@@ -1,0 +1,7 @@
+[[install]]
+id = 'wget'
+dst = '~/.wgetrc'
+path = 'wgetrc'
+capabilities = ['develop']
+planes = ['user']
+actions = ['histfile-install']

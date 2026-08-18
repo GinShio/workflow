@@ -1,0 +1,15 @@
+# amdPalSettings.cfg stays in the overlay tree but is not deployed.
+
+[[install]]
+id = 'amdgpu-pro'
+dst = '{{@@ sysenv.amd_config_dir @@}}/amdVulkanSettings.cfg'
+path = 'amdVulkanSettings.cfg'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'amdgpu-pro-tmpfiles'
+dst = '~/.config/user-tmpfiles.d/amdgpu-pro.conf'
+path = 'tmpfiles.conf'
+capabilities = ['develop']
+planes = ['user']

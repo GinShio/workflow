@@ -1,0 +1,6 @@
+[[install]]
+id = 'sshd'
+dst = '/etc/ssh/sshd_config'
+path = 'sshd_config'
+capabilities = ['develop']
+planes = ['system']

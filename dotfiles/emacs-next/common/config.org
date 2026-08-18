@@ -1,0 +1,109 @@
+# SPDX-FileCopyrightText: GinShio
+# SPDX-License-Identifier: MIT
+#+title: GNU Emacs Configuration
+#+author: GinShio
+#+property: header-args:emacs-lisp :tangle yes :comments link
+#+property: header-args :tangle "no" :results silent :eval no
+#+startup: fold
+
+#+begin_quote
+讓我們改變對程序構建的傳統態度：
+與其想象我們的主要任務是指導計算機做什麼，
+不如專注於向人們解釋我們想讓計算機做什麼。
+@@latex:\mbox{@@--- 高德納@@latex:}@@
+#+end_quote
+
+* 這份配置的取捨
+
+一份手寫的 Emacs 配置遲早會長到沒人記得住，包括作者本人。真正決定它能活多久的不是
+寫得多好，而是三年後你還能不能快速回答「這行為什麼在這裏」。所以這裏用文學編程：
+散文是主體，代碼是散文的產物。
+
+四條貫穿始終的規則：
+
+*地基不依賴任何第三方包。* 加載順序上排在包管理器之前的模塊，只使用 Emacs 內建設施。
+代價是這些模塊寫起來稍微囉嗦；回報是 tangle、smoke test 與 package bootstrap 可以在
+套件尚未激活時運行。這不表示普通啓動會容忍殘缺的包樹——完整配置缺一塊就立即失敗。
+
+*配置只有完整成立和啓動失敗兩種狀態。* 模塊錯誤不捕獲，套件的構建與 ~:config~ 錯誤也
+必須在 =init.el= 結束前拋出。半份配置帶着已執行的副作用繼續運行，比一個直接的 backtrace
+更難修。
+
+*運行中的 Emacs 只消費套件。* 下載、更新、構建與寫鎖由 =bin/vanilla-emacs= 在獨立批處理進程
+裏完成；普通會話裏 Elpaca 的變更命令被拒絕。編輯器不在工作途中改寫自己的地基。
+
+*生成物不進版本控制，而且有明確的銷毀邊界。* tangle 產物與套件樹都可由
+=bin/vanilla-emacs clean= 整體刪除，再由 =sync= 重建；文學源碼、lock 與使用者資料不在
+這條邊界內。其餘運行時狀態按性質分流到 XDG 目錄。
+
+* 模塊
+
+| 模塊         | 職責                                 | 可用第三方包 |
+|--------------+--------------------------------------+--------------|
+| =path=         | 目錄劃分                             | 否           |
+| =doctor=       | 環境自檢                             | 否           |
+| =core=         | 編輯行為、文件處理、內建設施的默認值 | 否           |
+| =keys=         | 全域鍵位重置、leader                 | 否           |
+| =packages=     | 包管理器。此後的模塊才可以用包       | 引導         |
+| =theme=        | 字體、配色、modeline、啓動畫面       | 是           |
+| =minibuffer=   | 選擇任何東西：補全、搜索、對候選項動手 | 是         |
+| =window=       | 窗口、緩衝區顯示規則、項目           | 是           |
+| =edit=         | 撤銷歷史、空白與換行、一次改多個地方 | 是           |
+| =file=         | 目錄即緩衝區                         | 否           |
+| =tty=          | 終端裏的 Emacs 缺的那幾樣            | 否           |
+| =shell=        | 把活交給外部程序                     | 是           |
+| =remote=       | 別的機器上的文件                     | 否           |
+| =lang=         | 語法樹、主模式、縮進、摺疊           | 否           |
+| =lsp=          | 語言服務器：文檔、診斷、跳轉、重構   | 否           |
+| =dap=          | 調試                                 | 是           |
+| =vc=           | 版本控制裏終端做不到的那部分         | 是           |
+| =lang-c=       | C/C++：向上面三個框架註冊自己        | 否           |
+| =lang-markup=   | Markdown、reST 與 AsciiDoc           | 是           |
+
+=path= 與 =doctor= 是基礎設施，由需要它們的模塊直接 ~require~；其餘按 =init.el= 中
+~ginshio-modules~ 的順序加載。
+
+功能模塊往 leader 樹上掛自己的分支，不回頭改 =keys=。=w= 與 =p= 屬於 =window=，
+=i= 屬於 =minibuffer=，=e= 屬於 =edit=，=!= 屬於 =shell=，=r= 屬於 =remote=，
+=c= 屬於 =lsp=，=z= 屬於 =lang=，=g= 屬於 =vc=，=d= 屬於 =dap=；註釋掉一個模塊，它
+的鍵位隨之消失。
+
+=file= 是唯一的例外：它往 =keys= 已有的 =f= 上補兩個鍵，而不是另開一支。它做的正是
+「文件」，分家只會讓同一類事住在兩個前綴底下。
+
+編號分五段，段界落在 =00= =20= =40= =60= =80=：地基與外觀、交互、與外部世界打交道、
+開發框架、語言。段內步進 2，於是任何兩個模塊之間都還留着一個空位。
+
+最後一段每個文件是一種語言，或一組共享同一用途的格式。編程語言只向框架註冊，框架不認
+識任何語言；Markdown、reST 與 AsciiDoc 這類文檔標記則共用一個模塊。兩者都保持同一條
+邊界：增加一類支持只新增一個文件，停用時只註釋一行。
+
+* 命名約定
+
+| 形式             | 用途                   | 例                        |
+|------------------+------------------------+---------------------------|
+| ~ginshio-foo~      | 內部函數與變量         | ~ginshio-cache-dir~         |
+| ~ginshio/foo~      | 交互命令               | ~ginshio/doctor~            |
+| ~ginshio-foo-h~    | 掛在 hook 上的函數     | ~ginshio-restore-gc-h~      |
+| ~ginshio-foo-a~    | 作為 advice 的函數     | ~ginshio-suppress-message-a~ |
+| =ginshio-foo.el=   | 模塊，提供 ~ginshio-foo~ | =ginshio-keys.el=           |
+
+#+include: org/00-bootstrap.org
+#+include: org/02-doctor.org
+#+include: org/04-core.org
+#+include: org/06-keys.org
+#+include: org/08-packages.org
+#+include: org/10-theme.org
+#+include: org/20-minibuffer.org
+#+include: org/22-window.org
+#+include: org/24-edit.org
+#+include: org/40-file.org
+#+include: org/42-tty.org
+#+include: org/44-shell.org
+#+include: org/46-remote.org
+#+include: org/60-lang.org
+#+include: org/62-lsp.org
+#+include: org/64-dap.org
+#+include: org/66-vc.org
+#+include: org/80-lang-c.org
+#+include: org/82-lang-markup.org

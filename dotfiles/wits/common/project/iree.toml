@@ -1,0 +1,35 @@
+[project]
+org = "{{@@ wits.projects.source_info['iree'].org @@}}"
+build_system = "cmake"
+generator = "Ninja"
+toolchain = "clang"
+default_presets = ["common"]
+
+[repos.main]
+path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
+build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}-{{build_type}}"
+install_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}-{{build_type}}"
+main_branch = "main"
+[repos.main.remotes]
+origin = "https://github.com/iree-org/iree.git"
+
+[project.presets.common]
+extends = ["llvm/common"]
+[project.presets.common.definitions]
+IREE_BUILD_COMPILER = true
+IREE_BUILD_TESTS = true
+IREE_BUILD_SAMPLES = true
+IREE_BUILD_PYTHON_BINDINGS = false
+IREE_BUILD_BINDINGS_TFLITE = false
+IREE_BUILD_BINDINGS_TFLITE_JAVA = false
+IREE_TARGET_BACKEND_DEFAULTS = false
+IREE_TARGET_BACKEND_LLVM_CPU = true
+IREE_TARGET_BACKEND_VULKAN_SPIRV = true
+IREE_HAL_DRIVER_DEFAULTS = false
+IREE_HAL_DRIVER_LOCAL_SYNC = true
+IREE_HAL_DRIVER_LOCAL_TASK = true
+IREE_HAL_DRIVER_VULKAN = true
+IREE_INPUT_STABLEHLO = true
+IREE_INPUT_TORCH = true
+IREE_INPUT_TOSA = true
+IREE_BUILD_BUNDLED_LLVM = true

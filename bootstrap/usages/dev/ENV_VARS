@@ -1,0 +1,16 @@
+DOTFILES_ROOT_PATH: (Optional) Path to the dotfiles repository. (default: ../dotfiles)
+WITS_SOURCE_DIR: (Optional) Path to the Wits source repository. (default: workflow-rs)
+--hostname / SETUP_HOSTNAME: System hostname and the Dotdrop host declared in
+    hosts.toml. Matched case-insensitively; if it is not a declared host, the
+    unique machine whose overlays include --profile is used.
+--profile / SETUP_PROFILE: Overlay and transcrypt context (default: personal).
+WITS_TRANSCRYPT_<OVERLAY>_<KEY>: Credentials for that overlay's transcrypt
+    context. generate compiles every host, so every overlay any machine uses
+    must be decryptable. e.g.
+    + WITS_TRANSCRYPT_PERSONAL_PASSWORD
+    + WITS_TRANSCRYPT_PERSONAL_CIPHER
+    + WITS_TRANSCRYPT_PERSONAL_DIGEST
+    + WITS_TRANSCRYPT_PERSONAL_KDF
+    + WITS_TRANSCRYPT_PERSONAL_ITERATIONS
+Legacy TRANSCRYPT_<OVERLAY>_<KEY> is copied onto the WITS_ form when the
+    latter is unset.

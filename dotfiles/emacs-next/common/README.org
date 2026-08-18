@@ -1,0 +1,124 @@
+#+title: GNU Emacs Configuration
+#+author: GinShio
+
+一份以文學編程維護的 Vanilla Emacs 配置。=config.org= 與 =org/*.org= 是代碼的唯一真實
+來源；=early-init.el=、=init.el= 與 =lisp/*.el= 都由它們生成，不直接編輯。
+
+* 契約
+
+- 支持 Emacs 30.1 或更新版本。
+- =XDG_CONFIG_HOME=、=XDG_DATA_HOME=、=XDG_STATE_HOME=、=XDG_CACHE_HOME= 與
+  =XDG_RUNTIME_DIR= 必須存在於環境中，而且必須是絕對路徑。
+- =XDG_RUNTIME_DIR= 必須已存在、可寫，且權限是 =0700=。
+- 正常 Emacs 啓動只激活已安裝、已構建、已鎖定的套件；不下載、不更新、不修復。
+- 配置或套件缺失時直接中止啓動。不隔離失敗模塊，不建立 safe mode。
+- 套件下載、更新、構建與 lock file 全部由 =bin/vanilla-emacs= 的獨立批處理進程完成。
+
+* 第一次安裝
+
+#+begin_src shell
+bin/vanilla-emacs sync
+#+end_src
+
+=sync= 會 tangle 配置，安裝 =elpaca.lock= 記錄的 revision，為當前 Emacs 版本建立獨立
+build，最後重寫 lock file。首次沒有 lock file 時會從當前 recipes 建立第一份。
+
+套件 source 共用於所有版本；build 位於：
+
+#+begin_example
+$XDG_DATA_HOME/emacs/elpaca/builds-<emacs-version>/
+#+end_example
+
+* 控制命令
+
+| 命令                               | 用途                                                   |
+|------------------------------------+--------------------------------------------------------|
+| =bin/vanilla-emacs sync=             | 嚴格按 lock 安裝、切換 revision、構建並重寫 lock         |
+| =bin/vanilla-emacs sync --upgrade=   | 忽略舊 lock，更新上游、重建並寫入新的 revision           |
+| =bin/vanilla-emacs clean=            | 刪除 tangle 產物、Elpaca 套件樹與 native-comp cache    |
+| =bin/vanilla-emacs doctor=           | 載入完整配置並檢查外部程序、字體、grammar 與目錄          |
+
+=clean= 是 =sync= 的反操作：它刪除 =early-init.el=、=init.el=、整個 =lisp/=，以及
+=$XDG_DATA_HOME/emacs/elpaca/= 和 =$XDG_CACHE_HOME/emacs/eln-cache/=。它保留
+=config.org=、=org/*.org=、=tangle.el=、=elpaca.lock=、tree-sitter grammars 與其他使用者
+資料；auto-save 和 backup cache 也不受影響。清理後普通 Emacs 必須啓動失敗，直到再次運行
+=bin/vanilla-emacs sync=。執行前應先由 system/service 停止所有使用這份配置的 Emacs；
+腳本不探測或管理 daemon。
+
+正常會話裏可以查看 =M-x elpaca-manager=、=M-x elpaca-log=、=M-x elpaca-info= 與套件
+source；Elpaca 的 fetch、update、rebuild、delete、write-lock 等變更命令會直接拒絕，並提示
+使用控制腳本。
+
+* Server
+
+配置同時兼容普通圖形 Emacs、默認 daemon 與具名 daemon；=bin/vanilla-emacs= 不負責它們的啓停。
+daemon 的進程生命週期應由 system/service 維護，客戶端直接使用 Emacs 原生的
+=emacsclient=。
+
+日常路徑保持 Emacs 的默認 server 名 =server=。普通圖形 Emacs 啓動後會自動開 server；
+默認 daemon service 的底層命令可直接使用 Emacs 的前臺 daemon 模式：
+
+#+begin_src shell
+emacs --init-directory=/path/to/emacs-next --fg-daemon
+emacsclient -c
+#+end_src
+
+只有需要隔離第二個 daemon 時才使用原生具名 server：
+
+#+begin_src shell
+emacs --init-directory=/path/to/emacs-next --fg-daemon=work
+emacsclient -s work -c
+GINSHIO_SERVER_NAME=scratch emacs --init-directory=/path/to/emacs-next
+#+end_src
+
+daemon 名由 ~--daemon=NAME~ / ~--fg-daemon=NAME~ 帶入；=GINSHIO_SERVER_NAME= 只用於讓普通
+圖形 Emacs 顯式成為另一個具名 server。不設名字就是唯一的默認 server。Unix socket 由
+Emacs 放在 =$XDG_RUNTIME_DIR/emacs=，配置不啓用 TCP server，也不設 =server-auth-dir=。
+
+* 使用文檔
+
+=GUIDE.org= 是面向使用的入口：工作流、鍵位、功能發現、各包手冊與常見操作都集中在那裏。
+
+在 Emacs 裏：
+
+| 鍵         | 用途                           |
+|------------+--------------------------------|
+| ~M-m~        | 打開 leader；停一下看 which-key |
+| ~M-m f g~    | 打開 =GUIDE.org=                 |
+| ~M-m f p~    | 打開文學配置源碼                 |
+| ~M-m h m~    | 查看當前 major/minor mode 的說明 |
+| ~M-m h k~    | 查看一個鍵實際執行什麼           |
+| ~M-m h f~    | 查看一個函數                     |
+| ~M-m h v~    | 查看一個變量                     |
+| ~M-m h b~    | 列出當前緩衝區全部有效鍵位       |
+
+這份配置只重置全域 keymap；major mode 的 =C-c= 鍵與 mode-local map 完整保留。因此引入一個
+包之後，第一個動作應該是 ~M-m h m~，而不是只看 leader 表。
+
+* 結構
+
+| 源文件                 | 產物                                        |
+|------------------------+---------------------------------------------|
+| =org/00-bootstrap.org=   | =early-init.el=、=init.el=、=ginshio-path.el= |
+| =org/02-doctor.org=      | =lisp/ginshio-doctor.el=                     |
+| =org/04-core.org=        | =lisp/ginshio-core.el=                       |
+| =org/06-keys.org=        | =lisp/ginshio-keys.el=                       |
+| =org/08-packages.org=    | =lisp/ginshio-packages.el=                   |
+| =org/10-theme.org=       | =lisp/ginshio-theme.el=                      |
+| =org/20-minibuffer.org=  | =lisp/ginshio-minibuffer.el=                 |
+| =org/22-window.org=      | =lisp/ginshio-window.el=                     |
+| =org/24-edit.org=        | =lisp/ginshio-edit.el=                       |
+| =org/40-file.org=        | =lisp/ginshio-file.el=                       |
+| =org/42-tty.org=         | =lisp/ginshio-tty.el=                        |
+| =org/44-shell.org=       | =lisp/ginshio-shell.el=                      |
+| =org/46-remote.org=      | =lisp/ginshio-remote.el=                     |
+| =org/60-lang.org=        | =lisp/ginshio-lang.el=                       |
+| =org/62-lsp.org=         | =lisp/ginshio-lsp.el=                        |
+| =org/64-dap.org=         | =lisp/ginshio-dap.el=                        |
+| =org/66-vc.org=          | =lisp/ginshio-vc.el=                         |
+| =org/80-lang-c.org=      | =lisp/ginshio-lang-c.el=                     |
+| =org/82-lang-markup.org= | =lisp/ginshio-lang-markup.el=                |
+
+新增模塊時，在 =org/NN-name.org= 生成 =lisp/ginshio-name.el=，將它加入 =config.org= 的
+=#+include=，再加入 =org/00-bootstrap.org= 的 ~ginshio-modules~。任何錯誤都應在 tangle、
+smoke test 或完整啓動中直接暴露。

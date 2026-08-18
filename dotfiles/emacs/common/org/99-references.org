@@ -1,0 +1,4 @@
+* 参考配置
+
+ + [[https://tecosaur.github.io/emacs-config/config.html][tecosaur - Doom Emacs Configuration]]
+ + [[https://www.hugchange.life/posts/202401_core_emacs_config.html][metaescape - 个人 Emacs 核心配置]]

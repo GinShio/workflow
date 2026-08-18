@@ -1,0 +1,46 @@
+# Composition table: the deployment contexts, and one block per machine.
+#
+# planes       — execution contexts; each becomes its own Dotdrop run
+# capabilities — which installs apply
+# overlays     — which content trees under each module are deployed (ordered)
+
+# The Dotdrop [config] every generated entrypoint starts from. `dotpath` and the
+# `import_*` keys are computed by the generator and rejected here.
+[config]
+backup = true
+banner = true
+create = true
+ignoreempty = false
+keepdot = false
+longkey = false
+showdiff = false
+workdir = '~/cyber/dotfiles'
+
+# An unprivileged run, as the logged-in user.
+[planes.user]
+dst_prefixes = ['~/', '{{@@']
+
+# A privileged run. It needs its own workdir because `~` resolves to root's home
+# under sudo, which would scatter rendered templates through /root.
+[planes.system]
+dst_prefixes = ['/etc/']
+
+[planes.system.config]
+workdir = '/var/lib/dotdrop'
+
+[defaults]
+ccache_remote_enabled = false
+
+[hosts.strix]
+capabilities = ['develop', 'desktop']
+overlays = ['common', 'personal']
+planes = ['user', 'system']
+
+[hosts.'Khronos3D-russell-openSUSE']
+capabilities = ['develop', 'desktop']
+overlays = ['common', 'khronos3d']
+planes = ['user', 'system']
+
+[hosts.'Khronos3D-russell-openSUSE'.variables]
+ccache_remote_enabled = true
+testing_runner_dir = '/run/user/1000/runner/'

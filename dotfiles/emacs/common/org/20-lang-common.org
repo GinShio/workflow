@@ -1,0 +1,50 @@
+* 编程语言配置
+
+** 文件模板
+
+Snippet 可以很好的帮助我们初始化一些文件。
+
+#+begin_src emacs-lisp
+;;(set-file-template! "\\.org$" :trigger "__" :mode 'org-mode)
+(set-file-template! "/LICEN[CS]E$" :trigger '+file-templates/insert-license)
+#+end_src
+
+** 纯文本
+
+我不介意左侧没有任何边距的 buffer，但是一旦剥离行号，buffer 就会感觉有点不对劲。
+
+#+begin_src emacs-lisp
+(defvar +text-mode-left-margin-width 1
+  "The `left-margin-width' to be used in `text-mode' buffers.")
+
+(defun +setup-text-mode-left-margin ()
+  (when (and (derived-mode-p 'text-mode)
+             (eq (current-buffer) ; Check current buffer is active.
+                 (window-buffer (frame-selected-window))))
+    (setq left-margin-width (if display-line-numbers
+                                0 +text-mode-left-margin-width))
+    (set-window-buffer (get-buffer-window (current-buffer))
+                       (current-buffer))))
+#+end_src
+
+现在我们只需要将它连接到所有可能表明条件发生变化或需要重新应用设置的事件。
+
+#+begin_src emacs-lisp
+(add-hook! (window-configuration-change display-line-numbers-mode)
+           #'+setup-text-mode-left-margin)
+(add-hook! text-mode #'+setup-text-mode-left-margin)
+#+end_src
+
+Doom 有一个小问题，因为 ~doom/toggle-line-numbers~ 不运行 ~display-line-numbers-mode-hook~​，所以需要一些设置。
+
+#+begin_src emacs-lisp
+(defadvice! +doom/toggle-line-numbers--call-hook-a ()
+  :after #'doom/toggle-line-numbers
+  (run-hooks 'display-line-numbers-mode-hook))
+#+end_src
+
+最后，我想我真的很喜欢这个，我会继续在文本模式下删除行号。
+
+#+begin_src emacs-lisp
+(remove-hook! text-mode #'display-line-numbers-mode)
+#+end_src

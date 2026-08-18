@@ -1,0 +1,6 @@
+[[install]]
+id = 'flatpak'
+dst = '~/.local/share/flatpak/'
+path = '.'
+capabilities = ['desktop']
+planes = ['user']

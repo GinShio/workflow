@@ -1,0 +1,36 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+# Keep staged text sane: LF newlines only, and valid UTF-8. Binary blobs and
+# (when iconv is absent) the UTF-8 check are skipped.
+files=$(staged_files)
+[ -n "$files" ] || exit 0
+
+has_iconv=0
+command -v iconv >/dev/null 2>&1 && has_iconv=1
+CR=$(printf '\r')
+
+rc=0
+oldifs=$IFS
+IFS='
+'
+set -f
+for file in $files; do
+    is_staged_text "$file" || continue
+    is_encrypted "$file" && continue   # its staged blob is ciphertext
+
+    if staged_blob "$file" | LC_ALL=C grep -q "$CR"; then
+        log_error "CR/CRLF line endings in $file (use LF)"
+        rc=1
+    fi
+
+    if [ "$has_iconv" -eq 1 ] &&
+       ! staged_blob "$file" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then
+        log_error "invalid UTF-8 in $file"
+        rc=1
+    fi
+done
+IFS=$oldifs
+set +f
+
+exit $rc

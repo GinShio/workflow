@@ -1,0 +1,6 @@
+[[install]]
+id = 'screen'
+dst = '~/.screenrc'
+path = 'screenrc'
+capabilities = ['develop']
+planes = ['user']

@@ -1,0 +1,158 @@
+#!/bin/sh
+
+# Git Hook Runner
+
+SCRIPT_NAME=$(basename "$0")
+export HOOK_NAME="$SCRIPT_NAME"
+
+current_dir=$(cd "$(dirname "$0")" && pwd)
+export HOOKS_DIR="$current_dir"
+
+# Search for lib.sh
+if [ -f "$current_dir/core/lib.sh" ]; then
+    LIB_PATH="$current_dir/core/lib.sh"
+elif [ -f "$current_dir/../core/lib.sh" ]; then
+    LIB_PATH="$current_dir/../core/lib.sh"
+else
+    echo "Git Hooks Error: Cannot find core/lib.sh functionality."
+    exit 1
+fi
+
+# lib.sh is the shared utility library; dispatch.sh (beside it) is the engine
+# that actually runs the layers. Hook scripts source only lib.sh.
+. "$LIB_PATH"
+. "$(dirname "$LIB_PATH")/dispatch.sh"
+
+# --- One-time initialization -------------------------------------------------
+#
+# The single place per-run setup happens. lib.sh is side-effect-free; everything
+# resolved here is exported so the `.d` children (which re-source lib.sh only for
+# its functions) inherit it and never re-fork for it.
+
+# Repo-fact resolvers. Each memoizes into (and exports) its well-known variable;
+# warm_facts calls the ones a hook needs, so the resolution happens once in the
+# parent and children read the plain $VAR. They also honour a value already in
+# the environment (one git exported, or one already resolved), so they are free
+# when it is known. dispatch.sh's run_local_hook / run_external_hooks call
+# git_dir / git_toplevel for the hooks warm_facts doesn't pre-resolve them for.
+git_dir() {
+    [ -n "${GIT_DIR:-}" ] || { GIT_DIR=$(git rev-parse --git-dir); export GIT_DIR; }
+}
+git_common_dir() {
+    [ -n "${GIT_COMMON_DIR:-}" ] ||
+        { GIT_COMMON_DIR=$(git rev-parse --git-common-dir); export GIT_COMMON_DIR; }
+}
+git_toplevel() {
+    if [ -z "${GIT_TOPLEVEL:-}" ]; then
+        GIT_TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null)
+        # A bare repository has no working tree; fall back to the git dir.
+        [ -n "$GIT_TOPLEVEL" ] || { git_dir; GIT_TOPLEVEL=$GIT_DIR; }
+        export GIT_TOPLEVEL
+    fi
+}
+current_branch() {
+    [ -n "${CURRENT_BRANCH:-}" ] ||
+        { CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null); export CURRENT_BRANCH; }
+}
+null_sha() {
+    [ -n "${NULL_SHA:-}" ] ||
+        { NULL_SHA=$(git hash-object --stdin </dev/null | tr '0-9a-f' '0'); export NULL_SHA; }
+}
+
+# The pre-commit staged cache: one `--numstat` both enumerates the staged paths
+# (added/copied/modified) and classifies each as text or binary (a binary blob
+# shows '-' for its line counts), replacing the per-file `git diff`/`git cat-file`
+# every content script would otherwise fork. staged_files/is_staged_text (lib.sh)
+# read it back.
+warm_staged_cache() {
+    _numstat=$(git diff --cached --numstat --diff-filter=ACM 2>/dev/null)
+    STAGED_FILES=$(printf '%s\n' "$_numstat" | awk -F'\t' 'NF>=3 { print $3 }')
+    STAGED_TEXT_FILES=$(printf '%s\n' "$_numstat" | awk -F'\t' 'NF>=3 && $1 != "-" { print $3 }')
+    _WITS_STAGED_CACHED=1
+    export STAGED_FILES STAGED_TEXT_FILES _WITS_STAGED_CACHED
+}
+
+# warm_config <hook>: batch this hook's config into env twins with one read, so
+# every cfg_bool/cfg_value/is_enabled lookup is then fork-free. The regexp takes
+# exactly this hook's keys (`wits.hooks.<hook>.…`) plus the top-level globals —
+# `disable`, `protected-branch`, `external-dirs` are the single-segment keys the
+# `[^.]+$` branch catches — and nothing belonging to *other* hooks. A twin the
+# user already set (their one-shot override) always wins, so we fill only the
+# unset ones; _WITS_CONFIG_WARMED then tells cfg_* an unset twin means "unset".
+warm_config() {
+    [ -n "${_WITS_CONFIG_WARMED:-}" ] && return 0
+    _re="^wits\.hooks\.([^.]+\$|$1\.)"
+    while IFS= read -r _cfg_line; do
+        [ -n "$_cfg_line" ] || continue
+        _cfg_key=${_cfg_line%% *}
+        case "$_cfg_line" in
+            *' '*) _cfg_val=${_cfg_line#* } ;;   # value keeps its trailing spaces
+            *)     _cfg_val= ;;
+        esac
+        _cfg_twin=$(_cfg_env_name "$_cfg_key")
+        # A crafted config subsection could produce a twin that isn't a clean
+        # identifier; skip it rather than feed it to `export`. The value is
+        # assigned by `export name=value` (never `eval`), so a config value can
+        # never be executed — and a twin the user already set wins.
+        _is_identifier "$_cfg_twin" || continue
+        if ! _env_is_set "$_cfg_twin"; then
+            export "$_cfg_twin=$_cfg_val"
+        fi
+    done <<_WITS_CFG_EOF
+$(git config --get-regexp "$_re" 2>/dev/null)
+_WITS_CFG_EOF
+    _WITS_CONFIG_WARMED=1
+    export _WITS_CONFIG_WARMED
+}
+
+# warm_facts <hook>: resolve exactly the repo facts this hook's scripts need —
+# the single, auditable declaration of each hook's needs. Resolved in the parent,
+# inherited by every child as a plain $VAR. (prepare-commit-msg's issue-tracker
+# resolves its own branch, detached-aware, so only provenance's GIT_DIR is here.)
+warm_facts() {
+    case "$1" in
+        pre-commit)            warm_staged_cache; current_branch ;;
+        pre-push)              null_sha ;;
+        post-checkout)         git_common_dir; git_toplevel ;;
+        reference-transaction) git_dir; git_common_dir; git_toplevel; null_sha ;;
+        prepare-commit-msg)    git_dir ;;
+    esac
+}
+
+warm_config "$HOOK_NAME"
+
+# Whole-run kill switch: global or per-hook. A separate, explicit judgment,
+# resolved once (fork-free, from the warmed config) into the flag is_enabled reads.
+_WITS_HOOKS_OFF=0
+cfg_bool wits.hooks.disable && _WITS_HOOKS_OFF=1
+[ "$_WITS_HOOKS_OFF" = 0 ] && cfg_bool "wits.hooks.$HOOK_NAME.disable" && _WITS_HOOKS_OFF=1
+export _WITS_HOOKS_OFF
+
+[ "$_WITS_HOOKS_OFF" = 0 ] && warm_facts "$HOOK_NAME"
+
+# Handle STDIN buffering for hooks that consume input
+# pre-push, post-rewrite, push-to-checkout, pre-receive, post-receive, reference-transaction
+NEEDS_STDIN=0
+case "$HOOK_NAME" in
+    pre-push|post-rewrite|push-to-checkout|pre-receive|post-receive|reference-transaction)
+        NEEDS_STDIN=1
+        ;;
+esac
+
+STDIN_FILE=""
+if [ "$NEEDS_STDIN" -eq 1 ]; then
+    # We must read stdin into a temp file
+    # mktemp is POSIX-ish (standard on linux/bsd/macos)
+    STDIN_FILE=$(mktemp)
+    cat > "$STDIN_FILE"
+fi
+
+run_hook_overlays "$HOOKS_DIR" "$HOOK_NAME" "$STDIN_FILE" "$@"
+run_external_hooks "$HOOK_NAME" "$STDIN_FILE" "$@"
+run_local_hook "$HOOK_NAME" "$STDIN_FILE" "$@"
+
+if [ -n "$STDIN_FILE" ] && [ -f "$STDIN_FILE" ]; then
+    rm "$STDIN_FILE"
+fi
+
+exit 0

@@ -1,0 +1,6 @@
+[[install]]
+id = 'sudoers'
+dst = '/etc/sudoers.d/'
+path = '.'
+capabilities = ['develop']
+planes = ['system']

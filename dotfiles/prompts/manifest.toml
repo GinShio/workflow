@@ -1,0 +1,109 @@
+# --- cursor -----------------------------------------------------------------
+
+[[install]]
+id = 'prompts-cursor-agents'
+dst = '~/.cursor/agents/'
+path = 'agents'
+capabilities = ['develop']
+planes = ['user']
+link = 'absolute'
+
+[[install]]
+id = 'prompts-cursor-skills'
+dst = '~/.cursor/skills/'
+path = 'skills'
+capabilities = ['develop']
+planes = ['user']
+link = 'absolute'
+
+[[install]]
+id = 'prompts-cursor-commands'
+dst = '~/.cursor/commands/'
+path = 'commands'
+capabilities = ['develop']
+planes = ['user']
+link = 'absolute'
+
+[[install]]
+id = 'prompts-cursor-craft'
+dst = '~/.cursor/craft/'
+path = 'craft'
+capabilities = ['develop']
+planes = ['user']
+link = 'absolute'
+
+[[install]]
+id = 'prompts-cursor-memory'
+dst = '~/.cursor/AGENTS.md'
+path = 'AGENTS.md'
+capabilities = ['develop']
+planes = ['user']
+link = 'absolute'
+
+# --- claude-code ------------------------------------------------------------
+
+[[install]]
+id = 'prompts-claude-agents'
+dst = '~/.claude/agents/'
+path = 'agents/'
+capabilities = ['develop']
+planes = ['user']
+link = 'absolute'
+
+[[install]]
+id = 'prompts-claude-skills'
+dst = '~/.claude/skills/'
+path = 'skills'
+capabilities = ['develop']
+planes = ['user']
+link = 'absolute'
+
+[[install]]
+id = 'prompts-claude-commands'
+dst = '~/.claude/commands/'
+path = 'commands'
+capabilities = ['develop']
+planes = ['user']
+link = 'absolute'
+
+[[install]]
+id = 'prompts-claude-craft'
+dst = '~/.claude/craft/'
+path = 'craft'
+capabilities = ['develop']
+planes = ['user']
+link = 'absolute'
+
+[[install]]
+id = 'prompts-claude-memory'
+dst = '~/.claude/CLAUDE.md'
+path = 'CLAUDE.md'
+capabilities = ['develop']
+planes = ['user']
+link = 'absolute'
+
+# --- codex ------------------------------------------------------------------
+
+[[install]]
+id = 'prompts-codex-skills'
+dst = '~/.codex/skills/'
+path = 'skills'
+capabilities = ['develop']
+planes = ['user']
+link = 'absolute'
+
+[[install]]
+id = 'prompts-codex-craft'
+dst = '~/.codex/craft/'
+path = 'craft'
+capabilities = ['develop']
+planes = ['user']
+link = 'absolute'
+
+[[install]]
+id = 'prompts-codex-memory'
+dst = '~/.codex/AGENTS.md'
+path = 'AGENTS.md'
+capabilities = ['develop']
+planes = ['user']
+link = 'absolute'

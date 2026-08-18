@@ -1,0 +1,6 @@
+[[install]]
+id = 'mpv'
+dst = '~/.config/mpv/'
+path = '.'
+capabilities = ['desktop']
+planes = ['user']

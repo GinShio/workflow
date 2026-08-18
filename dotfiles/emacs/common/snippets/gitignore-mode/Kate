@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: kate
+# key: kate
+# expand-env: ((yas-indent-line nil))
+# --
+######################### Kate #########################
+# repo: github/gitignore; pin: 5f35f30b049; file: Global/Kate.gitignore
+# LICENSE: Creative Commons Zero v1.0 Universal
+# Swap Files #
+.*.kate-swp
+.swp.*

@@ -1,0 +1,11 @@
+[[install]]
+id = 'emacs'
+dst = '~/.config/doom/'
+path = '.'
+capabilities = ['develop']
+planes = ['user']
+link = 'absolute'
+actions = ['emacs-config']
+
+[actions]
+emacs-config = '''emacs --batch -l {{@@ sysenv.xdg_config_home @@}}/doom/tangle.el --eval "(org-tangle-config \"{{@@ sysenv.xdg_config_home @@}}/doom/config.org\")"'''

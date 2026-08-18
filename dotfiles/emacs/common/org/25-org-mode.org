@@ -1,0 +1,709 @@
+** Org Mode
+:properties:
+:CUSTOM_ID: org
+:header-args:emacs-lisp: :tangle no :noweb-ref org-conf
+:end:
+
+因为这部分初始化时相当费时，我们需要将其放在 src_elisp{(after! ...)} 中。
+#+begin_src emacs-lisp :noweb no-export :tangle yes :noweb-prefix no :noweb-ref nil
+(after! org
+  <<org-conf>>
+  )
+#+end_src
+
+*** 功能增强
+
+#+begin_src emacs-lisp
+(setq! org-use-property-inheritance t         ; it's convenient to have properties inherited
+       org-log-done 'time                     ; having the time a item is done sounds convenient
+       org-list-allow-alphabetical t          ; have a. A. a) A) list bullets
+       ;; org-export-in-background t             ; run export processes in external emacs process
+       org-catch-invisible-edits 'smart       ; try not to accidently do weird stuff in invisible regions
+       org-export-with-sub-superscripts '{}   ; don't treat lone _ / ^ as sub/superscripts, require _{} / ^{}
+       org-export-allow-bind-keywords t       ; Bind keywords can be handy
+       org-image-actual-width '(0.9)          ; Make the in-buffer display closer to the exported result..
+       )
+#+end_src
+
+I also like the src_elisp{:comments} header-argument, so let’s make that a default.
+
+#+begin_src emacs-lisp
+(setq org-babel-default-header-args
+      '((:session . "none")
+        (:results . "replace")
+        (:exports . "code")
+        (:cache . "no")
+        (:noweb . "no")
+        (:hlines . "no")
+        (:tangle . "no")
+        (:comments . "link")))
+#+end_src
+
+**** 零宽空格
+
+偶尔在用 Org 是你希望将两个分开的块放在一起，这点有点烦人。比如将加​*重*​一个单词
+的一部分，或者说在内联源码块之前放一些符号。有一个可以解决的方法 --- 零宽空格。
+由于这是 Emacs，我们可以为 org-mode 做一个很小的改动将其添加到快捷键上 🙂。
+
+#+begin_src emacs-lisp
+(map! :map org-mode-map
+      :leader
+      :desc "zero-width-space" "SPC" (cmd! (insert "\u200B")))
+#+end_src
+
+**** 目录生成
+
+生成目录的需求并不大，但是像 =GitHub= 的环境下 TOC 可能成为必要，采用 ~toc-org~
+来生成。
+#+begin_src emacs-lisp :noweb-ref none :tangle no
+(use-package! toc-org
+  :defer t
+  :after (:any org markdown)
+  :config
+  (toc-org-mode t)
+  (add-hook! (org-mode markdown-mode) #'toc-org-mode)
+  (define-key! org-mode-map "C-c C-i" #'toc-org-insert-toc)
+  (define-key! markdown-mode-map "C-c M-t" #'toc-org-insert-toc))
+#+end_src
+
+=toc-org= 会清空带有 ~TOC~ 标签的 heading，并生成目录。
+
+我不确定真的需要它嘛，因此我将它关闭了。
+
+**** 加密块
+
+=org-crypt= 可以用 =GPG= 加密 Org Mode 的某些 heading，当然是带有 ~crypt~ 标签的。
+现在来设置一下。
+#+begin_src emacs-lisp
+(use-package! org-crypt
+  :custom
+  (org-crypt-key "0xA173AD0063A4E2DFAB4F9EAE65F09D172E677525")
+  (org-tags-exclude-from-inheritance '("crypt")) ;; avoid repeated encryption
+  :config
+  (org-crypt-use-before-save-magic) ;; encrypt when writing back to the hard disk
+  (map! :map org-mode-map
+        :localleader
+        :desc "org-encrypt" "C" nil
+        :desc "encrypt current" "C e" #'org-encrypt-entry
+        :desc "encrypt all" "C E" #'org-encrypt-entries
+        :desc "decrypt current" "C d" #'org-decrypt-entry
+        :desc "decrypt all" "C D" #'org-decrypt-entries))
+#+end_src
+
+如果想用其他密钥加密，可以设置 ~cryptkey~ 属性。
+#+begin_src fundamental
+,* Totally secret :crypt:
+:properties:
+:cryptkey: 0x0123456789012345678901234567890123456789
+:end:
+#+end_src
+
+**** 列表顺序
+
+#+begin_src emacs-lisp
+(setq org-list-demote-modify-bullet '(("+" . "-") ("-" . "+") ("*" . "+") ("1." . "a.")))
+#+end_src
+
+**** 引用
+
+#+begin_comment
+来自 =:tools biblio= 模块
+#+end_comment
+
+#+begin_src emacs-lisp
+;;; (org-cite-global-bibliography '("~/library/ebooks/catalog.bib" "~/library/papers/catalog.bib"))
+(after! citar
+  (setq! citar-symbol-separator "  "
+         citar-bibliography org-cite-global-bibliography
+         citar-symbols
+           `((file ,(nerd-icons-faicon "nf-fa-file_o" :face 'nerd-icons-green :v-adjust -0.1) . " ")
+             (note ,(nerd-icons-octicon "nf-oct-note" :face 'nerd-icons-blue :v-adjust -0.3) . " ")
+             (link ,(nerd-icons-octicon "nf-oct-link" :face 'nerd-icons-orange :v-adjust 0.01) . " ")))
+  (org-cite-follow-processor 'citar)
+  (org-cite-activate-processor 'citar)
+  (add-to-list 'citar-major-mode-functions
+               '((gfm-mode)
+                 (insert-keys . citar-markdown-insert-keys)
+                 (insert-citation . citar-markdown-insert-citation)
+                 (insert-edit . citar-markdown-insert-edit)
+                 (key-at-point . citar-markdown-key-at-point)
+                 (citation-at-point . citar-markdown-citation-at-point)
+                 (list-keys . citar-markdown-list-keys))))
+#+end_src
+
+主要为了引用的灵活性，这里并没有设置全局 bib，如果想在 Org 里引用某些 bib 文件可
+以采用以下方法。
+#+begin_src fundamental
+,#+bibliography: ~/library/ebooks/catalog.bib
+,#+bibliography: ~/library/papers/catalog.bib
+#+end_src
+
+当然这配置很简单，只不过功能很强大，关于 =org-cite= 和 =citar= 要学的还有很多。
+可以看看 [[https://blog.tecosaur.com/tmio/2021-07-31-citations.html][这篇]]。
+
+**** eglot 支持的源码块
+
+默認情況下，LSP 並不支持應用在 src 塊中。以下配置讓 eglot 在 org-babel 的
+=C-c '= 編輯窗口中自動啓動。
+
+#+begin_src emacs-lisp
+;; Enable eglot in org babel edit buffers
+;; need to add `:file test.xx' in the header
+(defun +org-babel-edit-prep:with-eglot (info)
+  "Setup eglot in org-babel edit buffer.
+需要在 header 中指定 :file 参数 (如 `:file test.py`)。"
+  (when-let* ((file-name (or (alist-get :file (caddr info))
+                             (make-temp-file "babel-eglot-"))))
+    (setq buffer-file-name file-name)
+    (when (fboundp 'eglot-ensure)
+      (eglot-ensure))))
+
+(defvar +org-babel-eglot-lang-list '("python" "C" "cpp" "rust")
+  "Languages that should have eglot support in org-babel edit buffers.")
+
+(dolist (lang +org-babel-eglot-lang-list)
+  (let ((fn-name (intern (format "org-babel-edit-prep:%s" lang))))
+    (unless (fboundp fn-name)
+      (defalias fn-name #'+org-babel-edit-prep:with-eglot))))
+#+end_src
+
+*** Agenda
+
+#+begin_src emacs-lisp :tangle yes :noweb-ref none
+(defvar org-agenda-dir (concat org-directory "/" "agenda"))
+(defvar org-agenda-todo-file (expand-file-name "todo.org" org-agenda-dir))
+(defvar org-agenda-project-file (expand-file-name "project.org" org-agenda-dir))
+(after! org-agenda
+  ;;urgancy|soon|as soon as possible|at some point|eventually
+  ;;
+  (setq! org-agenda-files `(,org-agenda-todo-file
+                            ,org-agenda-project-file)
+         org-agenda-skip-scheduled-if-done t
+         org-agenda-skip-deadline-if-done t
+         org-agenda-include-deadlines t
+         org-agenda-block-separator nil
+         org-agenda-tags-column 100 ;; from testing this seems to be a good value
+         org-agenda-compact-blocks t))
+#+end_src
+
+*** Capture
+
+开始设置 Org-capture 模板吧，快速记录！
+
+#+begin_src emacs-lisp :noweb-ref none :tangle yes
+(after! org-capture
+  (defun ginshio/find-project-tree(priority)
+    "find or create project headline
+https://www.zmonster.me/2018/02/28/org-mode-capture.html"
+    (let* ((hl (let ((headlines (org-element-map (org-element-parse-buffer 'headline) 'headline
+                                  (lambda (hl) (and (= (org-element-property :level hl) 1)
+                                               (org-element-property :title hl))))))
+                 (completing-read "Project Name: " headlines))))
+      (goto-char (point-min))
+      (if (re-search-forward
+           (format org-complex-heading-regexp-format (regexp-quote hl)) nil t)
+          (goto-char (point-at-bol))
+        (progn
+          (or (bolp) (insert "\n"))
+          (if (/= (point) (point-min)) (org-end-of-subtree))
+          (insert (format "* %s :project:%s:\n:properties:\n:homepage: %s\n:repo: \
+%s\n:end:\n\n** urgancy :urgancy:\n\n** soon :soon:\n\n** as soon as\
+ possible :asap:\n\n** at some point :asp:\n\n** eventually :eventually:\n"
+                          hl hl (read-string "homepage: ") (read-string "repo: ")))
+          (beginning-of-line 0)
+          (org-up-heading-safe))))
+    (re-search-forward
+     (format org-complex-heading-regexp-format
+             (regexp-quote priority))
+     (save-excursion (org-end-of-subtree t t)) t)
+    (org-end-of-subtree))
+  (setq! org-capture-dir (expand-file-name "capture" org-directory)
+         org-capture-snippet-file (expand-file-name "snippets.org" org-capture-dir)
+         org-capture-comment-file (expand-file-name "comments.org" org-capture-dir)
+         org-capture-note-file (expand-file-name "notes.org" org-capture-dir)
+         org-capture-blog-file (expand-file-name "blogs.org" org-capture-dir)
+         )
+  ;; http://www.howardism.org/Technical/Emacs/journaling-org.html
+  ;; https://www.zmonster.me/2018/02/28/org-mode-capture.html
+  (setq org-capture-templates
+        `(("B" "Blog TODO List" entry (file ,org-capture-blog-file)
+           "* TODO [#%^{priority|D|A|B|C|E}] %^{blog_title}\n:properties:\n:categories: %^{categories}\n:tags: %^{tags}\n:title: %\\1\n:file_name: %^{file_name}\n:end:\n%?"
+           :empty-lines 1)
+          ("c" "Comment")
+          ("cb" "Book" entry (file+weektree ,org-capture-comment-file)
+           "* %^{book} :book:%\\1:\n%?" :empty-lines 1)
+          ("cm" "Movie" entry (file+weektree ,org-capture-comment-file)
+           "* %^{movie} :movie:%\\1:\n%?" :empty-lines 1)
+          ("g" "GTD")
+          ("gt" "Todo" entry (file+headline org-agenda-todo-file "Personal")
+           "* TODO [#%^{priority|A|B|C|D|E}] %^{task}\n  SCHEDULED: %^T DEADLINE: %^T\n:properties:\n:end:\n%?"
+           :empty-lines 1)
+          ("gi" "Interview" entry (file+headline ,org-agenda-todo-file "Interview")
+           "* WAIT [#%^{priority|B|A|C|D}] %^{company} - %^{position}\t:%\\2:\nSCHEDULED: %^T DEADLINE: %^T\n:properties:\n:url: %^{link}\n:end:\n%?"
+           :prepend t :empty-lines 1)
+          ("gd" "Daily" entry (file+headline ,org-agenda-todo-file "Daily")
+           "* TODO [#%^{priority|C|A|B|D|E}] %^{task}\n SCHEDULED:  %<<%Y-%m-%d %a %H:%M ++1d>>\n:properties:\n:end:\n%?"
+           :empty-lines 1)
+          ("gw" "Weekly" entry (file+headline ,org-agenda-todo-file "Weekly")
+           "* TODO [#%^{priority|B|A|C|D|E}] %^{task}\n SCHEDULED: %<<%Y-%m-%d %a %H:%M ++1w>>\n:properties:\n:end:\n%?"
+           :empty-lines 1)
+          ("gm" "Monthly" entry (file+headline ,org-agenda-todo-file "Monthly")
+           "* TODO [#%^{priority|C|A|B|D|E}] %^{task}\n SCHEDULED: %<<%Y-%m-%d %a %H:%M ++1m>>\n:properties:\n:end:\n%?"
+           :empty-lines 1)
+          ("n" "Note")
+          ("nc" "Computer" entry (file+headline ,org-capture-note-file "Computer")
+           "* %^{heading} %^g\n%?\n" :empty-lines 1)
+          ("ne" "Emacs" entry (file+headline ,org-capture-note-file "Emacs")
+           "* %^{heading} %^g\n%?\n" :empty-lines 1)
+          ("ng" "Game" entry (file+headline ,org-capture-note-file "Game")
+           "* %^{heading} %^g\n%?\n" :empty-lines 1)
+          ;; ("p" "Project")
+          ;; ("pa" "Urgance" entry (file+function ,org-agenda-project-file
+          ;;                                      (lambda () (ginshio/find-project-tree "urgancy")))
+          ;;  "*** TODO [#A] %^{task}\n SCHEDULED: %<<%Y-%m-%d %a %H:%M>> DEADLINE: %^T\n    :properties:\n    :end:\n%?"
+          ;;  :empty-lines 1)
+          ;; ("pb" "Soon" entry (file+function ,org-agenda-project-file
+          ;;                                   (lambda () (ginshio/find-project-tree "soon")))
+          ;;  "*** TODO [#B] %^{task}\n SCHEDULED: %<<%Y-%m-%d %a %H:%M>> DEADLINE: %^T\n    :properties:\n    :end:\n%?"
+          ;;  :empty-lines 1)
+          ;; ("pc" "As Soon As Possiple" entry (file+function ,org-agenda-project-file
+          ;;                                                  (lambda () (ginshio/find-project-tree "as soon as possiple")))
+          ;;  "*** TODO [#C] %^{task}\n SCHEDULED: %<<%Y-%m-%d %a %H:%M>> DEADLINE: %^T\n    :properties:\n    :end:\n%?"
+          ;;  :empty-lines 1)
+          ;; ("pd" "At Some Point" entry (file+function ,org-agenda-project-file
+          ;;                                            (lambda () (ginshio/find-project-tree "at some point")))
+          ;;  "*** TODO [#D] %^{task}\n SCHEDULED: %<<%Y-%m-%d %a %H:%M>> DEADLINE: %^T\n    :properties:\n    :end:\n%?"
+          ;;  :empty-lines 1)
+          ;; ("pe" "Eventually" entry (file+function ,org-agenda-project-file
+          ;;                                         (lambda () (ginshio/find-project-tree "eventually")))
+          ;;  "*** TODO [#E] %^{task}\n SCHEDULED: %<<%Y-%m-%d %a %H:%M>> DEADLINE: %^T\n    :properties:\n    :end:\n%?"
+          ;;  :empty-lines 1)
+          ("s" "Code Snippet" entry (file ,org-capture-snippet-file)
+           "* %^{heading} :code:%\\2:\n:properties:\n:language: %^{language}\n:end:\n\n#+begin_src %\\2\n%?\n#+end_src"
+           :empty-lines 1)
+          )))
+#+end_src
+
+*** 视觉
+
+**** Org Modern
+
+使 =org-mode= buffer 尽可能漂亮是很重要的，Minad 的 =org-modern= 在这方面大有帮助。
+
+#+begin_src emacs-lisp :noweb-ref none :tangle packages.el
+(package! org-modern)
+#+end_src
+
+#+begin_src emacs-lisp
+(use-package! org-modern
+  :hook
+  (org-mode . org-modern-mode)
+  (org-agenda-finalize . org-modern-agenda)
+  :config
+  (setq org-modern-star 'replace
+        org-modern-replace-stars "♇♆♅♄♃♂♀☿" ;;  "◉○✸✿✤✜◆▶"
+        org-modern-table-vertical 1
+        org-modern-table-horizontal 0.2
+        org-modern-list '((43 . "➤")
+                          (45 . "–")
+                          (42 . "•"))
+        org-modern-todo-faces '(("TODO" . (:inherit org-verbatim :weight semi-bold :foreground "white" :background "goldenrod"))
+                                ("NEXT" . (:inherit org-verbatim :weight semi-bold :foreground "white" :background "IndianRed1"))
+                                ("STRT" . (:inherit org-verbatim :weight semi-bold :foreground "white" :background "OrangeRed"))
+                                ("WAIT" . (:inherit org-verbatim :weight semi-bold :foreground "white" :background "coral"))
+                                ("KILL" . (:inherit org-verbatim :weight semi-bold :foreground "white" :background "DarkGreen"))
+                                ("PROJ" . (:inherit org-verbatim :weight semi-bold :foreground "white" :background "LimeGreen"))
+                                ("HOLD" . (:inherit org-verbatim :weight semi-bold :foreground "white" :background "orange"))
+                                ("DONE" . (:inherit org-verbatim :weight semi-bold :foreground "black" :background "LightGray")))
+        org-modern-footnote (cons nil (cadr org-script-display))
+        org-modern-block-fringe nil
+        org-modern-block-name '((t . t)
+                                ("src" "»" "«")
+                                ("example" "»–" "–«")
+                                ("quote" "❝" "❞")
+                                ("export" "⏩" "⏪"))
+        org-modern-progress nil
+        org-modern-priority nil
+        org-modern-horizontal-rule (make-string 36 ?─)
+        org-modern-keyword '((t . t)
+                             ("title" . "𝙏")
+                             ("subtitle" . "𝙩")
+                             ("author" . "𝘼")
+                             ("email" . "")
+                             ("date" . "𝘿")
+                             ("property" . "󰠳")
+                             ("options" . #("󰘵" 0 1 (display (height 0.75))))
+                             ("startup" . "⏻")
+                             ("macro" . "𝓜")
+                             ("bind" . "󰌷")
+                             ("bibliography" . "")
+                             ("print_bibliography" . "󰌱")
+                             ("cite_export" . "⮭")
+                             ("print_glossary" . "󰌱ᴬᶻ")
+                             ("glossary_sources" . "󰒻")
+                             ("include" . "⇤")
+                             ("setupfile" . "⇚")
+                             ("html_head" . "🅷")
+                             ("html" . "🅗")
+                             ("latex_class" . "🄻")
+                             ("latex_class_options" . "🄻󰒓")
+                             ("latex_header" . "🅻")
+                             ("latex_header_extra" . "🅻⁺")
+                             ("latex" . "🅛")
+                             ("beamer_theme" . "🄱")
+                             ("beamer_color_theme" . "🄱󰏘")
+                             ("beamer_font_theme" . "🄱𝐀")
+                             ("beamer_header" . "🅱")
+                             ("beamer" . "🅑")
+                             ("attr_latex" . "🄛")
+                             ("attr_html" . "🄗")
+                             ("attr_org" . "⒪")
+                             ("call" . "󰜎")
+                             ("name" . "⁍")
+                             ("header" . "›")
+                             ("caption" . "☰")
+                             ("results" . "🠶"))
+        org-auto-align-tags nil
+        org-tags-column 0
+        org-catch-invisible-edits 'show-and-error
+        org-special-ctrl-a/e t
+        org-hide-emphasis-markers t
+        org-agenda-tags-column 0
+        org-agenda-block-separator ?─
+        org-agenda-time-grid '((daily today require-timed)
+                               (800 1000 1200 1400 1600 1800 2000)
+                               " ┄┄┄┄┄ " "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
+        org-agenda-current-time-string "⭠ now ─────────────────────────────────────────────────"
+        )
+  (custom-set-variables '(org-modern-statistics :inherit org-checkbox-statistics-todo)))
+#+end_src
+
+**** 强调标记
+
+虽然 ~org-hide-emphasis-markers~ 非常好，但有时它会使边界处的编辑变得更加繁琐。
+我们可以使用 =org-appear= 包在不牺牲视觉便利的情况下改善这种情况。
+
+#+begin_src emacs-lisp :noweb-ref none :tangle packages.el
+(package! org-appear
+  :recipe (:host github :repo "awth13/org-appear"))
+#+end_src
+
+#+begin_src emacs-lisp
+(use-package! org-appear
+  :hook (org-mode . org-appear-mode)
+  :config
+  (setq! org-appear-autoemphasis t
+         org-appear-autosubmarkers t
+         org-appear-autolinks nil)
+  ;; for proper first-time setup, `org-appear--set-elements'
+  ;; needs to be run after other hooks have acted.
+  (run-at-time nil nil #'org-appear--set-elements))
+#+end_src
+
+**** 符号
+
+本身不用加这个包的，不过移除了 doom 配置里的 `(org +pretty)` 的选项，只好自己手
+动来做这件事了。
+
+#+begin_src emacs-lisp :noweb-ref none :tangle packages.el
+(package! org-fancy-priorities
+  :recipe (:host github :repo "harrybournis/org-fancy-priorities"))
+#+end_src
+
+更改用于折叠项目的字符也很好 (默认情况下 ~…~)，我认为用 ~▾~ 更适合指示 「折叠部
+分」。并在默认的四个列表中添加一个额外的 ~org-bullet~ 。对了，别忘记优先级也要修
+改。
+
+#+begin_src emacs-lisp
+(use-package! org-fancy-priorities
+  :ensure t
+  :hook (org-mode . org-fancy-priorities-mode)
+  :custom (org-lowest-priority ?E)
+  :config (setq! org-fancy-priorities-list '("⚡" "↑" "↓" "☕" "❓")))
+(setq! org-ellipsis " ▾ "
+       org-hide-leading-stars t
+       org-priority-highest ?A
+       org-priority-lowest ?E
+       org-priority-faces
+       '((?A . 'nerd-icons-red)
+         (?B . 'nerd-icons-orange)
+         (?C . 'nerd-icons-yellow)
+         (?D . 'nerd-icons-green)
+         (?E . 'nerd-icons-blue)))
+(setq! +ligatures-extra-symbols
+          (list :list_property "∷"
+                :em_dash       "—"
+                :ellipses      "…"
+                :arrow_right   "→"
+                :arrow_left    "←"
+                :arrow_lr      "↔"
+                :properties    "⚙"
+                :end           "∎"
+                :priority_a    #("⚑" 0 1 (face nerd-icons-red))
+                :priority_b    #("⬆" 0 1 (face nerd-icons-orange))
+                :priority_c    #("■" 0 1 (face nerd-icons-yellow))
+                :priority_d    #("⬇" 0 1 (face nerd-icons-green))
+                :priority_e    #("❓" 0 1 (face nerd-icons-blue))))
+
+(defadvice! +org-init-appearance-h--no-ligatures-a ()
+  :after #'+org-init-appearance-h
+  (set-ligatures! 'org-mode nil)
+  (set-ligatures! 'org-mode
+    :list_property "::"
+    :em_dash       "---"
+    :ellipsis      "..."
+    :arrow_right   "->"
+    :arrow_left    "<-"
+    :arrow_lr      "<->"
+    :properties    ":PROPERTIES:"
+    :end           ":END:"
+    :priority_a    "[#A]"
+    :priority_b    "[#B]"
+    :priority_c    "[#C]"
+    :priority_d    "[#D]"
+    :priority_e    "[#E]"))
+#+end_src
+
+**** LaTeX 片段
+
+让公式稍稍好看一点点
+#+begin_src emacs-lisp
+(setq! org-highlight-latex-and-related '(latex script entities))
+#+end_src
+
+理想情况下 ~org-src-font-lock-fontify-block~ 不会添加 =org-block= ，但我
+们可以通过添加带有 =:inherit default= 面来避免整个功能，这将覆盖背景颜色。
+
+检查 ~org-do-latex-and-related~ 显示 ="latex"= 是传递的语言参数，因此我们
+可以如上所述覆盖背景。
+#+begin_src emacs-lisp
+(require 'org-src)
+(add-to-list 'org-src-block-faces '("latex" (:inherit default :extend t)))
+#+end_src
+
+比语法高亮的 LaTeX 更好的是 /呈现/ LaTeX。我们可以使用 =org-fragtog= 自动执
+行此操作。
+
+#+begin_src emacs-lisp :noweb-ref none :tangle packages.el
+(package! org-fragtog)
+#+end_src
+
+#+begin_src emacs-lisp
+(use-package! org-fragtog :hook (org-mode . org-fragtog-mode))
+#+end_src
+
+自定义 LaTeX 片段的外观很舒适，这样它们就更适合文本了 --- 比如这个
+$\sqrt{\beta^2+3}-\sum_{\phi=1}^\infty \frac{x^\phi-1}{\Gamma(a)}$​。
+
+#+begin_src emacs-lisp :noweb no-export :noweb-prefix no
+(setq! org-preview-latex-default-process 'dvisvgm
+       org-preview-latex-process-alist
+       '((dvipng :programs ("latex" "dvipng")
+          :description "dvi --> png"
+          :message "you need to install the programs: latex and dvipng."
+          :image-input-type "dvi"
+          :image-output-type "png"
+          :image-size-adjust (1.0 . 1.0)
+          :latex-compiler ("lualatex --shell-escape --output-format=dvi --interaction=nonstopmode --output-directory=%o %f")
+          :image-converter ("dvipng -D %D -T tight -bg Transparent -o %O %f"))
+         (dvisvgm :programs ("latex" "dvisvgm")
+                  :description "dvi --> svg"
+                  :message "you need to install the programs: latex and dvisvgm."
+                  :use-xcolor t
+                  :image-input-type "dvi"
+                  :image-output-type "svg"
+                  :image-size-adjust (1.7 . 1.5)
+                  :latex-compiler ("lualatex --shell-escape --output-format=dvi --interaction=nonstopmode --output-directory=%o %f")
+                  :image-converter ("dvisvgm %f --no-specials=bgcolor -n -b min -c %S -o %O"))
+         (imagemagick :programs ("latex" "convert")
+                      :description "pdf --> png"
+                      :message "you need to install the programs: latex and imagemagick."
+                      :use-xcolor t
+                      :image-input-type "pdf"
+                      :image-output-type "png"
+                      :image-size-adjust (1.0 . 1.0)
+                      :latex-compiler ("lualatex --shell-escape --output-format=pdf --interaction=nonstopmode --output-directory=%o %f")
+                      :image-converter ("convert -density %D -trim -antialias %f -quality 100 %O"))))
+(plist-put org-format-latex-options :background "Transparent")
+(plist-put org-format-latex-options :zoom 0.93) ; Calibrated based on the TeX font and org-buffer font.
+#+end_src
+
+顺便设置下背景
+
+#+begin_src emacs-lisp
+(defun +org-refresh-latex-images-previews-h ()
+  (dolist (buffer (doom-buffers-in-mode 'org-mode (buffer-list)))
+    (with-current-buffer buffer
+      (+org--toggle-inline-images-in-subtree (point-min) (point-max) 'refresh)
+      (unless (eq org-latex-preview-default-process 'dvisvgm)
+        (org-clear-latex-preview (point-min) (point-max))
+        (org--latex-preview-region (point-min) (point-max))))))
+
+(add-hook! doom-load-theme #'+org-refresh-latex-images-previews-h)
+#+end_src
+
+**** 字体化内联 src 块
+
+Org 使用 =#+begin_src= 块做了一些事情，比如在幕后使用 font-lock 作为语言的主要模
+式并拉出良好的彩色结果。相比之下，内联 =src_= 块在某种程度上被忽略了。
+
+我不是第一个有这种感觉的人, 幸好他们已经开始在 [[https://stackoverflow.com/questions/20309842/how-to-syntax-highlight-for-org-mode-inline-source-code-src-lang/28059832][stackexchange]] 上开始讨论了。 我打
+算直接使用他们的结果，但不幸的是，他们没有执行 /true/ 源代码字体化，而只是将
+=org-code= 应用在内容上。
+
+我们可以做得比这更好！使用 ~org-src-font-lock-fontify-block~ 我们可以应用适合语
+言的语法高亮。然后，继续到 ={{{results(...)}}}=，它可以将 =org-block= 应用相应的
+规则，然后通过模仿 ~prettify-symbols-mode~ 的行为隐藏值包围结构。
+
+#+begin_warning
+但目前只能一行高亮一个内联 src 块。我不知道它为什么会停止，我希望它正常。如果您
+知道发生了什么或如何解决此问题 /请/ 联系。
+#+end_warning
+
+#+begin_src emacs-lisp
+(setq! org-inline-src-prettify-results '("⟨" . "⟩"))
+#+end_src
+
+Doom 主题的额外字体化问题多于帮助。
+#+begin_src emacs-lisp
+(setq! doom-themes-org-fontify-special-tags nil)
+#+end_src
+
+
+*** Babel
+:properties:
+:CUSTOM_ID: org_babel_generic
+:header-args:emacs-lisp: :tangle no :noweb-ref org-babel-conf
+:end:
+
+我们需要建立一个通天的巴别塔，以便我们可以在 org-mode 的任意位置编写以及运行任何
+编程语言！
+
+#+begin_src emacs-lisp :noweb no-export :noweb-ref org-conf :tangle no
+<<org-babel-conf>>
+#+end_src
+
+**** LaTeX
+
+如果导出到文件，我们使用定制化的 LaTeX 导出，也就是应用所有关于我们对于 org-mode
+latex 的定制化设置。(HTML 除外？)
+
+#+begin_src emacs-lisp
+(defadvice! org-babel-execute-latex-export-file (orig-fn body params)
+  "Like `org-babel-execute:latex', support org-format-latex-header for all"
+  :around #'org-babel-execute:latex
+  (if (string-suffix-p ".html" (cdr (assq :file params)))
+      (funcall orig-fn body params)
+    (let ((expanded-body (org-babel-expand-body:latex body params))
+          (latex-compiler
+           (list :latex-compiler (or (cadar (org-collect-keywords '("latex_compiler"))) org-latex-compiler))))
+      (if (cdr (assq :file params))
+          (ginshio/org-babel-execute-latex-export-file latex-compiler expanded-body params)
+        expanded-body))))
+
+(defun ginshio/org-babel-execute-latex-export-file (latex-compiler body params)
+  (let* ((out-file (cdr (assq :file params)))
+         (extension (file-name-extension out-file))
+         (tex-file (org-babel-temp-file "latex-" ".tex"))
+         (border (cdr (assq :border params)))
+         (imagemagick (cdr (assq :imagemagick params)))
+         (fit (or (cdr (assq :fit params)) border))
+         (headers (cdr (assq :headers params))))
+    (stringp nil)
+    (with-temp-file tex-file
+      (require 'ox-latex)
+      (insert
+       (org-latex--insert-compiler latex-compiler)
+       (org-latex-guess-inputenc
+        (org-splice-latex-header
+         org-format-latex-header
+         (delq nil
+               (mapcar
+                (lambda (el)
+                  (unless (and (listp el) (string= "hyperref" (cadr el))) el))
+                org-latex-default-packages-alist))
+         (append (cdr (assq :packages params)) org-latex-packages-alist)
+         nil))
+       (if (string= "png" extension)
+           (format "%s%s%s%s"
+                   (if fit "\n\\usepackage[active,tightpage]{preview}\n" "")
+                   (if border (format "\\setlength{\\PreviewBorder}{%s}\n" border) "")
+                   (let ((height (and fit (cdr (assq :pdfheight params)))))
+                     (if height (format "\\pdfpageheight %s\n" height) ""))
+                   (let ((width (and fit (cdr (assq :pdfwidth params)))))
+                     (if width (format "\\pdfpageheight %s\n" width) "")))
+         "")
+       (if headers
+           (concat "\n"
+                   (if (listp headers)
+                       (mapconcat #'identity headers "\n")
+                     headers) "\n")
+         "")
+       (if (and fit (string= "png" extension))
+           (concat "\n\\begin{document}\n\\begin{preview}\n" body
+                   "\n\\end{preview}\n\\end{document}\n")
+         (concat "\n\\begin{document}\n" body "\n\\end{document}\n"))))
+    (when (file-exists-p out-file) (delete-file out-file))
+    (if (string= "tex" extension)
+        (rename-file tex-file out-file)
+      (let* ((transient-pdf-file (org-babel-latex-tex-to-pdf tex-file)))
+        (cond
+         ((string= "pdf" extension)
+          (rename-file transient-pdf-file out-file))
+         ((and (string= "png" extension) imagemagick)
+          (org-babel-latex-convert-pdf
+           transient-pdf-file out-file (cdr (assq :iminoptions params)) (cdr (assq :imoutoptions params))))
+         ((string= "svg" extension)
+          (let* ((log-buf (get-buffer-create "*Org Babel LaTeX Output*"))
+                 (err-msg "org babel latex failed")
+                 (img-out (org-compile-file
+                           transient-pdf-file
+                           (list org-babel-latex-pdf-svg-process)
+                           extension err-msg log-buf)))
+            (rename-file img-out out-file)))
+         (t
+          (error "Can not create %s files, please specify a .svg, .png or .pdf file or try the :imagemagick header argument"
+                 extension)))))))
+#+end_src
+
+*** 导出通用设置
+:properties:
+:CUSTOM_ID: org_export_generic
+:header-args:emacs-lisp: :tangle no :noweb-ref org-export-conf
+:end:
+
+默认情况下，Org 仅将前三个级别的标题导出为标题。当使用 =article= 时，LaTeX 标题
+从 =\section=​、​=\subsection=​、​=\subsubsection= 和 =\paragraph=​、
+=\subgraph= --- /五/ 个级别。HTML5 有六级标题 (=<h1>= 到 =<h6>=)，但第一级 Org
+标题被导出为 =<h2>= 元素 --- 剩下 /五/ 个可用级别。
+
+#+begin_src emacs-lisp :noweb no-export :noweb-ref org-conf :tangle no
+(setq! org-export-headline-levels 5)
+(after! ox
+  <<org-export-conf>>
+  )
+#+end_src
+
+我还将使用 =ox-extra= 中的一个项目，以便我可以在标题中添加一个 =:ignore:= 标记以
+保留内容，但标题本身会被忽略（​=:noexport:= 它忽略了标题和内容）。当我想使用标题
+来提供未出现在最终文档中的写作结构时，这很有用。
+
+#+begin_src emacs-lisp
+(require 'ox-extra)
+(ox-extras-activate '(ignore-headlines))
+#+end_src
+
+由于我（大致）跟踪 Org ~HEAD~​，因此在创建者字符串中包含 git 版本是有意义的。
+#+begin_src emacs-lisp
+(setq! org-export-creator-string
+       (format "Emacs %s (Org mode %s–%s)" emacs-version (org-release) (org-git-version)))
+#+end_src
+
+在导出时，我并不想要零宽度空格，加一个简单的过滤器将其过滤掉。
+#+begin_src emacs-lisp
+(defun +org-export-remove-zero-width-space (text _backend _info)
+  "Remove zero width spaces from TEXT."
+  (unless (org-export-derived-backend-p 'org)
+    (replace-regexp-in-string "\u200B" "" text)))
+(add-to-list 'org-export-filter-final-output-functions #'+org-export-remove-zero-width-space t)
+#+end_src

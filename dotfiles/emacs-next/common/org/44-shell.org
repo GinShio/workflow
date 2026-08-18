@@ -1,0 +1,150 @@
+* 跑外部程序
+
+Emacs 派生子進程的場合比看上去多：編譯、版本控制、語言服務器、補全時列一遍目錄。多
+數時候你不會注意到，直到有一天一條命令在終端裏跑得好好的，在 Emacs 裏卻報一句莫名其
+妙的語法錯誤。
+
+這個模塊管兩件事：Emacs 自己拼出來的命令行交給誰執行，以及你想親手敲一條命令時去哪
+裏敲。
+
+內建命令的語義見 [[info:emacs#Shell][Emacs manual: Shell Commands]]；Eat 的終端、char/semi-char/emacs
+三種輸入模式與遠程用法見 [[https://codeberg.org/akib/emacs-eat][Eat manual/README]]。本配置的五個入口整理在
+[[file:../GUIDE.org::*Shell 與 Eat][GUIDE.org]]。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el" :comments no
+;;; ginshio-shell.el --- handing work to other programs -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el"
+(require 'ginshio-path)
+(require 'ginshio-doctor)
+(require 'ginshio-keys)
+#+end_src
+
+** 兩個 shell，兩種用途
+
+交互用的 shell 和執行用的 shell 不必是同一個，而且不應該是。
+
+Emacs 拼命令行時假設的是 POSIX 語法——變量前綴賦值、~$(...)~、~&&~ 串聯。這些寫法在
+一個非 POSIX 的交互 shell 下不成立，而 Emacs 默認就把子進程交給 =$SHELL=。症狀出現
+在離原因很遠的地方：某個包的某條命令失敗，錯誤信息來自那個 shell，抱怨的是一段不是
+你寫的語法。
+
+所以把它釘死在一個 POSIX shell 上。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el"
+(defconst ginshio-shell-posix
+  (or (executable-find "bash") "/bin/sh")
+  "A POSIX shell, for the command lines Emacs assembles itself.")
+
+(setq shell-file-name ginshio-shell-posix
+      shell-command-switch "-c")
+#+end_src
+
+另一頭是你自己要用的那個。開一個終端是為了得到你平時的環境——你的別名、你的提示符、
+你的補全——所以它跟着登錄 shell 走，和上面那個互不干擾。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el"
+(setq explicit-shell-file-name (or (getenv "SHELL") ginshio-shell-posix))
+#+end_src
+
+** 一次性的命令
+
+不需要一個終端會話，只想跑一條命令看看結果——這是絕大多數情況。三個入口：把輸出丟進
+緩衝區、讓它在後台跑、把選中的文本喂給它。
+
+第三個是這份配置不做格式化的另一面。格式化交給外部工具，那麼把當前這段文本交出去、
+拿處理過的結果換回來，就該是一個順手的動作：加前綴參數時它原地替換選區。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el"
+(setq shell-command-prompt-show-cwd t
+      async-shell-command-buffer 'new-buffer)
+#+end_src
+
+提示符裏顯示當前目錄，因為命令是在那裏執行的，而緩衝區的目錄未必是你以為的那個。後
+台命令每次開新緩衝區而不是問你要不要覆蓋上一個——同時跑兩件事是常態，被問一句才是意
+外。
+
+輸出落在哪由 window 模塊那張表決定，異步命令的緩衝區已經在裏面。
+
+** 真的需要一個終端的時候
+
+外面已經有終端了，所以這裏要誠實：多數時候你該用外面那個。它更快，關掉 Emacs 也不影
+響它，出問題時它不會把編輯器一起拖下水。
+
+留一個在 Emacs 裏的理由只有一個，但這個理由很硬——輸出是緩衝區。一屏編譯錯誤、一段
+=strace= 的結果、一個 REPL 的歷史，在緩衝區裏可以用你搜索代碼的鍵去搜索，可以標記複
+製，可以直接跳到裏面提到的文件行號。在外面那個終端裏，這些都得先想辦法把文本弄出來。
+
+[[https://codeberg.org/akib/emacs-eat][eat]] 是純 elisp 實現的終端模擬器。它不需要編譯，因此不會在某次系統升級後突然裝不上；
+它也能在遠程目錄下工作，這一點和 remote 模塊是配套的。代價是重輸出時比編譯出來的實
+現慢——而重輸出的活本來就該在外面那個終端裏幹。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el"
+(use-package eat
+  :ensure (eat :host codeberg :repo "akib/emacs-eat"
+               :files ("*.el" ("term" "term/*.el") "*.texi" "*.ti"
+                       ("terminfo/e" "terminfo/e/*")
+                       ("terminfo/65" "terminfo/65/*")
+                       ("integration" "integration/*")
+                       (:exclude ".dir-locals.el" "*-tests.el")))
+  :commands (eat eat-project)
+  :init
+  (setq eat-kill-buffer-on-exit t))
+#+end_src
+
+*** 誰收到你按的鍵
+
+終端緩衝區有一個所有編輯器都要面對的問題：一個鍵是給 Emacs 的，還是給裏面跑着的程序
+的。eat 給了三檔，默認那檔把絕大多數鍵送進終端，只留少數幾個給 Emacs。
+
+leader 不在此列——它住在覆蓋層裏，而覆蓋層排在所有 major 和 minor 映射之前。所以終端
+緩衝區裏 ~M-m~ 仍然是 leader，切窗口、換緩衝區、開項目都照常。
+
+反過來說，~M-m~ 也就送不進終端裏的程序了。真要把它交出去的那天，關掉
+~ginshio-override-mode~ 就行——這是它作為一個 minor mode 而不是一段硬編碼的原因。
+
+** 鍵位
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el"
+(ginshio-leader-define
+ "!"   "run"
+ "! !" #'shell-command
+ "! &" #'async-shell-command
+ "! |" #'shell-command-on-region
+ "! t" #'eat
+ "! p" #'eat-project)
+#+end_src
+
+| 鍵         | 做什麼                                   |
+|------------+------------------------------------------|
+| ~M-m ! !~    | 跑一條命令，輸出進緩衝區                 |
+| ~M-m ! &~    | 跑一條命令，不等它                       |
+| ~M-m ! |~    | 把選區喂給一條命令；帶前綴參數則原地替換 |
+| ~M-m ! t~    | 在當前目錄開一個終端                     |
+| ~M-m ! p~    | 在項目根目錄開一個終端                   |
+
+編譯和錯誤跳轉也屬於這個模塊管的事——把源碼交給外部工具，再把它的輸出變回可跳轉的位
+置。目前只有 window 模塊的 ~M-m p c~ 觸發項目編譯，跳到下一個錯誤還沒有鍵。要補的話
+這裏是它的位置。
+
+** 自檢項
+
+檢查的不是「bash 裝了沒有」，而是「Emacs 將要使用的那個 shell 認不認 POSIX 語法」。
+這兩件事在多數機器上結論相同，但錯的時候，後者才是真正壞掉的東西。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el"
+(ginshio-doctor-declare 'shell "POSIX command syntax"
+                        (lambda ()
+                          (eq 0 (call-process shell-file-name nil nil nil
+                                              shell-command-switch
+                                              "probe=1; test \"$probe\" = 1")))
+                        :note "the shell Emacs builds command lines for"
+                        :detail (lambda () (format "using %s" shell-file-name))
+                        :remedy "zypper install bash")
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el" :comments no
+(provide 'ginshio-shell)
+;;; ginshio-shell.el ends here
+#+end_src

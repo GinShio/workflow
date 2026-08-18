@@ -1,0 +1,497 @@
+* 包管理
+
+Emacs 自帶的包管理器只認發布到 ELPA 的版本，而 Emacs 生態裏大量有價值的東西直接活
+在 git 倉庫裏，作者也常常按倉庫而不是按發布來迭代。所以這裏換一個能直接從源碼倉庫
+安裝的管理器。
+
+選用 [[https://github.com/progfolio/elpaca][elpaca]]。它並行地克隆和構建，也能直接以 commit 鎖定 git 倉庫。上游手冊的入口是
+[[https://github.com/progfolio/elpaca/blob/master/doc/elpaca.texi][Elpaca manual]]；日常查看已安裝套件與構建日誌用 ~M-x elpaca-manager~ 和
+~M-x elpaca-log~。
+
+包管理分成兩個明確階段：
+
+- =bin/vanilla-emacs sync= 可以下載、切換 revision、構建和寫鎖；加 =--upgrade= 時接受上游新
+  revision。
+- =bin/vanilla-emacs clean= 刪除 tangle 產物、=$XDG_DATA_HOME/emacs/elpaca/= 與 native-comp
+  cache，但保留文學源碼與 =elpaca.lock=。
+- 普通 Emacs 啓動只激活已存在的 build。缺一個包、鎖檔或對應版本的 build 都立即報錯，
+  不嘗試聯網修復。
+
+Elpaca 的聲明仍然先進隊列，但 =init.el= 結束前會同步等待所有隊列完成。這樣 package 的
+~:config~ 也是啓動契約的一部分：任何構建或配置錯誤都會中止啓動，而不是在稍後的 timer 裏
+變成一條容易錯過的 warning。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el" :comments no
+;;; ginshio-packages.el --- package manager -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+(require 'ginshio-path)
+(require 'ginshio-doctor)
+(require 'cl-lib)
+(require 'subr-x)
+#+end_src
+
+包樹裝到數據目錄。按「丟了損失什麼」的標準它其實接近緩存——刪掉只是要重新下載——但
+自動清理緩存的規則不該有能力讓你的編輯器在下次啓動時花十分鐘重建。
+
+每個 Emacs 版本有自己的 build 目錄。source 可以共用；byte-code、原生編譯產物以及不少包
+在編譯時寫入的常量不能假定跨版本相容。
+
+控制腳本用 ~GINSHIO_EMACS_COMMAND~ 告訴配置這次 =sync= 是按鎖同步，還是以升級模式運行；
+內部值分別是 =sync= 與 =upgrade=。普通啓動沒有這個變量。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+(defconst ginshio-package-command (getenv "GINSHIO_EMACS_COMMAND")
+  "Package operation requested by bin/vanilla-emacs, or nil during normal startup.")
+
+(defconst ginshio-package-managing-p
+  (member ginshio-package-command '("sync" "upgrade"))
+  "Non-nil only while the external package control command is running.")
+
+(when ginshio-package-managing-p
+  (setq native-comp-jit-compilation nil))
+
+(defvar elpaca-directory (expand-file-name "elpaca/" ginshio-data-dir))
+(defvar elpaca-builds-directory
+  (expand-file-name (format "builds-%s/" emacs-version) elpaca-directory))
+(defvar elpaca-sources-directory (expand-file-name "sources/" elpaca-directory))
+
+(defconst ginshio-elpaca-lock-file
+  (expand-file-name "elpaca.lock" ginshio-config-dir))
+
+(defconst ginshio-package-script
+  (expand-file-name "bin/vanilla-emacs" ginshio-config-dir)
+  "External command which owns package installation and maintenance.")
+#+end_src
+
+** 引導
+
+Elpaca 自己也必須被鎖定；它在讀取 lock file 之前就要先運行，所以不能靠 lock file 鎖住
+自己。=:ref= 固定到已審閱的 commit，升級時與 bootstrap 版本一起顯式修改。
+
+普通啓動要求 source、當前 Emacs 版本的 build 和 autoload 都已存在。只有控制腳本可以走
+上游 bootstrap 路徑。
+
+上游 installer 會直接在 source 目錄 byte-compile Elpaca；那在 source 也按版本隔離的默認
+佈局裏沒有問題，但這份配置刻意讓所有 Emacs 版本共用 source。把 =elpaca.elc= 留在
+=sources/elpaca/=，下一個版本第一次 =sync= 時就可能在建立自己的 build 之前先載入上一個
+版本的 byte-code。
+
+所以 bootstrap 不編譯共享 source。它只用當前 Emacs 解釋執行 =elpaca.el=，讓 Elpaca 隨後
+按正常隊列把自己構建到 =builds-<emacs-version>/elpaca/=。維護進程也會刪除舊 installer
+可能留在 source 裏的 =*.elc=；source 只保存可跨版本共用的源碼。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+(defvar elpaca-installer-version 0.12)
+(defconst ginshio-elpaca-ref "6530ffa73b18ccee858e7c471415ab7e0c0d8ce1")
+(defvar elpaca-order `(elpaca :repo "https://github.com/progfolio/elpaca.git"
+                              :ref ,ginshio-elpaca-ref :depth 1 :inherit ignore
+                              :files (:defaults "elpaca-test.el" (:exclude "extensions"))
+                              :build (:not elpaca-activate)))
+(let* ((repo  (expand-file-name "elpaca/" elpaca-sources-directory))
+       (build (expand-file-name "elpaca/" elpaca-builds-directory))
+       (build-library (expand-file-name "elpaca.elc" build))
+       (build-autoloads (expand-file-name "elpaca-autoloads.el" build))
+       (build-ready-p (and (file-readable-p build-library)
+                           (file-readable-p build-autoloads)))
+       (order (cdr elpaca-order))
+       (default-directory repo))
+  (unless ginshio-package-managing-p
+    (unless (file-directory-p repo)
+      (error "Elpaca source is missing; run %s sync" ginshio-package-script))
+    (unless build-ready-p
+      (error "Elpaca is not built for Emacs %s; run %s sync"
+             emacs-version ginshio-package-script)))
+  (unless (file-exists-p repo)
+    (make-directory repo t)
+    (condition-case-unless-debug err
+        (if-let* ((buffer (pop-to-buffer-same-window "*elpaca-bootstrap*"))
+                  ((zerop (apply #'call-process `("git" nil ,buffer t "clone"
+                                                  ,@(when-let* ((depth (plist-get order :depth)))
+                                                      (list (format "--depth=%d" depth) "--no-single-branch"))
+                                                  ,(plist-get order :repo) ,repo))))
+                  ((zerop (call-process "git" nil buffer t "checkout"
+                                        (or (plist-get order :ref) "--")))))
+            (progn (message "%s" (buffer-string)) (kill-buffer buffer))
+          (error "%s" (with-current-buffer buffer (buffer-string))))
+      ((error)
+       (when (file-directory-p repo) (delete-directory repo 'recursive))
+       (signal (car err) (cdr err)))))
+  (when ginshio-package-managing-p
+    (dolist (file (directory-files-recursively repo "\\.elc\\'"))
+      (delete-file file))
+    (when (and (file-directory-p build) (not build-ready-p))
+      (delete-directory build 'recursive)))
+  (if build-ready-p
+      (progn
+        (add-to-list 'load-path build)
+        (require 'elpaca-autoloads))
+    (add-to-list 'load-path repo)
+    (load (expand-file-name "elpaca.el" repo) nil nil)
+    (elpaca-generate-autoloads "elpaca" repo)
+    (let ((load-source-file-function nil))
+      (load (expand-file-name "elpaca-autoloads.el" repo) nil nil))))
+
+(setq elpaca-lock-file
+      (unless (equal ginshio-package-command "upgrade")
+        ginshio-elpaca-lock-file))
+
+(unless ginshio-package-managing-p
+  (unless (file-readable-p ginshio-elpaca-lock-file)
+    (error "Package lock file is missing; run %s sync"
+           ginshio-package-script)))
+
+(defun ginshio-packages-refuse-build (elpaca)
+  "Refuse to build ELPACA during ordinary editor startup."
+  (error "Package `%s' is not built for Emacs %s; run %s sync"
+         (elpaca<-id elpaca) emacs-version ginshio-package-script))
+
+(unless ginshio-package-managing-p
+  (setq elpaca-default-build-steps '(ginshio-packages-refuse-build)))
+
+(defun ginshio-packages-report-progress (elpaca)
+  "Print ELPACA's terminal status during noninteractive maintenance."
+  (when noninteractive
+    (message "%-8s %s" (elpaca<-status elpaca) (elpaca<-id elpaca))))
+
+(defun ginshio-packages--configure-maintenance-runtime ()
+  "Keep Elpaca subprocesses focused on deterministic package builds."
+  (setq native-comp-jit-compilation nil
+        elpaca-with-emacs-env-form
+        `(progn ,elpaca-with-emacs-env-form
+                (setq native-comp-jit-compilation nil))))
+
+(when ginshio-package-managing-p
+  (require 'elpaca)
+  (ginshio-packages--configure-maintenance-runtime)
+  (elpaca-subscribe 'finished #'ginshio-packages-report-progress)
+  (elpaca-subscribe 'failed #'ginshio-packages-report-progress))
+
+(add-hook 'after-init-hook #'elpaca-process-queues)
+(elpaca `(,@elpaca-order))
+#+end_src
+
+** 維護邊界
+
+普通 Emacs 不只是「啓動時不下載」；整個會話都只是套件消費者。否則一次好奇的
+~M-x elpaca-update-all~ 就能繞過 lock file、在編輯途中改寫 source 與 build，下一次啓動
+纔發現世界已經變了。
+
+manager、log、Info 與訪問 source 都是讀操作，仍然可用。抓取、合併、重建、刪除與寫鎖
+全部拒絕，錯誤信息只給出外部控制腳本。=sync= / =sync --upgrade= 進程不安裝這層保護，
+所以仍走 Elpaca 自己的實現，而不是在 shell 裏複製一套包管理器。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+(defconst ginshio-packages-mutating-commands
+  '(elpaca-update-menus
+    elpaca-try
+    elpaca-delete
+    elpaca-rebuild
+    elpaca-fetch
+    elpaca-fetch-all
+    elpaca-merge
+    elpaca-pull
+    elpaca-update
+    elpaca-merge-all
+    elpaca-pull-all
+    elpaca-update-all
+    elpaca-write-lock-file)
+  "Elpaca commands owned by the external package control plane.")
+
+(defun ginshio-packages-refuse-maintenance (&rest _)
+  "Refuse package tree mutation inside an ordinary Emacs session."
+  (user-error "Package maintenance is external; run %s sync or %s sync --upgrade"
+              ginshio-package-script ginshio-package-script))
+
+(unless ginshio-package-managing-p
+  (dolist (command ginshio-packages-mutating-commands)
+    (advice-add command :override #'ginshio-packages-refuse-maintenance)))
+#+end_src
+
+** 版本鎖定
+
+一份配置如果不能在另一台機器上裝出同樣的結果，它就只是一份筆記。鎖定文件記錄每個包
+當時的確切 commit，放進版本控制之後，配置和它依賴的世界一起被固定下來。
+
+日常使用 =bin/vanilla-emacs sync=：已有鎖檔時嚴格按鎖檔安裝，而且不重寫它；第一次沒有鎖檔
+時才解析當前 recipes 並寫出第一份。這也避免 Elpaca 從 lock menu 讀回 recipe 後，把原本的
+=:source= metadata 改寫成 =elpaca-menu-lock-file=，製造 revision 完全沒變的假 diff。
+
+主動升級使用 =bin/vanilla-emacs sync --upgrade=：忽略舊鎖、取回並合併上游更新、重建，再把新的
+commit 寫回鎖檔。兩者都由控制腳本調用，不在運行中的編輯器裏偷偷改變世界。
+
+=bin/vanilla-emacs clean= 是這個生命週期的逆操作。它刪除 =early-init.el=、=init.el=、
+=lisp/=、整棵 Elpaca 目錄與 =$XDG_CACHE_HOME/emacs/eln-cache/=。它不刪 lock，也不碰
+其他 data/state/cache。清理前由 system/service 停止正在使用它們的 Emacs；控制腳本不探測
+daemon。clean 後普通啓動必須失敗；再次 =sync= 才重新建立一個可消費的完整世界。
+
+** use-package
+
+~use-package~ 本身已隨 Emacs 分發，這裏只是讓它的 ~:ensure~ 交給 elpaca 處理。
+
+~:wait~ 在這裏是必需的，而不是保險。~use-package~ 是宏，它在被讀到的那一刻就展開；如果
+此時接管 ~:ensure~ 的支持還在隊列裏排隊，後面模塊裏的每一個 ~:ensure~ 都會被原本那套已
+經停用的包管理器接手，症狀是安裝憑空失敗而原因指向別處。~:wait~ 讓隊列在這一行處截斷
+並立即處理完，此後的展開才是對的。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+(elpaca (elpaca-use-package :wait t)
+  (elpaca-use-package-mode))
+
+(unless (bound-and-true-p elpaca-use-package-mode)
+  (error "Elpaca use-package integration is unavailable; run %s sync"
+         ginshio-package-script))
+#+end_src
+
+不啓用全局延遲加載。統一延遲聽起來總是划算，實際上會製造一類很難查的故障：包裝好了、
+~:config~ 卻從未執行，因為沒有任何東西觸發它加載，而症狀只是某個功能安靜地缺席。這裏
+要求每個聲明自己說明加載時機——多寫一行 ~:hook~ 或 ~:commands~，換來的是可預測。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+(setq use-package-always-defer nil
+      use-package-expand-minimally t
+      use-package-enable-imenu-support t
+      use-package-compute-statistics init-file-debug
+      use-package-verbose init-file-debug)
+#+end_src
+
+** 收束隊列
+
+所有模塊讀完之後，=init.el= 調用下面的函數。先保存本輪 queue 的引用，因為 Elpaca 完成後
+會切到新的空 queue；鎖檔必須從剛剛實際解析和構建的完整依賴圖生成。已完成的 queue 仍然
+保留在 ~elpaca--queues~ 裏，所以 ~elpaca-update-all~ 自己就能遍歷完整圖，不需要把內部 queue
+變量動態綁回舊值。
+
+按 lock 同步時，Git source 會 checkout 到確切 commit，因而留下 detached HEAD；僅僅在下一個
+進程裏忽略 lock file 並不會把既有 worktree 恢復成 branch。Elpaca 的 update path 會使用
+=@{upstream}=，所以升級前必須先把每個沒有顯式 pin 的共享 source 接回 tracking branch。
+選擇順序是 recipe 的 =:branch=、remote HEAD、唯一可包含當前 lock commit 的 tracking branch；
+沒有唯一答案就直接失敗，不猜測也不改寫歷史。
+
+Elpaca 0.12 的 ~elpaca-update-all~ 會重新排入所有 entry，包括顯式 =:ref= 的 package。這份配置
+在 update queue 建立後，把真正 pinned 的 entry 換成 Elpaca 自己的 skip step；同一 source 的
+其他 entry 也視為 pinned，避免例如 =elpaca-use-package= 越過固定的 Elpaca commit。
+
+package maintenance 已經由 Elpaca 的獨立 Emacs subprocess 做 byte compilation；native JIT 是
+普通編輯會話的運行時緩存，不是 package build。=sync= 期間同時啓動額外的異步 native compiler，
+會讓正在替換的 build directory 和共享 eln cache 多出一組無關 writer。因此 maintenance parent
+及其 Elpaca subprocess 都關掉 JIT；普通 Emacs 仍按 bootstrap 設置啓用它。
+
+動態綁定 ~debug-on-error~ 讓 Elpaca 對 package ~:config~ 的保護層重新拋出原始錯誤。構建
+階段的錯誤會把 order 標成 =failed=，等待結束後統一轉成啓動錯誤。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+(defun ginshio-packages--queue-elpacas (queues)
+  "Return every unique package entry held by QUEUES."
+  (cl-loop with seen
+           for queue in queues
+           append (cl-loop for (id . elpaca) in (elpaca-q<-elpacas queue)
+                           unless (memq id seen)
+                           collect (prog1 (cons id elpaca) (push id seen)))))
+
+(defun ginshio-packages--git-result (directory &rest arguments)
+  "Run Git with ARGUMENTS in DIRECTORY and return (STATUS . OUTPUT)."
+  (with-temp-buffer
+    (let ((default-directory (file-name-as-directory directory)))
+      (cons (apply #'process-file "git" nil t nil arguments)
+            (string-trim-right (buffer-string))))))
+
+(defun ginshio-packages--git-output (directory &rest arguments)
+  "Run Git with ARGUMENTS in DIRECTORY and return its output or signal."
+  (pcase-let ((`(,status . ,output)
+               (apply #'ginshio-packages--git-result directory arguments)))
+    (unless (and (integerp status) (zerop status))
+      (error "%s failed in %s%s"
+             (mapconcat #'shell-quote-argument (cons "git" arguments) " ")
+             directory
+             (if (string-empty-p output) "" (format ":\n%s" output))))
+    output))
+
+(defun ginshio-packages--tracking-branches (directory)
+  "Return tracking branches in DIRECTORY which contain its current HEAD."
+  (cl-loop for line in
+           (split-string
+            (ginshio-packages--git-output
+             directory "for-each-ref" "--contains=HEAD"
+             "--format=%(refname:short)\t%(upstream:short)" "refs/heads")
+            "\n" t)
+           for fields = (split-string line "\t")
+           for branch = (car fields)
+           for upstream = (cadr fields)
+           when (and upstream (not (string-empty-p upstream)))
+           collect (cons branch upstream)))
+
+(defun ginshio-packages--remote-head (directory)
+  "Return the default remote branch in DIRECTORY, or nil when unspecified."
+  (let* ((remote (format "%s" elpaca-default-remote-name))
+         (result (ginshio-packages--git-result
+                  directory "symbolic-ref" "--quiet" "--short"
+                  (format "refs/remotes/%s/HEAD" remote))))
+    (pcase (car result)
+      (0 (cdr result))
+      (1 nil)
+      (_ (error "Unable to read %s/HEAD in %s: %s"
+                remote directory (cdr result))))))
+
+(defun ginshio-packages--upgrade-branch (elpaca)
+  "Choose the tracking branch used to upgrade ELPACA's detached source."
+  (let* ((directory (elpaca<-source-dir elpaca))
+         (recipe-branch (plist-get (elpaca<-recipe elpaca) :branch))
+         (recipe-branch (and recipe-branch (format "%s" recipe-branch)))
+         (branches (ginshio-packages--tracking-branches directory))
+         (remote-head (ginshio-packages--remote-head directory)))
+    (cond
+     (recipe-branch
+      (if (assoc recipe-branch branches)
+          recipe-branch
+        (error "Recipe branch %s does not contain locked HEAD in %s"
+               recipe-branch directory)))
+     ((and remote-head (rassoc remote-head branches))
+      (car (rassoc remote-head branches)))
+     ((null (cdr branches))
+      (if branches
+          (caar branches)
+        (error "No tracking branch contains locked HEAD in %s" directory)))
+     (t
+      (error "Ambiguous tracking branches for locked HEAD in %s: %s"
+             directory (mapconcat #'car branches ", "))))))
+
+(defun ginshio-packages--attach-upgrade-source (elpaca)
+  "Attach ELPACA's Git source to the branch used for an upgrade."
+  (let* ((directory (elpaca<-source-dir elpaca))
+         (result (ginshio-packages--git-result
+                  directory "symbolic-ref" "--quiet" "--short" "HEAD")))
+    (pcase (car result)
+      (0
+       (unless (assoc (cdr result)
+                      (ginshio-packages--tracking-branches directory))
+         (error "Current branch %s has no usable upstream in %s"
+                (cdr result) directory)))
+      (1
+       (let ((branch (ginshio-packages--upgrade-branch elpaca)))
+         (message "upgrade  %s -> %s" (elpaca<-id elpaca) branch)
+         (ginshio-packages--git-output directory "checkout" branch)))
+      (_
+       (error "Unable to inspect HEAD in %s: %s" directory (cdr result))))))
+
+(defun ginshio-packages--prepare-upgrade (elpacas)
+  "Attach unpinned sources in ELPACAS and return every pinned entry."
+  (let (pinned seen-sources)
+    (dolist (entry elpacas)
+      (let* ((elpaca (cdr entry))
+             (source (elpaca<-source-dir elpaca))
+             (pinned-p (elpaca-pinned-p elpaca)))
+        (when pinned-p
+          (push elpaca pinned))
+        (unless (member source seen-sources)
+          (push source seen-sources)
+          (when (and (not pinned-p)
+                     (eq (plist-get (elpaca<-recipe elpaca) :type) 'git))
+            (ginshio-packages--attach-upgrade-source elpaca)))))
+    pinned))
+
+(defun ginshio-packages--normalize-log-text (text &optional limit)
+  "Collapse whitespace in TEXT and truncate it to LIMIT characters."
+  (let* ((limit (or limit 320))
+         (text (replace-regexp-in-string
+                "[[:space:]\n]+" " " (string-trim text))))
+    (if (> (length text) limit)
+        (concat (substring text 0 limit) "...")
+      text)))
+
+(defun ginshio-packages--failure-reason (id)
+  "Return the failed subprocess output or best recorded reason for package ID."
+  (let ((events (elpaca-event-log id)) outputs command)
+    (catch 'command
+      (dolist (event events)
+        (let* ((payload (elpaca-event<-payload event))
+               (output (plist-get payload :output))
+               (info (plist-get payload :info)))
+          (when output
+            (push (ginshio-packages--normalize-log-text output) outputs))
+          (when (and info
+                     (eq (plist-get payload :face) 'elpaca-failed)
+                     (string-prefix-p "$" info))
+            (setq command info)
+            (throw 'command nil)))))
+    (cond
+     (outputs
+      (mapconcat #'identity
+                 (last outputs (min 3 (length outputs))) " | "))
+     (command
+      (format "command failed: %s"
+              (ginshio-packages--normalize-log-text command)))
+     (t
+      (or
+       (cl-loop for event in events
+                for payload = (elpaca-event<-payload event)
+                for info = (plist-get payload :info)
+                when (and info
+                          (or (eq (plist-get payload :status) 'failed)
+                              (eq (plist-get payload :face) 'elpaca-failed))
+                          (not (string-prefix-p "Subprocess error" info)))
+                return (ginshio-packages--normalize-log-text info))
+       (cl-loop for event in events
+                for payload = (elpaca-event<-payload event)
+                for reason = (or (plist-get payload :info)
+                                 (plist-get payload :output))
+                when (and reason
+                          (or (eq (plist-get payload :status) 'failed)
+                              (eq (plist-get payload :face) 'elpaca-failed)))
+                return (ginshio-packages--normalize-log-text reason)))))))
+
+(defun ginshio-packages--assert-finished (elpacas)
+  "Signal an error unless every entry in ELPACAS finished successfully."
+  (when-let* ((failed
+               (cl-loop for (id . elpaca) in elpacas
+                        unless (eq (elpaca<-status elpaca) 'finished)
+                        collect (cons id elpaca))))
+    (error "Package activation failed:\n%s"
+           (mapconcat
+            (lambda (entry)
+              (format "  %s: %s"
+                      (car entry)
+                      (or (ginshio-packages--failure-reason (car entry))
+                          (elpaca<-status (cdr entry)))))
+            failed "\n"))))
+
+(defun ginshio-packages-finalize ()
+  "Activate the package graph, optionally update it, and enforce success."
+  (let ((queues elpaca--queues))
+    (let ((debug-on-error t))
+      (elpaca-wait))
+    (let ((elpacas (ginshio-packages--queue-elpacas queues)))
+      (ginshio-packages--assert-finished elpacas)
+      (when (equal ginshio-package-command "upgrade")
+        (let ((debug-on-error t)
+              (pinned (ginshio-packages--prepare-upgrade elpacas)))
+          (elpaca-update-all)
+          (dolist (elpaca pinned)
+            (setf (elpaca<-build-steps elpaca)
+                  (list #'elpaca--announce-pin)))
+          (elpaca-wait))
+        (ginshio-packages--assert-finished elpacas))
+      (when (and ginshio-package-managing-p
+                 (or (equal ginshio-package-command "upgrade")
+                     (not (file-exists-p ginshio-elpaca-lock-file))))
+        (let ((elpaca-lock-file-functions (list (lambda (_) t))))
+          (elpaca-write-lock-file ginshio-elpaca-lock-file elpacas))))))
+#+end_src
+
+** 自檢項
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+(ginshio-doctor-directory 'packages elpaca-directory :note "installed packages")
+(ginshio-doctor-directory 'packages elpaca-builds-directory
+                          :note (format "builds for Emacs %s" emacs-version))
+(ginshio-doctor-declare 'packages "lock file"
+                        (lambda () (file-readable-p ginshio-elpaca-lock-file))
+                        :note "pinned revisions for reproducible installs"
+                        :remedy "bin/vanilla-emacs sync")
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el" :comments no
+(provide 'ginshio-packages)
+;;; ginshio-packages.el ends here
+#+end_src

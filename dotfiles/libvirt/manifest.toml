@@ -1,0 +1,11 @@
+[[install]]
+id = 'libvirt'
+dst = '~/.config/libvirt/'
+path = '.'
+capabilities = ['develop']
+planes = ['user']
+
+[variables.libvirt]
+runtime_dir = "{{@@ env['XDG_RUNTIME_DIR'] @@}}/libvirt"
+coredump_dir = '{{@@ libvirt.runtime_dir @@}}/dump'
+hugepage_dir = '{{@@ libvirt.runtime_dir @@}}/ram'

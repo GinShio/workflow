@@ -1,0 +1,11 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+# Format staged Zig with `zig fmt`. A missing tool is a silent skip.
+command -v zig >/dev/null 2>&1 || exit 0
+
+staged_lang_files .zig .zon | while IFS= read -r f; do
+    apply_to_staged "$f" zig fmt --stdin
+done
+
+exit 0

@@ -1,0 +1,17 @@
+[project]
+org = "{{@@ wits.projects.source_info['vulkan-samples'].org @@}}"
+build_system = "cmake"
+generator = "Ninja Multi-Config"
+toolchain = "clang"
+default_presets = ["common"]
+
+[repos.main]
+path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
+build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+main_branch = "main"
+[repos.main.remotes]
+origin = "https://github.com/KhronosGroup/Vulkan-Samples.git"
+
+[project.presets.common.definitions]
+VKB_VALIDATION_LAYERS = true
+VKB_WSI_SELECTION = "WAYLAND"

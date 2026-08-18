@@ -1,0 +1,17 @@
+# -*- mode: systemd; coding: utf-8; indent-tabs-mode: nil; -*-
+[Unit]
+Description=PeerBanHelper Container
+
+[Container]
+ContainerName=peerbanhelper
+Image=docker.io/ghostchu/peerbanhelper:latest
+Volume={{@@ sysenv.xdg_data_home @@}}/PeerBanHelper:/app/data
+PublishPort={{@@ peerbanhelper.port @@}}:{{@@ peerbanhelper.port @@}}
+Network=host
+Environment=PUID=0
+Environment=PGID=0
+Environment=TZ=UTC
+AutoUpdate=registry
+
+[Install]
+WantedBy=multi-user.target default.target

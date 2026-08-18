@@ -1,0 +1,2 @@
+Defaults        rootpw
+Defaults        lecture = always # always / never / once

@@ -1,0 +1,11 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+# Format staged Rust with rustfmt. A missing tool is a silent skip.
+command -v rustfmt >/dev/null 2>&1 || exit 0
+
+staged_lang_files .rs | while IFS= read -r f; do
+    apply_to_staged "$f" rustfmt --edition 2021
+done
+
+exit 0

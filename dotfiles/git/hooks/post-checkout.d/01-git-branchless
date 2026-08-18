@@ -1,0 +1,5 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+git branchless hook post-checkout "$@" ||
+    log_warn "git-branchless post-checkout hook returned non-zero."

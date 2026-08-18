@@ -1,0 +1,5 @@
+/bundle/
+/*.toml
+/*.yaml
+!/globals.toml
+!/hosts.toml

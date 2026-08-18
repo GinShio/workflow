@@ -1,0 +1,12 @@
+# -*- mode: systemd; coding: utf-8; indent-tabs-mode: nil; -*-
+[Unit]
+Description=Timer of nightly script
+
+[Timer]
+OnCalendar=*-*-* 05:30:00
+Persistent=false
+AccuracySec=5s
+Unit=nightly-script.service
+
+[Install]
+WantedBy=timers.target

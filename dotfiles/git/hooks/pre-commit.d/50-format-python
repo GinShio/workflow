@@ -1,0 +1,28 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+# Format staged Python: ruff (format + import sort) preferred, else black
+# (+ isort). Both read the staged blob on stdin with the real path so config
+# resolution and reporting stay accurate. A missing tool is a silent skip.
+files=$(staged_lang_files .py .pyi)
+[ -n "$files" ] || exit 0
+
+oldifs=$IFS
+IFS='
+'
+set -f
+if command -v ruff >/dev/null 2>&1; then
+    for f in $files; do
+        apply_to_staged "$f" ruff format --stdin-filename "$f" -
+        apply_to_staged "$f" ruff check --fix --select I --stdin-filename "$f" -
+    done
+elif command -v black >/dev/null 2>&1; then
+    for f in $files; do
+        command -v isort >/dev/null 2>&1 && apply_to_staged "$f" isort -
+        apply_to_staged "$f" black -q -
+    done
+fi
+IFS=$oldifs
+set +f
+
+exit 0

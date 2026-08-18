@@ -1,0 +1,91 @@
+#!/bin/sh
+# Prune deleted branches from the git-machete definition file, re-parenting any
+# children of a deleted branch up to its parent so the tree stays valid.
+
+. "$HOOKS_DIR/core/lib.sh"
+
+# reference-transaction runs up to three times per transaction:
+#   prepared  - refs locked, not yet written
+#   committed - refs written (the only state we act on)
+#   aborted   - transaction rolled back
+# Acting on any other state would corrupt the file mid-rebase/restack.
+[ "$1" = "committed" ] || exit 0
+
+# `git rebase --abort` deletes the refs it created via a *committed* transaction
+# with new-value=0000..., which is indistinguishable from `git branch -D` here.
+# The rebase state dirs still exist at this point, so use them to skip the abort.
+if [ -d "$GIT_DIR/rebase-merge" ] || [ -d "$GIT_DIR/rebase-apply" ]; then
+    exit 0
+fi
+
+MACHETE_FILE="$GIT_COMMON_DIR/machete"
+[ -f "$MACHETE_FILE" ] || exit 0
+
+# Collect deleted branches from stdin: <old-value> <new-value> <ref-name>.
+deleted_branches=""
+while read -r old_val new_val ref_name; do
+    [ "$new_val" = "$NULL_SHA" ] || continue
+    case "$ref_name" in
+        refs/heads/*)
+            deleted_branches="${deleted_branches:+$deleted_branches }${ref_name#refs/heads/}"
+            ;;
+    esac
+done
+[ -n "$deleted_branches" ] || exit 0
+
+# Preferred path: let the native tool own the tree edit. `wf stack tree rm`
+# removes each branch and splices its children up to the parent (identical
+# semantics to the awk fallback), and stays the single source of truth for the
+# machete format. Word-splitting is intentional to pass one arg per branch.
+if command -v wf >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    wf stack tree rm $deleted_branches
+    exit 0
+fi
+
+# Fallback: rewrite the tree ourselves. Indentation width is detected per-subtree
+# from the deleted node's first child, so any consistent unit (tabs or N spaces)
+# is preserved.
+tmp_file=$(mktemp "${MACHETE_FILE}.XXXXXX") || exit 0
+awk -v deleted_list="$deleted_branches" '
+BEGIN {
+    n = split(deleted_list, arr, " ")
+    for (i = 1; i <= n; i++)
+        if (arr[i] != "") deleted[arr[i]] = 1
+}
+{
+    # Separate leading whitespace (indent) from the branch + annotation body.
+    match($0, /^[ \t]*/)
+    lead[NR]   = substr($0, 1, RLENGTH)
+    indent[NR] = RLENGTH
+    body[NR]   = substr($0, RLENGTH + 1)
+    split(body[NR], tok, /[ \t]/)
+    branch[NR] = tok[1]
+    total = NR
+}
+END {
+    for (i = 1; i <= total; i++) {
+        if (!(branch[i] in deleted) || status[i] == "del")
+            continue
+        d = indent[i]
+        step = 0
+        # Dedent every descendant by one level (the deleted node first child gap).
+        for (j = i + 1; j <= total && indent[j] > d; j++) {
+            if (step == 0) step = indent[j] - d
+            drop = (step > indent[j]) ? indent[j] : step
+            lead[j]   = substr(lead[j], drop + 1)
+            indent[j] = indent[j] - drop
+        }
+        status[i] = "del"
+    }
+    for (i = 1; i <= total; i++)
+        if (status[i] != "del") print lead[i] body[i]
+}
+' "$MACHETE_FILE" > "$tmp_file"
+
+if cmp -s "$MACHETE_FILE" "$tmp_file"; then
+    rm -f "$tmp_file"
+else
+    mv "$tmp_file" "$MACHETE_FILE"
+    log_info "cleanup-machete: removed deleted branches from machete definition."
+fi

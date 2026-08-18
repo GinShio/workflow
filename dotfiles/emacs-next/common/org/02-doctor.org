@@ -1,0 +1,225 @@
+* 自檢
+
+Emacs 的配置有一類故障特別難查：某個功能靜悄悄地不工作，因為它依賴的外部程序沒裝、
+字體沒裝、或者這個 Emacs 編譯時就沒帶上對應的支持。錯誤要麼根本不報，要麼報在離
+原因很遠的地方。
+
+自檢把這類問題提前：*每個模塊聲明自己需要什麼，一條命令把缺什麼列出來，並告訴你怎麼
+補*。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-doctor.el" :comments no
+;;; ginshio-doctor.el --- report what the configuration needs but cannot find -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-doctor.el"
+(require 'ginshio-path)
+(require 'seq)
+#+end_src
+
+** 聲明
+
+一項檢查由誰需要它、檢查什麼、失敗了怎麼辦三部分組成。
+
+重複聲明會替換而不是累積，這樣重新加載一個模塊不會讓報告出現重複條目。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-doctor.el"
+(defvar ginshio-doctor-checks nil
+  "Registered health checks, most recently declared first.")
+
+(defun ginshio-doctor-declare (module label test &rest props)
+  "Register TEST as a health check named LABEL on behalf of MODULE.
+
+TEST is called with no arguments; a non-nil result means healthy.
+
+Recognised PROPS:
+
+  :note      what this is needed for, shown beside the label
+  :remedy    a shell command or instruction shown when TEST fails
+  :detail    a function returning a string with specifics of the failure,
+             for checks where knowing *what* is wrong matters
+  :severity  `warn' to report a failure without failing the run;
+             anything else, including absent, means required
+  :when      a predicate deciding whether the check applies at all;
+             when it returns nil the check is reported as skipped"
+  (let ((check (append (list :module module :label label :test test) props)))
+    (setq ginshio-doctor-checks
+          (cons check
+                (seq-remove (lambda (other)
+                              (and (eq (plist-get other :module) module)
+                                   (equal (plist-get other :label) label)))
+                            ginshio-doctor-checks)))))
+#+end_src
+
+三種檢查佔了實際用量的絕大部分，所以給它們各自一個入口。字體那個帶有默認的適用條件：
+終端下沒有字體可言，這時報告缺失只是噪音。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-doctor.el"
+(defun ginshio-doctor-executable (module name &rest props)
+  "Declare that MODULE needs the NAME program on PATH."
+  (apply #'ginshio-doctor-declare module name
+         (lambda () (executable-find name))
+         props))
+
+(defun ginshio-doctor-font (module family &rest props)
+  "Declare that MODULE wants the FAMILY font installed."
+  (apply #'ginshio-doctor-declare module family
+         (lambda () (find-font (font-spec :family family)))
+         (append props (list :when #'display-graphic-p))))
+
+(defun ginshio-doctor-directory (module directory &rest props)
+  "Declare that MODULE needs DIRECTORY to exist and be writable."
+  (apply #'ginshio-doctor-declare module (abbreviate-file-name directory)
+         (lambda () (and (file-directory-p directory) (file-writable-p directory)))
+         props))
+#+end_src
+
+** 運行
+
+檢查本身可能出錯——它要調用外部程序、查詢字體、訪問文件系統。一項檢查拋出異常不應
+該讓整份報告消失，所以異常被捕獲並當作失敗處理，異常信息作為細節顯示。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-doctor.el"
+(defun ginshio-doctor--evaluate (check)
+  "Return (STATUS . DETAIL) for CHECK.
+STATUS is one of `pass', `fail' or `skip'."
+  (let ((applicable (plist-get check :when)))
+    (cond
+     ((and applicable (not (funcall applicable))) (cons 'skip nil))
+     (t (condition-case err
+            (if (funcall (plist-get check :test))
+                (cons 'pass nil)
+              (cons 'fail (when-let* ((detail (plist-get check :detail)))
+                            (funcall detail))))
+          (error (cons 'fail (error-message-string err))))))))
+
+(defun ginshio-doctor-run ()
+  "Evaluate every registered check.
+Returns a list of (CHECK STATUS DETAIL) in declaration order."
+  (mapcar (lambda (check)
+            (let ((outcome (ginshio-doctor--evaluate check)))
+              (list check (car outcome) (cdr outcome))))
+          (reverse ginshio-doctor-checks)))
+
+(defun ginshio-doctor-required-failures (results)
+  "Return the entries of RESULTS that failed and were not optional."
+  (seq-filter (lambda (entry)
+                (and (eq (nth 1 entry) 'fail)
+                     (not (eq (plist-get (nth 0 entry) :severity) 'warn))))
+              results))
+#+end_src
+
+** 報告
+
+報告先交代這個 Emacs 本身是什麼樣的。很多「功能不工作」最終追到的是編譯選項——沒有
+tree-sitter 支持的 Emacs 不會因為你配置了語法解析就長出來，而這件事只在這裏看得見。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-doctor.el"
+(defun ginshio-doctor--environment ()
+  (append
+   (list (cons "emacs" emacs-version)
+         (cons "session" (cond (noninteractive "batch")
+                               ((daemonp) (format "daemon:%s" (daemonp)))
+                               ((display-graphic-p) "graphical")
+                               (t "terminal")))
+         (cons "native compilation"
+               (if (and (fboundp 'native-comp-available-p) (native-comp-available-p)) "yes" "no"))
+         (cons "tree-sitter"
+               (if (and (fboundp 'treesit-available-p) (treesit-available-p)) "yes" "no"))
+         (cons "dynamic modules" (if module-file-suffix "yes" "no")))
+   (mapcar (lambda (variable) (cons variable (getenv variable)))
+           ginshio-required-xdg-variables)))
+#+end_src
+
+失敗分兩種，報告要讓它們一眼可辨：缺了就用不了的，和缺了只是少個便利的。把兩者混在
+同一個顯眼的標記下，時間一長整份報告就會被當作噪音略過。
+
+分組按模塊，而不是按聲明順序切段。一個模塊完全可能分兩處聲明檢查——框架在加載時聲明
+一批，使用它的模塊在註冊時再追加幾條——那樣同一個名字會在報告裏出現兩次，讀的人會以
+為是兩個不同的東西。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-doctor.el"
+(defun ginshio-doctor--mark (check status)
+  (pcase status
+    ('pass "  ok  ")
+    ('skip "  --  ")
+    (_ (if (eq (plist-get check :severity) 'warn) " warn " " FAIL "))))
+
+(defun ginshio-doctor--insert-report (results)
+  "Render RESULTS into the current buffer."
+  (insert "Environment\n")
+  (dolist (pair (ginshio-doctor--environment))
+    (insert (format "    %-26s %s\n" (car pair) (cdr pair))))
+  (dolist (module (delete-dups
+                   (mapcar (lambda (entry) (plist-get (nth 0 entry) :module))
+                           results)))
+    (insert (format "\n%s\n" module))
+    (dolist (entry results)
+      (let* ((check (nth 0 entry))
+             (status (nth 1 entry))
+             (detail (nth 2 entry)))
+        (when (eq (plist-get check :module) module)
+          (insert (format "%s%-26s %s\n"
+                          (ginshio-doctor--mark check status)
+                          (plist-get check :label)
+                          (or (plist-get check :note) "")))
+          (when (and (eq status 'fail) (plist-get check :remedy))
+            (insert (format "        try: %s\n" (plist-get check :remedy))))
+          (when detail
+            (insert (format "        %s\n" detail)))))))
+  (let ((failures (ginshio-doctor-required-failures results)))
+    (insert (if failures
+                (format "\n%d required check(s) failed.\n" (length failures))
+              "\nNothing required is missing.\n"))))
+#+end_src
+
+** 入口
+
+交互式的版本開一個緩衝區；批處理的版本寫到標準輸出並用退出碼表態，可以掛在部署腳本
+或提交鉤子上。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-doctor.el"
+(defun ginshio/doctor ()
+  "Report anything this configuration needs but cannot find."
+  (interactive)
+  (let ((buffer (get-buffer-create "*doctor*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (ginshio-doctor--insert-report (ginshio-doctor-run)))
+      (special-mode)
+      (goto-char (point-min)))
+    (pop-to-buffer buffer)))
+
+(defun ginshio-doctor-batch ()
+  "Print the report on stdout and exit non-zero if anything required is missing."
+  (let ((results (ginshio-doctor-run)))
+    (princ (with-temp-buffer
+             (ginshio-doctor--insert-report results)
+             (buffer-string)))
+    (kill-emacs (if (ginshio-doctor-required-failures results) 1 0))))
+#+end_src
+
+** 基礎檢查
+
+版本控制集成、包管理器都要調用 =git=，而配置、運行時 socket 與三個狀態目錄不可用的
+話，配置會在各種意想不到的地方報錯。這些與具體模塊無關，在這裏一併聲明。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-doctor.el"
+(ginshio-doctor-executable 'doctor "git"
+                           :note "version control and package installation"
+                           :remedy "zypper install git")
+
+(ginshio-doctor-declare 'doctor "configuration"
+                        (lambda () (file-readable-p ginshio-config-dir))
+                        :note (abbreviate-file-name ginshio-config-dir))
+(ginshio-doctor-directory 'doctor (getenv "XDG_RUNTIME_DIR")
+                          :note "local server sockets")
+(ginshio-doctor-directory 'doctor ginshio-data-dir :note "bookmarks, abbrevs, packages")
+(ginshio-doctor-directory 'doctor ginshio-state-dir :note "history, cursor positions")
+(ginshio-doctor-directory 'doctor ginshio-cache-dir :note "backups, auto-saves")
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-doctor.el" :comments no
+(provide 'ginshio-doctor)
+;;; ginshio-doctor.el ends here
+#+end_src

@@ -1,0 +1,51 @@
+[toolbox.runner]
+src = "{{@@ projects.root_dir @@}}/{{@@ wits.projects.source_info['runner'].org @@}}/{{@@ wits.projects.source_info['runner'].name @@}}"
+dest = "{{runner_root}}"
+paths = [
+    { src = "_build/main/release/", includes = ["deqp-runner", "piglit-runner"] },
+]
+
+[toolbox.deqp-vk]
+src = "{{@@ projects.root_dir @@}}/{{@@ wits.projects.source_info['deqp'].org @@}}/{{@@ wits.projects.source_info['deqp'].name @@}}"
+dest = "{{runner_root}}/{{@@ wits.projects.source_info['deqp'].name @@}}"
+post_install = ["gen_vk_default"]
+paths = [
+    { src = "_build/main/external/vulkancts/modules/vulkan/Release", includes = ["deqp-vk"] },
+    { src = "external/vulkancts/data", includes = ["vulkan"] },
+    { src = "external/vulkancts/mustpass/main", dest = "mustpass", includes = ["vk-default"], excludes = ["api.txt", "image/swapchain-mutable.txt", "info.txt", "query-pool.txt", "video.txt", "wsi.txt"] },
+    { src = "external/vulkancts/mustpass/main/waivers.xml", dest = "waivers/vk.xml" }
+]
+
+[toolbox.glcts]
+src = "{{@@ projects.root_dir @@}}/{{@@ wits.projects.source_info['deqp'].org @@}}/{{@@ wits.projects.source_info['deqp'].name @@}}"
+dest = "{{runner_root}}/{{@@ wits.projects.source_info['deqp'].name @@}}"
+paths = [
+    { src = "_build/main/external/openglcts/modules/Release", includes = ["glcts"] },
+    { src = "_build/main/external/openglcts/modules", includes = ["gles2/data", "gles2/shaders", "gles3/data", "gles3/shaders", "gles31/data", "gles31/shaders"] },
+    { src = "external/graphicsfuzz/data", includes = ["gles3/graphicsfuzz"] },
+    { src = "external/openglcts/data", includes = ["gl_cts"], excludes = ["mustpass"] },
+    { src = "external/openglcts/data/gl_cts/data/mustpass", dest = "mustpass", includes = ["gl/khronos_mustpass/main/*.txt", "gl/khronos_mustpass_single/main/*.txt", "egl/*_mustpass/main/*.txt", "gles/*_mustpass/main/*.txt"], excludes = ["src", "*-gtf-main.txt", "waivers"] },
+    { src = "external/openglcts/data/gl_cts/data/mustpass/waivers/waivers.xml", dest = "waivers/gl.xml" }
+]
+
+[toolbox.piglit]
+src = "{{@@ projects.root_dir @@}}/{{@@ wits.projects.source_info['piglit'].org @@}}/{{@@ wits.projects.source_info['piglit'].name @@}}"
+dest = "{{runner_root}}/{{@@ wits.projects.source_info['piglit'].name @@}}"
+post_install = ["patchelf_piglit"]
+paths = [
+    { src = "_build/main", includes = ["bin"], excludes = ["bin/replayer.py"] },
+    { src = "_build/main/lib/Release", dest = "lib" },
+    { includes = ["framework", "templates", "generated_tests/**/*.inc"] },
+    { src = "_build/main/tests", includes = ["*.xml.gz"] },
+    { includes = ["tests"], excludes = ["*.[chao]", "*.[ch]pp", "[Cc][Mm]ake*"] },
+    { src = "_build/main", includes = ["generated_tests"], excludes = ["*.[chao]", "*.[ch]pp", "[Cc][Mm]ake*", "*.list"] }
+]
+
+[toolbox.vkd3d]
+src = "{{@@ projects.root_dir @@}}/vkd3d"
+dest = "{{runner_root}}/vkd3d"
+paths = [
+    { src = "_build/_rel/tests", dest = "bin", excludes = ["*.a"] },
+    { src = "tests", dest = "tests", includes = ["d3d12_tests.h", "test-runner.sh"] },
+    { src = "_build/_rel/libs", includes = ["**/*.so"] }
+]

@@ -1,0 +1,45 @@
+[package]
+name = "wits"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Personal workflow tools, collected behind one command."
+
+[[bin]]
+name = "wits"
+path = "src/main.rs"
+
+[dependencies]
+wits-util.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# The black-box filter tests live under tests/cmd/ to mirror src/cmd/; a nested
+# path is not auto-discovered, so wire it explicitly.
+[[test]]
+name = "cmd_transcrypt"
+path = "tests/cmd/transcrypt.rs"
+
+[[test]]
+name = "cmd_review"
+path = "tests/cmd/review.rs"
+
+[[test]]
+name = "cmd_worktree"
+path = "tests/cmd/worktree.rs"
+
+[[test]]
+name = "cmd_project"
+path = "tests/cmd/project.rs"
+
+[[test]]
+name = "cmd_dotfiles"
+path = "tests/cmd/dotfiles.rs"

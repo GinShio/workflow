@@ -1,0 +1,6 @@
+[[install]]
+id = 'cargo'
+dst = '~/.config/cargo/'
+path = '.'
+capabilities = ['develop']
+planes = ['user']

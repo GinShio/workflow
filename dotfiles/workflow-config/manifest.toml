@@ -1,0 +1,16 @@
+[[install]]
+id = 'workflow-config'
+dst = '~/.config/workflow/gputest/'
+path = 'gputest/'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'workflow-tmpfiles'
+dst = '~/.config/user-tmpfiles.d/workflow.conf'
+path = 'tmpfiles.conf'
+capabilities = ['develop']
+planes = ['user']
+
+[dynvariables]
+gputest_max_jobs = """lscpu | grep -E 'Core\\(s\\) per socket|Socket\\(s\\)' | awk '{sum+=$NF} END{print sum}'"""

@@ -1,0 +1,6 @@
+[[install]]
+id = 'sysctl'
+dst = '/etc/sysctl.d/'
+path = '.'
+capabilities = ['develop']
+planes = ['system']

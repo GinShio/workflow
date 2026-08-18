@@ -1,0 +1,54 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+# Generic whitespace pass for staged text files: guarantee a final newline, and
+# trim trailing whitespace where doing so is safe. Language formatters run
+# earlier and leave their files clean, so this is a no-op on them; it exists to
+# cover everything else. Binary and encrypted blobs are skipped.
+#
+# Trailing whitespace carries meaning in some formats, so trimming is withheld
+# there while the (harmless) final newline is still ensured:
+#   - Markdown  — two trailing spaces are a hard line break
+#   - CSV / TSV — a trailing tab or space is a delimiter or an empty last field
+# and a few formats are byte-exact, so they are left entirely alone:
+#   - patch / diff — trimming or appending a newline corrupts the hunks
+#
+# Trailing whitespace is insignificant in most other markup (LaTeX, HTML, XML,
+# reStructuredText: the engine collapses it) so those are trimmed normally; the
+# lone exception is verbatim-style blocks (LaTeX verbatim/lstlisting, rST literal
+# blocks), where a literal trailing space would be altered — spare such a file by
+# adding its extension to the no-trim list.
+
+# Extensions whose trailing whitespace must be preserved (final newline still
+# applied). Built-in set plus any the user adds (space-separated).
+notrim=".md .markdown .mdown .mkd .mdwn .mkdn .csv .tsv"
+notrim="$notrim $(cfg_value wits.hooks.pre-commit.format-generic-notrim)"
+
+# Extensions left completely untouched (content is byte-significant).
+skip=".patch .diff"
+
+staged_files | while IFS= read -r f; do
+    is_staged_text "$f" || continue
+    is_encrypted "$f" && continue
+
+    _leave=0
+    for _e in $skip; do
+        case "$f" in *"$_e") _leave=1; break ;; esac
+    done
+    [ "$_leave" = 1 ] && continue
+
+    _trim=1
+    for _e in $notrim; do
+        case "$f" in *"$_e") _trim=0; break ;; esac
+    done
+
+    if [ "$_trim" = 1 ]; then
+        # Trim trailing whitespace and guarantee a final newline.
+        apply_to_staged "$f" awk '{ sub(/[ \t]+$/, ""); print }'
+    else
+        # Guarantee a final newline only; leave trailing whitespace intact.
+        apply_to_staged "$f" awk '{ print }'
+    fi
+done
+
+exit 0

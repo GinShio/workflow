@@ -1,0 +1,5 @@
+#!/bin/sh
+git branchless hook reference-transaction "$@" || {
+    echo 'branchless: failed to process reference transaction;' \
+         'some events (e.g. branch updates) may have been lost.' >&2
+}

@@ -1,0 +1,5 @@
+#!/bin/sh
+# GINSHIO HOOK RUNNER STUB
+# distinct file to prevent cross-pollution by third-party tools
+# source the central logic; 'exit' in runner will stop execution here
+. "$(dirname "$0")/core/runner"

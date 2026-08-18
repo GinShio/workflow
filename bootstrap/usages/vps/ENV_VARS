@@ -1,0 +1,10 @@
+VPS_DOMAIN_NAME: (Required) The primary domain name for the VPS (e.g., ginshio.org). Used for certbot and nginx configuration.
+VPS_ADMIN_EMAIL: (Optional) Email address for Let's Encrypt registration and recovery.
+DNS_PROVIDER: (Optional) DNS provider for Certbot DNS-01 challenge (e.g., cloudflare, aliyun, dnspod). If set, wildcard certificates can be generated.
+DNS_API_TOKEN: (Optional) API token/credentials for the specified DNS_PROVIDER. 
+    - For Aliyun: "AccessKeyID:AccessKeySecret"
+    - For DNSPod/Tencent: "API_ID,API_Token"
+    - For Cloudflare: "API_Token"
+LOGIN_USERNAME: (Optional) The username to create for login. Default: ginshio.
+LOGIN_PUBKEY: (Optional) The public SSH key to be added to the user's authorized_keys. If set, strict SSH configuration (disabling password auth) will be enforced.
+SSH_PORT: (Optional) The port number for the SSH daemon. Default: 2222.

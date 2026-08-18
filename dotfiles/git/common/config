@@ -1,0 +1,22 @@
+# -*- mode: gitconfig; coding: utf-8; indent-tabs-mode: nil; -*-
+[include]
+        path = config.d/alias.conf
+        path = config.d/blame.conf
+        path = config.d/branch.conf
+        path = config.d/color.conf
+        path = config.d/core.conf
+        path = config.d/diff.conf
+        path = config.d/fetch.conf
+        path = config.d/identity.conf
+        path = config.d/index.conf
+        path = config.d/init.conf
+        path = config.d/lfs.conf
+        path = config.d/log.conf
+        path = config.d/maintenance.conf
+        path = config.d/merge.conf
+        path = config.d/pack.conf
+        path = config.d/protocol.conf
+        path = config.d/pull.conf
+        path = config.d/push.conf
+        path = config.d/rebase.conf
+        path = config.d/rerere.conf

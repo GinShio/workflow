@@ -1,0 +1,145 @@
+* 輕量文檔標記
+
+Markdown、reStructuredText 與 AsciiDoc 解決的是同一類問題：用仍然能直接閱讀的純文本編寫
+文檔，再按需要渲染成 HTML、PDF 或其他格式。它們共享編輯策略、幫助入口與外部工具檢查，
+所以放在同一個序號和模塊裏；每種格式仍然使用自己的 major mode 與原生鍵位。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el" :comments no
+;;; ginshio-lang-markup.el --- lightweight document markup -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el"
+(require 'ginshio-doctor)
+#+end_src
+
+** 共用編輯行為
+
+core 對所有散文模式開啓 ~auto-fill-mode~，到第 80 列就真的插入換行。文檔通常活在版本控制
+裏，硬換行容易讓一次改字變成整段 diff；三種格式都關掉它，改用 ~visual-line-mode~ 只在
+窗口邊界折行。需要主動整理段落時，~M-q~ 仍然照常使用 ~fill-column~。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el"
+(defun ginshio-lang-markup-soft-wrap-h ()
+  "Wrap document prose visually without rewriting source lines."
+  (auto-fill-mode -1)
+  (visual-line-mode 1))
+#+end_src
+
+三個模式都保留自己的 ~C-c~ 前綴，不再額外補按鍵。完整模式說明與當前生效的全部局部鍵位
+統一從 ~M-m h m~ 打開；它調用內建的 ~describe-mode~，所以內容會跟着實際安裝的版本更新，
+不需要在配置裏維護一份容易過期的完整列表。
+
+** Markdown
+
+Markdown 的價值在於源文件本身就能讀，所以不把編輯緩衝區改造成所見即所得，也不藏起標
+記或鏈接地址。[[https://github.com/jrblevin/markdown-mode][markdown-mode]] 負責理解標題、列表、表格、鏈接與 fenced code block；需要接近成
+品的畫面時，再明確進入預覽。
+
+普通擴展名進 ~markdown-mode~；=README.md= 通常發佈在 GitHub，單獨交給 ~gfm-mode~，讓表格、
+刪除線、任務列表等語法按 GitHub 方言解讀。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el"
+(defun ginshio-lang-markup-markdown-setup-h ()
+  "Apply shared prose settings and select this Markdown dialect's renderer."
+  (ginshio-lang-markup-soft-wrap-h)
+  (setq-local markdown-command
+              `("pandoc"
+                ,(if (derived-mode-p 'gfm-mode) "--from=gfm" "--from=markdown")
+                "--to=html5")))
+
+(use-package markdown-mode
+  :ensure t
+  :mode (("\\.\\(?:md\\|markdown\\|mkd\\|mdown\\|mkdn\\|mdwn\\)\\'" . markdown-mode)
+         ("README\\.md\\'" . gfm-mode))
+  :init
+  (setq markdown-fontify-code-blocks-natively t
+        markdown-fontify-whole-heading-line t
+        markdown-header-scaling t
+        markdown-hide-markup nil
+        markdown-hide-urls nil
+        markdown-indent-on-enter 'indent-and-new-item)
+  :hook (markdown-mode . ginshio-lang-markup-markdown-setup-h))
+#+end_src
+
+代碼塊使用相應主模式的 font-lock；標題整行着色並按層級縮放。井號、星號、反引號與 URL
+仍然可見，編輯緩衝區始終忠於文件內容。在列表項按 ~RET~ 會延續下一項；空項再按一次則結
+束列表。
+
+~markdown-mode~ 能把渲染結果送到另一個窗口、瀏覽器或內建 EWW。普通 Markdown 與 GFM
+共用 pandoc，只在輸入方言上不同；輸出都是 HTML5 fragment，外層文檔由模式補齊。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el"
+(ginshio-doctor-executable 'lang-markup "pandoc"
+                           :severity 'warn
+                           :note "Markdown HTML preview and export"
+                           :remedy "zypper install pandoc")
+#+end_src
+
+常用入口是 ~C-c C-s~ 插入標記、~C-c C-o~ 跟隨鏈接、~C-c C-c p~ 瀏覽器預覽、
+~C-c C-c l~ EWW 即時預覽，以及 ~TAB~ / ~S-TAB~ 摺疊。完整分組與逐項說明見
+[[https://jblevins.org/projects/markdown-mode/#usage][markdown-mode Usage 文檔]]。
+
+** reStructuredText
+
+~rst-mode~ 隨 Emacs 分發，不引入第三方包。它知道 section adornment、縮進、列表、目錄與
+Docutils 編譯流程；=.rst= 和 =.rest= 都會自動進入這個模式。
+
+內建配置默認調用舊式的 ~rst2html~。這台機器同時提供現代的 ~rst2html5~，所以保留原本的
+~html~ toolset 名稱，只替換它實際執行的命令；~rst-compile~ 及其所有原生鍵位無需改變。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el"
+(use-package rst
+  :ensure nil
+  :mode ("\\.re?st\\'" . rst-mode)
+  :init
+  (setq rst-compile-primary-toolset 'html)
+  :hook (rst-mode . ginshio-lang-markup-soft-wrap-h)
+  :config
+  (setf (alist-get 'html rst-compile-toolsets)
+        '("rst2html5" ".html" nil)))
+
+(ginshio-doctor-executable 'lang-markup "rst2html5"
+                           :severity 'warn
+                           :note "reStructuredText HTML5 compilation"
+                           :remedy "zypper install python313-docutils")
+#+end_src
+
+常用入口是 ~C-c C-a C-a~ 調整標題層級、~C-c C-t C-t~ 打開目錄，以及
+~C-c C-c C-c~ 編譯 HTML。完整的模式說明仍從 ~M-m h m~ 查看；工作流與命令細節見
+[[https://docutils.sourceforge.io/docs/user/emacs.html][Docutils 的 Emacs support 文檔]]。
+
+** AsciiDoc
+
+[[https://github.com/bbatsov/adoc-mode][adoc-mode]] 提供結構導航、補全、xref、列表與標題操作、源碼塊原生着色，以及 Asciidoctor 預
+覽和導出。它不需要額外的 tree-sitter grammar，與這份配置「缺外部部件時仍能正常編輯」
+的退化方式一致。
+
+默認會在圖形界面打開文件時立即顯示所有圖片；這既改變源文件的可見形狀，也可能讀取遠程
+資源，所以關掉，仍可按需調用 ~adoc-toggle-images~。源碼塊只在 5000 字符以內使用對應
+major mode 着色，避免一個很大的 listing 拖慢整個文檔。預覽固定使用內建 EWW，不依賴
+xwidget 或外部瀏覽器。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el"
+(use-package adoc-mode
+  :ensure t
+  :mode ("\\.a\\(?:scii\\)?doc\\'" . adoc-mode)
+  :init
+  (setq adoc-display-images nil
+        adoc-fontify-code-blocks-natively 5000
+        adoc-preview-backend 'eww)
+  :hook (adoc-mode . ginshio-lang-markup-soft-wrap-h))
+
+(ginshio-doctor-executable 'lang-markup "asciidoctor"
+                           :severity 'warn
+                           :note "AsciiDoc preview and export"
+                           :remedy "zypper install rubygem-asciidoctor")
+#+end_src
+
+常用入口是 ~C-c C-s~ 插入樣式、~C-c C-o~ 跟隨鏈接、~C-c C-c~ 打開預覽與導出選單，以及
+~TAB~ / ~S-TAB~ 摺疊。完整模式說明從 ~M-m h m~ 查看；功能與命令細節見
+[[https://github.com/bbatsov/adoc-mode#usage][adoc-mode Usage 文檔]]。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el" :comments no
+(provide 'ginshio-lang-markup)
+;;; ginshio-lang-markup.el ends here
+#+end_src

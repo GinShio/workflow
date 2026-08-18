@@ -1,0 +1,6 @@
+[[install]]
+id = 'python'
+dst = '~/.config/python/'
+path = '.'
+capabilities = ['develop']
+planes = ['user']

@@ -1,0 +1,33 @@
+[[install]]
+id = 'wits-project'
+dst = '~/.config/wits/project/'
+path = 'project/'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'wits-tmpfiles'
+dst = '~/.config/user-tmpfiles.d/'
+path = 'tmpfiles.d/'
+capabilities = ['develop']
+planes = ['user']
+
+[variables.wits.projects.source_info]
+amdd3d         = { org = 'amd',      name = 'amdd3d' }
+amdllpc        = { org = 'amd',      name = 'amdllpc' }
+amdogl         = { org = 'amd',      name = 'amdogl' }
+amdvlk         = { org = 'amd',      name = 'amdvlk' }
+alive2         = { org = 'compiler', name = 'alive2' }
+iree           = { org = 'compiler', name = 'iree' }
+llvm           = { org = 'compiler', name = 'llvm' }
+mesa           = { org = 'fd.o',     name = 'mesa' }
+piglit         = { org = 'fd.o',     name = 'piglit' }
+runner         = { org = 'fd.o',     name = 'runner' }
+deqp           = { org = 'khronos',  name = 'deqp' }
+dxc            = { org = 'khronos',  name = 'dxc' }
+glslang        = { org = 'khronos',  name = 'glslang' }
+slang          = { org = 'khronos',  name = 'slang' }
+spirv-headers  = { org = 'khronos',  name = 'spirv-headers' }
+spirv-tools    = { org = 'khronos',  name = 'spirv-tools' }
+vulkan-samples = { org = 'khronos',  name = 'vulkan-samples' }
+vvl            = { org = 'khronos',  name = 'vvl' }

@@ -1,0 +1,22 @@
+#!/bin/sh
+# Auto-initialize git-branchless on the first branch checkout (e.g. after clone).
+# Idempotent: does nothing once branchless is set up for this repository.
+
+. "$HOOKS_DIR/core/lib.sh"
+
+# post-checkout args: <prev_head> <new_head> <branch_flag>
+# Only act on branch checkouts (flag == 1), never on file checkouts.
+[ "$3" = "1" ] || exit 0
+
+# `git branchless init` writes <common-git-dir>/branchless/config and adds an
+# [include] entry to the repo config. Its presence means we are already set up.
+# Use the common dir so linked worktrees share the main repo's state.
+[ -f "$GIT_COMMON_DIR/branchless/config" ] && exit 0
+
+main_branch=$(get_main_branch origin)
+log_info "Initializing git-branchless (main branch: $main_branch)..."
+if git branchless init --main-branch "$main_branch"; then
+    log_info "git-branchless initialized."
+else
+    log_error "git-branchless init failed."
+fi

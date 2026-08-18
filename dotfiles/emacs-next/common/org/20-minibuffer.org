@@ -1,0 +1,450 @@
+* 選擇
+
+Emacs 裏幾乎每個「選一個」都走 ~completing-read~：切緩衝區、找文件、跳定義、~M-x~ 自
+己。改這一層等於同時改幾百個命令。
+
+下面的包都不替換內建機制。vertico 換候選項的畫法，orderless 往 ~completion-styles~ 裏
+加一種樣式，consult 提供的是普通命令，只是它們給 ~completing-read~ 更好的候選項。全部
+拔掉得到的是原來的 Emacs。
+
+整條工作流的可操作索引在 [[file:../GUIDE.org::*選擇、搜索與補全][GUIDE.org]]；其中 Orderless 與 Embark 另有可從
+Emacs 內直接閱讀的 [[info:orderless#Top][Orderless manual]] 和 [[info:embark#Top][Embark manual]]。每個包的 README 仍在
+各節首次出現處鏈接。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el" :comments no
+;;; ginshio-minibuffer.el --- choosing things -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(require 'ginshio-path)
+(require 'ginshio-doctor)
+(require 'ginshio-keys)
+
+(declare-function eglot-completion-at-point "eglot")
+#+end_src
+
+** 內建的部分
+
+忽略大小寫要設三個變量，少設一個的症狀是「有時管用有時不管用」。
+
+提示語默認是普通文本：光標能走進去，退格能把它吃掉。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(setq completion-ignore-case t
+      read-file-name-completion-ignore-case t
+      read-buffer-completion-ignore-case t
+      minibuffer-prompt-properties '(read-only t cursor-intangible t
+                                     face minibuffer-prompt))
+
+(add-hook 'minibuffer-setup-hook #'cursor-intangible-mode)
+(minibuffer-depth-indicate-mode 1)
+#+end_src
+
+** 呈現
+
+[[https://github.com/minad/vertico][vertico]] 把候選項豎起來，一行一個。它的鍵位全在 ~vertico-map~ 裏，不進全域映射。
+
+擴展在 upstream 的 =extensions/= 目錄，要在配方裏顯式收進來。用兩個：~vertico-repeat~
+把上一次的會話原樣再跑一遍——搜完發現看漏了，不必重新輸入；~vertico-directory~ 讓文
+件路徑裏的 ~DEL~ 按目錄層級退，而不是一個字符一個字符退。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(use-package vertico
+  :ensure (vertico :files (:defaults "extensions/*"))
+  :demand t
+  :init
+  (setq vertico-count 15
+        vertico-resize nil               ; a list that changes height is hard to aim at
+        vertico-cycle t)
+  :config
+  (vertico-mode 1)
+  (require 'vertico-repeat)
+  (require 'vertico-directory)
+  (add-hook 'minibuffer-setup-hook #'vertico-repeat-save)
+  (add-hook 'rfn-eshadow-update-overlay-hook #'vertico-directory-tidy)
+  (keymap-set vertico-map "DEL" #'vertico-directory-delete-char)
+  (keymap-set vertico-map "M-DEL" #'vertico-directory-delete-word))
+#+end_src
+
+排序和重複都依賴歷史，而歷史由 core 模塊的 ~savehist-mode~ 持久化。關掉它不會報錯，
+只會讓這兩件事安靜地退化。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(with-eval-after-load 'savehist
+  (add-to-list 'savehist-additional-variables 'vertico-repeat-history))
+#+end_src
+
+** 怎麼算匹配
+
+[[https://github.com/oantolin/orderless][orderless]] 讓你用空格分隔片段，每片獨立匹配、順序不論：~key el~ 找得到
+=ginshio-keys.el=。它不打分也不重排，所以你永遠解釋得了某個候選項為什麼還在。
+
+~basic~ 必須留在樣式列表末尾。文件名和 TRAMP 遠程路徑的補全依賴它的具體行為，只留
+orderless 會讓 =~/= 展開和遠程主機名補全失靈，而症狀看起來像「TRAMP 壞了」。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(use-package orderless
+  :ensure t
+  :demand t
+  :init
+  (setq orderless-matching-styles '(orderless-literal orderless-regexp)))
+
+(setq completion-styles '(orderless basic)
+      completion-category-defaults nil
+      completion-category-overrides '((file (styles basic partial-completion))))
+#+end_src
+
+#+begin_quote
+語言服務器的候選項是個例外，而且不是這裏能管的。Eglot 給它們掛了專屬類別和一種自己
+的匹配樣式，但更根本的是：clangd 在服務器端就已經按你輸入的內容過濾過了，eglot 的補
+全表直接把結果交出來，不參與客戶端的過濾。實測往 ~completion-category-overrides~ 裏
+加一條 ~eglot-capf~ 的樣式覆蓋，候選集一個都不會變——只有高亮的畫法會受影響，而且僅在
+你輸入的恰好是連續子串時。所以這裏不寫那一條：一個效果說不清楚的設置，比沒有設置更難
+維護。
+#+end_quote
+
+** 註解
+
+[[https://github.com/minad/marginalia][marginalia]] 在候選項右邊補上它的來歷：緩衝區的模式和路徑、命令的鍵位和文檔首行、變量
+的當前值。這些信息本來就在 Emacs 裏，只是從不出現在你需要它的那一刻。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(use-package marginalia
+  :ensure t
+  :demand t
+  :after vertico
+  :config
+  (marginalia-mode 1))
+#+end_src
+
+** 來源
+
+vertico 改候選項怎麼顯示，[[https://github.com/minad/consult][consult]] 改它們從哪裏來。
+
+~consult-buffer~ 一次列出緩衝區、最近文件、書籤和項目文件，並允許在會話中按一個字符
+縮小到其中一類。這是 window 模塊不需要任何緩衝區隔離包的原因：「屬於哪個項目」在選擇
+的當下算得出來，不必提前歸類。
+
+~M-r~ 換成 ~consult-history~：出廠的 ~previous-matching-history-element~ 要你先想出一
+個正則，consult 的版本直接把歷史列出來讓你挑。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(use-package consult
+  :ensure t
+  :demand t
+  :init
+  (setq consult-narrow-key "<"
+        register-preview-delay 0.3
+        register-preview-function #'consult-register-format
+        xref-show-xrefs-function #'consult-xref
+        xref-show-definitions-function #'consult-xref)
+  :config
+  (keymap-set minibuffer-local-map "M-r" #'consult-history))
+#+end_src
+
+跨文件的命令要關掉自動預覽：~consult-ripgrep~ 有幾百個結果時，每按一次方向鍵就打開一
+個文件。改成按 ~M-.~ 才預覽。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(with-eval-after-load 'consult
+  (consult-customize
+   consult-ripgrep consult-grep consult-git-grep
+   consult-recent-file consult-bookmark
+   ;; The same restraint has to be applied again to the recent-file entries
+   ;; inside `consult-buffer': there they are sources, not commands, and do
+   ;; not inherit the setting above.
+   consult-source-recent-file consult-source-project-recent-file
+   :preview-key "M-."))
+
+(ginshio-doctor-executable 'minibuffer "rg"
+                           :note "project-wide search"
+                           :remedy "zypper install ripgrep")
+(ginshio-doctor-executable 'minibuffer "fd"
+                           :note "finding files by name"
+                           :remedy "zypper install fd")
+#+end_src
+
+既然 =rg= 已經非裝不可，那就別讓它只服務 consult。~project-find-regexp~ 和
+~xref-find-apropos~ 也要在一堆文件裏找匹配，它們走 ~xref-search-program~，而那個變量
+出廠指向 grep。同一棵樹，同一件事，兩種速度，還有兩套「哪些文件該跳過」的規則。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(setq xref-search-program 'ripgrep)
+#+end_src
+
+預覽本身走 ~display-buffer~，落在哪個窗口由 window 模塊的規則決定。
+
+那兩個外部程序都是硬要求，不是「有了更好」。搜內容只有 ~consult-ripgrep~ 這一條路，按文
+件名找也只有 ~consult-fd~ 這一條——項目裏找文件的鍵就是 =s f=，見下面的鍵位。它們不在的
+時候按下去得到的是一個空列表，而空列表看起來像「這個項目裏沒有」，不像「這台機器上少一
+個程序」。所以兩條檢查都不設 ~warn~，由 doctor 直接報 FAIL。
+
+** 動作
+
+[[https://github.com/oantolin/embark][embark]] 對「當前這個東西」列出可做的動作：minibuffer 裏高亮的候選項、光標下的文件名、
+URL 或符號。它認類型的依據正是 marginalia 提供的那些元數據。
+
+真正用得上的是導出。~consult-ripgrep~ 找到一批匹配之後，導出成一個 grep 緩衝區，
+[[https://github.com/mhayashi1120/Emacs-wgrep][wgrep]] 讓你在那裏直接改再寫回原文件。「先搜出來看，再決定改哪幾條」這條路徑沒有別的
+走法——Emacs 30 還沒有內建的 ~grep-edit-mode~，那要等 31。
+
+慣例的 ~C-.~ 這裏不用，終端未必送得到；改掛在 leader 的 ~.~ 上。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(use-package embark
+  :ensure t
+  :demand t)
+
+(use-package embark-consult
+  :ensure t
+  :demand t
+  :after (embark consult)
+  :hook (embark-collect-mode . consult-preview-at-point-mode))
+
+(use-package wgrep
+  :ensure t
+  :demand t)
+#+end_src
+
+** 緩衝區內補全
+
+[[https://github.com/minad/corfu][corfu]] 是 ~completion-at-point-functions~ 的前端，和上面共用同一套
+~completion-styles~，所以 orderless 在這裏一樣生效。
+
+~corfu-preselect~ 設成 ~prompt~，否則默認會預選第一個候選項，~RET~ 在你只想換行的時候
+會提交一個你沒看過的補全。~corfu-auto~ 是純偏好：改成 ~nil~ 就變手動觸發，其餘不受
+影響。
+
+延遲取 0.2 秒。這個數字不是手感問題而是負載問題：每一次觸發都是一次發往語言服務器的
+請求，在一個大型 C++ 項目上，把它調到零點一秒以下等於在打字時持續地問 clangd。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(use-package corfu
+  :ensure t
+  :demand t
+  :init
+  (setq corfu-auto t
+        corfu-auto-delay 0.2
+        corfu-auto-prefix 2
+        corfu-cycle t
+        corfu-count 16
+        corfu-max-width 120
+        corfu-preselect 'prompt)
+  :config
+  (global-corfu-mode 1)
+  (corfu-history-mode 1)
+  (corfu-popupinfo-mode 1))
+
+(with-eval-after-load 'savehist
+  (add-to-list 'savehist-additional-variables 'corfu-history))
+#+end_src
+
+~corfu-popupinfo-mode~ 在候選項旁邊再開一格，顯示它的文檔和完整簽名。對 C++ 這是分界
+線級別的差別——沒有它，一串重載函數在列表裏長得一模一樣，你只能靠猜或者選完再撤銷。
+
+延遲是一對數字：第一次彈出等久一點，之後在候選項之間移動時更新得快一點。這樣掃列表時
+不會有東西一直在旁邊閃，停下來看時又不用等。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(setq corfu-popupinfo-delay '(0.5 . 0.2)
+      corfu-popupinfo-max-height 20)
+#+end_src
+
+*** 不要在 minibuffer 裏疊兩層
+
+corfu 默認也會在 minibuffer 裏啓用。那本來是給沒有 vertico 的人用的，而這裏兩個都在，
+結果是一個彈出框壓在候選項列表上——最容易撞見的是 ~M-:~，它給 minibuffer 掛了本地的
+補全函數，正好滿足 corfu 的啓用條件。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(defun ginshio-minibuffer-corfu-wanted-p ()
+  "Return non-nil when this minibuffer has no completion UI of its own."
+  (and (not (bound-and-true-p vertico--input))
+       (local-variable-p 'completion-at-point-functions)))
+
+(setq global-corfu-minibuffer #'ginshio-minibuffer-corfu-wanted-p)
+#+end_src
+
+*** 手動觸發
+
+自動彈出關掉之後總得有辦法叫它出來，而全域映射是空的。用內建的辦法：讓 ~TAB~ 在該縮進
+時縮進、在已經縮好時補全。這是 Emacs 自己推薦的設置，也是 ~TAB~ 在其他編輯器裏的行為。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(setq tab-always-indent 'complete)
+#+end_src
+
+corfu 的彈出框是 child frame，終端下根本不存在——不裝下面這個，終端裏的補全菜單就是
+不出現，而且不報錯。[[https://codeberg.org/akib/emacs-corfu-terminal][corfu-terminal]] 用覆蓋層畫同樣的東西。
+
+它雖然是全局模式，卻會在每次畫 popup 時查看當前 frame。默認的
+~corfu-terminal-disable-on-gui~ 讓圖形 frame 繼續使用 Corfu 的 child frame，終端 frame
+才使用 popon；因此混合 GUI/TTY daemon 只需要把模式永久打開。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(use-package corfu-terminal
+  :ensure (corfu-terminal :host codeberg :repo "akib/emacs-corfu-terminal")
+  :after corfu
+  :config
+  (corfu-terminal-mode 1))
+#+end_src
+
+** 圖標
+
+一列候選項如果只有名字，你要讀完整個標識符才知道它是函數、變量、宏還是類型。那個信息
+服務器本來就給了——LSP 的每個候選項都帶一個 kind——只是以文字形式擠在註解欄裏。
+
+換成左邊一列圖標之後，「這一屏裏哪幾個是函數」變成掃一眼的事，而且候選項本身的排版不
+再被那串 kind 文字撐開。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(use-package nerd-icons-corfu
+  :ensure t
+  :after corfu
+  :config
+  (add-to-list 'corfu-margin-formatters #'nerd-icons-corfu-formatter))
+
+(use-package nerd-icons-completion
+  :ensure t
+  :after marginalia
+  :config
+  (nerd-icons-completion-mode 1)
+  (add-hook 'marginalia-mode-hook #'nerd-icons-completion-marginalia-setup))
+#+end_src
+
+字體由 theme 模塊的自檢負責：缺 Symbols Nerd Font Mono 時圖標會顯示成方框，
+~M-x ginshio/doctor~ 會指出來。
+
+** 補全來源
+
+沒有語言服務器的緩衝區裏 ~completion-at-point-functions~ 往往是空的。[[https://github.com/minad/cape][cape]] 補上幾個通
+用來源。
+
+掛的方式有兩處講究。一是 *按模式局部添加* 而不是塞進全域值——路徑補全在代碼裏有用，在
+minibuffer 裏是干擾；elisp 代碼塊只在 org 和 markdown 裏存在。二是 *深度*：負數排在語
+言服務器前面，正數排在後面。路徑補全用負數，因為當你已經在寫一個字符串路徑時，服務器
+給的符號名不可能是你要的；dabbrev 用正數，它是所有辦法都沒有時的兜底。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(defun ginshio-minibuffer-add-file-capf-h ()
+  (add-hook 'completion-at-point-functions #'cape-file -10 t))
+
+(defun ginshio-minibuffer-add-dabbrev-capf-h ()
+  (add-hook 'completion-at-point-functions #'cape-dabbrev 20 t))
+
+(defun ginshio-minibuffer-add-elisp-block-capf-h ()
+  (add-hook 'completion-at-point-functions #'cape-elisp-block 0 t))
+
+(use-package cape
+  :ensure t
+  :demand t
+  :config
+  (add-hook 'prog-mode-hook #'ginshio-minibuffer-add-file-capf-h)
+  (add-hook 'conf-mode-hook #'ginshio-minibuffer-add-file-capf-h)
+  (dolist (hook '(prog-mode-hook text-mode-hook conf-mode-hook))
+    (add-hook hook #'ginshio-minibuffer-add-dabbrev-capf-h))
+  (dolist (hook '(org-mode-hook markdown-mode-hook))
+    (add-hook hook #'ginshio-minibuffer-add-elisp-block-capf-h)))
+#+end_src
+
+*** 讓語言服務器願意和別人共存
+
+一個補全來源可以聲明自己是 *獨佔* 的：我給不出候選項時，別人也別給。Eglot 的來源沒有
+聲明相反的意思，所以它就是獨佔的。
+
+後果是那種「明明有東西可補，卻什麼都不彈」的情況：光標在一個服務器不認識的位置——註釋
+裏、字符串裏、一段還沒編譯通過的代碼中間——補全整條鏈就停在那裏，dabbrev 和路徑補全根
+本沒有機會被問到。
+
+cape 提供了一個包裝，把獨佔改成可共存。同一件事對 comint 和 pcomplete 也成立。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(with-eval-after-load 'eglot
+  (advice-add #'eglot-completion-at-point :around #'cape-wrap-nonexclusive))
+
+(with-eval-after-load 'comint
+  (advice-add #'comint-completion-at-point :around #'cape-wrap-nonexclusive))
+
+(with-eval-after-load 'pcomplete
+  (advice-add #'pcomplete-completions-at-point :around #'cape-wrap-nonexclusive))
+#+end_src
+
+#+begin_quote
+這幾行動的是 eglot 的函數，看起來越界了。界限是這樣劃的：lsp 模塊負責 *產生* 正確的
+capf，本模塊負責這些 capf *怎麼被消費*——包括它們彼此之間怎麼相處。包裝來自 cape，而
+cape 在這裏。
+#+end_quote
+
+** 鍵位
+
+consult 的幾個命令是對應內建命令的上位替代，所以接管原來的鍵，不另開入口：=b b= 從
+~switch-to-buffer~ 換掉（換成什麼見下），=f r= 從 ~recentf-open-files~ 換成
+~consult-recent-file~，=s i= 換成 ~consult-imenu~，=s n= 換成 ~consult-goto-line~。
+
+=s s= 也在這一批裏，換成 ~consult-line~。它和 isearch 確實是兩種東西：isearch 增量、
+原地走，適合找到就接着編輯；~consult-line~ 一次把全部匹配列出來，適合先看清這個詞出
+現在哪幾處，再決定去哪一處。日常搜索絕大多數是後者，所以它拿主位。=s S= 是
+~consult-line-multi~，把範圍擴到所有緩衝區——和 =s i= / =s I= 是同一組對照。
+
+isearch 不另設入口。keys 模塊在 =s s= 上綁的仍然是它；若有意停用本模塊，那個內建入口
+仍然成立。本模塊加載之後仍然想用，走 ~M-x isearch-forward~。
+
+頂層的兩個標點是這一層的元操作：~.~ 對眼前的東西動手，~,~ 把上一次的會話再跑一遍。
+
+=b b= 只列當前項目的緩衝區。理由在 window 模塊：一個項目就是一個工作區，而三個項目一起開
+着的時候，全域那張表會把你要找的東西夾在另外兩個項目的緩衝區之間。不在任何項目裏的時候給
+全域表——~consult-project-buffer~ 那時會先問你要哪個項目，而按這個鍵是為了換緩衝區，不是為
+了回答問題。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(defun ginshio/switch-buffer ()
+  "Switch buffers inside this project, or among all of them when there is none."
+  (interactive)
+  (if (project-current nil)
+      (consult-project-buffer)
+    (consult-buffer)))
+#+end_src
+
+=b B= 是全域那一張，一個鍵之差。它佔的位置原來是 ~consult-buffer-other-window~；「在另一個
+窗口打開」從候選項上按 ~M-m .~ 走 embark 就有，不值得一個頂層鍵。
+
+項目範圍的入口就是 =b b=，不在 =p b= 上再放一個。=p= 整條分支屬於 window 模塊，而它比本模
+塊後加載，掛在那裏的東西會被它蓋掉——這種綁定不會報錯，只會安靜地不生效。
+
+=s= 底下這幾個 consult 命令共用同一套範圍規則：不帶前綴參數以項目根為起點，帶前綴纔問你要
+哪個目錄。所以「按名字找文件」=s f=、「搜內容」=s g=、「切緩衝區」=b b= 三件事的範圍是同
+一個約定，而不是每條分支各有一套自己的。=p= 底下因此不再有找文件和搜內容的鍵。
+
+診斷列表也不在 =s= 底下。~consult-flymake~ 和 lsp 模塊的 =c x= / =c X= 覆蓋範圍完全一樣，
+而診斷屬於「寫代碼」那條線，和它上下的 =c n= / =c p= 待在一起纔連貫。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el"
+(ginshio-leader-define
+ "."   #'embark-act
+ ","   #'vertico-repeat
+
+ "b b" #'ginshio/switch-buffer
+ "b B" #'consult-buffer
+
+ "f r" #'consult-recent-file
+
+ "s s" #'consult-line
+ "s S" #'consult-line-multi
+ "s n" #'consult-goto-line
+ "s i" #'consult-imenu
+ "s I" #'consult-imenu-multi
+ "s m" #'consult-mark
+ "s g" #'consult-ripgrep
+ "s G" #'consult-git-grep
+ "s f" #'consult-fd
+
+ "i"   "insert"
+ "i y" #'consult-yank-pop
+ "i r" #'consult-register
+ "i s" #'consult-register-store)
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-minibuffer.el" :comments no
+(provide 'ginshio-minibuffer)
+;;; ginshio-minibuffer.el ends here
+#+end_src

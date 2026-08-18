@@ -1,0 +1,6 @@
+[[install]]
+id = 'fcitx5'
+dst = '~/.config/fcitx5/'
+path = '.'
+capabilities = ['desktop']
+planes = ['user']

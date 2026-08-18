@@ -1,0 +1,33 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+# Static analysis of staged Zig via `zig ast-check`. ast-check takes a path (no
+# stdin), so the staged blob is materialized under its own basename first, so any
+# diagnostic still names the file. A finding blocks the commit; a missing tool
+# warns.
+files=$(staged_lang_files .zig .zon)
+[ -n "$files" ] || exit 0
+
+if ! command -v zig >/dev/null 2>&1; then
+    log_warn "zig lint enabled but zig is not installed"
+    exit 0
+fi
+
+rc=0
+oldifs=$IFS
+IFS='
+'
+set -f
+for f in $files; do
+    d=$(mktemp -d) || { rc=1; continue; }
+    t="$d/${f##*/}"
+    if staged_blob "$f" > "$t"; then
+        zig ast-check "$t" || rc=1
+    fi
+    rm -rf "$d"
+done
+IFS=$oldifs
+set +f
+
+[ "$rc" -eq 0 ] || log_error "zig lint failed; fix the issues above or commit with --no-verify"
+exit $rc

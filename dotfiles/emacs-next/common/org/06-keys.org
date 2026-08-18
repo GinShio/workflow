@@ -1,0 +1,638 @@
+* 鍵位
+
+Emacs 出廠帶著上千個全域綁定，積累自四十年的歷史。其中大部分你永遠不會按，但它們
+全都佔著位置，並且在你想用某個組合鍵時擋在前面。
+
+本模塊把全域鍵位清空到零，然後以 leader 為唯一入口重新組織。目的不是標新立異，而是
+讓「我有哪些鍵」變成一個有確切答案的問題。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el" :comments no
+;;; ginshio-keys.el --- a keymap you can hold in your head -*- lexical-binding: t; -*-
+#+end_src
+
+本模塊只負責鍵位 *機制*：清空、召回、leader、優先級。具體功能歸各自的模塊——窗口
+怎麼移動、緩衝區出現在哪，都在 window 模塊裏，那裏也持有 leader 的 =w= 分支。
+
+Emacs 如何依序查找 keymap，見 [[info:elisp#Searching Keymaps][Elisp manual: Searching Keymaps]]；按鍵表示法與前綴參數見
+[[info:emacs#Key Bindings][Emacs manual: Key Bindings]]。提示界面由 [[https://github.com/justbur/emacs-which-key][which-key]] 提供，重複命令的完整機制見
+[[info:emacs#Repeating][Emacs manual: Repeating Commands]]。實際使用入口集中在 =GUIDE.org=。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(require 'ginshio-path)
+(require 'ginshio-doctor)
+(require 'recentf)
+(require 'repeat)
+(require 'which-key)
+#+end_src
+
+** 鍵位其實有三層
+
+「清空所有快捷鍵」聽起來像一個開關，實際上不是。Emacs 查找一個按鍵時依次穿過三層，
+它們的所有權完全不同：
+
+1. *emulation 與 minor mode 映射*。優先級最高。模態編輯這類需要壓過一切的功能住在
+   這裏。
+2. *major mode 映射*。由各個模式自己創建，是它們的正當領地。~C-c~ 開頭的組合按慣例
+   就是留給這一層的。
+3. *全域映射*。唯一完全屬於你的一層。
+
+能被整體替換的只有第三層。第二層沒有全局開關——清空全域映射之後，Lisp 緩衝區裏
+~C-M-x~ 照樣求值定義，因為那個綁定根本不在全域映射裏。
+
+於是策略是：*清空第三層，佔據第一層，完全不碰第二層*。leader 放進第一層，任何模式都
+搶不走它；~C-c~ 完整地讓給各個模式，它們之間不會再有爭執。
+
+** 留住原始映射
+
+清空之前先把出廠映射存下來。它有兩個用途：按鍵名查回某個鍵原本綁的是什麼，以及在
+出事時整體恢復。
+
+用 ~defvar~ 而不是 ~setq~ 是關鍵。~defvar~ 對已有值不做覆蓋，所以重新求值本文件時不會
+把「已經清空的映射」誤存為原始映射——那會讓出廠綁定永久丟失，且無法察覺。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(defvar ginshio-keys-vanilla-global-map (current-global-map)
+  "The global keymap as Emacs shipped it, captured before replacement.")
+
+(defun ginshio/keys-restore-vanilla ()
+  "Put stock Emacs bindings back for the rest of this session.
+The way out when the reset leaves you unable to work."
+  (interactive)
+  (use-global-map ginshio-keys-vanilla-global-map)
+  (message "Stock Emacs global bindings restored for this session."))
+#+end_src
+
+** 清空
+
+一張空映射要讓 Emacs 還能打字，得顯式聲明可打印字符自插入。範圍跳過控制字符區間：
+讓它們自插入沒有意義，而其中的 DEL 稍後另有用途。
+
+這個函數只構造、不安裝，原因見下一節。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(defun ginshio-keys-make-blank-map ()
+  "Return a fresh global keymap in which only printable text self-inserts."
+  (let ((map (make-keymap)))
+    (set-char-table-range (cadr map) (cons #x20 #x7E) #'self-insert-command)
+    (set-char-table-range (cadr map) (cons #xA0 #x10FFFF) #'self-insert-command)
+    map))
+#+end_src
+
+#+begin_quote
+清空全域映射不會把你關在 minibuffer 裏。~minibuffer-local-map~ 不以全域映射為父，
+自帶提交和取消的綁定。這是整個方案敢於激進的前提——最壞情況下你仍然能 ~M-x~ 一個命令
+並且中途反悔。
+#+end_quote
+
+** 按名召回
+
+清空之後，鍵位以組為單位加回來。一組就是一份鍵名列表，召回時從出廠映射裏查出該鍵原
+本的綁定再裝上。
+
+這種寫法讓召回是 *忠實* 的：列表只說「我要這個鍵」，不說它該做什麼。想改變某個鍵的行
+為就顯式綁定，想讓它消失就把它從列表裏刪掉。名單本身就是文檔。
+
+代價是有一種失敗完全不出聲：如果列表裏的某個鍵在出廠映射裏 *本來就沒有* 綁定，召回會
+一無所獲，而你直到某天按下它才發現。這比拼寫錯誤更難察覺——鍵名寫得完全合法，只是查
+錯了地方。所以這裏把兩件事都記下來：格式非法的當場警告，查無所獲的攢起來交給自檢。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(defvar ginshio-keys-unbound nil
+  "Keys that were listed for re-admission but had nothing to re-admit.")
+
+(defun ginshio-keys-admit (key keymap)
+  "Give KEY its stock Emacs binding inside KEYMAP.
+A malformed KEY is reported and skipped, so one typo cannot take a whole
+group with it.  A KEY that stock Emacs never bound is recorded instead,
+since finding nothing is almost always a mistake in the list."
+  (if (not (key-valid-p key))
+      (display-warning 'ginshio (format "Malformed key description: %S" key))
+    (let ((def (lookup-key ginshio-keys-vanilla-global-map (key-parse key))))
+      ;; `lookup-key' answers with an integer when the key runs past a
+      ;; non-prefix binding, which means it never had a definition at all.
+      (if (and def (not (numberp def)))
+          (keymap-set keymap key def)
+        (unless (member key ginshio-keys-unbound)
+          (push key ginshio-keys-unbound))))))
+
+(defun ginshio-keys-admit-group (keys keymap)
+  (dolist (key keys)
+    (ginshio-keys-admit key keymap)))
+#+end_src
+
+*** 求生
+
+這一組永遠啓用，因為它們是「配置壞掉之後用來修配置」的工具。幫助前綴尤其重要：在一
+張剛剛清空的映射面前，~C-h k~ 和 ~C-h b~ 是你唯一能看清自己還剩什麼的儀器。
+
+~C-u~ 屬於這裏，理由和其他幾個不同，值得單獨說。它不是一個命令，而是 *改變其他命令
+行為* 的通用機制——沒有它，`C-u 5 C-n' 這種寫法整個消失，而每一個接受前綴參數的命
+令都會安靜地少掉一半用法。它既不算「編輯」也不算「移動」，很容易從按主題分類的縫裏
+掉出去。
+
+只召回 ~C-u~ 一個鍵就夠：進入前綴參數狀態之後，數字和減號由 ~universal-argument-map~
+這張臨時映射接管，那張映射不經過全域映射。~M-1~ 到 ~M-9~ 因此不必召回——它們只是
+「省掉 ~C-u~」的簡寫，而那幾個鍵留空更有用。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(defconst ginshio-keys-survival
+  '("C-g"                               ; quit
+    "ESC ESC ESC"                       ; escape from anything
+    "M-x"                               ; arrives as `ESC x' on a terminal
+    "M-:"                               ; evaluate an expression
+    "C-u"                               ; prefix arguments, for every command
+    "C-h")                              ; the entire help prefix
+  "Keys that must never be missing.  Always admitted.")
+#+end_src
+
+*** 可選
+
+下面每組都可以在 ~ginshio-keys-groups~ 裏開關。默認啓用的是「不啓用就不像編輯器」的
+那些。
+
+=compat= 組例外。它把出廠的 ~C-x~ 和 ~C-c~ 前綴整個裝回來，等於放棄了本模塊的全部意義，
+存在的理由只是遷移期間的軟著陸。
+
+=editing= 裏的 ~C-x h~ 是全文選中，也是唯一一個活下來的 ~C-x~ 組合。代價是那個前綴重
+新存在，只不過底下只有這一個鍵——按下 ~C-x~ 之後別無選擇。留在這裏而不是挪到 leader
+上，是因為它兩鍵就到，leader 那條路要三鍵，而這兩鍵已經在手指裏了。
+
+刪除鍵這一組需要單獨說明，因為它是本模塊唯一一處「鍵名不等於實際查找對象」的地方。
+
+按鍵在到達映射之前要穿過一層翻譯。退格鍵和刪除鍵在不同終端、不同圖形環境下發出的編
+碼並不一致，翻譯層負責統一它們：退格最終被查為 ~DEL~，刪除鍵最終被查為 ~<deletechar>~。
+~<backspace>~ 和 ~<delete>~ 這兩個名字本身在全域映射裏是空的——把它們寫進列表不會有任何
+效果。
+
+所以下面列的是 *翻譯之後* 的名字。同理 ~<return>~ 與 ~<tab>~ 也只是 ~RET~ 和 ~TAB~ 的別名，
+不必單獨列出。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(defconst ginshio-keys-editing
+  '("RET" "TAB"
+    "DEL"                               ; backspace, after translation
+    "<deletechar>"                      ; the delete key, after translation
+    "C-d"
+    "C-SPC"
+    "C-x h"                             ; the one survivor of the C-x prefix
+    "C-w" "M-w" "C-y" "M-y"
+    "C-k" "M-d" "M-DEL"
+    "C-_"                               ; undo; its redo is bound further down
+    "M-;" "M-/"
+    "M-u" "M-l" "M-c"))
+
+(defconst ginshio-keys-motion
+  '("C-a" "C-e" "C-f" "C-b" "C-n" "C-p"
+    "M-f" "M-b" "M-a" "M-e" "M-<" "M->"
+    "C-v" "M-v" "C-l"
+    "C-M-f" "C-M-b" "C-M-a" "C-M-e" "C-M-u" "C-M-d" "C-M-n" "C-M-p"
+    "<left>" "<right>" "<up>" "<down>"
+    "<home>" "<end>" "<prior>" "<next>"
+    "C-<left>" "C-<right>" "C-<up>" "C-<down>"
+    "M-<left>" "M-<right>"))
+
+;; Multi-clicks and press-and-hold are handled by the single-click bindings
+;; themselves, so they need no entries of their own.
+(defconst ginshio-keys-mouse
+  '("<mouse-1>" "<down-mouse-1>" "<drag-mouse-1>"
+    "<mouse-2>" "<mouse-3>"
+    "<wheel-up>" "<wheel-down>" "<wheel-left>" "<wheel-right>"
+    "C-<wheel-up>" "C-<wheel-down>"
+    "<mouse-4>" "<mouse-5>" "<mouse-6>" "<mouse-7>"))
+
+(defconst ginshio-keys-compat
+  '("C-x" "C-c")
+  "The stock prefixes, for a soft landing during migration.")
+
+(defvar ginshio-keys-groups '(editing motion mouse)
+  "Optional groups to re-admit.
+Recognised: `editing', `motion', `mouse', `compat'.")
+#+end_src
+
+順序在這裏很重要。新映射先在一邊完整組裝，安裝是最後一步。若中途拋出異常，舊映射原
+封不動，你得到一個帶警告但完全可用的 Emacs。
+
+反過來寫——先清空再逐個召回——中途出錯就會停在「全域映射已空、leader 尚未掛上」的狀
+態，除了打字什麼都做不了。那是這份配置唯一真正致命的失敗模式，用構造與安裝分離來排
+除它。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(defun ginshio-keys-group-keys (group)
+  "Return the key descriptions belonging to GROUP."
+  (pcase group
+    ('survival ginshio-keys-survival)
+    ('editing  ginshio-keys-editing)
+    ('motion   ginshio-keys-motion)
+    ('mouse    ginshio-keys-mouse)
+    ('compat   ginshio-keys-compat)
+    (_ (display-warning 'ginshio (format "Unknown key group `%s'" group))
+       nil)))
+
+(defun ginshio-keys-apply-groups ()
+  "Install the global keymap this configuration wants.
+That is the survival group, the enabled groups, and the handful of
+replacements below."
+  (setq ginshio-keys-unbound nil)
+  (let ((map (ginshio-keys-make-blank-map)))
+    (dolist (group (cons 'survival ginshio-keys-groups))
+      (ginshio-keys-admit-group (ginshio-keys-group-keys group) map))
+    (ginshio-keys-apply-replacements map)
+    (use-global-map map)))
+#+end_src
+
+一個列出來卻查無所獲的鍵是配置裏的死條目：它看起來像在做事，實際什麼都沒做，而且不
+會報錯。交給自檢定期指出來。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(ginshio-doctor-declare 'keys "re-admitted keys resolve"
+                        (lambda () (null ginshio-keys-unbound))
+                        :severity 'warn
+                        :note "every listed key had something to restore"
+                        :detail (lambda ()
+                                  (format "nothing to restore for: %s"
+                                          (string-join (reverse ginshio-keys-unbound) " ")))
+                        :remedy "drop them from the group, or use the name the key translates to")
+#+end_src
+
+** 替代品
+
+召回組裝回來的是出廠命令。有幾個位置上，出廠命令做的事是明確可以改進的，而改進之後
+的版本仍然一按就到得了原來的行為——那樣的地方值得替換。~C-a~ ~C-e~ ~DEL~ 是三個，命令
+本身由 core 定義，這裏只決定它們去哪個鍵。
+
+撤銷與重做替換掉的不是某一個命令，是整組鍵位。出廠給撤銷留了三個鍵（~C-/~ ~C-_~
+~C-?~），給重做留了兩個（~C-?~ ~C-M-_~），其中 ~C-?~ 兩邊都算——這是四十年累積出來的
+結果，不是誰設計的。這裏收成一對：~C-_~ 撤銷，~M-_~ 重做。
+
+留 ~C-_~ 而不是 ~C-/~ 有個具體理由。~C-_~ 是一個真正的控制字符，圖形界面和終端下是同
+一個東西；~C-/~ 只有在圖形界面下才是獨立事件，終端把它發成 ~C-_~。留下前者，兩種環境
+的行為才一致。
+
+~M-_~ 只能寫在這裏，不能寫進召回名單。名單只認出廠映射裏已經有的東西，而出廠從來沒
+有綁過 ~M-_~——寫進去的結果是一條查無所獲，最後由自檢報出來。
+
+裝在全域映射上而不是 leader 上。它們是編輯原語，一天按幾百次；掛到三鍵前綴後面等於
+沒有。
+
+替換前先確認命令存在。core 是可能加載失敗的模塊，而那種情況下正確的結果是退回出廠
+行為，不是一個綁着未定義函數的退格鍵——地基壞掉一塊，不該連累你還能不能打字。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(defconst ginshio-keys-replacements
+  '(("C-a" . ginshio/beginning-of-line)
+    ("C-e" . ginshio/end-of-line)
+    ("DEL" . ginshio/hungry-delete-backward)
+    ("M-_" . undo-redo))
+  "Keys this module binds in the global map rather than re-admitting.")
+
+(defun ginshio-keys-apply-replacements (keymap)
+  "Install `ginshio-keys-replacements' into KEYMAP.
+An entry naming a command that does not exist is skipped, which leaves the
+stock binding admitted a moment ago in place."
+  (pcase-dolist (`(,key . ,command) ginshio-keys-replacements)
+    (when (fboundp command)
+      (keymap-set keymap key command))))
+#+end_src
+
+** 覆蓋層
+
+一個全局 minor mode，它的映射註冊到查找鏈的最前端。這是整份配置裏唯一凌駕於 major
+mode 之上的映射，*只用來安放 leader*——往裏面塞別的東西，就等於重新製造本模塊想消除
+的那種爭搶。
+
+註冊的位置決定了優先級：minor mode 的常規映射在 major mode 之後才被查詢，而 emulation
+映射在之前。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(defvar ginshio-override-map (make-sparse-keymap)
+  "Consulted before major and minor mode maps.  Reserved for the leader.")
+
+(define-minor-mode ginshio-override-mode
+  "Give `ginshio-override-map' precedence over all other keymaps."
+  :global t
+  :lighter nil
+  :group 'ginshio)
+
+(add-to-list 'emulation-mode-map-alists
+             `((ginshio-override-mode . ,ginshio-override-map)))
+#+end_src
+
+** Leader
+
+一個前綴鍵，其下掛著所有你自己的命令。好處是鍵位管理從「在整個鍵盤上找空位」變成
+「在一棵樹上安排位置」，而且這棵樹可以被完整地展示出來。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(defvar ginshio-leader-map (make-sparse-keymap "leader")
+  "The root of every command this configuration binds.")
+
+(defvar ginshio-leader-key "M-m"
+  "Key sequence that opens the leader map.")
+#+end_src
+
+選這個鍵受幾條約束擠壓：不能用 ~C-c~，那是各個模式的領地；不能用 super 修飾鍵，終端
+下收不到；不能用裸空格，沒有模態編輯時它必須保持自插入。~M-m~ 出廠綁定的功能可以由
+行首移動代替，是全鍵盤上最容易讓出的一個，且在圖形界面和終端下都可靠送達。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(defun ginshio-leader-bind-key (key &optional keymap)
+  "Make KEY open the leader map inside KEYMAP.
+KEYMAP defaults to the override map, which makes KEY reach the leader from
+every buffer no matter what mode it is in."
+  (keymap-set (or keymap ginshio-override-map) key ginshio-leader-map))
+#+end_src
+
+** 綁定
+
+一個小到可以完整讀懂的聲明式接口。輸入是扁平的「鍵 定義」序列，定義可以是：
+
+- *字符串* —— 把該鍵聲明成一個帶名字的前綴
+- *命令* —— 綁定它
+- ~(名字 . 定義)~ —— 綁定的同時登記一個顯示名字。用於掛接 ~help-map~ 這類既有映射：
+  你不便改寫它們自己的標題，卻仍希望它在提示界面裏有個像樣的名字
+- ~nil~ —— 解除綁定
+
+中間層級的前綴按需自動創建。這一點是模塊化的關鍵：任何模塊都可以直接聲明 ~"g s"~，
+不必關心 ~"g"~ 有沒有被誰先聲明過，也就不需要在模塊之間約定初始化順序。
+
+前綴的名字在登記的同時就交給提示界面。做成一步而不是「先記下、稍後統一公佈」，是因
+為後者要求每個模塊在定義完鍵位後再調用一次公佈——漏掉的模塊不會報錯，只是它的前綴在
+提示界面裏顯示成一個裸鍵，而這種缺失很難注意到。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(defvar ginshio-keys-prefix-names nil
+  "Alist of (KEY . NAME) for every named prefix.")
+
+(defun ginshio-keys--name-prefix (map name)
+  "Store NAME as MAP's title.
+A keymap carries its title directly after the leading symbol."
+  (if (stringp (cadr map))
+      (setcar (cdr map) name)
+    (setcdr map (cons name (cdr map)))))
+
+(defun ginshio-keys--ensure-path (keymap key)
+  "Create whatever intermediate prefixes KEY needs inside KEYMAP."
+  (let ((segments (split-string key " " t))
+        (prefix nil))
+    (dolist (segment (butlast segments))
+      (setq prefix (if prefix (concat prefix " " segment) segment))
+      (unless (keymapp (keymap-lookup keymap prefix))
+        (keymap-set keymap prefix (make-sparse-keymap))))))
+
+(defun ginshio-keys-define (keymap bindings)
+  "Define BINDINGS, a flat list of KEY DEFINITION pairs, in KEYMAP."
+  (while bindings
+    (let ((key (pop bindings))
+          (def (pop bindings))
+          (name nil))
+      (when (and (consp def) (stringp (car def)))
+        (setq name (car def)
+              def (cdr def)))
+      (ginshio-keys--ensure-path keymap key)
+      (cond
+       ((stringp def)
+        (let ((existing (keymap-lookup keymap key)))
+          (if (keymapp existing)
+              (ginshio-keys--name-prefix existing def)
+            (keymap-set keymap key (make-sparse-keymap def))))
+        (setq name def))
+       (t
+        (keymap-set keymap key def)))
+      (when name
+        (setf (alist-get key ginshio-keys-prefix-names nil nil #'equal) name)
+        (which-key-add-keymap-based-replacements keymap key name)))))
+
+(defun ginshio-leader-define (&rest bindings)
+  "Define BINDINGS under the leader."
+  (ginshio-keys-define ginshio-leader-map bindings))
+#+end_src
+
+
+** 給模態編輯留的接縫
+
+本模塊不引入模態編輯，但不排除它。真要加入時，模態模塊只需要做兩件事，不必修改這裏
+的任何代碼：
+
+#+begin_src emacs-lisp :tangle no
+;; 讓 normal state 下的裸空格成為第二個 leader 入口
+(ginshio-leader-bind-key "SPC" some-modal-normal-state-map)
+
+;; 需要時把某個模式的鍵位整個讓開
+(ginshio-keys-suppress-mode-map 'org-mode)
+#+end_src
+
+第二件事對應第二層。那一層沒有全局開關，只能逐個模式放棄，而且應該在確認它的綁定確
+實可以被替代之後再做。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(defun ginshio-keys-suppress-mode-map (mode)
+  "Empty MODE's own keymap, leaving only what this configuration binds."
+  (let ((map-symbol (intern (format "%s-map" mode))))
+    (if (and (boundp map-symbol) (keymapp (symbol-value map-symbol)))
+        (setcdr (symbol-value map-symbol) nil)
+      (display-warning 'ginshio (format "No keymap found for `%s'" mode)))))
+#+end_src
+
+** 佈局
+
+leader 之下按主題分區。這裏填入的都是內建功能；引入包的模塊往同一棵樹上掛自己的分支，
+不需要回到這個文件。
+
+| 鍵    | 分區     | 由誰填             |
+|-------+----------+--------------------|
+| =SPC=   | 執行命令 | 本模塊             |
+| =b=     | 緩衝區   | 本模塊             |
+| =f=     | 文件     | 本模塊             |
+| =s=     | 搜索     | 本模塊、minibuffer |
+| =h=     | 幫助     | 本模塊             |
+| =q=     | 退出     | 本模塊             |
+| =.=     | 動作     | minibuffer         |
+| =,=     | 重複上次 | minibuffer         |
+| =i=     | 插入     | minibuffer         |
+| =w=     | 窗口     | window             |
+| =p=     | 項目     | window             |
+| =e=     | 多處編輯 | edit               |
+| =z=     | 摺疊     | lang               |
+| =c=     | 代碼     | lsp                |
+| =d=     | 調試     | dap                |
+| =g=     | 版本控制 | vc                 |
+
+前六格在本文件裏填好，其餘都是空的：每個功能模塊在自己的文件裏往這棵樹上掛分支，中
+間前綴會被自動創建。註釋掉一個模塊，它的分支連同下面的一切一起消失，本文件不用改。
+
+*** 幾個小命令
+
+有些動作沒有現成的命令，或者現成的那個問得太多。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(defun ginshio/kill-current-buffer ()
+  "Kill the current buffer without asking which one."
+  (interactive)
+  (kill-buffer (current-buffer)))
+
+(defun ginshio/find-config ()
+  "Visit the literate source of this configuration."
+  (interactive)
+  (find-file (expand-file-name "config.org" ginshio-config-dir)))
+
+(defun ginshio/find-guide ()
+  "Visit the workflow guide for this configuration."
+  (interactive)
+  (find-file (expand-file-name "GUIDE.org" ginshio-config-dir)))
+
+(defun ginshio/yank-buffer-file-name ()
+  "Put this buffer's file name on the kill ring.
+Falls back to its directory when the buffer is not visiting a file."
+  (interactive)
+  (let ((name (or buffer-file-name default-directory)))
+    (unless name
+      (user-error "This buffer has neither a file nor a directory"))
+    (kill-new name)
+    (message "%s" name)))
+
+(defun ginshio/revert-buffer ()
+  "Re-read this buffer from disk.
+Asks first when there are unsaved changes, because rereading discards them."
+  (interactive)
+  (revert-buffer :ignore-auto (not (buffer-modified-p))))
+#+end_src
+
+*** 綁定表
+
+大寫字母是同一個動作的放大版：~b s~ 存這個緩衝區，~b S~ 問一遍所有改過的。這條規則在
+別的分區裏也成立——~g d~ 看這個文件的改動，~g D~ 看整個倉庫的。記住一個小寫鍵，等於順
+帶記住了它的大寫。
+
+~b w~ 是唯一一個字母不來自命令名的：~read-only-mode~ 切換的是這個緩衝區能不能寫，於是
+用 =w=。按命令名取會落到 =r= 上，而那裏已經是重讀文件了——兩個都以「r」開頭卻一個丟棄
+改動、一個保護改動，是不該讓手指去分辨的一對。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(ginshio-leader-define
+ "SPC" #'execute-extended-command
+ ":"   #'eval-expression
+
+ "b"   "buffer"
+ "b b" #'switch-to-buffer
+ "b k" #'ginshio/kill-current-buffer
+ "b K" #'kill-buffer
+ "b n" #'next-buffer
+ "b p" #'previous-buffer
+ "b r" #'ginshio/revert-buffer
+ "b s" #'save-buffer
+ "b S" #'save-some-buffers
+ "b w" #'read-only-mode
+ "b x" #'scratch-buffer
+
+ "f"   "file"
+ "f f" #'find-file
+ "f S" #'write-file
+ "f r" #'recentf-open-files
+ "f y" #'ginshio/yank-buffer-file-name
+ "f p" #'ginshio/find-config
+ "f g" #'ginshio/find-guide
+
+ "s"   "search"
+ "s r" #'query-replace
+ "s R" #'query-replace-regexp
+ "s i" #'imenu
+ "s n" #'goto-line
+
+ "h"   (cons "help" help-map)
+
+ "q"   "quit"
+ "q q" #'save-buffers-kill-terminal
+ "q f" #'delete-frame
+ "q r" #'restart-emacs
+ "q d" #'ginshio/doctor)
+#+end_src
+
+** 提示
+
+一棵按主題分區的鍵位樹只有在能被看見時才好用。按下 leader 之後停頓片刻，下一層有
+哪些選擇就列出來——這讓鍵位可以靠探索記住，而不是靠背誦。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(setq which-key-idle-delay 0.5
+      which-key-idle-secondary-delay 0.05
+      which-key-add-column-padding 1
+      which-key-sort-order #'which-key-key-order-alpha)
+
+(which-key-mode 1)
+#+end_src
+
+** 重複
+
+leader 有個固定開銷：按到一個命令要三下。大多數命令按一次就完事，這點開銷無所謂。但
+有幾個命令你按下去本來就是為了連着按——下一個聲明、下一個改動塊、再標一處相同的文本。
+~M-m z n~ 連敲五遍，後面四遍純粹是在重複那個前綴。
+
+~repeat-mode~ 就是為這件事準備的，Emacs 28 起內建。一個命令可以聲明「我剛跑完之後，
+這幾個單鍵直接再來一次」，於是那三下只按一次。
+
+它出廠帶了幾十張這樣的表，可惜配的都是出廠鍵位。~other-window~ 那張認 =o=，因為出廠
+鍵是 ~C-x o~；這裏的鍵是 ~M-m w w~，按完之後它一看剛按下的是 =w=，不在表裏，就不接手
+了。鍵位重排過，表也得跟着重排。
+
+所以這裏提供的不是一個開關，是一個讓功能模塊照自己的鍵位建表的函數。規則只有一條：
+*剛才按的最後一個鍵，再按一次就再來一次*。~M-m z n~ 之後按 =n=，~M-m w f~ 之後按 =f=。
+
+表要掛在一個符號上，不能直接就是那張映射。~repeat-mode~ 兩種都認，但
+~M-x describe-repeat-maps~ 只認符號——而那條命令是這套機制唯一的說明書，不值得為省一
+個名字弄丟。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(defun ginshio-keys-repeatable (name &rest keys)
+  "Let the leader bindings named by KEYS repeat by their own last key.
+
+NAME is a symbol whose value becomes the keymap they share.
+
+Each of KEYS is a leader sequence; its last segment is the key that
+repeats, so the key that just ran the command is the key that runs it
+again."
+  (let ((map (make-sparse-keymap)))
+    (dolist (key keys)
+      ;; A prefix answers with a keymap, an unbound sequence with nil, and one
+      ;; running past a non-prefix binding with a number.  None of the three
+      ;; is a command, and a malformed description does not even get to ask.
+      (let ((command (and (key-valid-p key)
+                          (keymap-lookup ginshio-leader-map key))))
+        (if (and command (symbolp command))
+            (progn
+              (keymap-set map (car (last (split-string key " " t))) command)
+              (put command 'repeat-map name))
+          (display-warning
+           'ginshio (format "Nothing to repeat under the leader at `%s'" key)))))
+    (set name map)))
+#+end_src
+
+出廠的 ~repeat-mode~ 不設超時，表一直活着，直到你按到表外的某個鍵。單鍵表上這件事有
+點討厭：切完窗口停下來想了兩句，回頭打字，第一個字母又跑去切窗口了。兩秒夠連按了，也
+短到不至於在你回頭打字時還埋在那裏。
+
+打開它的時候它會把整個 obarray 掃一遍，數出有多少命令可以重複，然後報給你。這個數字
+啓動時沒人看。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(setq repeat-exit-timeout 2)
+
+(let ((inhibit-message t))
+  (repeat-mode 1))
+#+end_src
+
+建表的事留給功能模塊，寫在各自的鍵位表後面——這樣註釋掉一個模塊，它的重複表也跟着消
+失。目前還沒有模塊建表，所以生效的只有 Emacs 自帶的那幾十張，而它們認的是出廠鍵位，
+在這份配置裏多半按不到。
+
+** 生效
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el"
+(ginshio-keys-apply-groups)
+(ginshio-override-mode 1)
+(ginshio-leader-bind-key ginshio-leader-key)
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-keys.el" :comments no
+(provide 'ginshio-keys)
+;;; ginshio-keys.el ends here
+#+end_src

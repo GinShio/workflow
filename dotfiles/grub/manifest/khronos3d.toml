@@ -1,0 +1,5 @@
+[variables.grub.amdgpu]
+kernel_parameters = [
+  'amdgpu.si_support=1',
+  'amdgpu.cik_support=1',
+]

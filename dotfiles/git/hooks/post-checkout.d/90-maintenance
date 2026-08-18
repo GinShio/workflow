@@ -1,0 +1,15 @@
+#!/bin/sh
+# Register this repository for git's background maintenance, once.
+
+. "$HOOKS_DIR/core/lib.sh"
+
+# Skip if this exact repo path is already registered globally.
+# -x forces a whole-line match so path prefixes don't cause false positives.
+if git config --global --get-all maintenance.repo 2>/dev/null | grep -Fqx "$GIT_TOPLEVEL"; then
+    exit 0
+fi
+
+# `git maintenance` exists since git 2.29; fails silently on older versions.
+if git maintenance start >/dev/null 2>&1; then
+    log_info "Registered repository for git background maintenance."
+fi

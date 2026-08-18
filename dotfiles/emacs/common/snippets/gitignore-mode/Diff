@@ -1,0 +1,10 @@
+# -*- mode: snippet -*-
+# name: diff
+# key: diff
+# expand-env: ((yas-indent-line nil))
+# --
+######################### Diff #########################
+# repo: github/gitignore; pin: f6fa01ee0dc; file: Global/Diff.gitignore
+# LICENSE: Creative Commons Zero v1.0 Universal
+*.patch
+*.diff

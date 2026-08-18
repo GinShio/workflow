@@ -1,0 +1,60 @@
+# Cross-cutting plaintext data. Module-private knobs stay in module manifests.
+
+[variables]
+testing_runner_dir = "{{@@ env['XDG_RUNTIME_DIR'] @@}}/runner"
+
+[variables.sysenv]
+xdg_config_home = "{{@@ env['HOME'] @@}}/.config"
+xdg_cache_home = "{{@@ env['HOME'] @@}}/.cache"
+xdg_data_home = "{{@@ env['HOME'] @@}}/.local/share"
+xdg_state_home = "{{@@ env['HOME'] @@}}/.local/state"
+xdg_bin_home = "{{@@ env['HOME'] @@}}/.local/bin"
+xdg_lib_home = "{{@@ env['HOME'] @@}}/.local/lib64"
+amd_config_dir = "{{@@ sysenv.xdg_config_home @@}}/amdgpu-pro"
+amd_debug_dir = "{{@@ env['XDG_RUNTIME_DIR'] @@}}/amd"
+histfile = "{{@@ sysenv.xdg_cache_home @@}}/history_bash"
+ccache_dir = "{{@@ sysenv.xdg_cache_home @@}}/ccache"
+ccache_configpath = "{{@@ sysenv.xdg_config_home @@}}/ccache/ccache.conf"
+sccache_conf = "{{@@ sysenv.xdg_config_home @@}}/sccache/config"
+sccache_cache_zstd_level = 5
+builder_config_dir = "{{@@ sysenv.xdg_config_home @@}}/workflow/builder"
+gputest_config_dir = "{{@@ sysenv.xdg_config_home @@}}/workflow/gputest"
+gnupghome = "{{@@ sysenv.xdg_config_home @@}}/gnupg"
+lesshistfile = "{{@@ sysenv.xdg_cache_home @@}}/history_less"
+pythonpycacheprefix = "{{@@ sysenv.xdg_cache_home @@}}/python"
+pythonstartup = "{{@@ sysenv.xdg_config_home @@}}/python/startup.py"
+pythonuserbase = "{{@@ sysenv.xdg_data_home @@}}/python"
+python_history = "{{@@ sysenv.xdg_cache_home @@}}/history_python"
+cargo_home = "{{@@ sysenv.xdg_data_home @@}}/cargo"
+zig_global_cache_dir = "{{@@ sysenv.xdg_cache_home @@}}/zig"
+sqlite_history = "{{@@ sysenv.xdg_cache_home @@}}/history_sqlite"
+
+[variables.testing]
+runner_dir = "{{@@ testing_runner_dir @@}}"
+baseline_dir = '{{@@ testing.runner_dir @@}}/baseline'
+result_dir = "{{@@ env['HOME'] @@}}/Public/results"
+
+[variables.projects]
+root_dir = "{{@@ env['HOME'] @@}}/Projects"
+script_dir = "{{@@ _dotdrop_dotpath @@}}/.."
+
+[actions]
+histfile-install = '''grep -Phor '\bhistory_[\w-]*' {{@@ _dotfile_abs_dst @@}} | xargs -I@ bash -c 'touch {{@@ sysenv.xdg_cache_home @@}}/$(eval echo -E @)''''
+
+[dynvariables]
+sys_arch = "{{@@ projects.script_dir @@}}/scripts/detect.sh arch"
+sys_cpu = "{{@@ projects.script_dir @@}}/scripts/detect.sh cpu"
+sys_gpu = "{{@@ projects.script_dir @@}}/scripts/detect.sh gpu"
+sys_platform = "{{@@ projects.script_dir @@}}/scripts/detect.sh platform"
+sys_distro = "{{@@ projects.script_dir @@}}/scripts/detect.sh distro"
+sys_distro_ver = "{{@@ projects.script_dir @@}}/scripts/detect.sh distro_ver"
+sys_kernel = "{{@@ projects.script_dir @@}}/scripts/detect.sh kernel"
+sys_kernel_major = "{{@@ projects.script_dir @@}}/scripts/detect.sh kernel_major"
+sys_kernel_minor = "{{@@ projects.script_dir @@}}/scripts/detect.sh kernel_minor"
+sys_kernel_patch = "{{@@ projects.script_dir @@}}/scripts/detect.sh kernel_patch"
+sys_cmdline = "{{@@ projects.script_dir @@}}/scripts/detect.sh cmdline"
+sys_memory_mb = "{{@@ projects.script_dir @@}}/scripts/detect.sh memory_mb"
+sys_hostname = "{{@@ projects.script_dir @@}}/scripts/detect.sh hostname"
+sys_de = "{{@@ projects.script_dir @@}}/scripts/detect.sh desktop"
+sys_display = "{{@@ projects.script_dir @@}}/scripts/detect.sh display_server"
+kill_bin = 'command -v kill 2>/dev/null || echo /usr/bin/kill'

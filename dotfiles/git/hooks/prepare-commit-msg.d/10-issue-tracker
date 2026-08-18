@@ -1,0 +1,112 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+# Seed a commit message with an issue ID read from the current branch name — on
+# `feature/PROJ-123-login`, `[PROJ-123] ` at the start of the subject, or a
+# `Refs: PROJ-123` trailer at the end. Opt-in.
+#
+# This hook fires on almost every message-producing command (commit, -m, -t,
+# merge, cherry-pick, revert, amend, …), so the rule is "add unless" rather than
+# an allow-list of sources. It stays out of the way where acting would be wrong:
+#   - during a rebase — replayed/reworded commits already carry their ID, and
+#     rewriting history messages would be surprising;
+#   - on an autosquash marker (`fixup! `/`squash! `/`amend! `) — prefixing it
+#     would stop `git rebase --autosquash` from matching it;
+#   - on a detached HEAD — no branch, so no ID to read;
+#   - and never twice — a message that already carries the ID is left as is.
+
+msg_file="$1"
+
+# A rebase replays commits that already have their prefix (and reword edits an
+# existing message); adding there would rewrite history, so stay out entirely.
+# The state dir is per-worktree, hence GIT_DIR rather than the common dir.
+if [ -d "$GIT_DIR/rebase-merge" ] || [ -d "$GIT_DIR/rebase-apply" ]; then
+    exit 0
+fi
+
+# Need a branch to read the ID from; a detached HEAD has none.
+branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+[ -n "$branch" ] || exit 0
+
+first_line=$(head -n 1 "$msg_file" 2>/dev/null)
+
+# Leave autosquash markers untouched so `git rebase --autosquash` still pairs
+# them with their target (`git commit --fixup`/`--squash`, `--fixup=amend:…`).
+case "$first_line" in
+    "fixup! "*|"squash! "*|"amend! "*) exit 0 ;;
+esac
+
+regex=$(cfg_value wits.hooks.prepare-commit-msg.issue-tracker-regex '[A-Z]+-[0-9]+')
+position=$(cfg_value wits.hooks.prepare-commit-msg.issue-tracker-position prepend)
+fallback=$(cfg_value wits.hooks.prepare-commit-msg.issue-tracker-default)
+
+# The wrapping template. Its sensible default depends on where the ID goes: a
+# subject tag when prepending, a git trailer when appending.
+format=$(cfg_value wits.hooks.prepare-commit-msg.issue-tracker-format)
+if [ -z "$format" ]; then
+    case "$position" in
+        append) format='Refs: %s' ;;
+        *)      format='[%s] ' ;;
+    esac
+fi
+
+# First match of the issue pattern in the branch name; fall back to a configured
+# default when the branch carries none. Track which we got: a branch-derived ID
+# is specific, the fallback is only a placeholder, and append treats them
+# differently.
+id=$(printf '%s\n' "$branch" | grep -oE "$regex" | head -n 1)
+if [ -n "$id" ]; then
+    id_default=0
+else
+    id="$fallback"
+    id_default=1
+fi
+[ -n "$id" ] || exit 0
+
+# Render the ID into the template by substituting the first literal `%s`. Done
+# with parameter expansion rather than `printf "$format"`, so a stray `%` or
+# backslash in the configured format can never misfire. With no `%s`, literal.
+case "$format" in
+    *"%s"*) text="${format%%"%s"*}$id${format#*"%s"}" ;;
+    *)      text="$format$id" ;;
+esac
+
+case "$position" in
+    append)
+        # Add the ID as a git trailer at the end of the body; interpret-trailers
+        # places it correctly relative to the comment block. The --if-exists
+        # policy depends on how specific the ID is:
+        #   - branch-derived → addIfDifferent: idempotent on a re-run, yet still
+        #     accumulates a genuinely different ID (a commit cherry-picked into
+        #     another issue's branch gains that ref while keeping its own);
+        #   - the fallback default → doNothing: a placeholder, added only when no
+        #     issue trailer exists yet, never stacked onto a real reference.
+        # Expects a `Token: %s` rendering.
+        if [ "$id_default" = 1 ]; then
+            _ife=doNothing
+        else
+            _ife=addIfDifferent
+        fi
+        git interpret-trailers --if-exists "$_ife" --in-place \
+            --trailer "$text" "$msg_file" 2>/dev/null ||
+            log_warn "issue-tracker: could not append trailer '$text'"
+        ;;
+    *)
+        # Prepend to the start of the first line. Idempotent: if it is already
+        # there, do nothing — the quoted pattern matches literally, so brackets
+        # aren't a glob class.
+        case "$first_line" in
+            "$text"*) exit 0 ;;
+        esac
+        # Streaming `text + file` through a temp copy is simpler and safer than an
+        # awk rewrite (no -v escape processing, no line-ending normalization);
+        # write back in place to keep the file's permissions and git's path.
+        tmp=$(mktemp) || exit 0
+        if { printf '%s' "$text"; cat "$msg_file"; } > "$tmp" 2>/dev/null; then
+            cat "$tmp" > "$msg_file"
+        fi
+        rm -f "$tmp"
+        ;;
+esac
+
+exit 0

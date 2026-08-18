@@ -1,0 +1,18 @@
+# -*- mode: systemd; coding: utf-8; indent-tabs-mode: nil; -*-
+[Unit]
+Description=Beancount Container
+
+[Container]
+ContainerName=beancount
+Exec=--port {{@@ beancount.port @@}} /data/main.beancount
+Image=docker.io/thekevjames/fava:latest
+Volume={{@@ env['HOME'] @@}}/cyber/blog/ledger:/data
+PublishPort={{@@ beancount.port @@}}:{{@@ beancount.port @@}}
+Network=host
+Environment=PUID=0
+Environment=PGID=0
+Environment=TZ=UTC
+AutoUpdate=registry
+
+[Install]
+WantedBy=multi-user.target default.target

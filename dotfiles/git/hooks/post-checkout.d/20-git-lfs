@@ -1,0 +1,4 @@
+#!/bin/sh
+# Sync Git LFS objects after checkout.
+
+git lfs post-checkout "$@"

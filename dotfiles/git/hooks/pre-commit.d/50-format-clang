@@ -1,0 +1,22 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+# Format staged C/C++ (and friends) with clang-format, rewriting the index copy
+# via apply_to_staged so unstaged edits are left intact. clang-format discovers a
+# nearby .clang-format through --assume-filename; an explicit configured style
+# overrides that. A missing tool is a silent skip.
+command -v clang-format >/dev/null 2>&1 || exit 0
+
+style=$(cfg_value wits.hooks.pre-commit.format-clang-style)
+if [ -n "$style" ]; then
+    set -- "-style=$style"
+else
+    set -- -style=file -fallback-style=LLVM
+fi
+
+staged_lang_files .c .h .inc .hh .hpp .hxx .h++ .cc .cpp .cxx .c++ .icc .ipp .ixx .i++ .tcc .tpp .txx |
+while IFS= read -r f; do
+    apply_to_staged "$f" clang-format "--assume-filename=$f" "$@"
+done
+
+exit 0

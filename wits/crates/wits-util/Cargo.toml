@@ -1,0 +1,32 @@
+[package]
+name = "wits-util"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared library behind the wits CLI and its plugins"
+
+[lib]
+name = "wits_util"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+log.workspace = true
+ureq.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+aes-gcm.workspace = true
+chacha20poly1305.workspace = true
+pbkdf2.workspace = true
+argon2.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+sha3.workspace = true
+blake2.workspace = true
+base64.workspace = true
+rand.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

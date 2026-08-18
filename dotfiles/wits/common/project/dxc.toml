@@ -1,0 +1,24 @@
+[project]
+org = "{{@@ wits.projects.source_info['dxc'].org @@}}"
+build_system = "cmake"
+generator = "Ninja Multi-Config"
+toolchain = "clang"
+default_presets = ["common"]
+
+[repos.main]
+path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
+build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+install_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+main_branch = "main"
+[repos.main.remotes]
+upstream = "https://github.com/microsoft/DirectXShaderCompiler.git"
+origin = "https://github.com/GinShio/DirectXShaderCompiler.git"
+
+[project.presets.common]
+extra_config_args = ["-C{{repos.main.workdir}}/cmake/caches/PredefinedParams.cmake"]
+[project.presets.common.definitions]
+ENABLE_SPIRV_CODEGEN = true
+LLVM_ENABLE_ASSERTIONS = true
+SPIRV_BUILD_TESTS = false
+SPIRV_TOOLS_USE_MIMALLOC = false
+SPIRV_TOOLS_USE_MIMALLOC_IN_STATIC_BUILD = true

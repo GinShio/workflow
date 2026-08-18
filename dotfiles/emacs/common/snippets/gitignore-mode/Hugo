@@ -1,0 +1,21 @@
+# -*- mode: snippet -*-
+# name: hugo
+# key: hugo
+# expand-env: ((yas-indent-line nil))
+# --
+######################### Hugo #########################
+# repo: github/gitignore; pin: e65111c6188; file:community/Golang/Hugo.gitignore
+# LICENSE: Creative Commons Zero v1.0 Universal
+# Generated files by hugo
+/public/
+/resources/_gen/
+/assets/jsconfig.json
+hugo_stats.json
+
+# Executable may be added to repository
+hugo.exe
+hugo.darwin
+hugo.linux
+
+# Temporary lock file while building
+/.hugo_build.lock

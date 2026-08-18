@@ -1,0 +1,300 @@
+* 調試框架
+
+用 printf 調試的真正代價不是麻煩，是它改變你問問題的方式：你只能問那些事先想到要問
+的問題，每問一個新問題就要重新編譯一次。調試器把這個循環去掉了——程序停在那裏，你可
+以一直問下去。
+
+在編輯器裏調試，比在終端裏多出來的東西只有一樣，但那一樣很大：*位置*。當前停在哪一
+行就高亮在你正在讀的那份源碼上，變量的值顯示在它出現的那一行旁邊。gdb 的 TUI 在模
+仿這件事，而它模仿的是一個編輯器——你面前已經有一個真的了。
+
+Dape 的配置格式、適配器、資訊面板與 REPL 見 [[https://elpa.gnu.org/packages/dape.html][GNU ELPA: Dape]]；從設斷點到結束會話的
+最短流程及完整鍵位索引在 [[file:../GUIDE.org::*Dape][GUIDE.org]]。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-dap.el" :comments no
+;;; ginshio-dap.el --- stopping the program to ask it things -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-dap.el"
+(require 'ginshio-path)
+(require 'ginshio-doctor)
+(require 'ginshio-keys)
+
+(declare-function dape-breakpoint-load "dape")
+(declare-function dape-breakpoint-save "dape")
+#+end_src
+
+** 為什麼是 dape
+
+Emacs 內建的 gdb 界面靠解析 gdb 的文本輸出工作。它只認 gdb，而且每次 gdb 調整輸出
+格式它就壞一點。
+
+DAP 是調試器這一側的 LSP：調試器用結構化的協議說話，編輯器不必知道對面是 gdb、
+lldb 還是別的什麼。dape 是一個直接說這個協議的客戶端，不依賴任何 LSP 框架，並且把
+斷點、單步、變量檢視都建在 Emacs 自己的設施上——和上一個模塊選 eglot 是同一條理由。
+
+** 加載之前
+
+下面幾項在包加載之前設定。這是可以的，也是慣例：它們都是 ~defcustom~，而
+~defcustom~ 不覆蓋已經有值的變量。
+
+*不要它的全局鍵位。* dape 加載時會執行一次 ~global-set-key~，把 ~C-x C-a~ 變成它的
+命令前綴。那張全局映射是被刻意清空的，而這個包不知道。把前綴設成 nil 之後它就不再
+安裝——它自己檢查了這一點，所以這是受支持的用法，不是繞過。
+
+*斷點存到狀態目錄。* 默認落在配置目錄裏。斷點屬於「丟了損失連續性、但沒有損失信息」
+那一檔——重開一次會話就能重新設上——所以歸 state。
+
+*信息窗口靠右。* 這是本模塊唯一一處關於位置的設置，因為它不經過 ~display-buffer~：
+dape 自己編排那一組窗口。要精細控制哪個面板去哪裏，popup 模塊仍然可以插手。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-dap.el"
+(setq dape-key-prefix nil
+      dape-default-breakpoints-file (ginshio-state "dape-breakpoints")
+      dape-buffer-window-arrangement 'right
+      dape-info-hide-mode-line nil)
+#+end_src
+
+調試配置是一段可以編輯的表達式，你上次跑的那一條值得留到下次。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-dap.el"
+(add-to-list 'savehist-additional-variables 'dape-history)
+#+end_src
+
+** 聲明
+
+包本身延遲到第一次用才加載。~:commands~ 這張表因此不是樣板：dape 只給 ~dape~ 一個
+自動加載入口，其餘命令要在這裏點名，否則按下鍵得到的是「函數未定義」。這張表就是本
+模塊全部的入口。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-dap.el"
+(use-package dape
+  :ensure (:host github :repo "svaante/dape")
+  :commands (dape
+             dape-continue dape-next dape-step-in dape-step-out dape-until
+             dape-pause dape-restart dape-quit dape-kill
+             dape-breakpoint-toggle dape-breakpoint-remove-all
+             dape-breakpoint-expression dape-breakpoint-hits dape-breakpoint-log
+             dape-evaluate-expression dape-watch-dwim
+             dape-memory dape-disassemble
+             dape-info dape-repl dape-select-stack dape-select-thread))
+#+end_src
+
+*** 先存盤
+
+適配器是從磁盤讀源碼的。緩衝區裏有未保存的改動時，它報的行號和你眼前的行號會錯開，
+而這種錯位不報錯，只會讓你對著錯的一行想很久。
+
+只保存當前項目的文件。無條件保存全部也能解決問題，但那會順手寫入一堆和這次調試無關
+的東西。
+
+掛鉤要等包加載之後。這個鉤子出廠就帶着兩項默認值，而默認值是在包加載時由
+~defcustom~ 給出的——它不覆蓋已經有值的變量。提前掛的後果是那兩項默認值被靜默地擠
+掉，症狀是會話開始時信息窗口不再自動出現，而看起來和鉤子毫無關係。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-dap.el"
+(defun ginshio-dap-save-project-buffers-h ()
+  "Save this project's modified files before the adapter reads them."
+  (when-let* ((project (project-current nil))
+              (root (project-root project)))
+    (save-some-buffers
+     t (lambda ()
+         (and buffer-file-name (file-in-directory-p buffer-file-name root))))))
+
+(with-eval-after-load 'dape
+  (add-hook 'dape-start-hook #'ginshio-dap-save-project-buffers-h))
+#+end_src
+
+*** 斷點活過重啓
+
+在一個難復現的問題上佈置好的一組斷點，是你花時間換來的。它默認活不過一次重啓。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-dap.el"
+(with-eval-after-load 'dape
+  (when (file-exists-p dape-default-breakpoints-file)
+    (dape-breakpoint-load))
+  (add-hook 'kill-emacs-hook #'dape-breakpoint-save))
+#+end_src
+
+** 語言怎麼接進來
+
+多數情況下不用做任何事。dape 自帶一大批適配器配置，每條都聲明了自己適用於哪些主模
+式，~M-m d d~ 只列出當前模式能用的那些——裝了外部程序它就出現，沒裝就不出現。所以
+「支持一種語言」通常等於「裝上那個語言的調試適配器」，配置這邊是空的。
+
+需要動手的只有兩種情況：適配器的可執行文件名和 dape 的預期不一致，或者你要固定一組
+啓動參數。前者在語言自己的文件裏改 ~dape-configs~ 的對應項；後者用下面說的
+=.dir-locals.el=。
+
+各語言對適配器的自檢也歸各語言自己聲明——是否裝了 gdb 是 C/C++ 的問題，不是調試框架
+的問題。
+
+** 走一遍
+
+第一次用 DAP 最容易卡住的地方，是它和 =gdb= 命令行的心智模型不一樣：這裏沒有「啓動
+調試器然後在裏面輸命令」這一步，你是在編輯器裏標好想停的地方，然後讓它跑。
+
+拿一個具體的程序走一遍。
+
+#+begin_src c++ :tangle no
+int add(int a, int b) {
+  int sum = a + b;      // ← 想停在這裏
+  return sum;
+}
+
+int main() {
+  int total = 0;
+  for (int i = 1; i <= 3; ++i)
+    total = add(total, i);
+  return total;
+}
+#+end_src
+
+*一、帶調試信息編譯。* 這一步不在 Emacs 裏，也沒有捷徑：沒有 ~-g~ 就沒有行號和變量
+名，調試器只能給你彙編。~-O0~ 同樣重要，否則優化過的代碼裏「當前行」會來回跳，變量
+會顯示成「已被優化掉」。
+
+#+begin_src shell :tangle no
+c++ -g -O0 -o demo main.cc
+#+end_src
+
+*二、標好要停的地方。* 光標移到 =int sum = a + b;= 那一行，按 ~M-m d b~。左邊出現一
+個標記。
+
+這一步 *不需要會話正在運行*——這正是它和命令行不同的地方。斷點是你對源碼的標註，先標
+好，會話啓動時一起帶過去。上一次留下的斷點也還在，它們存在狀態目錄裏。
+
+*三、啓動。* ~M-m d d~。minibuffer 列出適用於當前主模式的配置，C++ 這邊會看到 =gdb=
+和 =lldb-dap=。選 =gdb=，然後 —— *這是關鍵的一步* —— 你看到的不是一個確認提示，而是
+一行 *可以直接編輯的配置*：
+
+#+begin_src emacs-lisp :tangle no
+gdb :program "a.out" :args []
+#+end_src
+
+把 ~"a.out"~ 改成 ~"demo"~，回車。要傳參數就填進 ~:args~，例如 ~["--verbose" "3"]~。
+
+*四、程序停下之後。* 屏幕右側出現一組窗口：
+
+| 窗口                     | 裏面是什麼                             |
+|--------------------------+----------------------------------------|
+| =*dape-info Scope*=        | 當前作用域的所有變量和它們的值，可展開 |
+| =*dape-info Stack*=        | 調用棧，點一層就跳到那一層的源碼       |
+| =*dape-info Breakpoints*=  | 所有斷點                               |
+| =*dape-repl*=              | 直接對被調試的程序求值                 |
+
+同時源碼緩衝區裏當前行被高亮——你是在自己的代碼上調試，不是在調試器的界面裏看代碼。
+
+*五、往下走。*
+
+| 鍵        | 相當於 gdb 的 | 做什麼                     |
+|-----------+---------------+----------------------------|
+| ~M-m d n~   | ~next~          | 執行這一行，不進入函數     |
+| ~M-m d i~   | ~step~          | 進入這一行調用的函數       |
+| ~M-m d o~   | ~finish~        | 跑完當前函數，回到調用者   |
+| ~M-m d c~   | ~continue~      | 跑到下一個斷點             |
+| ~M-m d u~   | ~until~         | 跑到光標所在的這一行       |
+
+*六、問值。* 最直接的是看 Scope 窗口。臨時算一個表達式用 ~M-m d v~；想讓某個表達式
+在每次停下時都顯示，用 ~M-m d w~ 把它加進監視。
+
+*七、結束。* ~M-m d q~ 結束會話，~M-m d Q~ 連被調試的進程一起殺掉。
+
+** 少打幾次字
+
+每次都要把 ~:program~ 改一遍很快就會煩。兩條路：
+
+改過的那一行會進入歷史，下次 ~M-m d d~ 直接按上箭頭調出來。這對「同一個程序反覆調」
+夠用了。
+
+固定下來就寫進項目根目錄的 =.dir-locals.el=：
+
+#+begin_src emacs-lisp :tangle no
+((c++-ts-mode . ((dape-command . (gdb :program "_build/demo" :args [])))))
+#+end_src
+
+這樣在這個項目裏 ~M-m d d~ 直接就是對的，不用記在腦子裏。需要每次先構建的話再加一個
+~compile~ 鍵，dape 會先跑它、成功了才啓動：
+
+#+begin_src emacs-lisp :tangle no
+((c++-ts-mode . ((dape-command . (gdb compile "ninja -C _build"
+                                      :program "_build/demo")))))
+#+end_src
+
+** 鍵位
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-dap.el"
+(ginshio-leader-define
+ "d"   "debug"
+ "d d" #'dape
+ "d c" #'dape-continue
+ "d n" #'dape-next
+ "d i" #'dape-step-in
+ "d o" #'dape-step-out
+ "d u" #'dape-until
+ "d p" #'dape-pause
+ "d r" #'dape-restart
+ "d q" #'dape-quit
+ "d Q" #'dape-kill
+
+ "d b" #'dape-breakpoint-toggle
+ "d B" #'dape-breakpoint-remove-all
+ "d e" #'dape-breakpoint-expression
+ "d h" #'dape-breakpoint-hits
+ "d l" #'dape-breakpoint-log
+
+ "d v" #'dape-evaluate-expression
+ "d w" #'dape-watch-dwim
+ "d m" #'dape-memory
+ "d a" #'dape-disassemble
+
+ "d ?" #'dape-info
+ "d R" #'dape-repl
+ "d s" #'dape-select-stack
+ "d t" #'dape-select-thread)
+#+end_src
+
+三種斷點都值得知道，它們解決的是不同的問題。普通斷點停下來；~d e~ 的條件斷點只在表
+達式成立時停，用來從一萬次循環裏抓住出問題的那一次；~d l~ 的日誌斷點不停，只打印一
+行——那才是 printf 調試本該有的樣子，不用重新編譯，也不用記得刪掉。
+
+全部與調試有關的鍵，包括不是本模塊綁的：
+
+| 鍵            | 做什麼                            | 來自                     |
+|---------------+-----------------------------------+--------------------------|
+| ~M-m d d~       | 選一個配置開始                    | 本模塊                   |
+| ~M-m d c~       | 繼續運行                          | 本模塊                   |
+| ~M-m d n~ ~d i~ ~d o~ | 下一行 / 步入 / 步出        | 本模塊                   |
+| ~M-m d u~       | 一直運行到光標這一行              | 本模塊                   |
+| ~M-m d p~ ~d r~   | 暫停 / 重啓                     | 本模塊                   |
+| ~M-m d q~ ~d Q~   | 結束會話 / 連被調試的進程一起殺  | 本模塊                   |
+| ~M-m d b~ ~d B~   | 切換斷點 / 刪光所有斷點         | 本模塊                   |
+| ~M-m d e~ ~d h~ ~d l~ | 條件 / 命中次數 / 日誌斷點  | 本模塊                   |
+| ~M-m d v~ ~d w~   | 求值一次 / 加入監視             | 本模塊                   |
+| ~M-m d m~ ~d a~   | 看內存 / 看反彙編               | 本模塊                   |
+| ~M-m d ?~ ~d R~   | 信息面板 / REPL                 | 本模塊                   |
+| ~M-m d s~ ~d t~   | 切換棧幀 / 切換線程             | 本模塊                   |
+| 斷點邊距上點左鍵 | 切換那一行的斷點                | dape 自帶                |
+| REPL 裏 ~TAB~     | 補全命令與變量名                 | dape 自帶                |
+
+dape 出廠還有一個 ~C-x C-a~ 全局前綴，涵蓋上面同一批命令。它被關掉了，見上一節。
+
+** 這個模塊會產生的緩衝區
+
+| 緩衝區               | 什麼時候出現           |
+|----------------------+------------------------|
+| =*dape-repl*=          | 會話開始，或 ~M-m d R~   |
+| =*dape-info …*=        | 會話開始，或 ~M-m d ?~   |
+| =*dape-shell*=         | 被調試的程序有終端輸出時 |
+| =*dape-memory*=        | ~M-m d m~                |
+| =*dape-disassemble*=   | ~M-m d a~                |
+
+** 自檢項
+
+本模塊不聲明任何檢查。它需要的東西只有一個包，而包在不在由 packages 模塊回答；具體
+適配器裝沒裝是各語言的事，聲明在各語言自己的文件裏。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-dap.el" :comments no
+(provide 'ginshio-dap)
+;;; ginshio-dap.el ends here
+#+end_src

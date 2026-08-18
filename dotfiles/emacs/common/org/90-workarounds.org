@@ -1,0 +1,9 @@
+* Workaround
+
+** Emacs 29.4
+
+#+begin_src emacs-lisp
+(when (and (= emacs-major-version 29) (= emacs-minor-version 4))
+  (after! auctex ; See <https://github.com/minad/vertico/discussions/475>
+    (fmakunbound 'ConTeXt-mode)))
+#+end_src

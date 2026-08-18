@@ -1,0 +1,37 @@
+# ssh-key-install still points at {{@@ _dotdrop_workdir @@}}/scripts/ssh-key.sh,
+# a path removed when the scripts tree moved to ~/cyber/scripts.
+
+[[install]]
+id = 'ssh'
+dst = '~/.ssh/'
+path = '.'
+capabilities = ['develop']
+planes = ['user']
+actions = ['ssh-chmod']
+
+[actions]
+ssh-chmod = """find {{@@ _dotfile_abs_dst @@}} -type f -exec chmod 600 {{}} +"""
+
+[variables.ssh.github]
+remote = 'github'
+url = 'github.com'
+hostname = 'ssh.github.com'
+port = 443
+
+[variables.ssh.gitlab]
+remote = 'gitlab'
+url = 'gitlab.com'
+hostname = 'altssh.gitlab.com'
+port = 443
+
+[variables.ssh.codeberg]
+remote = 'codeberg'
+url = 'codeberg.org'
+hostname = 'codeberg.org'
+port = 22
+
+[variables.ssh.bitbucket]
+remote = 'bitbucket'
+url = 'bitbucket.org'
+hostname = 'altssh.bitbucket.org'
+port = 443

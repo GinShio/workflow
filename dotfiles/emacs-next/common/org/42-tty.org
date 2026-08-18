@@ -1,0 +1,180 @@
+* 終端裏的 Emacs
+
+這裏只補終端協議與圖形 frame 的差異，不建立另一套配置。按鍵譯碼與終端輸入的背景見
+[[info:elisp#Terminal Input][Elisp manual: Terminal Input]]；剪貼板、xterm paste 與 tmux 的實際檢查會出現在
+~M-x ginshio/doctor~。GUI/TTY 共用的 Corfu、server 與工作流見 [[file:../GUIDE.org][GUIDE.org]]。
+
+圖形界面白給的幾樣東西，在終端裏要自己接上。最要緊的一樣是剪貼板：終端裏的 Emacs 和
+桌面的剪貼板之間沒有任何連接，複製出去的文本只活在 kill ring 裏。發現這件事的方式通
+常是切到瀏覽器按下粘貼，然後看着上一次在別處複製的東西冒出來。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-tty.el" :comments no
+;;; ginshio-tty.el --- what a terminal does not give for free -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-tty.el"
+(require 'ginshio-path)
+(require 'ginshio-doctor)
+
+(declare-function xterm-paste "term/xterm")
+#+end_src
+
+** 剪貼板
+
+*** 唯一還連着桌面的東西
+
+終端裏的 Emacs 沒有窗口系統的連接，也不該去猜你在用 Wayland 還是 X11、裝的是
+=wl-copy= 還是 =xclip=。而且它可能根本不在這台機器上——ssh 過去的 Emacs 調用本地剪貼
+板工具，寫進的是那台遠程主機的剪貼板。
+
+還連着你桌面的只有一樣：終端本身。OSC 52 就是為此存在的一條轉義序列——把文本編碼進去
+發給終端，終端替你放進系統剪貼板。它穿過 ssh，因為它走的就是那條連接。
+
+*** 這條序列不用自己發
+
+=term/xterm.el= 已經實現了它，接在 ~gui-set-selection~ 的後端上。也就是說出廠的
+~kill-ring-save~ 就能一路走到終端，而且順帶得到兩樣自己寫容易漏的東西：一個長度上限
+（超過了不送——中途每一層都要把整條序列一次裝下，過長的表現不是報錯，是剪貼板裏出現半
+截內容），以及 GNU screen 需要的分段。
+
+問題只在於它默認不啓用。那個實現藏在一個終端參數後面，而設置這個參數的條件是終端先證
+明自己支持：Emacs 發一次能力查詢，按回答的版本號決定。這條路上有兩個地方會失手。
+
+*tmux 那條路根本不問。* tmux 能做什麼取決於它外面那個終端，而外面那個在會話中途可能被
+換掉，所以 Emacs 對 tmux 改讀一張「假定支持哪些」的固定表——那張表裏只有 modifyOtherKeys。
+
+*問了也可能被否掉。* 版本號那段邏輯裏有一串對付舊終端誤報的特例，報得太新反而會被歸進
+「假定為古董」的分支，於是剪貼板不啓用。
+
+兩處都是為了不在不支持的終端上讓 ~C-y~ 卡住超時而做的保守選擇，方向沒錯。但我們知道自
+己在用哪些終端，不必談判：直接把那個參數打開。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-tty.el"
+(defun ginshio-tty-enable-clipboard-h ()
+  "Let this terminal be handed the clipboard escape sequence.
+`term/xterm' implements OSC 52 behind this parameter, but only sets it
+for terminals that answered its capability query convincingly."
+  (unless (display-graphic-p)
+    (set-terminal-parameter nil 'xterm--set-selection t)))
+
+(add-hook 'tty-setup-hook #'ginshio-tty-enable-clipboard-h)
+(add-hook 'server-after-make-frame-hook #'ginshio-tty-enable-clipboard-h)
+#+end_src
+
+參數是按終端存的，所以兩個 hook 都要掛：第一個管這個 Emacs 自己啓動時的那個終端，第二
+個管 =emacsclient= 之後接進來的每一個。圖形幀上跳過——那裏走的是窗口系統自己的後端，本
+來就通。
+
+終端不認這條序列時也不會壞掉：~gui-set-selection~ 找不到對應的後端方法時什麼都不做，
+複製照舊留在 kill ring 裏。
+
+*** tmux 還要肯往外傳
+
+序列到了 tmux 並不等於到了終端。tmux 對內層程序發來的 OSC 52 怎麼處理由
+~set-clipboard~ 決定，而它的默認值 ~external~ 容易被讀反：那個值說的是「tmux *自己*
+複製時去設外層剪貼板」，內層程序發來的那條它不管。實測默認值下這條序列不會出現在外層
+終端的輸出裏。
+
+所以 =tmux.conf= 那頭要有一行：
+
+#+begin_src conf :tangle no
+set -g set-clipboard on
+#+end_src
+
+打開之後 tmux 既往外傳，也在自己的緩衝區裏留一份，於是 tmux 的粘貼鍵也拿得到同一段文
+本。下面的自檢項會替你確認這一行在不在。
+
+** 粘貼
+
+反方向不走同一條路。OSC 52 可以向終端*索取*剪貼板內容，但答案是從終端輸入流裏回來的
+一串轉義序列，要讀它就得在鍵盤輸入中間插一段解析——很容易在超時和竟態上出問題，而收
+益是重複一件終端已經替你做好的事。
+
+所以粘貼交給終端自己的粘貼鍵：它把剪貼板內容當作鍵盤輸入送進來。支持括號粘貼的終端
+會在這串內容前後各加一個標記，Emacs 認得那兩個標記，於是把中間的部分當成一次插入，
+而不是幾千次按鍵——這是它既快、又不會沿途觸發自動縮進和補全的原因。
+
+那一次插入是一個叫 ~xterm-paste~ 的事件，需要有東西接住。接不住的時候不報錯，整串內
+容原地消失。
+
+出廠狀態下不需要配置：=term/xterm.el= 加載時會把它綁進 ~global-map~。這裏需要，原因
+是 keys 模塊換掉了全域映射——~use-global-map~ 換的是「當前生效的那一張」，而
+~global-map~ 這個變量仍然指着出廠的那一張。於是 xterm 把綁定寫進了一張不再被查詢的
+映射。
+
+召回名單也接不住這一個。名單在配置期間查出廠映射，而 =term/xterm.el= 要等終端真正初
+始化才加載，那件事發生在讀完配置之後——名單查的時候這個鍵還不存在，結果只會是一條查
+無所獲。
+
+所以在這裏直接裝一次。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-tty.el"
+(keymap-set (current-global-map) "<xterm-paste>" #'xterm-paste)
+#+end_src
+
+綁的是一個此刻還沒有定義的命令。這件事在別處要避免，這裏不必：能發出這個事件的終端，
+一定已經加載了定義它的那個文件。
+
+也就是說：往外複製用 Emacs 的鍵，往裏粘貼用終端的鍵。
+
+** 其餘的終端適配住在別處
+
+終端相關的設置不全在這個模塊裏，因為多數是「某個功能的終端版本」，跟着那個功能走更
+容易維護。
+
+| 在哪裏     | 做什麼                                     |
+|------------+--------------------------------------------|
+| core       | 鼠標——終端裏點擊和滾輪要顯式打開           |
+| theme      | 背景色讓給終端，於是終端的透明度透得過來   |
+| minibuffer | 補全彈窗改用終端畫得出來的形式             |
+
+這個模塊只管那些不屬於任何功能、純粹因為「跑在終端裏」才存在的東西。
+
+** 自檢項
+
+tmux 的剪貼板轉發默認不是打開的。沒有它，序列走到 tmux 就停了——而症狀和完全沒配置一
+模一樣：複製沒有任何反應，也沒有任何錯誤。這種「兩邊都要對，錯一邊不出聲」的接線正是
+自檢該管的。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-tty.el"
+(defun ginshio-tty-inside-multiplexer-p ()
+  (and (getenv "TMUX") t))
+
+(defun ginshio-tty--multiplexer-forwards-clipboard-p ()
+  (equal "on"
+         (string-trim
+          (or (ignore-errors
+                (car (process-lines "tmux" "show-options" "-gv" "set-clipboard")))
+              ""))))
+
+(ginshio-doctor-declare 'tty "tmux clipboard passthrough"
+                        #'ginshio-tty--multiplexer-forwards-clipboard-p
+                        :note "tmux hands the clipboard escape on to the terminal"
+                        :remedy "tmux set-option -g set-clipboard on"
+                        :when #'ginshio-tty-inside-multiplexer-p)
+#+end_src
+
+配色是為真彩寫的。降到 256 色不會壞掉，只是每一種顏色都被換成最接近的那個近似值，而
+主題裏那些靠細微色差區分的東西會糊在一起。
+
+批處理下跳過。那裏的「終端」是一個沒人在看的啞終端，問它有多少顏色，得到的答案為真
+卻無意義——而一條恆假的檢查會讓整份報告開始被忽略。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-tty.el"
+(ginshio-doctor-declare 'tty "direct colour"
+                        (lambda () (>= (display-color-cells) 16777216))
+                        :severity 'warn
+                        :note "the colour scheme assumes more than 256"
+                        :detail (lambda ()
+                                  (format "this terminal reports %d, TERM=%s"
+                                          (display-color-cells)
+                                          (or (getenv "TERM") "unset")))
+                        :remedy "use a -direct terminfo entry, e.g. TERM=xterm-direct"
+                        :when (lambda ()
+                                (and (not noninteractive) (not (display-graphic-p)))))
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-tty.el" :comments no
+(provide 'ginshio-tty)
+;;; ginshio-tty.el ends here
+#+end_src

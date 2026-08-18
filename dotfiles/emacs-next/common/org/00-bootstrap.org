@@ -1,0 +1,260 @@
+* 引導
+
+Emacs 的啓動次序、early init 與 init file 契約見 [[info:emacs#Init File][Emacs manual: The Emacs Initialization File]]；
+目錄劃分遵守 [[https://specifications.freedesktop.org/basedir-spec/latest/][XDG Base Directory Specification]]，但刻意不採用變量缺失時的默認回退。
+部署、同步與 server 的操作入口在 [[file:../README.org][README]] 與 [[file:../GUIDE.org::*安裝、同步與檢查][GUIDE.org]]。
+
+啓動分成兩段。第一段在 GUI 出現之前，處理那些「晚一步就來不及」的事；第二段建立
+目錄、找到模塊、按順序加載。
+
+** 啓動前
+
+Emacs 在讀取主配置之前會先讀 =early-init.el=。這個時間點的特殊之處在於：包系統尚未
+激活，第一個窗口尚未創建。
+
+#+begin_src emacs-lisp :tangle "early-init.el" :comments no
+;;; early-init.el --- runs before the first frame exists -*- lexical-binding: t; -*-
+#+end_src
+
+這份配置只支持 Emacs 30，以及一個完整的 XDG 會話。這不是要提供兼容層的地方：版本或
+環境不對時，越早停下來，錯誤越接近真正原因。尤其不使用 XDG 規範裏的默認回退；啓動器
+沒有傳入這些變量，本身就是需要修正的環境錯誤。
+
+#+begin_src emacs-lisp :tangle "early-init.el"
+(when (version< emacs-version "30.1")
+  (error "Ginshio Emacs requires Emacs 30.1 or newer; found %s" emacs-version))
+
+(dolist (variable '("XDG_CONFIG_HOME"
+                    "XDG_DATA_HOME"
+                    "XDG_STATE_HOME"
+                    "XDG_CACHE_HOME"
+                    "XDG_RUNTIME_DIR"))
+  (let ((value (getenv variable)))
+    (unless value
+      (error "Required environment variable %s is not set" variable))
+    (unless (file-name-absolute-p value)
+      (error "Required environment variable %s is not absolute: %s"
+             variable value))))
+
+(let ((runtime (getenv "XDG_RUNTIME_DIR")))
+  (unless (file-directory-p runtime)
+    (error "XDG_RUNTIME_DIR does not exist: %s" runtime))
+  (unless (file-writable-p runtime)
+    (error "XDG_RUNTIME_DIR is not writable: %s" runtime))
+  (unless (= (logand (file-modes runtime) #o777) #o700)
+    (error "XDG_RUNTIME_DIR must be private (0700): %s" runtime)))
+#+end_src
+
+啓動期間分配的對象幾乎全部存活到會話結束，回收它們找不到任何垃圾。把閾值頂到最大
+等於在這段時間關掉 GC，正常值由 core 模塊在啓動完成後恢復。
+
+#+begin_src emacs-lisp :tangle "early-init.el"
+(setq gc-cons-threshold most-positive-fixnum
+      gc-cons-percentage 0.6)
+#+end_src
+
+包管理器由專門的模塊負責，Emacs 自帶的那套要在此關掉，否則它會在啓動時激活一份平行
+的包樹，兩邊的同名包互相覆蓋，症狀難以歸因。
+
+#+begin_src emacs-lisp :tangle "early-init.el"
+(setq package-enable-at-startup nil)
+#+end_src
+
+界面元素從 frame 的默認參數裏拿掉，而不是創建之後再關閉。差別是肉眼可見的：後者會
+讓工具欄先畫出來再消失，每次啓動閃一下。
+
+#+begin_src emacs-lisp :tangle "early-init.el"
+(push '(menu-bar-lines . 0) default-frame-alist)
+(push '(tool-bar-lines . 0) default-frame-alist)
+(push '(vertical-scroll-bars) default-frame-alist)
+(setq menu-bar-mode nil
+      tool-bar-mode nil
+      scroll-bar-mode nil)
+#+end_src
+
+啓動途中字體和界面元素還在變化，此時每次變化都讓 frame 重新計算尺寸純屬浪費。
+
+#+begin_src emacs-lisp :tangle "early-init.el"
+(setq frame-inhibit-implied-resize t
+      frame-resize-pixelwise t
+      inhibit-startup-screen t
+      inhibit-splash-screen t
+      inhibit-x-resources t
+      initial-scratch-message nil
+      load-prefer-newer t)
+#+end_src
+
+原生編譯的產物默認落在配置目錄裏。配置目錄屬於版本控制，不該堆積編譯緩存，所以在
+它被使用之前就改道。這件事必須在 =early-init.el= 完成——一旦有代碼被編譯過，改就
+晚了。
+
+#+begin_src emacs-lisp :tangle "early-init.el"
+(when (fboundp 'startup-redirect-eln-cache)
+  (startup-redirect-eln-cache
+   (expand-file-name "emacs/eln-cache/" (getenv "XDG_CACHE_HOME"))))
+
+(setq native-comp-async-report-warnings-errors 'silent
+      native-comp-jit-compilation t)
+#+end_src
+
+** 目錄
+
+Emacs 會生成大量運行時文件：包、備份、歷史、書籤、緩存。默認它們全都堆在配置目錄，
+於是配置與狀態糾纏在一起，備份時分不清該帶走什麼，版本控制裏永遠有噪音。
+
+分流的標準是一個問題：*這東西沒了，你損失什麼？*
+
+- 損失你創造的信息 → =data=。書籤、縮寫、自定義設置。這是你會備份的東西。
+- 損失連續性，但沒有信息 → =state=。歷史、光標位置、最近打開的文件。丟了只是不順手。
+- 只損失時間 → =cache=。備份文件、自動保存、編譯產物。刪掉重來即可。
+
+這三檔對應 XDG 規範的三個目錄，其中 =XDG_STATE_HOME= 正是為第二檔設立的。分開還有
+一個現實好處：清理緩存的自動化規則可以放心地掃 =cache=，不會誤傷你的歷史記錄。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-path.el" :comments no
+;;; ginshio-path.el --- where things live -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-path.el"
+(defgroup ginshio nil
+  "Personal Emacs configuration."
+  :group 'convenience
+  :prefix "ginshio-")
+
+(defconst ginshio-required-xdg-variables
+  '("XDG_CONFIG_HOME" "XDG_DATA_HOME" "XDG_STATE_HOME"
+    "XDG_CACHE_HOME" "XDG_RUNTIME_DIR")
+  "Environment variables required by this configuration.")
+
+(defun ginshio-path--environment (variable)
+  "Return absolute value of required environment VARIABLE.
+Signal an error when it is absent or relative."
+  (let ((value (getenv variable)))
+    (unless value
+      (error "Required environment variable %s is not set" variable))
+    (unless (file-name-absolute-p value)
+      (error "Required environment variable %s is not absolute: %s"
+             variable value))
+    value))
+
+(dolist (variable ginshio-required-xdg-variables)
+  (ginshio-path--environment variable))
+
+(let ((runtime (ginshio-path--environment "XDG_RUNTIME_DIR")))
+  (unless (file-directory-p runtime)
+    (error "XDG_RUNTIME_DIR does not exist: %s" runtime))
+  (unless (file-writable-p runtime)
+    (error "XDG_RUNTIME_DIR is not writable: %s" runtime))
+  (unless (= (logand (file-modes runtime) #o777) #o700)
+    (error "XDG_RUNTIME_DIR must be private (0700): %s" runtime)))
+
+(defun ginshio-path--xdg (variable subdir)
+  "Expand SUBDIR below the directory named by XDG VARIABLE."
+  (expand-file-name subdir (ginshio-path--environment variable)))
+
+(defconst ginshio-config-dir (file-name-as-directory user-emacs-directory)
+  "This configuration itself.  Under version control; treated as read-only.")
+
+(defconst ginshio-lisp-dir (expand-file-name "lisp/" ginshio-config-dir)
+  "Where the modules live.")
+
+(defconst ginshio-data-dir (ginshio-path--xdg "XDG_DATA_HOME" "emacs/")
+  "Information you would miss if it vanished.  Worth backing up.")
+
+(defconst ginshio-state-dir (ginshio-path--xdg "XDG_STATE_HOME" "emacs/")
+  "Continuity between sessions.  Losing it costs convenience, not information.")
+
+(defconst ginshio-cache-dir (ginshio-path--xdg "XDG_CACHE_HOME" "emacs/")
+  "Regenerable.  Losing it costs only time.")
+
+(dolist (dir (list ginshio-data-dir ginshio-state-dir ginshio-cache-dir))
+  (unless (file-directory-p dir)
+    (make-directory dir t))
+  (set-file-modes dir #o700))
+
+(add-to-list 'load-path ginshio-lisp-dir)
+#+end_src
+
+三個輔助函數，讓後續模塊不必反覆寫 ~expand-file-name~，也讓每個文件的歸類在調用處
+一目瞭然。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-path.el"
+(defun ginshio-data (name) (expand-file-name name ginshio-data-dir))
+(defun ginshio-state (name) (expand-file-name name ginshio-state-dir))
+(defun ginshio-cache (name) (expand-file-name name ginshio-cache-dir))
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-path.el" :comments no
+(provide 'ginshio-path)
+;;; ginshio-path.el ends here
+#+end_src
+
+** 加載
+
+=init.el= 應該短到一屏讀完。它不配置任何東西，只負責找到模塊並按順序交給加載器——
+這樣啓動出問題時，你一眼就能看出卡在哪一步。
+
+#+begin_src emacs-lisp :tangle "init.el" :comments no
+;;; init.el --- module loader -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "init.el"
+(add-to-list 'load-path (expand-file-name "lisp/" user-emacs-directory))
+(require 'ginshio-path)
+#+end_src
+
+*** 加載器
+
+模塊就是 =lisp/ginshio-NAME.el=，提供特性 ~ginshio-NAME~。這裏刻意不捕獲錯誤：一份配置
+只有「完整成立」和「啓動失敗」兩種狀態。吞掉一個模塊的異常會留下已經執行的副作用，卻
+讓後面的模塊在半成品上繼續工作；那不是降級，而是把真正錯誤藏到更遠的地方。
+
+因此加載器只做 ~require~。普通啓動得到第一個錯誤，~--debug-init~ 得到原始 backtrace。
+
+*** 啓用的模塊
+
+這份列表是整個配置的總開關。註釋掉一行，對應模塊連同它安裝的包一起消失。
+
+順序即依賴順序，其中 =packages= 是分水嶺：排在它前面的模塊不得使用第三方包，排在後
+面的才可以。
+
+#+begin_src emacs-lisp :tangle "init.el"
+(defvar ginshio-modules
+  '(core        ; editing behaviour, files, built-in defaults
+    keys        ; global keymap reset and leader
+    packages    ; package manager -- modules below may use third-party packages
+    theme       ; fonts, colours, modeline, startup screen
+    minibuffer  ; completion, search, jumping: choosing anything
+    window      ; window movement, buffer display rules, workspaces
+    edit        ; changing several places at once
+    file        ; directories as buffers
+    tty         ; what a terminal does not give for free
+    shell       ; handing work to other programs
+    remote      ; files on other machines
+    lang        ; syntax trees, major modes, indentation, folding
+    lsp         ; language servers: documentation, diagnostics, navigation
+    dap         ; debugging
+    vc          ; the parts of version control the terminal cannot do
+    lang-c      ; C and C++ register themselves with the three above
+    lang-markup ; Markdown, reStructuredText and AsciiDoc
+    )
+  "Modules to load, in order.")
+
+(dolist (module ginshio-modules)
+  (require (intern (format "ginshio-%s" module))))
+
+;; Every package declaration has been seen.  Activate the installed package
+;; graph now, and fail startup if any part of it is unavailable or broken.
+(ginshio-packages-finalize)
+#+end_src
+
+*** 自定義文件
+
+~customize~ 界面默認把它的結果寫進 =init.el=。這裏的 =init.el= 是生成的，被改寫就
+會在下次生成時憑空產生衝突，所以指到別處去。
+
+#+begin_src emacs-lisp :tangle "init.el"
+(setq custom-file (ginshio-data "custom.el"))
+(when (file-exists-p custom-file)
+  (load custom-file nil 'nomessage))
+#+end_src

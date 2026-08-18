@@ -1,0 +1,6 @@
+[[install]]
+id = 'user-dirs'
+dst = '~/.config/user-dirs.dirs'
+path = 'user-dirs.dirs'
+capabilities = ['develop']
+planes = ['user']

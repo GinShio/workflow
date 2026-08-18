@@ -1,0 +1,39 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+# Reject the easy-to-make, tedious-to-undo mistakes, judged against the staged
+# content: leftover conflict markers, symlinks pointing nowhere, and an
+# oversized blob (usually a stray build artifact or dataset).
+files=$(staged_files)
+[ -n "$files" ] || exit 0
+
+max_size=$(cfg_value wits.hooks.pre-commit.sanity-checks-max-file-size 26214400)
+
+rc=0
+oldifs=$IFS
+IFS='
+'
+set -f
+for file in $files; do
+    if [ -L "$file" ] && [ ! -e "$file" ]; then
+        log_error "broken symlink: $file -> $(readlink "$file")"
+        rc=1
+        continue
+    fi
+
+    size=$(staged_size "$file")
+    if [ -n "$size" ] && [ "$size" -gt "$max_size" ]; then
+        log_error "file too large: $file ($((size / 1048576)) MiB > $((max_size / 1048576)) MiB)"
+        rc=1
+    fi
+
+    if is_staged_text "$file" &&
+       staged_blob "$file" | grep -Eq '^(<<<<<<< |=======$|>>>>>>> )'; then
+        log_error "merge-conflict markers in $file"
+        rc=1
+    fi
+done
+IFS=$oldifs
+set +f
+
+exit $rc

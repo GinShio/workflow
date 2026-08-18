@@ -1,0 +1,6 @@
+[[install]]
+id = 'grub'
+dst = '/etc/default/grub.d/'
+path = '.'
+capabilities = ['develop']
+planes = ['system']

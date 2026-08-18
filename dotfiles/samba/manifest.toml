@@ -1,0 +1,14 @@
+[[install]]
+id = 'samba'
+dst = '~/Public/'
+path = '.'
+capabilities = ['develop']
+planes = ['user']
+actions = ['samba-mkdir']
+
+[actions]
+samba-mkdir = """cat {{@@ env['HOME'] @@}}/Public/.config.d/*.fstab 2>/dev/null |tr -s ' ' |cut -d' ' -f2 |sort |uniq |xargs -I@ bash -c 'mkdir -p $(eval echo @)'"""
+
+[dynvariables]
+samba_common_args = 'eval echo uid=$(id -nu $USER),gid=$(id -ng $USER),file_mode=0640,dir_mode=0750,cache=strict,iocharset=utf8,forcegid,mapposix,nounix'
+samba_credentials = 'eval echo credentials=$HOME/Public/.config'

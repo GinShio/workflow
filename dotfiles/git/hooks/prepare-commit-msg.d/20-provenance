@@ -1,0 +1,58 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+# Record where a derived commit came from as a structured git trailer, instead of
+# leaving the provenance in prose (or nowhere):
+#   - merge       → `Merges: <sha>`             (one per parent, so octopus works)
+#   - cherry-pick → `Cherry-picked-from: <sha>` (git records nothing without -x)
+#   - revert      → `Reverts: <sha>`            (replacing git's default
+#                                                "This reverts commit <sha>." line)
+# This is provenance — an immutable historical fact — so a trailer is the right
+# home: it never needs to stay consistent across a stack and never goes stale.
+
+msg_file="$1"
+
+# A rebase replays commits that already carry their provenance; stay out of it.
+if [ -d "$GIT_DIR/rebase-merge" ] || [ -d "$GIT_DIR/rebase-apply" ]; then
+    exit 0
+fi
+
+# addIfDifferent: idempotent on a re-run, but still records a genuinely different
+# source (e.g. an octopus merge's several parents).
+add_trailer() {
+    git interpret-trailers --if-exists addIfDifferent --in-place \
+        --trailer "$1: $2" "$msg_file" 2>/dev/null ||
+        log_warn "provenance: could not add trailer '$1: $2'"
+}
+
+# Drop git's default "This reverts commit <sha>." prose — the Reverts: trailer
+# now carries it.
+strip_reverts_prose() {
+    _tmp=$(mktemp) || return 0
+    if grep -v '^This reverts commit [0-9a-f]\{7,\}\.$' "$msg_file" > "$_tmp"; then
+        cat "$_tmp" > "$msg_file"
+    fi
+    rm -f "$_tmp"
+}
+
+if [ -f "$GIT_DIR/MERGE_HEAD" ]; then
+    while IFS= read -r sha; do
+        [ -n "$sha" ] && add_trailer "Merges" "$sha"
+    done < "$GIT_DIR/MERGE_HEAD"
+elif [ -f "$GIT_DIR/CHERRY_PICK_HEAD" ]; then
+    add_trailer "Cherry-picked-from" "$(cat "$GIT_DIR/CHERRY_PICK_HEAD")"
+elif [ -f "$GIT_DIR/REVERT_HEAD" ]; then
+    # Conflicted revert: the marker is still around.
+    sha=$(cat "$GIT_DIR/REVERT_HEAD")
+    strip_reverts_prose
+    [ -n "$sha" ] && add_trailer "Reverts" "$sha"
+else
+    # Clean revert: no marker at this point, but git seeded the sha into the body.
+    sha=$(sed -n 's/^This reverts commit \([0-9a-f]\{7,\}\)\.$/\1/p' "$msg_file" | head -n 1)
+    if [ -n "$sha" ]; then
+        strip_reverts_prose
+        add_trailer "Reverts" "$sha"
+    fi
+fi
+
+exit 0

@@ -1,0 +1,376 @@
+* 基礎
+
+本模塊集中修改 Emacs 自身的持久化與編輯默認值。備份、自動保存與跨會話狀態的上游說明
+分別見 [[info:emacs#Backup][Emacs manual: Backup Files]]、[[info:emacs#Auto Save][Auto Save]] 與
+[[info:emacs#Saving Emacs Sessions][Saving Emacs Sessions]]；這裏的重點是把它們按 data/state/cache 性質分流，而不是另造機制。
+
+本模塊確立 Emacs 的行為：文件怎麼處理、狀態存到哪裏、編輯時的默認假設是什麼。外觀
+不在這裏，由 theme 模塊負責。
+
+它只使用內建設施。這是刻意的約束：無論包管理器出什麼狀況，加載完本模塊的 Emacs 都
+應該是一個能用的編輯器。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el" :comments no
+;;; ginshio-core.el --- how this editor behaves -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(require 'ginshio-path)
+(require 'ginshio-doctor)
+(require 'recentf)
+(require 'savehist)
+(require 'saveplace)
+#+end_src
+
+** 身份
+
+提交簽名、郵件、以及需要憑證時去哪裏找。憑證文件分開兩份，是為了讓不同身份的
+forge 訪問互不干擾。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(setq user-full-name "GinShio"
+      user-mail-address "ginshio78@gmail.com")
+#+end_src
+
+** 垃圾回收
+
+啓動期間 GC 被關掉了，這裏把它恢復成常態值。
+
+閾值的選擇是一個權衡而非優化：調得越高，GC 越少發生，但每次發生時停頓越長、佔用的
+內存越久不歸還。極端地調到上 GiB 確實能讓你幾乎感覺不到 GC，代價是偶爾一次數秒級的
+凍結——那比頻繁的小停頓更難忍受。這裏取一個在編輯和語言服務器場景下都察覺不到、但
+單次停頓仍然很短的值。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(defconst ginshio-gc-cons-threshold (* 128 1024 1024)
+  "Steady-state garbage collection threshold.")
+
+(defun ginshio-restore-gc-h ()
+  "Return garbage collection to its steady-state settings."
+  (setq gc-cons-threshold ginshio-gc-cons-threshold
+        gc-cons-percentage 0.1))
+
+(add-hook 'emacs-startup-hook #'ginshio-restore-gc-h)
+#+end_src
+
+子進程輸出緩衝區的默認大小只有幾 KiB，遠小於語言服務器單次回應的體量，會讓交互退化
+成反覆的小塊讀取。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(setq read-process-output-max (* 1024 1024)
+      process-adaptive-read-buffering nil)
+#+end_src
+
+** 編碼
+
+全線 UTF-8，換行一律 LF。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(set-language-environment "UTF-8")
+(prefer-coding-system 'utf-8-unix)
+(set-default-coding-systems 'utf-8-unix)
+(setq default-input-method nil          ; `set-language-environment' would set one
+      locale-coding-system 'utf-8-unix)
+#+end_src
+
+** 文件
+
+Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件的旁邊。這在單機單用戶
+的年代很合理，今天的後果是每個代碼倉庫都被撒上一層需要被 =.gitignore= 的垃圾。全部
+改道到緩存目錄——它們的定義就是「丟了只損失時間」。
+
+鎖文件 (=.#file=) 同理。它的本意是讓另一個 Emacs 實例知道這個文件正在被編輯；代價是
+在監視文件變化的構建系統面前，它是一個會憑空出現的壞符號鏈接。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(defconst ginshio-backup-dir (ginshio-cache "backup/"))
+(defconst ginshio-auto-save-dir (ginshio-cache "auto-save/"))
+(defconst ginshio-auto-save-session-dir
+  (expand-file-name "sessions/" ginshio-auto-save-dir))
+
+(dolist (dir (list ginshio-backup-dir
+                   ginshio-auto-save-dir
+                   ginshio-auto-save-session-dir))
+  (unless (file-directory-p dir)
+    (make-directory dir t))
+  (set-file-modes dir #o700))
+
+(setq backup-directory-alist `((".*" . ,ginshio-backup-dir))
+      auto-save-file-name-transforms `((".*" ,ginshio-auto-save-dir t))
+      auto-save-list-file-prefix ginshio-auto-save-session-dir
+      lock-file-name-transforms `((".*" ,ginshio-auto-save-dir t)))
+
+(setq auto-save-default t
+      make-backup-files t
+      backup-by-copying t               ; keeps hard links and ownership intact
+      version-control t
+      delete-old-versions t
+      kept-new-versions 5
+      kept-old-versions 5)
+#+end_src
+
+刪除走回收站。誤刪是所有編輯器裏最不值得的一種損失。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(setq delete-by-moving-to-trash t)
+#+end_src
+
+磁盤上的改動自動反映到緩衝區。切分支、跑代碼生成、被格式化工具改寫之後，緩衝區與磁
+盤如果悄悄分叉，接下來的每一次保存都是一次意外覆蓋。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(setq global-auto-revert-non-file-buffers t
+      auto-revert-verbose nil)
+(global-auto-revert-mode 1)
+#+end_src
+
+#+begin_quote
+這裏刻意不設 ~revert-without-query~。把它放寬到匹配全部文件是常見寫法，但那會讓
+~revert-buffer~ 對 *有未保存修改* 的緩衝區也不再確認，一次誤觸就是無聲的數據丟失。
+自動重載本身只碰未修改的緩衝區，不需要這個變量配合。
+#+end_quote
+
+單行極長的文件——壓縮過的 JavaScript、日誌、機器生成的中間表示——會讓語法高亮和雙向
+文本算法陷入停滯，表現為打開文件時 Emacs 徹底卡死。內建的 ~so-long~ 檢測到這種情況
+時自動退化為簡化顯示。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(global-so-long-mode 1)
+#+end_src
+
+** 狀態
+
+按「丟了損失什麼」把運行時文件分流。書籤和縮寫是你創造的內容，歸 data；歷史、光標
+位置、最近文件是連續性，歸 state；緩存和臨時憑據歸 cache。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(setq savehist-file (ginshio-state "history")
+      history-length 1000
+      history-delete-duplicates t
+      savehist-save-minibuffer-history t
+      savehist-additional-variables '(kill-ring
+                                      register-alist
+                                      search-ring
+                                      regexp-search-ring))
+(savehist-mode 1)
+
+(setq save-place-file (ginshio-state "places"))
+(save-place-mode 1)
+
+(setq recentf-save-file (ginshio-state "recentf")
+      recentf-max-saved-items 300
+      recentf-exclude (list "\\.gz\\'" "\\.xz\\'" "\\.zip\\'"
+                            "^/tmp/" "^/ssh:" "^/sudo:"
+                            (regexp-quote ginshio-data-dir)
+                            (regexp-quote ginshio-state-dir)
+                            (regexp-quote ginshio-cache-dir)))
+(recentf-mode 1)
+
+(setq project-list-file (ginshio-state "projects")
+      bookmark-default-file (ginshio-data "bookmarks")
+      abbrev-file-name (ginshio-data "abbrev.el")
+      tramp-persistency-file-name (ginshio-cache "tramp")
+      transient-history-file (ginshio-cache "transient/history.el")
+      url-cache-directory (ginshio-cache "url/"))
+#+end_src
+
+** 編輯
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(setq-default
+ window-combination-resize t            ; a new window takes space from all siblings
+ indent-tabs-mode nil
+ tab-width 4
+ fill-column 80
+ require-final-newline t
+ sentence-end-double-space nil)
+
+(setq undo-limit (* 100 1024 1024)
+      truncate-string-ellipsis "…"      ; narrower than three periods
+      password-cache-expiry nil
+      scroll-margin 2
+      scroll-conservatively 101         ; scroll by lines instead of recentring
+      scroll-preserve-screen-position t
+      auto-window-vscroll nil
+      which-func-unknown ""
+      use-short-answers t
+      kill-do-not-save-duplicates t
+      save-interprogram-paste-before-kill t
+      find-file-visit-truename t        ; resolve symlinked config files to their source
+      vc-follow-symlinks t
+      enable-recursive-minibuffers t
+      echo-keystrokes 0.02
+      ring-bell-function #'ignore
+      visible-bell nil)
+
+(delete-selection-mode 1)               ; typing replaces the active region
+(global-subword-mode 1)                 ; word motion stops inside CamelCase
+(column-number-mode 1)
+#+end_src
+
+終端下鼠標默認完全不工作。~xterm-mouse-mode~ 讓終端模擬器把點擊和滾輪翻譯成 Emacs 認
+得的事件，keys 模塊召回的那組鼠標鍵才有東西可接。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(xterm-mouse-mode 1)
+#+end_src
+
+括號、引號成對插入。這個模式知道什麼時候不該動手——在字符串或註釋裏、在一個已經配平
+的括號前面，它都會讓開，所以它不會變成那種「總得多按一次刪除鍵」的功能。
+
+配平的另一半——按下閉括號時高亮它匹配的那一個——是 ~show-paren-mode~ 的事，Emacs 28 起
+默認就開着，這裏不必重複。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(electric-pair-mode 1)
+#+end_src
+
+上面那幾個是 *我的* 默認值，只在沒人有意見時成立。項目如果自己聲明了縮進寬度、換行
+寬度、要不要製表符，那份聲明應該壓過它們——否則每一次保存都在和項目的既有風格互相
+覆蓋，而 diff 裏會出現一堆與改動無關的行。
+
+=.editorconfig= 是這件事的通用格式，多數編輯器都認。Emacs 30 起它是內建的，不需要包。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(editorconfig-mode 1)
+#+end_src
+
+它的接入方式順帶決定了優先級，這一點值得記住：它把讀到的設置當作 *目錄局部變量* 交給
+Emacs，而目錄局部變量是在主模式和它的鉤子之後才生效的。所以任何在模式鉤子裏做的猜測——
+比如語言模塊從別處推斷出來的縮進——都會被 =.editorconfig= 蓋掉。這正是想要的次序：明
+確寫下來的勝過推斷出來的。
+
+GC 時壓縮字體緩存會帶來明顯卡頓，而收回的內存微不足道。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(setq inhibit-compacting-font-caches t)
+#+end_src
+
+文本模式下用硬換行。視覺換行只是把長行顯示成多行，文件裏仍是一整行；提交 diff、郵件
+引用、以及任何按行工作的工具都會因此變得難讀。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(add-hook 'text-mode-hook #'auto-fill-mode)
+#+end_src
+
+代碼裏行尾空白要看得見——它們是 diff 噪音的主要來源。當前所在的函數名顯示在 modeline
+上，在長函數裏比滾回去看定義快得多。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(defun ginshio-show-trailing-whitespace-h ()
+  (setq-local show-trailing-whitespace t))
+
+(add-hook 'prog-mode-hook #'ginshio-show-trailing-whitespace-h)
+(add-hook 'prog-mode-hook #'which-function-mode)
+#+end_src
+
+** 幾個出廠命令的替代品
+
+~C-a~、~C-e~、~DEL~ 各做一件定義明確的事，而那件事往往不是你按下去時想要的那件。下
+面三個命令替換它們，共同遵守一條規矩：*出廠行為必須仍然到得了*——多按一次就是。沒有
+哪個動作因為換了實現而消失。
+
+這裏只定義命令。把它們裝到鍵上是 keys 模塊的事，本模塊在它之前加載，還沒有全域映射
+可裝。
+
+*** 行的兩端各有兩個
+
+一行代碼的開頭有兩個位置：縮進之前和縮進之後。結尾也有兩個：代碼結束處和真正的行尾，
+中間隔著一句尾註釋，或者幾個行尾空白。四個位置裏，出廠的 ~C-a~ ~C-e~ 各只給了你外側
+的那個，而你想去的多半是內側。
+
+判斷代碼在哪裏結束用的是語法狀態，不是找註釋符號。=//= 出現在一個字符串字面量裏是
+合法的，按字符匹配會在那裏誤判成註釋，而語法狀態知道它在字符串內。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(defun ginshio-core--code-end-of-line ()
+  "Return the position where the code on this line ends.
+Before a trailing comment when there is one, and before trailing
+whitespace in either case."
+  ;; `syntax-ppss' leaves point where it finished parsing, so everything
+  ;; here has to be wrapped: without this the caller can never tell that it
+  ;; is already standing on the answer, and the second press does nothing.
+  (save-excursion
+    (let* ((bol (line-beginning-position))
+           (eol (line-end-position))
+           (state (syntax-ppss eol))
+           (comment (and (nth 4 state) (nth 8 state))))
+      (goto-char (if (and comment (> comment bol)) comment eol))
+      (skip-chars-backward " \t" bol)
+      (point))))
+
+(defun ginshio/beginning-of-line (&optional n)
+  "Move to the first non-whitespace character of this line.
+Press again to go on to the true beginning.  N behaves as it does for
+`move-beginning-of-line'."
+  (interactive "^p")
+  (if (and n (/= n 1))
+      (move-beginning-of-line n)
+    (let ((origin (point)))
+      (back-to-indentation)
+      (when (= origin (point))
+        (if visual-line-mode
+            (beginning-of-visual-line)
+          (move-beginning-of-line 1))))))
+
+(defun ginshio/end-of-line (&optional n)
+  "Move to where the code on this line ends, before any trailing comment.
+Press again to go on to the true end.  N behaves as it does for
+`move-end-of-line'."
+  (interactive "^p")
+  (if (and n (/= n 1))
+      (move-end-of-line n)
+    (let ((code (ginshio-core--code-end-of-line)))
+      (if (= (point) code)
+          (if visual-line-mode
+              (end-of-visual-line)
+            (move-end-of-line 1))
+        (goto-char code)))))
+#+end_src
+
+*** 退格吃掉整段空白
+
+縮進是四個空格。一個一個地退，是這份配置裏最頻繁的無意義按鍵。
+
+它在行首停住，不跨過換行。跨行的版本更徹底，代價是在行首按退格會連帶吃掉上一行的縮
+進——而在那個位置，你想做的通常只是把兩行接起來。所以這裏讓退格解決縮進，把接行留給
+它出廠就會做的事。
+
+沒有空白可吃時退回 ~backward-delete-char-untabify~。這一句是這個命令能無條件裝在
+~DEL~ 上的原因：任何緩衝區裏它都仍然是一個退格鍵，不需要為它記例外。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(defun ginshio/hungry-delete-backward (n)
+  "Delete the whitespace before point, all of it at once.
+Deletes N characters instead when there is no whitespace to take."
+  (interactive "p")
+  (let ((origin (point)))
+    (skip-chars-backward " \t" (line-beginning-position))
+    (if (= origin (point))
+        (backward-delete-char-untabify n)
+      (delete-region (point) origin))))
+
+;; With `delete-selection-mode' on, typing over a region should replace it.
+;; `supersede' is how a deleting command says it has no business running
+;; afterwards.
+(put 'ginshio/hungry-delete-backward 'delete-selection 'supersede)
+#+end_src
+
+** 自檢項
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+(ginshio-doctor-directory 'core ginshio-backup-dir :note "backup files")
+(ginshio-doctor-directory 'core ginshio-auto-save-dir :note "auto-save files")
+(ginshio-doctor-declare 'core "trash support"
+                        (lambda () (or (not delete-by-moving-to-trash)
+                                       (executable-find "gio")
+                                       (file-directory-p "~/.local/share/Trash")))
+                        :severity 'warn
+                        :note "deleting files sends them to the trash"
+                        :remedy "zypper install glib2-tools")
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el" :comments no
+(provide 'ginshio-core)
+;;; ginshio-core.el ends here
+#+end_src

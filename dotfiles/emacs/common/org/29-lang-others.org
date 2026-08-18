@@ -1,0 +1,326 @@
+** LaTeX
+:properties:
+:CUSTOM_ID: LaTeX
+:header-args:emacs-lisp: :tangle no :noweb-ref tex-conf
+:end:
+
+#+begin_src emacs-lisp :noweb no-export :tangle yes :noweb-ref nil
+(setq! LaTeX-biblatex-use-Biber t)
+(custom-set-variables '(LaTeX-section-label '(("part" . "part:")
+                                              ("chapter" . "chap:")
+                                              ("section" . "sec:")
+                                              ("subsection" . "subsec:")
+                                              ("subsubsection" . "subsubsec:")))
+                      '(TeX-auto-local "auto")
+                      '(TeX-command-extra-options "--shell-escape --interaction=nonstopmode"))
+(after! latex
+  (add-hook! latex-mode #'TeX-latex-mode)
+  <<tex-conf>>
+  )
+#+end_src
+
+*** 编译
+
+#+begin_src emacs-lisp
+(setq! TeX-save-query nil
+       TeX-show-compilation t
+       LaTeX-clean-intermediate-suffixes (append TeX-clean-default-intermediate-suffixes
+                                                 '("\\.acn" "\\.acr" "\\.alg" "\\.glg"
+                                                   "\\.ist" "\\.listing" "\\.fdb_latexmk")))
+(add-to-list 'TeX-command-list '("LatexMk (LuaLaTeX)" "LC_ALL=en_US.UTF-8 latexmk -pdf -lualatex -8bit %S%(mode) %(file-line-error) %(extraopts) %t" TeX-run-latexmk nil
+                                 (plain-tex-mode latex-mode doctex-mode)
+                                 :help "Run LatexMk (LuaLaTeX)"))
+#+end_src
+
+*** 引用
+
+如果 ~bib~ 中有你不想要的某些字段，可以通过一下方法去除 (导言区)
+#+begin_src latex :tangle no :noweb-ref none
+\AtEveryBibitem{
+  \clearfield{note}
+  \ifentrytype{book}{
+    \clearfield{url}
+    \clearfield{isbn}
+  }{}
+  \ifentrytype{article}{
+    \clearfield{url}
+  }{}
+  \ifentrytype{thesis}{
+    \clearfield{url}
+  }{}
+}
+#+end_src
+
+*** 视觉
+
+增强一点点视觉效果
+#+begin_src emacs-lisp
+(setq TeX-fold-math-spec-list
+      `(;; missing/better symbols
+        ("≤" ("le"))
+        ("≥" ("ge"))
+        ("≠" ("ne"))
+        ;; convenience shorts -- these don't work nicely ATM
+        ;; ("‹" ("left"))
+        ;; ("›" ("right"))
+        ;; private macros
+        ("ℝ" ("RR"))
+        ("ℕ" ("NN"))
+        ("ℤ" ("ZZ"))
+        ("ℚ" ("QQ"))
+        ("ℂ" ("CC"))
+        ("ℙ" ("PP"))
+        ("ℍ" ("HH"))
+        ("𝔼" ("EE"))
+        ("𝑑" ("dd"))
+        ;; known commands
+        ("" ("phantom"))
+        (,(lambda (num den) (if (and (TeX-string-single-token-p num) (TeX-string-single-token-p den))
+                                (concat num "／" den)
+                              (concat "❪" num "／" den "❫"))) ("frac"))
+        (,(lambda (arg) (concat "√" (TeX-fold-parenthesize-as-necessary arg))) ("sqrt"))
+        (,(lambda (arg) (concat "⭡" (TeX-fold-parenthesize-as-necessary arg))) ("vec"))
+        ("‘{1}’" ("text"))
+        ;; private commands
+        ("|{1}|" ("abs"))
+        ("‖{1}‖" ("norm"))
+        ("⌊{1}⌋" ("floor"))
+        ("⌈{1}⌉" ("ceil"))
+        ("⌊{1}⌉" ("round"))
+        ("𝑑{1}/𝑑{2}" ("dv"))
+        ("∂{1}/∂{2}" ("pdv"))
+        ;; fancification
+        ("{1}" ("mathrm"))
+        (,(lambda (word) (string-offset-roman-chars 119743 word)) ("mathbf"))
+        (,(lambda (word) (string-offset-roman-chars 119951 word)) ("mathcal"))
+        (,(lambda (word) (string-offset-roman-chars 120003 word)) ("mathfrak"))
+        (,(lambda (word) (string-offset-roman-chars 120055 word)) ("mathbb"))
+        (,(lambda (word) (string-offset-roman-chars 120159 word)) ("mathsf"))
+        (,(lambda (word) (string-offset-roman-chars 120367 word)) ("mathtt"))
+        )
+      TeX-fold-macro-spec-list
+      '(
+        ;; as the defaults
+        ("[f]" ("footnote" "marginpar"))
+        ("[c]" ("cite"))
+        ("[l]" ("label"))
+        ("[r]" ("ref" "pageref" "eqref"))
+        ("[i]" ("index" "glossary"))
+        ("..." ("dots"))
+        ("{1}" ("emph" "textit" "textsl" "textmd" "textrm" "textsf" "texttt"
+                "textbf" "textsc" "textup"))
+        ;; tweaked defaults
+        ("©" ("copyright"))
+        ("®" ("textregistered"))
+        ("™"  ("texttrademark"))
+        ("[1]:||►" ("item"))
+        ("❡❡ {1}" ("part" "part*"))
+        ("❡ {1}" ("chapter" "chapter*"))
+        ("§ {1}" ("section" "section*"))
+        ("§§ {1}" ("subsection" "subsection*"))
+        ("§§§ {1}" ("subsubsection" "subsubsection*"))
+        ("¶ {1}" ("paragraph" "paragraph*"))
+        ("¶¶ {1}" ("subparagraph" "subparagraph*"))
+        ;; extra
+        ("⬖ {1}" ("begin"))
+        ("⬗ {1}" ("end"))
+        ))
+
+(defun string-offset-roman-chars (offset word)
+  "Shift the codepoint of each character in WORD by OFFSET with an extra -6 shift if the letter is lowercase"
+  (apply 'string
+         (mapcar (lambda (c)
+                   (string-offset-apply-roman-char-exceptions
+                    (+ (if (>= c 97) (- c 6) c) offset)))
+                 word)))
+
+(defvar string-offset-roman-char-exceptions
+  '(;; lowercase serif
+    (119892 .  8462) ; ℎ
+    ;; lowercase caligraphic
+    (119994 . 8495) ; ℯ
+    (119996 . 8458) ; ℊ
+    (120004 . 8500) ; ℴ
+    ;; caligraphic
+    (119965 . 8492) ; ℬ
+    (119968 . 8496) ; ℰ
+    (119969 . 8497) ; ℱ
+    (119971 . 8459) ; ℋ
+    (119972 . 8464) ; ℐ
+    (119975 . 8466) ; ℒ
+    (119976 . 8499) ; ℳ
+    (119981 . 8475) ; ℛ
+    ;; fraktur
+    (120070 . 8493) ; ℭ
+    (120075 . 8460) ; ℌ
+    (120076 . 8465) ; ℑ
+    (120085 . 8476) ; ℜ
+    (120092 . 8488) ; ℨ
+    ;; blackboard
+    (120122 . 8450) ; ℂ
+    (120127 . 8461) ; ℍ
+    (120133 . 8469) ; ℕ
+    (120135 . 8473) ; ℙ
+    (120136 . 8474) ; ℚ
+    (120137 . 8477) ; ℝ
+    (120145 . 8484) ; ℤ
+    )
+  "An alist of deceptive codepoints, and then where the glyph actually resides.")
+
+(defun string-offset-apply-roman-char-exceptions (char)
+  "Sometimes the codepoint doesn't contain the char you expect.
+Such special cases should be remapped to another value, as given in `string-offset-roman-char-exceptions'."
+  (if (assoc char string-offset-roman-char-exceptions)
+      (cdr (assoc char string-offset-roman-char-exceptions))
+    char))
+
+(defun TeX-fold-parenthesize-as-necessary (tokens &optional suppress-left suppress-right)
+  "Add ❪ ❫ parenthesis as if multiple LaTeX tokens appear to be present"
+  (if (TeX-string-single-token-p tokens) tokens
+    (concat (if suppress-left "" "❪")
+            tokens
+            (if suppress-right "" "❫"))))
+
+(defun TeX-string-single-token-p (teststring)
+  "Return t if TESTSTRING appears to be a single token, nil otherwise"
+  (if (string-match-p "^\\\\?\\w+$" teststring) t nil))
+#+end_src
+
+一些 local 快捷键使生活更轻松
+#+begin_src emacs-lisp
+(map!
+ :map LaTeX-mode-map
+ :ei [C-return] #'LaTeX-insert-item)
+(setq TeX-electric-math '("\\(" . ""))
+#+end_src
+
+当然数学界定符不需要强调
+#+begin_src emacs-lisp
+;; Making \( \) less visible
+(defface unimportant-latex-face
+  '((t :inherit font-lock-comment-face :weight extra-light))
+  "Face used to make \\(\\), \\[\\] less visible."
+  :group 'LaTeX-math)
+
+(font-lock-add-keywords
+ 'latex-mode
+ `(("\\\\[]()[]" 0 'unimportant-latex-face prepend))
+ 'end)
+
+;; (font-lock-add-keywords
+;;  'latex-mode
+;;  '(("\\\\[[:word:]]+" 0 'font-lock-keyword-face prepend))
+;;  'end)
+#+end_src
+
+*** CDLaTeX
+
+默认情况下，符号修改非常好用，但可以充实更多符号。让我们将前缀更改为同样很少使用但更方便的键，例如 =;=​。
+#+begin_src emacs-lisp
+(after! cdlatex
+  (setq cdlatex-env-alist
+        '(("bmatrix" "\\begin{bmatrix}\n?\n\\end{bmatrix}" nil)
+          ("equation*" "\\begin{equation*}\n?\n\\end{equation*}" nil)))
+  (setq ;; cdlatex-math-symbol-prefix ?\; ;; doesn't work at the moment :(
+   cdlatex-math-symbol-alist
+   '( ;; adding missing functions to 3rd level symbols
+     (?_    ("\\downarrow"  ""           "\\inf"))
+     (?2    ("^2"           "\\sqrt{?}"     ""     ))
+     (?3    ("^3"           "\\sqrt[3]{?}"  ""     ))
+     (?^    ("\\uparrow"    ""           "\\sup"))
+     (?k    ("\\kappa"      ""           "\\ker"))
+     (?m    ("\\mu"         ""           "\\lim"))
+     (?c    (""             "\\circ"     "\\cos"))
+     (?d    ("\\delta"      "\\partial"  "\\dim"))
+     (?D    ("\\Delta"      "\\nabla"    "\\deg"))
+     ;; no idea why \Phi isnt on 'F' in first place, \phi is on 'f'.
+     (?F    ("\\Phi"))
+     ;; now just convenience
+     (?.    ("\\cdot" "\\dots"))
+     (?:    ("\\vdots" "\\ddots"))
+     (?*    ("\\times" "\\star" "\\ast")))
+   cdlatex-math-modify-alist
+   '( ;; my own stuff
+     (?B    "\\mathbb"        nil          t    nil  nil)
+     (?a    "\\abs"           nil          t    nil  nil))))
+#+end_src
+
+*** SyncTeX
+
+#+begin_src emacs-lisp
+(setq!
+ ;;; %o: TeX-output-extension; %n: TeX-current-line; %b: TeX-current-file-name-master-relative
+ TeX-view-program-list '(("Okular" "okular --unique %o#src:%n%(dir)./%b"))
+ TeX-view-program-selection '((output-pdf "Okular") (output-dvi "Okular")))
+#+end_src
+
+** Markdown
+
+Doom 默认的 Markdown 是 ~GFM~ (GitHub Flavored Markdown)，不过有了 =Emacs= 和
+=Org Mode= 谁还用 =Markdown= 。但是 ~toc-org-mode~ 依然可以使用。
+
+可以采用如下方式支持 Markdown。
+#+begin_src fundamental
+# TOC         <!-- :TOC: -->
+#+end_src
+
+** C/C++
+
+tcc 也是 C++
+#+begin_src emacs-lisp
+(add-to-list 'auto-mode-alist '("\\.tcc\\'" . c++-mode))
+#+end_src
+
+如果开启了 format 那可以使用 clang-format 自动格式化代码
+#+begin_src emacs-lisp :tangle no
+(set-formatter! 'clang-format
+  '("clang-format" "--Wno-error=unknown" ("-assume-filename=%S" (or buffer-file-name mode-result "")))
+  :modes '(c-mode c++-mode))
+#+end_src
+
+使用 =dape= 進行現代化調試，配置見 [[file:21-lang-lsp-dap.org][LSP/DAP 配置]]​。
+
+** LLVM
+
+先把需要的包下下來，这些东西就在 llvm 的仓库里。
+
+#+begin_src emacs-lisp :tangle packages.el
+(package! llvm-mir-mode
+  :recipe `(:local-repo ,doom-user-dir
+            :files ("modules/llvm/llvm-mir-mode.el")))
+(package! llvm-mode
+  :recipe `(:local-repo ,doom-user-dir
+            :files ("modules/llvm/llvm-mode.el")))
+(package! mlir-mode
+  :recipe `(:local-repo ,doom-user-dir
+            :files ("modules/mlir/mlir-mode.el")))
+(package! tablegen-mode
+  :recipe `(:local-repo ,doom-user-dir
+            :files ("modules/llvm/tablegen-mode.el")))
+#+end_src
+
+别忘了让 emacs 可以认识 LLVM 的文件。
+#+begin_src emacs-lisp
+(add-to-list 'auto-mode-alist '("\\.ll\\'" . llvm-mode))
+(add-to-list 'auto-mode-alist '("\\.mlir\\'" . mlir-mode))
+(add-to-list 'auto-mode-alist '("\\.lgc\\'" . llvm-mode))  ; https://github.com/GPUOpen-Drivers/llpc/tree/dev/lgc
+(add-to-list 'auto-mode-alist '("\\.td\\'" . tablegen-mode))
+#+end_src
+
+
+** GLSL
+
+似乎这份配置已经支持 glsl 了，那就把相关文件都标记为 glsl！
+#+begin_src emacs-lisp
+(add-to-list 'auto-mode-alist '("\\.tesc\\'" . glsl-mode))
+(add-to-list 'auto-mode-alist '("\\.tese\\'" . glsl-mode))
+(add-to-list 'auto-mode-alist '("\\.comp\\'" . glsl-mode))
+(add-to-list 'auto-mode-alist '("\\.mesh\\'" . glsl-mode))
+(add-to-list 'auto-mode-alist '("\\.task\\'" . glsl-mode))
+(add-to-list 'auto-mode-alist '("\\.rgen\\'" . glsl-mode))
+(add-to-list 'auto-mode-alist '("\\.rint\\'" . glsl-mode))
+(add-to-list 'auto-mode-alist '("\\.rahit\\'" . glsl-mode))
+(add-to-list 'auto-mode-alist '("\\.rchit\\'" . glsl-mode))
+(add-to-list 'auto-mode-alist '("\\.rmiss\\'" . glsl-mode))
+(add-to-list 'auto-mode-alist '("\\.rcall\\'" . glsl-mode))
+#+end_src

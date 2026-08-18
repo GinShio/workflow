@@ -1,0 +1,39 @@
+# Cargo configuration
+
+# Aliases for common commands
+[alias]
+b = "build"
+c = "check"
+t = "test"
+r = "run"
+rr = "run --release"
+doc-open = "doc --open"
+tree = "tree"
+outdated = "outdated"
+audit = "audit"
+
+# Network configuration
+[net]
+# Use the git executable for git operations (can fix some auth issues)
+git-fetch-with-cli = true
+
+# Registry configuration
+[registries.crates-io]
+# Use the sparse index protocol (faster updates, default in newer Cargo)
+protocol = "sparse"
+
+# Build configuration
+[build]
+# Use sccache for caching builds (requires sccache installed)
+rustc-wrapper = "sccache"
+
+# Linker configuration
+# Use mold for supported architectures (x86_64, aarch64, riscv64, s390x) on Linux
+[target.'cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64", target_arch = "s390x")))']
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# Fallback to lld for other Linux architectures or if mold is problematic (can count as generic fallback)
+[target.'cfg(all(target_os = "linux", not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64", target_arch = "s390x"))))']
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]

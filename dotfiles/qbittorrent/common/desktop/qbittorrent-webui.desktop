@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=qBittorrent WebUI
+GenericName=BitTorrent Client
+Comment=Download and share files over BitTorrent
+Icon=qbittorrent
+Exec=xdg-open "http://127.0.0.1:{{@@ qbittorrent.port @@}}/"
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;P2P;
+MimeType=application/x-bittorrent;x-scheme-handler/magnet;
+Keywords=bittorrent;torrent;magnet;

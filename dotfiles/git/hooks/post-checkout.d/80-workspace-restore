@@ -1,0 +1,35 @@
+#!/bin/sh
+# On branch switch, point ./compile_commands.json at the active branch's build
+# directory, so tooling picks up the right index.
+
+. "$HOOKS_DIR/core/lib.sh"
+
+# post-checkout args: <prev_head> <new_head> <branch_flag>
+[ "$3" = "1" ] || exit 0
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+[ -n "$branch" ] || exit 0   # detached HEAD: nothing to activate
+
+build_dirs=$(resolve_build_dirs "$branch")
+[ -n "$build_dirs" ] || { log_warn "No build directory for '$branch' yet; skipping workspace restore."; exit 0; }
+
+oldifs=$IFS
+IFS='
+'
+set -f
+for build_dir in $build_dirs; do
+    src="$build_dir/compile_commands.json"
+    link="$GIT_TOPLEVEL/compile_commands.json"
+    [ -f "$src" ] || continue
+    # Only manage the path if it is absent or a symlink we own; never clobber a
+    # real file the user committed or generated in-tree.
+    if [ -L "$link" ] || [ ! -e "$link" ]; then
+        ln -sf "$src" "$link"
+        log_info "Linked compile_commands.json -> $src"
+        exit 0
+    else
+        log_warn "compile_commands.json is a real file; leaving it untouched."
+    fi
+done
+IFS=$oldifs
+set +f

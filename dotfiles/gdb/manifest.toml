@@ -1,0 +1,7 @@
+[[install]]
+id = 'gdb'
+dst = '~/.config/gdb/'
+path = '.'
+capabilities = ['develop']
+planes = ['user']
+actions = ['histfile-install']

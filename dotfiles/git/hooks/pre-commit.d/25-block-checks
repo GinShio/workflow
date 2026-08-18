@@ -1,0 +1,28 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+# A tripwire you plant in your own code: a stop-word in the staged changes
+# blocks the commit until you remove it. The literals are split so this file
+# doesn't trip its own check.
+files=$(staged_files)
+[ -n "$files" ] || exit 0
+
+markers="DO_NOT_SUB""MIT|NO""COMMIT|FIXME_BLOC""KER"
+
+oldifs=$IFS
+IFS='
+'
+set -f
+# -I skips binary; searching --cached limits the match to staged content, and
+# the pathspec limits it to the files this commit actually touches.
+# shellcheck disable=SC2086
+if git grep --cached -I -nE "($markers)" -- $files; then
+    log_error "blocking markers in staged changes (above); remove them or commit with --no-verify"
+    rc=1
+else
+    rc=0
+fi
+IFS=$oldifs
+set +f
+
+exit $rc

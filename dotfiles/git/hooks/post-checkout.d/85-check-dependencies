@@ -1,0 +1,53 @@
+#!/bin/sh
+# Warn (never block) when dependency lockfiles change across a checkout or
+# merge, so you remember to re-run your package manager.
+# Shared by post-checkout and post-merge (post-merge.d/85 is a symlink here).
+
+. "$HOOKS_DIR/core/lib.sh"
+
+case "$HOOK_NAME" in
+    post-checkout)
+        # args: <prev_head> <new_head> <branch_flag>
+        [ "$3" = "1" ] || exit 0
+        old="$1"
+        new="$2"
+        ;;
+    post-merge)
+        # args: <is_squash>; compare the pre-merge HEAD to the current HEAD.
+        old="ORIG_HEAD"
+        new="HEAD"
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+
+# Watched lockfiles, matched by basename anywhere in the tree.
+lockfiles="
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lockb
+poetry.lock
+uv.lock
+Pipfile.lock
+requirements.txt
+Cargo.lock
+go.sum
+Gemfile.lock
+composer.lock
+"
+
+# Single diff; keep paths whose basename is in the watch list.
+changed=$(git diff --name-only "$old" "$new" 2>/dev/null | while IFS= read -r path; do
+    base=${path##*/}
+    for lf in $lockfiles; do
+        [ "$base" = "$lf" ] && { printf '%s\n' "$path"; break; }
+    done
+done)
+
+if [ -n "$changed" ]; then
+    log_warn "Dependency lockfiles changed:"
+    printf '%s\n' "$changed" | while IFS= read -r f; do log_warn "  $f"; done
+    log_warn "You may need to re-run your package manager install."
+fi

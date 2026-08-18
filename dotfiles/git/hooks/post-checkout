@@ -1,0 +1,4 @@
+## START BRANCHLESS CONFIG
+
+git branchless hook post-checkout "$@"
+## END BRANCHLESS CONFIG

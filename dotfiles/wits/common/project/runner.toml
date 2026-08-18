@@ -1,0 +1,10 @@
+[project]
+org = "{{@@ wits.projects.source_info['runner'].org @@}}"
+build_system = "cargo"
+
+[repos.main]
+path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
+build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+main_branch = "main"
+[repos.main.remotes]
+origin = "https://gitlab.freedesktop.org/mesa/deqp-runner.git"

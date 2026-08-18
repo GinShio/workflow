@@ -1,0 +1,6 @@
+export no_proxy="localhost,127.0.0.1,localaddress,.localdomain.com,.cn"
+export NO_PROXY="localhost,127.0.0.1,localaddress,.localdomain.com,.cn"
+export http_proxy="http://localhost:8118"
+export HTTP_PROXY="http://localhost:8118"
+export https_proxy="http://localhost:8118"
+export HTTPS_PROXY="http://localhost:8118"

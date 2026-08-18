@@ -1,0 +1,22 @@
+[project]
+org = "{{@@ wits.projects.source_info['glslang'].org @@}}"
+build_system = "cmake"
+generator = "Ninja Multi-Config"
+toolchain = "clang"
+default_presets = ["common"]
+
+[repos.main]
+path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
+build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+install_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+main_branch = "main"
+[repos.main.remotes]
+origin = "https://github.com/KhronosGroup/glslang.git"
+[repos.main.hooks]
+post_update = "python3 update_glslang_sources.py --site github"
+
+[project.presets.common.definitions]
+ENABLE_HLSL = false
+ENABLE_OPT = true
+GLSLANG_TESTS = true
+ALLOW_EXTERNAL_GTEST = false

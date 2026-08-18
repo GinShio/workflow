@@ -1,0 +1,387 @@
+* 語義框架
+
+上一個模塊讓 Emacs 看見代碼的 *形狀*，本模塊讓它知道代碼的 *含義*：這個符號在哪裏
+定義、誰在用它、改個名字要動哪些文件、這一行編譯器會不會抱怨。
+
+這些問題語法樹回答不了，因為答案取決於整個項目——頭文件、模板實例化、編譯選項。回
+答它們的程序叫語言服務器。本模塊配置的是與服務器打交道的方式；具體哪種語言用哪個服
+務器，由各語言自己的文件註冊進來。
+
+四個內建子系統各有自己的手冊：[[info:eglot#Top][Eglot]]、[[info:emacs#Xref][Xref]]、[[info:flymake#Top][Flymake]] 與
+[[info:elisp#Documentation Basics][Eldoc]]。本配置把它們組成同一條代碼工作流，入口與範圍規則見
+[[file:../GUIDE.org::*Eglot、xref、Eldoc 與 Flymake][GUIDE.org]]。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lsp.el" :comments no
+;;; ginshio-lsp.el --- what the code means -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lsp.el"
+(require 'ginshio-path)
+(require 'ginshio-doctor)
+(require 'ginshio-keys)
+(require 'seq)
+
+(defvar eglot-server-programs)
+(declare-function eglot-managed-p "eglot")
+(declare-function eglot-completion-at-point "eglot")
+#+end_src
+
+** 不在這裏加載 eglot
+
+本模塊從頭到尾不 ~require~ eglot，這一點需要說明，因為下面幾乎每一行都在配置它。
+
+eglot 自己 ~require~ 了 =compat=。=compat= 不是內建包，是包管理器裝的一個包，而它要
+到 ~after-init-hook~ 纔開始激活自己那一份——模塊全部加載完之後。所以在這裏
+~require~ eglot，等於在包管理器接手之前先把它管的包加載進來，於是每次啓動都得到一句
+「compat loaded before Elpaca activation」，以及一個為此彈出來的 =*Warnings*= 窗口。
+那個窗口是真正的代價：它此後一直佔着底部，而 git 叫 Emacs 來寫提交信息時，你看到的第
+一屏就是它。
+
+第二個理由是時間。eglot 連帶 jsonrpc、flymake、xref 一起加載，而 `git commit` 每次都
+是一個全新的 Emacs——為一條提交信息付一次語言服務器客戶端的加載，付得毫無道理。
+
+不加載也能配好，因為需要的三樣東西各有辦法：*變量* 全是 ~defcustom~，先賦值不會被之後
+的定義覆蓋；*鉤子* 用名字掛，不要求那個變量已經存在；*命令* 聲明成自動加載，按下去的
+那一刻纔把 eglot 拉起來。
+
+真正加載它的時刻只有兩個：某個註冊過的主模式在一個裝了服務器的項目裏打開文件，或者你
+自己按了下面那些鍵。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lsp.el"
+(dolist (command '(eglot-code-actions
+                   eglot-find-implementation
+                   eglot-find-typeDefinition
+                   eglot-rename
+                   eglot-shutdown
+                   eglot-reconnect))
+  (autoload command "eglot" nil t))
+
+(dolist (command '(flymake-goto-next-error
+                   flymake-goto-prev-error
+                   flymake-show-buffer-diagnostics
+                   flymake-show-project-diagnostics))
+  (autoload command "flymake" nil t))
+#+end_src
+
+~eglot~ 與 ~eglot-ensure~ 上游已經聲明過，不必重複。flymake 那四個要自己聲明的原因是
+它們在上游一個都沒有聲明——之前它們能用，靠的是 eglot 把 flymake 一起拉了進來。
+
+** 為什麼是 eglot
+
+Emacs 有兩個成熟的 LSP 客戶端，區別不在功能多寡，在於它們對「LSP 應該是什麼」的看法。
+
+eglot 認為 LSP 是既有設施的 *數據源*。跳轉交給 xref，文檔交給 eldoc，診斷交給
+flymake，補全交給 capf，符號列表交給 imenu。你已經會用的鍵和已經配好的界面，換一種
+語言照樣工作，並且 LSP 沒起來時它們退回本來的實現，而不是消失。
+
+另一個客戶端自帶一整套平行的 UI。功能確實更多，代價是每個功能都有兩套：兩種跳轉、
+兩種文檔顯示、兩處配置。對這份配置想要的「一件事只有一個地方」，那是相反的方向。
+
+** 連接
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lsp.el"
+(setq eglot-autoshutdown t
+      eglot-sync-connect 1
+      eglot-connect-timeout 60
+      eglot-send-changes-idle-time 0.3
+      eglot-extend-to-xref t)
+#+end_src
+
+兩個值得單獨說。
+
+~eglot-connect-timeout~ 從 30 秒放寬到 60：clangd 在一個大項目上首次啓動要載入索引，
+超時之後你看到的是連接失敗，而真實情況只是它還在讀。
+
+~eglot-extend-to-xref~ 讓服務器也管理 *項目之外* 的文件。跳進系統頭文件或第三方庫之
+後，默認行為是那個緩衝區不受管理——於是你在那裏繼續跳轉會突然失效，而原因並不顯而
+易見。C++ 尤其常撞上，因為讀實現多半意味着離開自己的樹。
+
+*** 事件日誌
+
+eglot 默認把與服務器往來的每一條 JSON 留在一個緩衝區裏，上限兩百萬字符。它只在調試
+協議問題時有用，而那種事一年遇不到一次；平時它是持續的內存與字符串處理開銷，並且在
+一個活躍的 C++ 會話裏增長得很快。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lsp.el"
+(setq eglot-events-buffer-config '(:size 0 :format full))
+#+end_src
+
+真要查協議：把 ~:size~ 改成正整數，~M-x eglot-reconnect~ 讓它生效，然後
+~M-x eglot-events-buffer~。
+
+** 用哪些能力，不用哪些
+
+LSP 服務器啓動時會報告它能做什麼，eglot 回答它打算用什麼。這張表列出全部二十二項，
+因為「我沒有選擇的東西」和「我選擇了的東西」同樣需要能被查到——半年後想起某個功能沒
+有，第一個要看的就是這裏。
+
+| 能力                    | 用 | 理由                                               |
+|-------------------------+----+----------------------------------------------------|
+| hover                   | 是 | 光標處的類型與文檔，eldoc 的主要來源               |
+| completion              | 是 | 補全候選，經由 capf 交給補全前端                   |
+| signatureHelp           | 是 | 填參數時顯示函數簽名                               |
+| definition              | 是 | ~M-m c d~                                            |
+| typeDefinition          | 是 | ~M-m c t~                                            |
+| implementation          | 是 | ~M-m c i~                                            |
+| declaration             | 是 | 保留能力，沒給鍵；C++ 裏用得極少                   |
+| references              | 是 | ~M-m c D~                                            |
+| documentSymbol          | 是 | imenu 的來源，~M-m c s~                              |
+| workspaceSymbol         | 是 | 按名字搜整個項目，~M-m c S~                          |
+| codeAction              | 是 | ~M-m c a~                                            |
+| rename                  | 是 | ~M-m c r~                                            |
+| documentHighlight       | 是 | 光標停在符號上，同名的其他出現處一起淡淡標出       |
+| executeCommand          | 是 | 一部分 code action 靠它落地，關掉會連帶弄壞它們    |
+| diagnostics             | 是 | 不在這張表裏，服務器主動推送，由 flymake 呈現      |
+|-------------------------+----+----------------------------------------------------|
+| documentFormatting      | 否 | 格式化由提交時的鉤子負責，編輯器不參與             |
+| documentRangeFormatting | 否 | 同上                                               |
+| documentOnTypeFormatting| 否 | 同上，而且是在你還沒寫完時就改寫你的那一行         |
+| inlayHint               | 否 | 行內插入的類型與參數名，信息密度換來的是持續的視覺噪音 |
+| foldingRange            | 否 | 摺疊已經由 tree-sitter 的大綱回答，不必讓服務器再算 |
+| codeLens                | 否 | eglot 1.17 沒有實現，關掉只是少一次協商            |
+| color                   | 否 | 在色值旁邊畫色塊                                   |
+| documentLink            | 否 | 把註釋裏的 URL 變成可點的鏈接                      |
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lsp.el"
+(setq eglot-ignored-server-capabilities
+      '(:documentFormattingProvider
+        :documentRangeFormattingProvider
+        :documentOnTypeFormattingProvider
+        :inlayHintProvider
+        :foldingRangeProvider
+        :codeLensProvider
+        :colorProvider
+        :documentLinkProvider))
+#+end_src
+
+想臨時看看關掉的某一項是什麼樣，把它從這張列表裏拿走，~M-x eglot-reconnect~ 就生效，
+不用重啓。
+
+** 文檔
+
+光標停下時，回音區告訴你這裏是什麼。信息可能來自多個源——服務器給的簽名、flymake 給
+的診斷——默認策略是只顯示先到的那一個，於是有錯誤時就看不到簽名。改成合併之後兩者都在。
+
+合併之後，行數上限就不再是純粹的美觀問題了。那個值的單位是螢幕行，*所有源加起來* 共
+用這個額度；填成一行，等於讓簽名和診斷去爭同一行，而先到的那個贏——把上一段剛剛解決
+的問題原樣換了個方向。警告因此經常是看不見的，且看不見得毫無跡象。
+
+給一個上限而不是解除限制。~t~ 允許回音區一路長到 ~max-mini-window-height~，一條 C++
+模板錯誤能吃掉四分之一個 frame；五行放得下一條簽名加一條診斷，也還沒到會讓人分心的
+高度。完整內容仍然按 ~M-m c h~ 進專門的緩衝區看；那個緩衝區開着的時候，回音區就不再
+重複一遍。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lsp.el"
+(setq eldoc-idle-delay 0.3
+      eldoc-echo-area-use-multiline-p 5
+      eldoc-echo-area-prefer-doc-buffer t)
+
+(defun ginshio-lsp-managed-setup-h ()
+  "Settle a buffer that Eglot has just taken over.
+The hook this runs from also fires on shutdown, hence the guard."
+  (when (eglot-managed-p)
+    (setq-local eldoc-documentation-strategy #'eldoc-documentation-compose)))
+
+(add-hook 'eglot-managed-mode-hook #'ginshio-lsp-managed-setup-h)
+#+end_src
+
+** 診斷
+
+flymake 的指示器和版本控制的邊欄改動標記都想要 fringe。左邊留給 vc——哪幾行被改過是
+持續存在的背景信息，錯誤是偶發的前景信息，兩者搶同一條窄縫時會互相遮蔽。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lsp.el"
+(setq flymake-fringe-indicator-position 'right-fringe
+      flymake-suppress-zero-counters t
+      flymake-wrap-around nil)
+#+end_src
+
+計數器為零時不顯示。默認只隱藏為零的警告數而保留為零的錯誤數，於是狀態欄上長期掛着
+一個「0 個錯誤」——它從不變化，也就從不傳遞信息。全部隱藏之後，狀態欄上出現數字這件
+事本身成了信號。
+
+~flymake-wrap-around~ 關掉：跳到最後一個錯誤再按一次，默認會回到第一個。在一個長文件
+裏，那和「沒有更多錯誤了」在視覺上難以區分，於是你會來回轉圈。
+
+** 註冊
+
+語言模塊用一次調用聲明它的服務器。一處聲明同時決定三件事：eglot 用什麼命令啓動、啓
+動之前檢查哪個可執行文件、以及自檢報告裏怎麼寫。分成三份的話，遲早有一天你改了命令
+行卻忘了改其中之一。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lsp.el"
+(defvar ginshio-lsp-servers nil
+  "Language servers registered by the language modules, most recent first.")
+
+(defun ginshio-lsp-register-server (&rest properties)
+  "Declare a language server.
+
+PROPERTIES is a plist:
+
+  :modes    the major modes it serves
+  :program  the executable to look for before trying to start anything
+  :contact  what to hand Eglot: a list forming a command line, or a
+            function of two arguments (INTERACTIVE PROJECT) returning
+            one, called in the buffer being taken over"
+  (let ((modes (plist-get properties :modes)))
+    (setq ginshio-lsp-servers
+          (cons properties
+                (seq-remove (lambda (other)
+                              (equal (plist-get other :modes) modes))
+                            ginshio-lsp-servers)))
+    (dolist (mode modes)
+      (add-hook (intern (format "%s-hook" mode)) #'ginshio-lsp-start-h))
+    (ginshio-lsp--declare-server-check properties)
+    (when (featurep 'eglot)
+      (ginshio-lsp--teach-eglot properties))))
+
+(defun ginshio-lsp-server-for-mode (mode)
+  "Return the registered server serving MODE, if there is one."
+  (seq-find (lambda (server) (memq mode (plist-get server :modes)))
+            ginshio-lsp-servers))
+#+end_src
+
+註冊表和 eglot 的那張表是兩件事，因為它們的生命週期不同：語言模塊在啓動時就註冊完了，
+而 eglot 可能到你打開第一個 C 文件時纔加載。所以註冊只記在自己這邊，等 eglot 出現再一
+併交過去；之後若還有新的註冊進來，那時 eglot 已經在了，直接交。兩條路匯到同一個函數。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lsp.el"
+(defun ginshio-lsp--teach-eglot (server)
+  "Tell Eglot how to start SERVER."
+  (let ((modes (plist-get server :modes)))
+    ;; Ahead of Eglot's own entry for the same modes, which is a reasonable
+    ;; default that knows nothing about this machine.
+    (setq eglot-server-programs
+          (cons (cons modes (plist-get server :contact))
+                (seq-remove (lambda (entry) (equal (car entry) modes))
+                            eglot-server-programs)))))
+
+;; Oldest first, so that the most recently registered server ends up in front.
+(with-eval-after-load 'eglot
+  (mapc #'ginshio-lsp--teach-eglot (reverse ginshio-lsp-servers)))
+#+end_src
+
+~:contact~ 給函數時，那兩個參數是必須的，即使一個都不用。eglot 按函數的元數分派：接
+一個參數的用一種調用方式，其餘一律按兩個參數調用——包括一個都不接的。寫成無參數的結
+果是啓動時拋出「參數個數錯誤」。
+
+#+begin_quote
+這個錯誤特別難認，值得記一筆。自動啓動失敗時 eglot 把錯誤消息當作格式字符串交給
+~format~，而上面那條消息裏含有 =%d=，於是你在回音區看到的是
+=Not enough arguments for format string=——一句和真實原因毫無關係的話。懷疑
+contact 有問題時，直接 ~M-x eglot~ 手動啓動，那條路徑會如實報錯。
+#+end_quote
+
+** 什麼時候啓動
+
+不要在主模式鉤子裏無條件啓動。有三種情況它會幫倒忙：緩衝區沒有對應文件時服務器無從
+談起；文件不屬於任何項目時 eglot 會彈出詢問，於是「打開一個文件」變成一次問答；服務
+器沒安裝時它直接報錯，而你只是想看一眼代碼。
+
+這三種都不是異常，是日常。所以先問清楚，能成再啓動。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lsp.el"
+(defun ginshio-lsp-start-h ()
+  "Attach a language server to this buffer when doing so can succeed."
+  (when-let* ((server (ginshio-lsp-server-for-mode major-mode))
+              ((buffer-file-name))
+              ((project-current nil))
+              ((executable-find (plist-get server :program))))
+    (eglot-ensure)))
+#+end_src
+
+沒自動起來的時候 ~M-m c e~ 手動啓動，那條路徑會照常報告失敗的原因。
+
+** 補全
+
+不在這裏配。eglot 把補全掛在 ~completion-at-point-functions~ 上，那是 Emacs 的標準
+接口；前端長什麼樣是補全模塊的事，本模塊只要不碰那個變量，兩邊就不會打架。
+
+** 鍵位
+
+跳轉綁在 xref 上，不綁 eglot 自己的命令。這一點值得解釋，因為看起來像是繞遠路：eglot
+在接管緩衝區時把自己註冊為 xref 的後端，所以有語言服務器時 ~M-m c d~ 拿到的就是服務
+器的答案。綁 xref 換來的是同一個鍵在沒有服務器的地方也還是「跳到定義」——elisp 問
+Emacs 自己的符號表，老倉庫問 TAGS，都沒有就退回搜索。
+
+大小寫成對：小寫問這個緩衝區，大寫問整個項目。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lsp.el"
+(ginshio-leader-define
+ "c"   "code"
+ "c a" #'eglot-code-actions
+ "c d" #'xref-find-definitions
+ "c D" #'xref-find-references
+ "c b" #'xref-go-back
+ "c i" #'eglot-find-implementation
+ "c t" #'eglot-find-typeDefinition
+ "c S" #'xref-find-apropos
+ "c r" #'eglot-rename
+ "c h" #'eldoc-doc-buffer
+
+ "c n" #'flymake-goto-next-error
+ "c p" #'flymake-goto-prev-error
+ "c x" #'flymake-show-buffer-diagnostics
+ "c X" #'flymake-show-project-diagnostics
+
+ "c e" #'eglot
+ "c q" #'eglot-shutdown
+ "c Q" #'eglot-reconnect)
+#+end_src
+
+全部與語義相關的鍵，包括不是本模塊綁的：
+
+| 鍵         | 命令                    | 來自                             |
+|------------+-------------------------+----------------------------------|
+| ~M-m c d~    | 跳到定義                | 本模塊，經 xref                  |
+| ~M-m c D~    | 列出所有引用            | 本模塊，經 xref                  |
+| ~M-m c b~    | 回到跳走之前的位置      | 本模塊，可連續退棧               |
+| ~M-m c i~ ~c t~ | 實現 / 類型定義      | 本模塊                           |
+| ~M-m s i~    | 本緩衝區的符號          | minibuffer 模塊，經 imenu 讀服務器的符號 |
+| ~M-m c S~    | 全項目的符號            | 本模塊                           |
+| ~M-m c a~ ~c r~ | 代碼操作 / 重命名    | 本模塊                           |
+| ~M-m c h~    | 完整文檔進緩衝區        | 本模塊                           |
+| ~M-m c n~ ~c p~ | 下/上一個診斷        | 本模塊                           |
+| ~M-m c x~ ~c X~ | 本文件 / 全項目診斷列表 | 本模塊                        |
+| ~M-m c e~ ~c q~ ~c Q~ | 啓動 / 關閉 / 重連 | 本模塊                       |
+| ~C-h .~      | 光標處的文檔            | 內建，eglot 把它重映射到文檔緩衝區 |
+| fringe 上點左鍵 | 打開診斷列表         | flymake 自帶                     |
+
+出廠的 ~M-.~ ~M-,~ ~M-?~ 綁的正是這三個 xref 命令，但它們不在 keys 模塊召回的任何一
+組裏，這是想過之後的決定而不是遺漏：跳轉全部從 leader 走，代價是多兩個按鍵，換來的
+是「我有哪些鍵」仍然只有一個地方需要查。
+
+改主意的成本很低——把 ~"M-."~ ~"M-,"~ ~"M-?"~ 加進 =06-keys.org= 的
+~ginshio-keys-motion~ 即可，它們是出廠綁定，按名召回會查到正確的命令。
+
+** 這個模塊會產生的緩衝區
+
+臨時窗口的擺放歸 window 模塊。本模塊不設任何顯示規則，只交代它會造出什麼：
+
+| 緩衝區                                | 什麼時候出現       |
+|---------------------------------------+--------------------|
+| =*eldoc*=                               | ~M-m c h~            |
+| =*Flymake diagnostics …*=               | ~M-m c x~            |
+| =*Flymake diagnostics for project …*=   | ~M-m c X~            |
+| =*xref*=                                | 跳轉有多個候選時   |
+| =*eglot-help*=                          | 部分服務器的懸浮文檔 |
+| =*EGLOT … events*=                      | 只在打開事件日誌後 |
+
+** 自檢項
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lsp.el"
+(defun ginshio-lsp--declare-server-check (server)
+  "Have the doctor report on SERVER's executable."
+  (let ((program (plist-get server :program))
+        (modes (plist-get server :modes)))
+    (ginshio-doctor-executable 'lsp program
+                               :note (format "semantic analysis for %s"
+                                             (string-join
+                                              (mapcar #'symbol-name modes) ", "))
+                               :remedy (format "install %s and put it on PATH" program))))
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lsp.el" :comments no
+(provide 'ginshio-lsp)
+;;; ginshio-lsp.el ends here
+#+end_src

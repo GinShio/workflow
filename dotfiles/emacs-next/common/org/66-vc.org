@@ -1,0 +1,813 @@
+* 版本控制
+
+日常的 git 操作在終端裏。這不是妥協，是分工：提交、分支、變基、疊放提交的來回移動，
+命令行做得又快又準，Emacs 裏再造一套只是多一種心智模型。
+
+所以本模塊不是一個 git 界面。它做兩件終端做不到的事，加上一件終端已經在做、但做得
+不夠好的事。
+
+*終端做不到的*：在你編輯的同時，把「這幾行是新寫的」直接畫在緩衝區旁邊，並且讓你就
+在那裏挑出其中幾行送去暫存；把一次 blame 從一次性的文本輸出，變成可以繼續往下追的活
+頁面。
+
+*終端已經在做的*：`git` 需要一個編輯器的時候會叫 Emacs——寫提交信息、編排 rebase、
+解決衝突。這條路徑已經在用，但 Emacs 這邊什麼都沒準備，所以它落到最原始的模式裏。
+
+內建部分見 [[info:emacs#Version Control][Emacs manual: Version Control]]；提交與 rebase 編輯模式由 Magit/with-editor
+提供，完整手冊是 [[info:magit#Top][Magit]] 與 [[info:with-editor#Top][With-Editor]]；三方合併見 [[info:ediff#Top][Ediff]]。本配置的
+終端協作、hunk、衝突與 server 工作流先看 [[file:../GUIDE.org::*版本控制][GUIDE.org]]。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el" :comments no
+;;; ginshio-vc.el --- what the terminal cannot do -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(require 'ginshio-path)
+(require 'ginshio-doctor)
+(require 'ginshio-keys)
+(require 'seq)
+(require 'vc)
+(require 'vc-git)
+(require 'server)
+(require 'smerge-mode)
+
+(declare-function ediff-setup-windows-plain "ediff-wind")
+#+end_src
+
+** 內建 vc
+
+只認 git。默認情況下，每打開一個文件 Emacs 都要依次問一遍它是不是 RCS、是不是
+CVS、是不是 SVN……這些後端在這台機器上一個都不會遇到，而每一問都是若干次文件系統
+調用。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(setq vc-handled-backends '(Git)
+      vc-git-diff-switches '("--histogram")
+      vc-git-print-log-follow t
+      vc-find-revision-no-save t)
+#+end_src
+
+~vc-git-print-log-follow~ 讓單個文件的歷史穿過重命名。不打開它的話，一個文件在改名
+之前的歷史就像不存在，而那往往正是你要找的東西。
+
+~vc-find-revision-no-save~ 讓「打開這個文件的某個舊版本」停留在緩衝區裏，不在工作
+樹旁邊落下一個臨時文件。
+
+** 讓 git 找得到這個 Emacs
+
+git 把編輯任務交給 =emacsclient= 時，必須有一個服務器在聽。以 daemon 方式啓動時它自己
+會開；直接啓動一個圖形 Emacs 時不會，於是同一台機器上 `git commit` 的行為取決於你今天
+是怎麼啓動的編輯器——這種不確定性沒有存在的理由。
+
+mergetool 那條路無論如何都要它：它是 ~--eval~ 調進來的，只有 =emacsclient= 有這條路。
+
+默認 server 名仍然是 Emacs 的 =server=，所以日常的裸 =emacsclient= 不需要任何參數。
+daemon 的啓停由 system/service 管理，=bin/vanilla-emacs= 不包裝進程生命週期。具名 daemon 使用
+Emacs 原生的 ~--daemon=NAME~ 或 ~--fg-daemon=NAME~，客戶端使用 ~emacsclient -s NAME~；普通
+圖形 Emacs 若要作為額外 server，啓動時設 =GINSHIO_SERVER_NAME=name=。
+
+本機 Unix socket 已由 Emacs 放在 =$XDG_RUNTIME_DIR/emacs=。~server-auth-dir~ 只服務 TCP
+server，這份配置沒有啓用 TCP，因此不設它。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(when-let* ((name (getenv "GINSHIO_SERVER_NAME")))
+  (setq server-name name))
+
+(unless (or noninteractive (daemonp) (server-running-p server-name))
+  (server-start))
+#+end_src
+
+*** 讓出整個 frame
+
+git 等你答復的時候是阻塞的：終端停在那裏，分支停在半路。這種時刻不該和別的東西分屏
+——旁邊那半個窗口裏的代碼你現在不會讀，而一份被擠成八行高的 rebase 清單會讓你看不見
+自己正在編排什麼。
+
+所以 git 叫出來的緩衝區獨佔整個 frame，交回去之後把原來的佈局放回來。後半句同樣重
+要：提交一次就毀掉一次窗口佈局的編輯器，你會學會不在裏面提交。
+
+這兩半由不同的人做，而且該由不同的人做。
+
+*還回去* 不在這裏做。`with-editor` 已經在做，而且做得更準：它從 ~server-switch-buffer~
+外面切進去，存下的是緩衝區 *還沒顯示出來* 那一刻的佈局；本模塊能拿到的最早的一份，已經
+包含了那個緩衝區。收尾時它自己會還原，所以這裏再掛一個還原函數，只會用一份更差的覆蓋掉
+一份更好的。
+
+*佔滿 frame* 在這裏做，而它要對付兩條不同的路。
+
+git 用哪個編輯器由一條優先級鏈決定，結果可能是 =emacsclient=——把文件交給一個已經在跑的
+Emacs——也可能是 =emacs= 本身，每次現開一個進程。兩條路都能用，區別只在速度；但它們把緩
+衝區送到眼前的時刻完全不同，而這正是「獨佔」要挑的那一刻。
+
+=emacsclient= 那條路上，時刻是 ~server-switch-hook~：緩衝區剛剛顯示出來，模式已經設好。
+
+新開一個 Emacs 那條路上根本沒有 server，那個鉤子一次都不會跑。這條路上文件是作為命令行
+參數打開的，而啓動時的窗口佈局要等命令行處理完纔定下來——在那之前動手，佈局會在之後被重
+新擺一遍。所以時刻是 ~window-setup-hook~，Emacs 啓動序列的最後一步。
+
+只是那不一定是 *這份配置* 的最後一步。包管理器在 ~after-init-hook~ 裏開始幹活，而那個鉤
+子排在命令行處理之前：包都已經構建好的時候，它在那裏一口氣做完，magit 趕得上；只要有東西
+要克隆或者重新編譯，它就轉成異步，magit 落到 ~window-setup-hook~ 之後。那時
+=COMMIT_EDITMSG= 還停在 fundamental-mode，下面這個函數在窗口裏一個「git 正在等」的緩衝區
+都找不到。所以這條路上還有第三個時刻，是 magit 自己到場的那一刻——見「補上錯過的那一刻」。
+
+兩個鉤子共用一個函數，於是它不能假設「當前緩衝區就是那一個」——~window-setup-hook~ 跑的
+時候當前緩衝區是誰都有可能。改成在這個 frame 的窗口裏找，並且把找到的窗口交還給調用者：
+第三個時刻要靠它判斷剛纔到底有沒有事情發生。
+
+~server-switch-hook~ 上不只有這一個函數。magit 也往那裏掛了一個，用來叫出待提交的改動
+（下一節）。順序有講究：先清場、再顯示 diff，得到的是「信息在左、改動在右」；反過來則是
+清場把剛剛開好的那個 diff 窗口一起收掉。所以這一個要求排在前面。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(defun ginshio-vc-waiting-on-p (&optional buffer)
+  "Return non-nil when Git has stopped and is waiting on BUFFER."
+  (with-current-buffer (or buffer (current-buffer))
+    (or (bound-and-true-p git-commit-mode)
+        (derived-mode-p 'git-rebase-mode))))
+
+(defun ginshio-vc-own-the-frame ()
+  "Give the buffer Git is waiting on this frame to itself.
+Return that buffer's window, or nil when nothing here is waiting."
+  (when-let* ((window (seq-find (lambda (window)
+                                  (ginshio-vc-waiting-on-p (window-buffer window)))
+                                (window-list nil 'never))))
+    (select-window window)
+    ;; `delete-other-windows' works inside the main window area, so a side
+    ;; window -- the warnings and messages of a session that started a
+    ;; second ago -- would sit there through the whole commit.
+    (when (seq-some (lambda (window) (window-parameter window 'window-side))
+                    (window-list nil 'never))
+      (window-toggle-side-windows))
+    (delete-other-windows window)
+    (ginshio-vc-show-what-is-being-committed)
+    window))
+
+(add-hook 'server-switch-hook #'ginshio-vc-own-the-frame -90)
+(add-hook 'window-setup-hook #'ginshio-vc-own-the-frame)
+#+end_src
+
+兩種緩衝區得用兩種方式認，這一點容易寫錯而且錯了不報錯。~git-rebase-mode~ 是主模式，
+可以派生判斷；提交信息那邊的主模式是普通的 ~text-mode~，真正標記身份的
+~git-commit-mode~ 是疊在上面的 *次* 模式。只寫派生判斷的話，rebase 會獨佔 frame 而提
+交不會，兩者都不出聲。
+
+自己 ~M-m f f~ 打開一份舊的 =COMMIT_EDITMSG= 不會觸發這些——那時 git 沒在等，兩個鉤子也
+都不在現場。
+
+*** 寫信息的時候看得見改動
+
+「我到底提交了什麼」是寫提交信息時唯一需要核對的事，而默認情況下 =COMMIT_EDITMSG= 裏只
+有你寫的幾行加幾行註釋。
+
+git 那邊有個 ~commit.verbose~ 選項，會把完整 diff 附在一行剪刀標記之後（magit 認得它，
+會染色也能摺疊）。那是一份可以往下翻的附錄，不是一份可以對照着寫的參照——它在同一個緩衝
+區裏，看它就得離開你正在寫的那一行。
+
+magit 有現成的答案：一個顯示「即將提交的內容」的緩衝區。而且不需要接線——magit 一加載就
+把那個函數掛在 ~server-switch-hook~ 上，不管這次提交是它自己發起的還是你在終端裏敲的。
+
+所以這一節不負責「有沒有」，只負責它沒管的兩件事：出現在哪，以及另一條路上誰來叫它。
+
+*出現在哪。* magit 把它交給 ~display-buffer~ 去「另找一個窗口」，具體落在哪由
+~split-window-sensibly~ 按當前 frame 的長寬決定：寬屏得到左右分屏，矮一點就翻成上下。而
+diff 是參照物，要和正在寫的那段話並排纔讀得下去——上下疊放的話兩邊各剩幾行，兩件事都做不
+成。window 模塊那張規則表就是為這種事準備的，往它上面加一條，位置就不再取決於 frame 當時
+多高。
+
+按模式認而不是按緩衝區名：那個名字由 ~magit-buffer-name-format~ 拼出來，是可配置的。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(add-to-list 'display-buffer-alist
+             '((derived-mode . magit-diff-mode)
+               (display-buffer-in-direction)
+               (direction . right)
+               (window-width . 0.5)))
+#+end_src
+
+*另一條路上誰來叫它。* 上面那個鉤子只在 =emacsclient= 那條路上跑。新開一個 Emacs 的時候
+根本沒有 server，那個鉤子一次都不會被調用，所以那條路要自己叫一次；叫的地方就是上面那個
+佔滿 frame 的函數，先拿到整個 frame，再從中分一半出去。
+
+於是條件是「沒有別人會叫」，寫出來就是「這個緩衝區沒有客戶端在等」。有客戶端就意味着走的
+是 server 那條路，magit 掛在那裏的函數緊接着就會跑；兩邊都叫的話，diff 會被算兩遍，而算
+一次是要跑一次 git 的。
+
+同時也要求次模式在，而不是看文件名：手動打開一份舊的 =COMMIT_EDITMSG= 也會經過 magit 的
+設置函數，但那時沒有什麼「即將提交的內容」，不該引出一個 diff。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(defun ginshio-vc-show-what-is-being-committed ()
+  "Put the changes about to be committed beside the message being written.
+Only when nothing else will: with a client waiting, Magit brings the diff
+up from `server-switch-hook' a moment after this runs."
+  (when (and (bound-and-true-p git-commit-mode)
+             (not server-buffer-clients))
+    (magit-commit-diff)))
+#+end_src
+
+要關掉就設 ~magit-commit-show-diff~ 為 nil，那是 magit 自己的開關，這裏順着它。~C-c C-d~
+隨時可以再叫一次。
+
+只有 mergetool 那條路不歸 `with-editor` 管——它是 ~--eval~ 直接調進來的，沒有經過編輯
+器交接的那套機制。所以它自己存、自己還。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(defvar ginshio-vc--interrupted-layout nil
+  "The window layout to put back once the merge is resolved.")
+
+(defun ginshio-vc-give-the-frame-back ()
+  "Put back the layout Git interrupted, when there is still one to put back.
+An emacsclient that made its own frame has had it deleted by now, and the
+layout recorded there went with it."
+  (when-let* ((layout ginshio-vc--interrupted-layout))
+    (setq ginshio-vc--interrupted-layout nil)
+    (when (frame-live-p (window-configuration-frame layout))
+      (set-window-configuration layout))))
+#+end_src
+
+*** 收尾
+
+按下 ~C-c C-c~ 之後，`with-editor` 把文件存盤、把緩衝區殺掉、把佈局還原，然後通知還在等
+的 git。所以 =COMMIT_EDITMSG= 和 =git-rebase-todo= 本身不會留在緩衝區列表裏；它們也不進
+最近打開的文件列表，光標位置也不會被記住——後兩件是 magit 自己排掉的，不需要在這裏重複。
+
+它管不到的有兩件。
+
+*magit 開在旁邊的那些緩衝區。* 上一節那個 diff 沒有人收。這在 magit 自己的工作流裏是對
+的——那是你接着還要用的一組緩衝區之一；但這裏它只為一次提交而存在，而一個常駐的 Emacs 就
+這樣一次提交攢下一個。編排 rebase 時按 ~RET~ 看某個提交留下的 =magit-revision:= 同理。
+
+裝的地方是 ~git-commit-setup-hook~。上一節那個「顯示在哪」不能用它，因為那時窗口佈局還沒
+定下來；而「結束時做什麼」與佈局無關，這正是它該待的地方。rebase 那邊沒有對應的設置鉤
+子，用它的主模式鉤子——那時 `with-editor` 已經在了，模式自己剛把它打開。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(defconst ginshio-vc-side-buffer-modes '(magit-diff-mode magit-revision-mode)
+  "Modes Magit brings up while Git waits, and does not take back.")
+
+(defun ginshio-vc-drop-what-magit-brought-h ()
+  "Kill what Magit put on the screen around this editing session."
+  (dolist (mode ginshio-vc-side-buffer-modes)
+    (when-let* ((buffer (ignore-error magit-outside-git-repo
+                          (magit-get-mode-buffer mode))))
+      (kill-buffer buffer))))
+#+end_src
+
+*這個進程。* =emacsclient= 那條路上不需要做什麼：客戶端一被釋放 git 就繼續往下走，而那個
+會話本來就該留下來。新開一個 Emacs 那條路上不一樣——git 等的是進程結束，而 ~C-c C-c~ 只殺
+掉了緩衝區。你會停在一個空的編輯器裏，還得再退一次，而 git 在你退之前什麼都收不到。這種
+Emacs 是為了一次編輯而存在的，編完就該走。
+
+「是不是為了這個而存在」不能只看有沒有客戶端。手動打開的一份舊 =COMMIT_EDITMSG= 同樣沒有
+客戶端，而在那上面按 ~C-c C-c~ 把整個會話帶走是災難。所以問的是命令行：這個 Emacs 啓動的
+時候，是不是就被交了這樣一個文件。
+
+這個問題要在 magit 加載之前回答，用不上它那幾個更完整的正則，所以自己寫一個。少認幾個文
+件名的後果只是少一次自動退出，不會誤退。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(defconst ginshio-vc-waiting-file-regexp
+  "/\\(COMMIT_EDITMSG\\|MERGE_MSG\\|TAG_EDITMSG\\|NOTES_EDITMSG\\|git-rebase-todo\\)\\'"
+  "Files Git hands to an editor and then waits on.")
+
+(defconst ginshio-vc-started-as-the-editor
+  (and (seq-some (lambda (argument)
+                   (string-match-p ginshio-vc-waiting-file-regexp argument))
+                 command-line-args)
+       t)
+  "Non-nil when this Emacs was started to edit a file Git is waiting on.")
+
+(defun ginshio-vc-clean-up-when-done-h ()
+  "Arrange for this editing session to leave nothing of its own behind."
+  (add-hook 'with-editor-post-finish-hook #'ginshio-vc-drop-what-magit-brought-h nil t)
+  (add-hook 'with-editor-post-cancel-hook #'ginshio-vc-drop-what-magit-brought-h nil t)
+  (when (and ginshio-vc-started-as-the-editor (not server-buffer-clients))
+    (add-hook 'with-editor-post-finish-hook #'kill-emacs nil t)
+    (add-hook 'with-editor-post-cancel-hook #'kill-emacs nil t)))
+
+(add-hook 'git-commit-setup-hook #'ginshio-vc-clean-up-when-done-h)
+(add-hook 'git-rebase-mode-hook #'ginshio-vc-clean-up-when-done-h)
+#+end_src
+
+取消也退出。`with-editor` 在取消時會把那個文件刪掉，git 據此放棄整次操作，所以退出的時候
+不必再多說什麼。
+
+** 交給 git 的那兩個編輯器
+
+`git commit` 和 `git rebase --interactive` 都是把你送進一個文件，然後停在那裏等。出
+廠的 Emacs 對這兩個文件沒有任何準備：=COMMIT_EDITMSG= 落進 fundamental-mode——沒有換
+行寬度、沒有摘要過長的提示、`commit -v` 附在下面的那段 diff 是一片白色的文本；
+=git-rebase-todo= 同樣如此，而它本該是一份用單鍵編排的清單。
+
+最要命的一條是沒有任何鍵可以告訴 git「我寫完了」：那個鍵是 ~C-x #~，而整個 ~C-x~ 前
+綴已經被 keys 模塊清空。
+
+Magit 為這兩個文件各提供了一個成熟的模式。它們雖然裝在 magit 這個包裏，卻和
+`magit-status` 那套 porcelain 是兩回事：porcelain 的目的是 *取代* 命令行，而這兩個模
+式是命令行 *主動交出來* 的那一段。這裏只要後者，porcelain 一個鍵都不綁。
+
+Magit 的界面框架 =transient= 要單獨聲明一行，否則整個包裝不上。
+
+包管理器默認不去動任何內建包——這個策略本身是對的，內建包在 Emacs 啓動時就已經加載，
+半路換掉一個是麻煩的來源。但它的實現方式是把 *所有* 內建包列進忽略名單，於是「內建的
+那個版本太舊」這種情況也一起被忽略了：Emacs 30.2 帶的 transient 是 0.7.2.2，magit 要
+0.13 以上，而包管理器不會主動去補這個差。它只是不裝，然後 magit 靜靜地建不起來——源碼
+克隆下來了，構建目錄始終不出現，啓動時也不會有人抱怨。
+
+那份名單的說明寫着「除非用戶明確要求，否則不安裝」。下面這一行就是那個明確要求。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(use-package transient
+  :ensure t
+  :demand t)
+
+(use-package magit
+  :ensure t
+  :demand t
+  :init
+  (setq magit-define-global-key-bindings nil
+        git-commit-summary-max-length 50)
+  :config
+  (ginshio-vc-adopt-waiting-buffers))
+#+end_src
+
+#+begin_quote
+magit 依賴的另一個內建包 =seq= 沒有這個問題：它要 2.24，而 Emacs 30.2 帶的正好是
+2.24。同一條規則下一個過關一個不過關，差別只在版本號——所以這類問題只能一個個查，看不
+出規律。
+#+end_quote
+
+*為什麼不能延遲加載。* ~git-rebase-mode~ 帶自動加載聲明，連同它的 ~auto-mode-alist~
+條目一起，所以打開一份 =git-rebase-todo= 會自己把 magit 拉起來。提交信息那邊沒有這個
+待遇：認文件名的是 ~global-git-commit-mode~ 掛在 ~find-file-hook~ 上的一個函數，而那
+個次模式本身沒有任何自動加載聲明。延遲加載的結果是 `git commit` 安靜地落回
+fundamental-mode——正是本節存在的理由。以 daemon 運行時這筆開銷一天只付一次。
+
+不過 ~:demand~ 只承諾「這個會話遲早會加載它」，並不承諾「在那個文件被打開之前」。剩下的那
+一半是下一節。
+
+*關掉它的全域鍵位。* ~magit-define-global-key-bindings~ 默認會把 `magit-status` 裝到
+~C-x g~ 上。那個前綴在這份配置裏不存在；而且它裝進去的是 *當時那張* 全域映射，
+~ginshio-keys-apply-groups~ 重跑一次就沒了。既然不打算用 porcelain，關掉它比留一個半
+死的綁定乾淨。
+
+*摘要 50 欄。* magit 默認 68。git 自己對摘要長度沒有規定，但所有顯示日誌的地方都會截
+斷它。這個值只決定從第幾欄開始標紅，不阻止你寫長——判斷仍然是你的，只是在還容易改的
+時候讓你看見。
+
+除此之外沒有配置。~C-c C-c~ 與 ~C-c C-k~、寫完之後把佈局還原、把控制權交回給還在等待
+的 git——這些都由 `with-editor` 提供，兩個模式進來時各自打開它。
+
+*** 補上錯過的那一刻
+
+上面那兩個模式都是靠「文件被打開」這件事觸發的：提交信息那邊是 magit 加載時掛到
+~find-file-hook~ 上的一個函數，rebase 那邊是它往 ~auto-mode-alist~ 裏加的一條。兩者都要
+求 magit 先在場。
+
+=emacsclient= 那條路上這是必然的——文件是在一個已經跑了很久的會話裏被打開的。新開一個
+Emacs 那條路上要看運氣：命令行上的文件緊接着 ~after-init-hook~ 就被打開，而包管理器是在那
+個鉤子裏開始處理隊列的。包樹是熱的（每個包都已經構建好）時，它在那裏就做完了，magit 趕得
+上；一旦有東西要克隆或者重新編譯，它轉成異步，於是 git 交過來的文件落進 fundamental-mode，
+這一節上面說的東西一件都不生效，而且不出聲——沒有 ~C-c C-c~、沒有信息歷史、沒有旁邊那份
+diff，~window-setup-hook~ 上那個佔滿 frame 的函數也什麼都找不到。
+
+換句話說，這條路平時是好的，只在你剛加了一個包、或者剛更新過的那一次是壞的。這種故障最不
+容易被聯繫到原因上：你會覺得是「這次 commit 怪怪的」，而不是「包管理器今天多做了一件事」。
+
+辦法不是想法子讓 magit 更早到，而是在它到了之後回頭認一次。這樣兩邊誰先誰後都不再重要，
+包管理器哪一刻把它加載完也不再重要——這也是為什麼補救寫在這裏，而不是寫成又一個啓動鉤子。
+
+「還沒被認領」用 `with-editor` 那個次模式判斷，而不是問主模式是不是 fundamental-mode：那
+個次模式正是「有一個外部程序在等這個緩衝區」的標記，也就是這裏真正要問的事。認領分兩步，
+因為那兩個文件本來就是被兩套機制認出來的：先讓 magit 自己那個檢查函數過一遍，它認得提交信
+息的那幾個文件名；它沒認的（rebase 清單）交給 ~auto-mode-alist~。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(defun ginshio-vc-adopt-waiting-buffers ()
+  "Set up the buffers Git is waiting on that were opened before Magit arrived."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (and buffer-file-name
+                 (string-match-p ginshio-vc-waiting-file-regexp buffer-file-name)
+                 (not (bound-and-true-p with-editor-mode)))
+        (git-commit-setup-check-buffer)
+        (unless (bound-and-true-p with-editor-mode)
+          (normal-mode)))))
+  (ginshio-vc-own-the-frame))
+#+end_src
+
+*** 順帶得到的
+
+~git-commit-setup-hook~ 默認就裝好了下面這些，不需要配置：
+
+- 之前寫過的提交信息存成一個環，~M-p~ ~M-n~ 翻，~C-c M-p~ ~C-c M-n~ 按內容搜。修補一
+  個提交、重寫一次信息的時候省事。
+- trailer 用 ~C-c C-i~ 插入，名字和郵箱從倉庫歷史裏補全。它走的是 capf，所以直接落在
+  minibuffer 模塊那套補全界面上。
+- `commit -v` 附的那段 diff 不只染色，還可以整段摺疊起來。
+- 按 git 的慣例硬換行到 72 欄。
+- 信息裏的 issue 號變成可點的鏈接。
+
+這些文件住在 =.git/= 裏，是 git 的臨時草稿，不該進入最近打開的文件列表——否則那份列表
+很快就會變成一串同名的 =COMMIT_EDITMSG=。git-commit 自己排除了它認得的那幾個文件名，
+但 =git-rebase-todo= 不在其中，所以整個目錄一起排掉。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(add-to-list 'recentf-exclude "/\\.git/")
+#+end_src
+
+** 衝突
+
+衝突有兩種處理姿勢，值得都留著，因為它們適合的場合不同。
+
+*就地解決*。文件已經在你面前，衝突標記就在那裏，你只是要在幾個版本裏挑一個或者手寫
+一個折中。這種情況佔絕大多數，開一個三窗格的比較界面反而是繞路。內建的衝突模式在檢
+測到標記時自動打開。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(defun ginshio-vc-enable-smerge-h ()
+  "Turn on conflict editing when this file actually has a conflict in it."
+  (when (and buffer-file-name
+             (save-excursion
+               (goto-char (point-min))
+               (re-search-forward "^<<<<<<< " nil t)))
+    (smerge-mode 1)))
+
+(add-hook 'find-file-hook #'ginshio-vc-enable-smerge-h)
+(add-hook 'after-revert-hook #'ginshio-vc-enable-smerge-h)
+#+end_src
+
+*並排比較*。改動大、或者兩邊都動了同一片邏輯的時候，你需要同時看見三個版本。這是
+ediff 的場合，也是 `git mergetool` 調用的東西。
+
+*** mergetool
+
+`git mergetool` 給的是四個文件名，要的是一個寫好的結果文件，以及在你做完之前不要返
+回。中間那段膠水如果寫在 git 配置的一行字符串裏，它就沒法被閱讀、沒法被修改、也沒
+人會發現它做錯了什麼。所以它在這裏。
+
+有三處細節決定這段代碼為什麼長這樣：
+
+*結果自己寫。* ediff 本來就能把合併結果存到指定文件，但那條路徑會先問「文件已存在，
+覆蓋嗎」——而 git 交過來的那個文件必然已經存在。它還會在發現該文件已被某個緩衝區打
+開時，停下來問你要不要先保存並殺掉那個緩衝區。在一個長期運行的 daemon 裏解決自己正
+在編輯的文件的衝突，這是常態而不是意外。
+
+*hook 用緩衝區局部的。* ediff 的幾個 hook 是全局變量。直接 ~setq~ 它們會永久改寫這
+個 Emacs 裏所有後續 ediff 會話的行為，而 mergetool 是一次性的事。startup hook 在
+ediff 的控制緩衝區裏執行，所以在那裏設的局部值只對這一次生效。
+
+*結束時放走客戶端，而不是殺掉 Emacs。* =emacsclient= 在你關閉它創建的那個 frame 之
+前不會返回，這正是 mergetool 需要的阻塞。想讓它返回只要關掉那個 frame；如果改成結
+束 Emacs，在 daemon 上那意味著每解決一次衝突就丟掉一次整個會話，連同所有未保存的緩
+衝區。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(defvar ediff-buffer-C)
+(defvar ediff-quit-merge-hook)
+(defvar ediff-after-quit-hook-internal)
+
+(defun ginshio-vc--write-merge (destination)
+  "Write the merge result to DESTINATION, unconditionally.
+Runs in the Ediff control buffer while the merge is being quit."
+  (when (buffer-live-p ediff-buffer-C)
+    (with-current-buffer ediff-buffer-C
+      (write-region nil nil destination nil 'silent))))
+
+(defun ginshio-vc--release-client (frame)
+  "Let go of FRAME when an emacsclient is waiting on it."
+  (when (and (frame-live-p frame) (frame-parameter frame 'client))
+    (delete-frame frame)))
+
+(defun ginshio/git-mergetool (local remote base merged)
+  "Resolve a conflict with Ediff, writing the result to MERGED.
+
+LOCAL, REMOTE and BASE are the three sides Git provides.  Reached from
+`git mergetool'; see the wiring shown by \\[ginshio/doctor]."
+  (require 'ediff)
+  (let ((frame (selected-frame)))
+    (setq ginshio-vc--interrupted-layout (current-window-configuration))
+    (delete-other-windows)
+    (ediff-merge-files-with-ancestor
+     local remote base
+     (list (lambda ()
+             (setq-local ediff-quit-merge-hook
+                         (list (lambda () (ginshio-vc--write-merge merged))))
+             (add-hook 'ediff-after-quit-hook-internal
+                       (lambda ()
+                         (ginshio-vc--release-client frame)
+                         (ginshio-vc-give-the-frame-back))
+                       nil t))))))
+#+end_src
+
+git 那邊的一行：
+
+#+begin_src shell :tangle no
+git config --global mergetool.ediff.cmd \
+  'emacsclient -nw --eval "(ginshio/git-mergetool \"$LOCAL\" \"$REMOTE\" \"$BASE\" \"$MERGED\")"'
+#+end_src
+
+*** ediff 自己的窗口
+
+ediff 默認把控制面板放進一個獨立的 frame。在平鋪的窗口管理器下那是一個突然出現的小
+窗口，並且它和三個比較窗口分屬兩個 frame，切換時很容易丟掉焦點。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(setq ediff-window-setup-function #'ediff-setup-windows-plain
+      ediff-split-window-function #'split-window-horizontally
+      ediff-merge-split-window-function #'split-window-horizontally)
+#+end_src
+
+左右分割而不是上下：比較的是行，行是橫向的；上下疊放讓每一行都被截斷。
+
+** 邊欄
+
+哪幾行相對上一次提交被改過，這件事終端沒有辦法在你編輯的時候告訴你。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(use-package diff-hl
+  :ensure t
+  :demand t
+  :init
+  (setq diff-hl-draw-borders nil
+        diff-hl-show-staged-changes nil)
+  :config
+  (global-diff-hl-mode 1)
+  (diff-hl-flydiff-mode 1)
+  ;; This mode installs a `C-x v' prefix of its own.  A minor mode map is
+  ;; consulted independently of the global map, so that prefix would come
+  ;; back to life in exactly the buffers where code is edited.
+  (keymap-unset diff-hl-mode-map "C-x v" t))
+#+end_src
+
+~diff-hl-flydiff-mode~ 讓標記在你打字時就更新，而不是等到保存。它每次空閒都要跑一次
+diff，是本模塊唯一一處持續的開銷；如果在很大的文件上感覺到了，關掉它就回到保存時更新。
+
+終端下沒有 fringe，diff-hl 會自動改用邊距，不需要為此配置什麼。
+
+#+begin_quote
+~diff-hl-update-async~ 可以把 diff 挪到後台，但它的兩種實現一個要求 Emacs 31，另一
+個用線程且在某些配置下會崩。等升級到 31 之後再打開。
+#+end_quote
+
+*** 挑出要暫存的幾行
+
+`git add -p` 是命令行裏最不好用的一條：行緩衝、翻不回去、把一個 hunk 拆開要先按 =s=
+再按 =e= 然後手工編輯一段 diff 文本。而這件事的自然位置本來就在文件裏——你剛寫完這幾
+行，最清楚它們該不該和上面那幾行一起提交。
+
+~diff-hl-stage-dwim~ 就在當前緩衝區做這件事：對光標所在的那個 hunk，或者選中的那幾行。
+不用切走，不用開別的界面。這是本模塊裏唯一一件 porcelain 也能做、但做得比它遠的事——
+porcelain 要求你先離開文件。
+
+~diff-hl-show-staged-changes~ 必須跟着關掉。它默認把已暫存的改動也算進標記，於是你暫
+存完一個 hunk，邊欄紋絲不動，沒有任何跡象說明剛才那一下生效了。關掉之後標記只代表
+「還沒暫存的」，邊欄就成了一份會自己減少的待辦清單。
+
+*** 讓 Emacs 知道你在終端裏做了什麼
+
+這是 CLI 為主的工作流特有的問題，值得單獨解決。
+
+倉庫的狀態幾乎總是在 Emacs 外面改變的——你切到終端，改寫歷史、移動提交、修補上一次
+提交，然後切回來。緩衝區的文本會自動重載，那個 core 模塊已經管了；但 Emacs 緩存的
+另外兩樣東西不會：狀態欄上的分支和狀態，以及邊欄的改動標記。它們會繼續顯示切走之前
+的樣子，而且不會有任何跡象表明那是舊的。
+
+所以在窗口重新獲得焦點時，重新問一次 git。只問看得見的緩衝區——這是「回到編輯器」這
+個動作的自然邊界，也讓開銷與打開了多少文件無關。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(defun ginshio/vc-refresh ()
+  "Ask Git again about the buffers currently on screen."
+  (interactive)
+  (dolist (window (window-list nil 'never))
+    (let ((buffer (window-buffer window)))
+      (when-let* ((file (buffer-local-value 'buffer-file-name buffer))
+                  ((not (file-remote-p file))))
+        (with-current-buffer buffer
+          (vc-refresh-state)
+          (when (bound-and-true-p diff-hl-mode)
+            (diff-hl-update)))))))
+
+(defun ginshio-vc-refresh-on-focus-h ()
+  "Refresh when this frame is being returned to, not when it is left."
+  (when (frame-focus-state)
+    (ginshio/vc-refresh)))
+
+(add-function :after after-focus-change-function #'ginshio-vc-refresh-on-focus-h)
+#+end_src
+
+** 鍵位
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(ginshio-leader-define
+ "g"   "git"
+ "g d" #'vc-diff
+ "g D" #'vc-root-diff
+ "g l" #'vc-print-log
+ "g L" #'vc-print-root-log
+ "g b" #'vc-annotate
+ "g h" #'vc-region-history
+ "g f" #'vc-revision-other-window
+ "g s" #'vc-dir
+ "g r" #'ginshio/vc-refresh
+
+ "g n" #'diff-hl-next-hunk
+ "g p" #'diff-hl-previous-hunk
+ "g v" #'diff-hl-show-hunk
+ "g a" #'diff-hl-stage-dwim
+ "g x" #'diff-hl-revert-hunk
+
+ "g c"   "conflict"
+ "g c n" #'smerge-next
+ "g c p" #'smerge-prev
+ "g c u" #'smerge-keep-upper
+ "g c l" #'smerge-keep-lower
+ "g c b" #'smerge-keep-base
+ "g c a" #'smerge-keep-all
+ "g c c" #'smerge-keep-current
+ "g c r" #'smerge-resolve
+ "g c e" #'smerge-ediff)
+#+end_src
+
+~g h~ 是這裏最容易被忽略、也最沒有終端替代品的一個：選中幾行，它給出 *只有這幾行*
+的歷史。手寫等價的 `git log -L` 需要行號，而行號在你讀代碼的時候是最不想去數的東西。
+
+暫存用 =a= 而不是 =s=，因為 =s= 已經是 `vc-dir`。=a= 是 git 自己的說法——你在終端裏
+敲的就是 `git add`，一個字母都不用另記。
+
+上下兩組衝突命令的命名跟隨 git 自己的說法：upper 是你這邊，lower 是合過來的那邊。
+配置了 =diff3= 衝突樣式之後還有第三塊，base 就是它——共同祖先，往往是判斷「對方到底
+改了什麼」的唯一依據。
+
+*** 全部鍵位
+
+leader 之外還有三處鍵位，它們只在特定緩衝區裏生效，所以不佔 leader 的位置。
+
+**寫提交信息時**（=COMMIT_EDITMSG= 等，由 magit 的 ~git-commit-mode~ 提供）：
+
+| 鍵                | 做什麼                                 |
+|-------------------+----------------------------------------|
+| ~C-c C-c~           | 寫完，交回給 git                       |
+| ~C-c C-k~           | 取消；git 據此放棄這次操作             |
+| ~M-p~ ~M-n~           | 翻之前寫過的提交信息                   |
+| ~C-c M-p~ ~C-c M-n~   | 按內容搜索之前寫過的提交信息           |
+| ~C-c C-i~           | 插入 trailer，問哪一種，名字郵箱可補全 |
+| ~C-c M-s~           | 把當前這條存進歷史環                   |
+| ~C-c C-d~           | 再看一次即將提交的改動                 |
+
+**編排 rebase 時**（=git-rebase-todo=，由 magit 的 ~git-rebase-mode~ 提供）：
+
+| 鍵                | 做什麼                                |
+|-------------------+---------------------------------------|
+| ~n~ ~p~               | 下一行 / 上一行                       |
+| ~c~                 | pick：原樣重放                        |
+| ~r~ ~w~               | reword：重放後停下改信息              |
+| ~e~ ~m~               | edit：重放後停下改內容                |
+| ~s~                 | squash：併入上一個，合併兩條信息      |
+| ~f~                 | fixup：併入上一個，丟掉這條信息       |
+| ~d~                 | drop：標記為不要                      |
+| ~k~ ~C-k~             | 註釋掉這一行；已註釋的則取消註釋      |
+| ~b~ ~z~               | 插入 ~break~ / ~noop~ 一行                |
+| ~x~ ~u~               | 插入 ~exec~ / ~update-ref~ 一行           |
+| ~l~ ~t~ ~M M~           | ~label~ / ~reset~ / ~merge~，變基保留合併時用 |
+| ~y~                 | 手寫一條指令插進去                    |
+| ~SPC~ ~DEL~           | 看這一行的提交，再按翻頁              |
+| ~RET~               | 看這一行的提交                        |
+| ~M-p~ ~M-n~           | 把這個 commit 往前 / 往後挪一位       |
+| ~M-<up>~ ~M-<down>~   | 同上                                  |
+| ~C-/~               | 撤銷剛才的改動                        |
+| ~C-c C-c~           | 寫完，交回給 git                      |
+| ~C-c C-k~           | 中止這次 rebase                       |
+
+緩衝區是只讀的，所以單個字母才能表示指令而不是插入那個字母。=q= 被顯式設成無效——對
+一份 git 正阻塞等待的清單反射性地按 =q=，等於不告訴 git 就放棄整次變基。要反悔用
+~C-c C-k~。
+
+**文件裏有衝突標記時**（smerge 自動打開，這些是它自帶的）：
+
+| 鍵          | 做什麼                     |
+|-------------+----------------------------|
+| ~C-c ^ n~ ~p~   | 下一個 / 上一個衝突        |
+| ~C-c ^ u~     | 保留上半塊（你這邊）       |
+| ~C-c ^ l~     | 保留下半塊（合進來那邊）   |
+| ~C-c ^ b~     | 保留共同祖先               |
+| ~C-c ^ a~     | 三塊全留，自己再收拾       |
+| ~C-c ^ RET~   | 保留光標所在的那一塊       |
+| ~C-c ^ r~     | 讓它自己試着解             |
+| ~C-c ^ R~     | 逐字符細化顯示差異         |
+| ~C-c ^ E~     | 這一處轉去 ediff 解        |
+| ~C-c ^ = <~ ~>~ ~=~ | 兩兩對比三塊             |
+
+同樣一組命令在 leader 的 ~M-m g c~ 下也有一份。兩套並存是有意的：~C-c ^~ 是 smerge
+自己的前綴，只在有衝突的緩衝區裏出現，不與任何東西衝突；連續解十處衝突時它比四鍵的
+leader 順手。
+
+**Ediff 會話裏**：全部鍵位由 ediff 自己提供，在控制面板裏按 ~?~ 展開。最常用的是
+~n~ / ~p~ 換差異塊，~a~ / ~b~ 取某一邊，~!~ 重算，~q~ 結束。
+
+** 這個模塊會產生的緩衝區
+
+| 緩衝區                | 什麼時候出現 |
+|-----------------------+--------------|
+| =*vc-diff*=             | ~M-m g d~ / ~M-m g D~ |
+| =*vc-change-log*=       | ~M-m g l~ / ~M-m g L~ |
+| =*Annotate …*=          | ~M-m g b~      |
+| =*vc-dir*=              | ~M-m g s~      |
+| =*diff-hl-show-hunk*=   | ~M-m g v~      |
+| =magit-diff:…=          | 寫提交信息時，在旁邊 |
+| =magit-revision:…=      | 編排 rebase 時按 ~SPC~ 或 ~RET~ |
+| =*Ediff Control Panel*= | 合併與 ~M-m g c e~ |
+
+** 自檢項
+
+有幾項檢查跨出了 Emacs：它們讀 git 自己的配置，確認那一頭真的指回這裏。這類「兩邊都
+要改，改一邊沒效果」的接線正是最適合交給自檢的東西——忘了貼那行配置的症狀，是下一次
+提交或下一次衝突時才發現。
+
+編輯器那兩項問的是 `git var` 而不是 `git config`，因為決定 git 最終跑什麼的是一整條
+優先級鏈：~GIT_EDITOR~ 環境變量、=core.editor=、~VISUAL~、~EDITOR~，最後纔是內建默認
+值。只讀 =core.editor= 會在它沒設、而 ~VISUAL~ 指着別的編輯器時報平安。`git var` 給
+的是這條鏈解算之後的結果，也就是真正會被執行的那一行。
+
+必須成立的是「git 叫的是這個 Emacs」。它叫的是 =emacsclient= 還是 =emacs=，兩條路上面
+那節都接好了，所以那不是一項要求，是一個偏好：=emacsclient= 把文件交給已經在跑的
+Emacs，提交信息立刻就在眼前；=emacs= 每次現開一個進程，要重走一遍包管理器和整份配置，
+為一行提交信息付幾秒鐘。所以分成兩項——「是不是這個 Emacs」必須成立，「是不是那個快的」
+只提醒。
+
+最後一項問的是 git 肯不肯把待提交的改動附在信息下面。上面已經在旁邊開了一個 diff 緩衝
+區，所以這一項不再是必需的，留着的理由是它給的是另一種東西：那段 diff 就在同一個緩衝區
+裏，跟着提交信息一起被你翻閱、也跟着一起被 =git= 剪掉，適合最後通讀一遍。開了之後
+magit 會把它染色並允許摺疊。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el"
+(defun ginshio-vc--git-editor (variable)
+  "Return the command Git resolves VARIABLE to, or nil when it cannot say."
+  (ignore-errors (car (process-lines "git" "var" variable))))
+
+(defun ginshio-vc--emacs-editor-p (variable)
+  (string-match-p "emacs" (or (ginshio-vc--git-editor variable) "")))
+
+(defun ginshio-vc--emacsclient-editor-p (variable)
+  (string-match-p "emacsclient" (or (ginshio-vc--git-editor variable) "")))
+
+(defun ginshio-vc--editor-detail (variable)
+  (lambda ()
+    (format "git runs: %s" (or (ginshio-vc--git-editor variable) "nothing"))))
+
+(ginshio-doctor-declare 'vc "emacs server"
+                        (lambda () (server-running-p))
+                        :note "git calls emacsclient to edit messages and merges"
+                        :remedy "systemctl --user enable --now emacs.service")
+
+(ginshio-doctor-declare 'vc "git editor"
+                        (lambda () (ginshio-vc--emacs-editor-p "GIT_EDITOR"))
+                        :note "commit messages reach this Emacs"
+                        :detail (ginshio-vc--editor-detail "GIT_EDITOR")
+                        :remedy "git config --global core.editor 'emacsclient -nw'")
+
+(ginshio-doctor-declare 'vc "git sequence editor"
+                        (lambda () (ginshio-vc--emacs-editor-p "GIT_SEQUENCE_EDITOR"))
+                        :note "rebase plans reach this Emacs"
+                        :detail (ginshio-vc--editor-detail "GIT_SEQUENCE_EDITOR")
+                        :remedy "unset sequence.editor so it follows core.editor")
+
+(ginshio-doctor-declare 'vc "editor reuses this session"
+                        (lambda () (ginshio-vc--emacsclient-editor-p "GIT_EDITOR"))
+                        :severity 'warn
+                        :note "emacsclient answers at once; emacs starts from scratch"
+                        :detail (ginshio-vc--editor-detail "GIT_EDITOR")
+                        :remedy "git config --global core.editor 'emacsclient -nw'")
+
+(ginshio-doctor-declare 'vc "commit shows its diff"
+                        (lambda ()
+                          (equal "true"
+                                 (ignore-errors
+                                   (car (process-lines "git" "config" "--type=bool"
+                                                       "--get" "commit.verbose")))))
+                        :severity 'warn
+                        :note "the change under review appears below the message"
+                        :remedy "git config --global commit.verbose true")
+
+(ginshio-doctor-declare 'vc "git mergetool wiring"
+                        (lambda ()
+                          (string-match-p
+                           "ginshio/git-mergetool"
+                           (or (ignore-errors
+                                 (car (process-lines "git" "config" "--global"
+                                                     "--get" "mergetool.ediff.cmd")))
+                               "")))
+                        :severity 'warn
+                        :note "git mergetool reaches this configuration"
+                        :remedy (concat "git config --global mergetool.ediff.cmd "
+                                        "'emacsclient -nw --eval \"(ginshio/git-mergetool "
+                                        "\\\"$LOCAL\\\" \\\"$REMOTE\\\" \\\"$BASE\\\" "
+                                        "\\\"$MERGED\\\")\"'"))
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-vc.el" :comments no
+(provide 'ginshio-vc)
+;;; ginshio-vc.el ends here
+#+end_src

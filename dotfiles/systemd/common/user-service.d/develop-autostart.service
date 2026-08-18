@@ -1,0 +1,14 @@
+# -*- mode: systemd; coding: utf-8; indent-tabs-mode: nil; -*-
+[Unit]
+Description=Autostart run
+After=local-fs.target
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/bin/sh {{@@ projects.script_dir @@}}/services/runner.sh autostart
+Restart=no
+
+[Install]
+WantedBy=default.target

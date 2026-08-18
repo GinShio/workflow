@@ -1,0 +1,17 @@
+# -*- mode: systemd; coding: utf-8; indent-tabs-mode: nil; -*-
+[Unit]
+Description=qBittorrent-nox Command Line Client
+Documentation=man:qbittorrent-nox(1)
+After=network.target
+
+[Service]
+Type=simple
+# Start qbittorrent-nox
+ExecStart={{@@ qbittorrent_bin @@}}
+# Gracefully stop the process
+ExecStop={{@@ kill_bin @@}} -w -s TERM $MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

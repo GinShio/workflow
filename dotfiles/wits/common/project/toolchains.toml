@@ -1,0 +1,21 @@
+[toolchains.clang]
+cc = "clang"
+cxx = "clang++"
+ar = "llvm-ar"
+ranlib = "llvm-ranlib"
+linker = "mold"
+launcher = "ccache"
+c_flags = ["-fcolor-diagnostics"]
+cxx_flags = ["-fcolor-diagnostics"]
+supports = ["cmake", "meson"]
+
+[toolchains.gcc]
+cc = "gcc"
+cxx = "g++"
+ar = "ar"
+ranlib = "ranlib"
+linker = "mold"
+launcher = "ccache"
+c_flags = ["-fdiagnostics-color=always"]
+cxx_flags = ["-fdiagnostics-color=always"]
+supports = ["cmake", "meson"]

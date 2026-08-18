@@ -1,0 +1,13 @@
+# -*- mode: systemd; coding: utf-8; indent-tabs-mode: nil; -*-
+[Unit]
+Description=Set battery charge threshold
+After=systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+Restart=no
+ExecStart=/usr/bin/bash -c "echo 60 >/sys/class/power_supply/BAT0/charge_control_start_threshold; echo 80 > /sys/class/power_supply/BAT0/charge_control_end_threshold; :"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

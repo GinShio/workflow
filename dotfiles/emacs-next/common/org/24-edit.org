@@ -1,0 +1,302 @@
+* 編輯
+
+本模塊管三件事：改動怎麼撤銷、改完在文件裏留下什麼、以及一次要改多個地方時用什麼工
+具。前兩件對每一次編輯都成立，第三件只在遇到那種情形時才用得上。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el" :comments no
+;;; ginshio-edit.el --- how changes are made and unmade -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+(require 'ginshio-path)
+(require 'ginshio-doctor)
+(require 'ginshio-keys)
+(require 'rect)
+
+(defvar mc/cmds-to-run-once)
+(defvar mc/unsupported-minor-modes)
+(defvar mc/keymap)
+#+end_src
+
+** 撤銷跨越會話
+
+撤銷歷史活在緩衝區裏，緩衝區關掉它就沒了。多數時候無所謂，但「上午在這個文件裏改的
+那一段，能不能退回去」是個真實存在的問題，而版本控制只在你提交過的地方幫得上忙。
+
+[[https://codeberg.org/ideasman42/emacs-undo-fu-session][undo-fu-session]] 在保存時把歷史寫到磁盤，下次打開同一個文件時讀回來。它不改變撤銷
+本身的行為，只是讓內建的那套歷史活得比緩衝區長。重做的分支也一起存——只存撤銷的話，
+~C-?~ 回不去那些被撤銷掉的分支。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+(use-package undo-fu-session
+  :ensure t
+  :demand t
+  :init
+  (setq undo-fu-session-directory (ginshio-state "undo/")
+        undo-fu-session-compression 'zst
+        undo-fu-session-file-limit 2000
+        undo-fu-session-incompatible-files '("/\\.git/"))
+  :config
+  (undo-fu-session-global-mode 1))
+#+end_src
+
+四項設置各回答一個問題。
+
+*存哪裏。* 默認在配置目錄裏。歷史是連續性不是信息——丟了要重新摸索，但沒有任何東西
+真的消失——所以歸 state，和光標位置、最近文件放在一起。
+
+*怎麼壓。* 每保存一次就要寫一次，所以這裏要的是快而不是小；省下來的那點空間對這種
+尺寸的文件毫無意義。zstd 在這個量級上比 gzip 快一檔。代價是它得裝在機器上，見自檢。
+
+*留多少。* 默認不限，於是每個你打開過的文件都留下一份，永遠不清理。設了上限之後超
+出的部分從最舊的開始刪。
+
+*哪些不存。* =.git/= 底下的文件是 git 每次現生成的：提交信息、rebase 的待辦清單。上
+一次的撤銷歷史對這一次沒有任何意義，而 vc 模塊恰恰是拿這些文件當編輯器入口的。
+
+** 保存時的行尾空白
+
+core 讓行尾空白在代碼緩衝區裏顯示出來，因為它是 diff 噪音的主要來源。看得見之後，
+下一個問題是誰來刪掉它。
+
+把 ~delete-trailing-whitespace~ 掛到保存鉤子上是最直接的寫法，代價也同樣直接：它掃
+整個緩衝區。在一個本來就帶着行尾空白的文件裏，你改一行、保存，diff 裏多出兩百行——
+正是這份配置在別處極力避免的那種東西。
+
+[[https://elpa.nongnu.org/nongnu/ws-butler.html][ws-butler]] 只清你這一次動過的行。於是顯示和刪除各管一段，合起來剛好完整：屏幕上看
+到的是別人留下的，保存時清掉的是你自己留下的。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+(use-package ws-butler
+  :ensure t
+  :hook (prog-mode . ws-butler-mode))
+#+end_src
+
+範圍和 core 的顯示對齊，只在代碼緩衝區生效。散文裏的行尾空白有時是有意義的——
+Markdown 用兩個尾隨空格表示換行——那類文件不該被順手改掉。
+
+它同時會收掉緩衝區末尾多餘的空行，並且遵守 core 設的 ~require-final-newline~，兩者
+不會互相拆台。
+
+多行字符串裏的空白如果需要原樣保住，~ws-butler-trim-predicate~ 是那個出口：它拿到
+一段區域，返回真才清。
+
+** 一次改多個地方
+
+編輯器的默認假設是一個光標、一處改動。代碼裏違反這個假設的情形卻很常見：一列需要對
+齊的初始化值、二十行都要加上同一個前綴、一個名字在一個函數體裏出現七次。逐個改的代
+價不在慢，在於你會漏掉一個——而漏掉的那一個要等到編譯，或者更晚，才浮出來。
+
+這種改動有三種形狀，用的不是同一個工具。改動排成一列的，是矩形。改動落在同一個詞的
+每次出現上的，是模式匹配。改動是「每一行做同一串操作」的，那才真的需要多個光標。
+
+第二種在這份配置裏還有一條更短的路：符號改名走 ~M-m c r~，語言服務器分得清哪些出現
+是同一個符號、哪些只是碰巧同名，文本匹配分不清。下面兩節處理的是剩下的部分——純文本
+上的、語義工具夠不着的多處改動。
+
+** 矩形
+
+矩形選區把「第 3 到第 12 列、第 5 到第 20 行」這樣一塊區域當成一個整體。它是內建的，
+而且在這份配置裏幾乎不需要配置——這是召回組付的利息。
+
+~rectangle-mark-mode~ 打開之後做兩件事。它把移動命令 remap 成矩形版本，於是已經召回
+的 ~C-f~ ~C-b~ ~C-n~ ~C-p~ 用來調整矩形的兩個對角；它替換 ~region-extract-function~，
+於是已經召回的 ~C-w~ ~M-w~ ~C-y~ 直接變成矩形的剪切、複製與粘貼。沒有第二套命令要記，
+也沒有第二套鍵要綁。
+
+另有兩個命令住在它自己的 minor mode 映射裏：~C-t~ 把矩形框住的內容 *替換* 成同一段文
+字，~C-o~ 把矩形撐開成空白。minor mode 映射在全域映射之前被查，所以清空全域碰不到它
+們；覆蓋層裏只有 leader 一個鍵，也不會搶走。
+
+~C-t~ 同時也是「在每一行插入」：把矩形拉成零寬——只上下移動、不左右移動——再替換，等
+於在那一列上給每一行插進同樣的文字。加註釋前綴、給一批行縮進，都走這條。
+
+替換固定文字之外還有替換 *模式*，那條路是 ~M-m s r~。~query-replace~ 認得矩形選區：
+矩形激活時它只在那個方框裏找，方框外同樣的字符原樣不動。兩者回答的是不同的問題——
+~C-t~ 是「這一塊都換成這個」，~M-m s r~ 是「這一塊裏凡是 X 都換成 Y」。
+
+漏在那張映射外面的只有 ~rectangle-number-lines~——沿一列填入遞增的數字。它沒有綁：同一
+件事多光標那邊也有一個，而多光標是本模塊的主線，見下面的鍵位。
+
+所以矩形這一整套只有一個入口，=e r=，進去之後全靠已經召回的那些鍵。
+
+** 多光標
+
+矩形要求改動排成一列。不排成一列的時候——每行的目標落在不同的列上，或者要先搜索才能
+定位——就需要真正的多個光標：N 個光標同時接收你敲的每一個鍵，N 處一起變，你看着它們
+變。
+
+[[https://github.com/magnars/multiple-cursors.el][multiple-cursors]] 的代價寫在它的工作方式裏。Emacs 的命令都是為一個光標寫的，所以這
+個包必須逐個決定哪些命令要在每個光標上重放、哪些只跑一次。它靠一張由你回答出來的表
+做這件事：第一次用到某個命令時問你一句，記下來，以後不再問。
+
+*** 加載之前
+
+~mc/list-file~ 就是那張表，默認寫在配置目錄裏，而這裏的配置目錄是版本控制的內容。它
+記的是你答過的問題——重新答一遍損失的是耐心，不是信息——所以歸 state。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+(setq mc/list-file (ginshio-state "mc-lists.el"))
+#+end_src
+
+*** 聲明
+
+包裏每個命令都自帶自動加載入口，所以這裏不必像 dap 那樣逐個點名：綁定表本身就足夠讓
+它在第一次按下時加載。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+(use-package multiple-cursors
+  :ensure t
+  :defer t)
+#+end_src
+
+*** 本配置自己的命令只跑一次
+
+那張問答表出廠時已經覆蓋了標準命令，其中包括本配置召回的那些。真正會被問到的是本配
+置自己定義的命令，而它們的答案全都一樣：跑一次。
+
+這一點可以直接從命名約定推出來，不必逐個列舉。~ginshio/~ 開頭的都是交互命令，而它們
+沒有一個是編輯文本的原語——它們切緩衝區、存盤、開項目、跑自檢。對二十個光標各做一次
+這些事都是錯的，其中幾件還很難撤銷。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+(with-eval-after-load 'multiple-cursors-core
+  ;; Reading the answer off the naming convention keeps the list from going
+  ;; stale as modules add commands.
+  (mapatoms
+   (lambda (symbol)
+     (when (and (commandp symbol)
+                (string-prefix-p "ginshio/" (symbol-name symbol)))
+       (add-to-list 'mc/cmds-to-run-once symbol)))))
+#+end_src
+
+*** 補全會插嘴
+
+這個包帶着一張「和多光標合不來」的 minor mode 清單，會話開始時把它們臨時關掉，結束
+時恢復。那張清單寫於 company 的年代，不認識 corfu。
+
+而這份配置的 corfu 是自動彈出的。二十個光標同時打字，就是二十次補全計算，外加一個依
+附在真光標上、和另外十九個毫無關係的候選菜單。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+(with-eval-after-load 'multiple-cursors-core
+  (add-to-list 'mc/unsupported-minor-modes 'corfu-mode))
+#+end_src
+
+*** 終端上的回車
+
+結束多光標的鍵是回車。包裏綁的是 ~<return>~，那是圖形界面下 Enter 產生的事件；終端
+裏 Enter 產生的是 ~RET~，永遠到不了那個綁定。症狀不是報錯：終端裏按回車不會結束會
+話，而是在每一個光標處插入一個換行。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+(with-eval-after-load 'multiple-cursors-core
+  (keymap-set mc/keymap "RET" #'multiple-cursors-mode))
+#+end_src
+
+*** 用鼠標點出光標
+
+一個點擊藏不到 leader 後面，所以這是本模塊唯一裝進全域映射的鍵。它值得這個例外：「這
+裏、這裏、還有這裏各放一個」是多光標最自然的用法，而那幾個位置之間往往沒有任何文本規
+律，~e n~ 那一組靠模式匹配的命令找不到它們。
+
+~C-S-鼠標左鍵~ 在點擊處放一個光標，再點一次收回。這是包的文檔建議的綁定，也是多數編
+輯器用的那個組合。
+
+帶修飾鍵的點擊在終端裏一般送不出來，所以這條實際上只在圖形界面有效。終端裏用拖選再
+~M-m e l~。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+(keymap-set (current-global-map) "C-S-<mouse-1>" #'mc/toggle-cursor-on-click)
+#+end_src
+
+** 鍵位
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+(ginshio-leader-define
+ "e"   "edit"
+
+ "e r" #'rectangle-mark-mode
+
+ "e f"   "fill"
+ "e f f" #'fill-paragraph
+ "e f c" #'set-fill-column
+
+ "e l" #'mc/edit-lines
+ "e b" #'mc/edit-beginnings-of-lines
+ "e e" #'mc/edit-ends-of-lines
+
+ "e <down>" #'mc/mark-next-lines
+ "e <up>"   #'mc/mark-previous-lines
+
+ "e n" #'mc/mark-next-like-this
+ "e p" #'mc/mark-previous-like-this
+ "e N" #'mc/skip-to-next-like-this
+ "e P" #'mc/skip-to-previous-like-this
+ "e u" #'mc/unmark-next-like-this
+ "e U" #'mc/unmark-previous-like-this
+ "e m" #'mc/mark-more-like-this-extended
+ "e a" #'mc/mark-all-dwim
+ "e A" #'mc/mark-all-like-this
+
+ "e #" #'mc/insert-numbers
+ "e s" #'mc/sort-regions
+ "e v" #'mc/reverse-regions)
+#+end_src
+
+一次加一個光標的命令天生要連按，而 leader 前綴讓連按變貴——~M-m e n~ 敲五遍，不如不
+用。~e m~ 就是為這件事準備的：按一次進去，之後用方向鍵繼續，上下加一個、左右跳過一
+個，滿意了按別的鍵離開。
+
+| 鍵                     | 做什麼                            |
+|------------------------+-----------------------------------|
+| ~M-m e f f~              | 同上                              |
+| ~M-m e f c~              | 換行寬度取當前列；帶前綴參數則問你 |
+| ~M-m e r~                | 開始一個矩形選區                  |
+| 矩形裏 ~C-f~ ~C-b~ ~C-n~ ~C-p~ | 調整兩個對角              |
+| 矩形裏 ~C-w~ ~M-w~ ~C-y~     | 剪切 / 複製 / 粘貼            |
+| 矩形裏 ~C-t~             | 把框住的內容換成同一段文字        |
+| 矩形裏 ~C-o~             | 撐開成空白                        |
+| 矩形裏 ~M-m s r~         | 只在方框內做 ~query-replace~        |
+| ~M-m e l~                | 區域覆蓋的每一行一個光標          |
+| ~M-m e <down>~ ~e <up>~    | 不用選區，往下 / 往上逐行加光標   |
+| ~C-S-鼠標左鍵~           | 在點擊處放一個光標，再點收回      |
+| ~M-m e b~ ~e e~            | 每行的行首 / 行尾一個光標         |
+| ~M-m e n~ ~e p~            | 往下 / 往上再標一處相同的         |
+| ~M-m e N~ ~e P~            | 跳過這一處，改標下一處            |
+| ~M-m e u~ ~e U~            | 收回最後標的那一處                |
+| ~M-m e m~                | 標一處，然後用方向鍵繼續加減      |
+| ~M-m e a~                | 按上下文猜「全都要」是什麼意思    |
+| ~M-m e A~                | 標出所有相同的                    |
+| ~M-m e #~                | 在每個光標處填遞增數字            |
+| ~M-m e s~ ~e v~            | 把各光標選中的文本排序 / 反轉     |
+| 多光標裏 ~RET~           | 結束                              |
+| 多光標裏 ~C-g~           | 結束，並回到最初那一個光標        |
+
+問答表答錯了不要緊：刪掉 =mc-lists.el= 裏對應的那一行，下次它會重新問。要是完全不想
+被問，~mc/always-run-for-all~ 設成 ~t~ 就一律在所有光標上跑——省掉的提問，代價是偶爾
+會有一個命令做二十遍。
+
+** 自檢項
+
+壓縮撤銷歷史用的是外部程序。它不在時的症狀是每次保存都失敗一次，而錯誤信息說的是壓
+縮命令的事，離「配置選了一種這台機器上沒有的壓縮格式」還有幾步推理。
+
+換掉壓縮格式時這個檢查應該跟着消失，所以它問的是當前選的是不是 zstd，而不是無條件
+要求。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+(ginshio-doctor-executable 'edit "zstd"
+                           :note "compressing stored undo history"
+                           :remedy "zypper install zstd"
+                           :when (lambda ()
+                                   (eq (bound-and-true-p undo-fu-session-compression)
+                                       'zst)))
+#+end_src
+
+其餘沒有可查的：包在不在由 packages 模塊回答，矩形那半邊全部是內建的。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el" :comments no
+(provide 'ginshio-edit)
+;;; ginshio-edit.el ends here
+#+end_src

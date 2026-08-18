@@ -1,0 +1,16 @@
+[[install]]
+id = 'v2core-config'
+dst = '~/.config/v2core/'
+path = 'config'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'v2core-service'
+dst = '~/.config/systemd/user/'
+path = 'service'
+capabilities = ['develop']
+planes = ['user']
+
+[dynvariables]
+v2ray_bin = 'command -v v2ray 2>/dev/null || echo /usr/bin/v2ray'

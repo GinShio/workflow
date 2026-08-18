@@ -1,0 +1,1451 @@
+*** LaTeX 导出
+:properties:
+:CUSTOM_ID: org_export_latex
+:header-args:emacs-lisp: :tangle no :noweb-ref ox-latex-conf
+:end:
+
+#+begin_src emacs-lisp :noweb no-export :noweb-ref org-export-conf :tangle no
+(defvar org-latex-maths-preamble
+  "
+<<latex-maths-conveniences>>
+"
+  "Preamble that sets up a bunch of mathematical conveniences.")
+(defvar org-latex-caption-preamble
+  "
+<<org-latex-caption-preamble>>
+"
+  "Preamble that improves captions.")
+(defvar org-latex-checkbox-preamble
+  "
+<<org-latex-checkbox-preamble>>
+"
+  "Preamble that improves checkboxes.")
+(defvar org-latex-box-preamble
+  "
+<<org-latex-box-preamble>>
+"
+  "Preamble that provides a macro for custom boxes.")
+(defvar org-latex-image-preamble
+  "
+<<latex-feature-image>>
+"
+  "Preamble for image support.")
+(defvar org-latex-svg-preamble
+  "
+<<latex-feature-svg>>
+"
+  "Preamble for SVG support.")
+(defvar org-latex-table-preamble
+  "
+<<latex-feature-table>>
+"
+  "Preamble for table support.")
+(defvar org-latex-cleveref-preamble
+  "
+<<latex-feature-cleveref>>
+"
+  "Preamble for cleveref support.")
+(defvar org-latex-underline-preamble
+  "
+<<latex-feature-underline>>
+"
+  "Preamble for underline support.")
+(defvar org-latex-float-wrap-preamble
+  "
+<<latex-feature-float-wrap>>
+"
+  "Preamble for float wrapping.")
+(defvar org-latex-rotate-preamble
+  "
+<<latex-feature-rotate>>
+"
+  "Preamble for rotation support.")
+(defvar org-latex-microtype-preamble
+  "
+<<latex-feature-microtype>>
+"
+  "Preamble for microtype.")
+(defvar org-latex-acronym-preamble
+  "
+<<latex-feature-acronym>>
+"
+  "Preamble for acronym support.")
+(defvar org-latex-box-drawing-preamble
+  "
+<<latex-feature-box-drawing>>
+"
+  "Preamble for box-drawing characters.")
+(defvar org-latex-italic-quotes-preamble
+  "
+<<latex-feature-italic-quotes>>
+"
+  "Preamble for italic quotes.")
+(defvar org-latex-par-sep-preamble
+  "
+<<latex-feature-par-sep>>
+"
+  "Preamble for paragraph separation.")
+(defvar org-latex-pifont-preamble
+  "
+<<latex-feature-pifont>>
+"
+  "Preamble for pifont.")
+(defvar org-latex-xcoffins-preamble
+  "
+<<latex-feature-xcoffins>>
+"
+  "Preamble for xcoffins.")
+(defvar org-latex-checkbox-amssymb-preamble
+  "
+<<latex-feature-checkbox-amssymb>>
+"
+  "Preamble for amssymb (provides \\square for checkboxes).")
+(defvar org-latex-box-warning-preamble
+  "
+<<latex-feature-box-warning>>
+"
+  "Preamble for warning box.")
+(defvar org-latex-box-info-preamble
+  "
+<<latex-feature-box-info>>
+"
+  "Preamble for info box.")
+(defvar org-latex-box-notes-preamble
+  "
+<<latex-feature-box-notes>>
+"
+  "Preamble for notes box.")
+(defvar org-latex-box-success-preamble
+  "
+<<latex-feature-box-success>>
+"
+  "Preamble for success box.")
+(defvar org-latex-box-error-preamble
+  "
+<<latex-feature-box-error>>
+"
+  "Preamble for error box.")
+(defvar org-latex-use-microtype nil
+  "Use the microtype pakage.")
+(defvar org-latex-italic-quotes t
+  "Make \"quote\" environments italic.")
+(defvar org-latex-par-sep t
+  "Vertically seperate paragraphs, and remove indentation.")
+(defvar org-export-latex--preamble-info nil)
+(defvar org-latex-conditional-features nil
+  "Org feature tests and associated LaTeX feature flags.
+
+Alist where the car is a test for the presense of the feature,
+and the cdr is either a single feature symbol or list of feature symbols.
+
+When a string, it is used as a regex search in the buffer.
+The feature is registered as present when there is a match.
+
+The car can also be a
+- symbol, the value of which is fetched
+- function, which is called with info as an argument
+- list, which is `eval'uated
+
+If the symbol, function, or list produces a string: that is used as a regex
+search in the buffer. Otherwise any non-nil return value will indicate the
+existance of the feature.")
+(defvar org-latex-feature-implementations nil
+  "LaTeX features and details required to implement them.
+
+List where the car is the feature symbol, and the rest forms a plist with the
+following keys:
+- :snippet, which may be either
+  - a string which should be included in the preamble
+  - a symbol, the value of which is included in the preamble
+  - a function, which is evaluated with the list of feature flags as its
+    single argument. The result of which is included in the preamble
+  - a list, which is passed to `eval', with a list of feature flags available
+    as \"features\"
+
+- :requires, a feature or list of features that must be available
+- :when, a feature or list of features that when all available should cause this
+    to be automatically enabled.
+- :prevents, a feature or list of features that should be masked
+- :order, for when ordering is important. Lower values appear first.
+    The default is 0.
+- :eager, when non-nil the feature will be eagerly loaded, i.e. without being detected.")
+
+(after! ox-latex
+  <<ox-latex-conf>>
+  )
+#+end_src
+
+**** 编译
+
+默认情况下，Org 使用 =pdflatex= \times 3 + =bibtex=​。 这在现代世界根本行不通。
+=latexmk= + =biber= (自动与 =latexmk= 一起使用) 是一个简单且优越组合。
+
+设置 LaTeX 片段预览使用的头文件，这一步必须在 =org-latex-maths-preamble= 定义
+之后执行。
+
+#+begin_src emacs-lisp
+(setq org-format-latex-header (concat "
+\\documentclass{standalone}
+[DEFAULT-PACKAGES]
+[PACKAGES]
+% Custom font
+\\usepackage{arev}
+" org-latex-maths-preamble))
+#+end_src
+
+#+begin_src emacs-lisp
+;; org-latex-compilers = ("pdflatex" "xelatex" "lualatex"), which are the possible values for %latex
+(setq! org-latex-pdf-process '("LC_ALL=en_US.UTF-8 latexmk -f -pdf -%latex --shell-escape --interaction=nonstopmode --output-directory=%o %f")
+       org-latex-logfiles-extensions (append org-latex-logfiles-extensions
+                                             '("acn" "acr" "alg" "bbl" "blg" "glg" "ist" "listing" "fdb_latexmk") nil))
+#+end_src
+
+虽然上面的 ~-%latex~ 有点 hacky (~-pdflatex~ 期望被赋予一个值)，但它允许我们保持
+~org-latex-compilers~ 不变。如果我打开一个使用 =#+LATEX_COMPILER= 的 org 文件，
+这很好，它应该仍然可以工作。
+
+**** 复选框
+
+我们可以假设在序言部分，定义了下面的各种自定义 =\checkbox...= 命令。
+
+#+begin_src emacs-lisp
+(defun +org-export-latex-fancy-item-checkboxes (text backend info)
+  (when (org-export-derived-backend-p backend 'latex)
+    (replace-regexp-in-string
+     "\\\\item\\[{$\\\\\\(\\w+\\)$}\\]"
+     (lambda (fullmatch)
+       (concat "\\item[" (pcase (substring fullmatch 9 -3) ; content of capture group
+                             ("square"   "\\checkboxUnchecked")
+                             ("boxminus" "\\checkboxTransitive")
+                             ("boxtimes" "\\checkboxChecked")
+                             (_ (substring fullmatch 9 -3))) "]"))
+     text nil t)))
+(add-to-list 'org-export-filter-item-functions
+             '+org-export-latex-fancy-item-checkboxes)
+#+end_src
+
+**** 类模板
+
+页边空白处的节号，这可以用下面的 LaTeX 来完成。
+
+#+name: latex-hanging-secnum
+#+begin_src LaTeX
+\renewcommand\sectionformat{\llap{\thesection\autodot\enskip}}
+\renewcommand\subsectionformat{\llap{\thesubsection\autodot\enskip}}
+\renewcommand\subsubsectionformat{\llap{\thesubsubsection\autodot\enskip}}
+\makeatletter
+\g@addto@macro\tableofcontents{\clearpage\setcounter{page}{1}\pagenumbering{arabic}}
+\makeatother
+\setcounter{page}{1}
+\pagenumbering{Roman}
+#+end_src
+
+超大的 ~\chapter~​。
+
+#+name: latex-big-chapter
+#+begin_src LaTeX
+\RedeclareSectionCommand[afterindent=false, beforeskip=0pt, afterskip=0pt, innerskip=0pt]{chapter}
+\setkomafont{chapter}{\normalfont\Huge}
+\renewcommand*{\chapterheadstartvskip}{\vspace*{0\baselineskip}}
+\renewcommand*{\chapterheadendvskip}{\vspace*{0\baselineskip}}
+\renewcommand*{\chapterformat}{%
+  \fontsize{60}{30}\selectfont\rlap{\hspace{6pt}\thechapter}}
+\renewcommand*\chapterlinesformat[3]{%
+  \parbox[b]{\dimexpr\textwidth-0.5em\relax}{%
+    \raggedleft{{\large\scshape\bfseries\chapapp}\vspace{-0.5ex}\par\Huge#3}}%
+    \hfill\makebox[0pt][l]{#2}}
+#+end_src
+
+#+name: latex-article-sections
+#+begin_src LaTeX
+\section{%s}
+#+end_src
+
+#+name: latex-article-sections-unnumbered
+#+begin_src LaTeX
+\section*{%s}
+#+end_src
+
+#+name: latex-document-class-scrartcl
+#+begin_src LaTeX
+\documentclass{scrartcl}
+#+end_src
+
+#+name: latex-document-class-scrbook
+#+begin_src LaTeX
+\documentclass[twoside=false]{scrbook}
+#+end_src
+
+#+name: latex-blank-article-options
+#+begin_src LaTeX
+[NO-DEFAULT-PACKAGES]
+[NO-PACKAGES]
+[EXTRA]
+#+end_src
+
+#+name: latex-bmc-article-class
+#+begin_src LaTeX
+\documentclass[article,code,maths]{bmc}
+[NO-DEFAULT-PACKAGES]
+[NO-PACKAGES]
+[EXTRA]
+#+end_src
+
+#+name: latex-bmc-class
+#+begin_src LaTeX
+\documentclass[code,maths]{bmc}
+[NO-DEFAULT-PACKAGES]
+[NO-PACKAGES]
+[EXTRA]
+#+end_src
+
+现在在 Org LaTeX 类中添加一些 =KOMA-Script=​。
+
+#+begin_src emacs-lisp :noweb-ref ox-latex-conf :noweb no-export
+(let* ((article-sections '(("<<latex-article-sections>>" . "<<latex-article-sections-unnumbered>>")
+                           ("\\subsection{%s}" . "\\subsection*{%s}")
+                           ("\\subsubsection{%s}" . "\\subsubsection*{%s}")
+                           ("\\paragraph{%s}" . "\\paragraph*{%s}")
+                           ("\\subparagraph{%s}" . "\\subparagraph*{%s}")))
+       (book-sections (append '(("\\chapter{%s}" . "\\chapter*{%s}"))
+                              article-sections))
+       (hanging-secnum-preamble "
+<<latex-hanging-secnum>>
+")
+       (big-chap-preamble "
+<<latex-big-chapter>>
+"))
+  (setcdr (assoc "article" org-latex-classes)
+          `(,(concat "<<latex-document-class-scrartcl>>" hanging-secnum-preamble)
+            ,@article-sections))
+  (add-to-list 'org-latex-classes
+               `("report" ,(concat "<<latex-document-class-scrartcl>>" hanging-secnum-preamble)
+                 ,@article-sections))
+  (add-to-list 'org-latex-classes
+               `("book" ,(concat "<<latex-document-class-scrbook>>"
+                                 big-chap-preamble hanging-secnum-preamble)
+                 ,@book-sections))
+  (add-to-list 'org-latex-classes
+               `("blank" "
+<<latex-blank-article-options>>
+"
+                 ,@article-sections))
+  (add-to-list 'org-latex-classes
+               `("bmc-article" "
+<<latex-bmc-article-class>>
+"
+                 ,@article-sections))
+  (add-to-list 'org-latex-classes
+               `("bmc" "
+<<latex-bmc-class>>
+"
+                 ,@book-sections)))
+
+(setq! org-latex-tables-booktabs t
+       org-latex-hyperref-template "
+<<latex-fancy-hyperref>>
+"
+       org-latex-reference-command "\\cref{%s}")
+#+end_src
+
+然而 =hyperref= 设置需要单独处理。
+
+#+name: latex-fancy-hyperref
+#+begin_src LaTeX
+\providecolor{url}{HTML}{0077bb}
+\providecolor{link}{HTML}{882255}
+\providecolor{cite}{HTML}{999933}
+\hypersetup{
+  pdfauthor={%a},
+  pdftitle={%t},
+  pdfkeywords={%k},
+  pdfsubject={%d},
+  pdfcreator={%c},
+  pdflang={%L},
+  breaklinks=true,
+  colorlinks=true,
+  linkcolor=link,
+  urlcolor=url,
+  citecolor=cite
+}
+\urlstyle{same}
+%% hide links styles in toc
+\NewCommandCopy{\oldtoc}{\tableofcontents}
+\renewcommand{\tableofcontents}{\begingroup\hypersetup{hidelinks}\oldtoc\endgroup}
+#+end_src
+
+**** 智能序言
+
+***** 功能优化
+
+Caption 可以做一些调整，比如
++ 可以轻松拥有多个 Caption
++ 指向图的链接带到图的顶部 (而不是底部)
++ Caption 标签可以稍微加粗一点
++ 只有当跨越多行时，多行 Caption 应该向右一点
+
+#+name: org-latex-caption-preamble
+#+begin_src LaTeX
+\usepackage{subcaption}
+\usepackage[hypcap=true]{caption}
+\setkomafont{caption}{\sffamily\small}
+\setkomafont{captionlabel}{\upshape\bfseries}
+\captionsetup{justification=raggedright,singlelinecheck=true}
+\usepackage{capt-of} % required by Org
+#+end_src
+
+默认的复选框太丑了，用一些好看的替代品吧。
+
+#+name: org-latex-checkbox-preamble
+#+begin_src LaTeX
+\newcommand{\checkboxUnchecked}{$\square$}
+\newcommand{\checkboxTransitive}{\rlap{\raisebox{-0.1ex}{\hspace{0.35ex}\Large\textbf -}}$\square$}
+\newcommand{\checkboxChecked}{\rlap{\raisebox{0.2ex}{\hspace{0.35ex}\scriptsize \ding{52}}}$\square$}
+#+end_src
+
+"消息块" 是一个不错的想法，就像 info/warning/error/success。LaTeX 中的宏可
+以创建它们。
+
+#+name: org-latex-box-preamble
+#+begin_src LaTeX
+\ExplSyntaxOn
+\NewCoffin\SBXBaseline
+\NewCoffin\SBXHeader
+\NewCoffin\SBXContent
+\NewCoffin\SBXSideRule
+\newbox\SBXSplitBox
+\cs_new_protected:Nn \simplebox_start:nnn {
+  % #1 ding, #3 name, #4 label
+  \vcoffin_set:Nnn \SBXHeader { \linewidth - 1em } {
+  \noindent\textcolor{#2}{#1}~\textcolor{#2}{\textbf{#3}}}
+  \vcoffin_set:Nnw \SBXContent { \linewidth - 1.5em }
+}
+\cs_new_protected:Nn \simplebox_split_content:n {
+  % #1 name
+  \setbox\SBXSplitBox = \vbox:n { \vbox_unpack_drop:N \SBXContent }
+  \dim_set:Nn \l_tmpa_dim { \dim_eval:n { \dim_min:nn { \pagegoal } { \textheight } - \pagetotal - 2\baselineskip } }
+  \setbox0 = \vsplit\SBXSplitBox to \l_tmpa_dim
+  \vcoffin_set:Nnn \SBXContent { \CoffinWidth \SBXContent } { \box0 %
+    \vspace{-1.7\baselineskip}
+    \noindent\textcolor{#1}{\textbf{\ldots }}
+    \vspace*{-0.3\baselineskip}}
+}
+\cs_new_protected:Nn \simplebox_split_refill:nnnn {
+  % #1 ding, #2 ding offset, #3 name, #4 label
+  \simplebox_start:nnn {#1} {#3} {#4,\space{}\emph{continued}}
+  \vspace*{-0.2\baselineskip}
+  \vbox_unpack_drop:N \SBXSplitBox
+  \vcoffin_set_end:
+}
+\cs_new_protected:Nn \simplebox_typeset:nn {
+    % #1 name, #2 ding offset
+    \vcoffin_set:Nnn \SBXBaseline {0pt} {\vbox{}}
+    \SetHorizontalCoffin\SBXSideRule{\color{#1}\rule{1pt}{\dim_eval:n { \CoffinTotalHeight\SBXContent + \baselineskip }}}
+    \JoinCoffins*\SBXContent[l,t]\SBXSideRule[l,t](\dim_eval:n {#2 - 1em}, \dim_eval:n{\baselineskip - 0.5em})
+    \JoinCoffins*\SBXContent[l,t]\SBXHeader[l,B](-1em, 0.5\baselineskip)
+    \JoinCoffins*\SBXBaseline[l,T]\SBXContent[l,T]
+    \vspace{-0.5\baselineskip}
+    \noindent\TypesetCoffin\SBXBaseline(\dim_eval:n { 1em - #2 + 1pt }, 0pt)
+    \vspace*{\CoffinTotalHeight\SBXContent}
+    \vspace{-0.08em} % Why on earth is this needed for baseline alignment!?
+}
+\cs_new_protected:Nn \simplebox_typeset_breakable:nnnn {
+    % #1 ding, #2 ding offset, #3 name, #4 label
+    \dim_set:Nn \l_tmpa_dim {\dim_eval:n { \CoffinTotalHeight\SBXContent + \baselineskip }}
+    \dim_set:Nn \l_tmpb_dim { \dim_eval:n { \dim_min:nn { \pagegoal } { \textheight } - \pagetotal - \baselineskip } }
+    \dim_compare:nNnTF {\l_tmpa_dim} > {\l_tmpb_dim} {
+      \simplebox_split_content:n {#3}
+      \simplebox_typeset:nn {#3} {#2}
+      \newpage
+      \simplebox_split_refill:nnnn {#1} {#2} {#3} {#4}
+      \simplebox_typeset_breakable:nnnn {#1} {#2} {#3} {#4}
+    }{
+      \simplebox_typeset:nn {#3} {#2}
+    }
+}
+
+\NewDocumentCommand{\defsimplebox}{O{\ding{117}} O{0.35em} O{#1} O{#2} m m m}{%
+  % #1 ding, #2 ding offset, #3 alt-ding, #4 alt-ding offset,
+  % #5 name, #6 colour, #7 default label
+  \definecolor{#5}{HTML}{#6}
+  \NewDocumentEnvironment{#5}{ O{#7} }{
+    \simplebox_start:nnn {#1} {#5} {##1}
+  }{
+    \vcoffin_set_end:
+    \simplebox_typeset_breakable:nnnn {#3} {#4} {#5} {##1}
+  }
+}
+\ExplSyntaxOff
+#+end_src
+
+***** 内容-特征-序言关联
+
+每个检测到的特征都会给出一个所需的「特征标志」列表。只需合并功能标志列表，不再需
+要避免 LaTeX 的重复。然后额外的层在特征标志和可用于实现该特征的规范之间形成双射。
+
+#+begin_src dot :file misc/org-latex-clever-preamble.svg :exports none
+digraph {
+    graph [bgcolor="transparent"];
+    node  [shape="underline" penwidth="2" width="1.3" style="rounded,filled" fillcolor="#efefef" color="#c9c9c9" fontcolor="#000000" fontname="overpass"];
+    edge  [color="#aaaaaa" penwidth="1.2"]
+    rankdir=LR
+
+    node[group=a,color="#2ec27e"]
+    "file:*.svg"
+    "file:*.jpeg"
+    "file:*.png"
+    "#+caption"
+    "xkcd:*"
+    node[group=b,color="#f5c211"]
+    "svg"
+    "image"
+    "caption"
+    node[group=c,color="#813d9c"]
+    "(TeX) svg"
+    "(TeX) graphicx"
+    "(TeX) caption"
+
+    "file:*.svg" -> "svg" -> "(TeX) svg"
+    "file:*.jpeg" -> "image" -> "(TeX) graphicx"
+    "file:*.png" -> "image"
+    "(TeX) svg":s -> "(TeX) graphicx":n [constraint=false]
+    "#+caption" -> "caption" -> "(TeX) caption"
+    "xkcd:*" -> "image"
+    "xkcd:*" -> "caption"
+}
+#+end_src
+
+# #+caption: Org 功能、功能标志和 LaTeX 片段之间的关联
+# #+attr_html: :class invertible :alt DAG showing how Org features flow through to LaTeX :style max-width:min(24em,100%)
+# #+attr_latex: :width 0.6\linewidth
+# [[file:misc/org-latex-clever-preamble.svg]]
+
+首先，我们将实现该模型的特征检测组件。我希望它能够使用尽可能多的状态信息，因此功
+能测试应该非常通用。
+
+#+begin_src emacs-lisp
+(setq! org-latex-conditional-features
+       '(("\\[\\[\\(?:file\\|https?\\):\\(?:[^]]\\|\\\\\\]\\)+?\\.\\(?:eps\\|pdf\\|png\\|jpeg\\|jpg\\|jbig2\\)\\]\\]\\|\\\\includegraphics[\\[{]" . image)
+         ("\\[\\[\\(?:file\\|https?\\):\\(?:[^]]+?\\|\\\\\\]\\)\\.svg\\]\\]\\|\\\\includesvg[\\[{]" . svg)
+         ("\\\\(\\|\\\\\\[\\|\\\\begin{\\(?:math\\|displaymath\\|equation\\|align\\|flalign\\|multiline\\|gather\\)[a-z]*\\*?}" . maths)
+         ("^[ \t]*|" . table)
+         ("cref:\\|\\cref{" . cleveref)
+         ((and (boundp 'org-latex-reference-command)
+               (string-match-p "cref" org-latex-reference-command)) . cleveref)
+         ("[;\\\\]?\\b[A-Z][A-Z]+s?[^A-Za-z]" . acronym)
+         ("\\+[^ ].*[^ ]\\+\\|_[^ ].*[^ ]_\\|\\\\uu?line\\|\\\\uwave\\|\\\\sout\\|\\\\xout\\|\\\\dashuline\\|\\\\dotuline\\|\\\\markoverwith" . underline)
+         (":float wrap" . float-wrap)
+         (":float sideways" . rotate)
+         (org-latex-use-microtype . microtype)
+         ("[\u2500-\u259F]" . box-drawing)
+         ("^[ \t]*#\\+caption:\\|\\\\caption" . caption)
+         ((and org-latex-italic-quotes "^[ \t]*#\\+begin_quote\\|\\\\begin{quote}") . italic-quotes)
+         (org-latex-par-sep . par-sep)
+         ("^[ \t]*\\(?:[-+*]\\|[0-9]+[.)]\\|[A-Za-z]+[.)]\\) \\[[ -X]\\]" . checkbox)
+         ("^[ \t]*#\\+begin_warning\\|\\\\begin{warning}" . box-warning)
+         ("^[ \t]*#\\+begin_info\\|\\\\begin{info}"       . box-info)
+         ("^[ \t]*#\\+begin_notes\\|\\\\begin{notes}"     . box-notes)
+         ("^[ \t]*#\\+begin_success\\|\\\\begin{success}" . box-success)
+         ("^[ \t]*#\\+begin_error\\|\\\\begin{error}"     . box-error)))
+#+end_src
+
+然后我们提供一种方法来生成提供这些功能的序言。除了
+~org-latex-conditional-features~ 中命名的特性之外，我们还将创建元特性，这些
+特性可能是其他特性所需要的 (=:requires=)，或者默认情况下是启用的
+(=:eager t=)。为了进一步控制，我只能在某些其他功能处于启用状态 (=:when=) 并被
+其他功能屏蔽 (=:prevents=) 时使用某些功能。我将使用以 =.= 开头的元功能的约定
+，以及以 =!= 开头的 =:eager= 功能，使它们的性质更明显。
+
+LaTeX  中的另一个考虑因素是加载顺序，这在某些情况下很重要。除此之外，有某种合理的
+排序是很好的。为此我将介绍一个 =:order= 关键字。使用它将按如下方式排列片段。
+
++ =0= 排版
+  - =0= 字体本身
+  # - =0.1= 排版调整 (=microtype=)
+  - =0.2= 数学设置
+  - =0.3= 数学字体
+  - =0.4= 额外的文字整形 (~\acr~)
+  - =0.5-0.9= 其他文本修改，尝试将较短的片段放在首位
++ =1= (/default/)
++ =2= 表和图
++ =3= 其他短内容
++ =4= 各种 boxes
+
+#+name: latex-feature-image
+#+begin_src LaTeX
+\usepackage{graphicx}
+#+end_src
+
+#+name: latex-feature-svg
+#+begin_src LaTeX
+\usepackage[inkscapelatex=false]{svg}
+#+end_src
+
+#+name: latex-feature-table
+#+begin_src LaTeX
+\usepackage{longtable}
+\usepackage{booktabs}
+#+end_src
+
+#+name: latex-feature-cleveref
+#+begin_src LaTeX
+\usepackage[capitalize]{cleveref}
+\makeatletter
+\newcommand*{\@setcpagerefrange}[3]{%
+  \@@setcpagerefrange{#1}{#2}{cref}{#3}}
+\newcommand*{\@setCpagerefrange}[3]{%
+  \@@setcpagerefrange{#1}{#2}{Cref}{#3}}
+\newcommand*{\@setlabelcpagerefrange}[3]{%
+  \@@setcpagerefrange{#1}{#2}{labelcref}{#3}}
+\makeatother
+#+end_src
+
+#+name: latex-feature-underline
+#+begin_src LaTeX
+\usepackage[normalem]{ulem}
+#+end_src
+
+#+name: latex-feature-float-wrap
+#+begin_src LaTeX
+\usepackage{wrapfig}
+#+end_src
+
+#+name: latex-feature-rotate
+#+begin_src LaTeX
+\usepackage{rotating}
+#+end_src
+
+#+name: latex-feature-microtype
+#+begin_src LaTeX
+\usepackage[activate={true,nocompatibility},final,tracking=true,kerning=true,spacing=true,factor=2000]{microtype}
+#+end_src
+
+#+name: latex-feature-acronym
+#+begin_src LaTeX
+\makeatletter
+\@ifpackageloaded{microtype}{%
+  \newcommand{\acr}[1]{\protect\textls*[110]{\scshape #1}}}{%
+  \newcommand{\acr}[1]{{\scshape #1}}}
+\makeatother
+\newcommand{\acrs}{\protect\scalebox{.91}[.84]{\hspace{0.15ex}s}}
+#+end_src
+
+#+name: latex-feature-box-drawing
+#+begin_src LaTeX
+\usepackage{pmboxdraw}
+#+end_src
+
+#+name: latex-feature-italic-quotes
+#+begin_src LaTeX
+\renewcommand{\quote}{\list{}{\rightmargin\leftmargin}\item\relax\em}
+#+end_src
+
+#+name: latex-feature-par-sep
+#+begin_src LaTeX
+\setlength{\parskip}{\baselineskip}
+\setlength{\parindent}{0pt}
+#+end_src
+
+#+name: latex-feature-pifont
+#+begin_src LaTeX
+\usepackage{pifont}
+#+end_src
+
+#+name: latex-feature-xcoffins
+#+begin_src LaTeX
+\usepackage{xcoffins}
+#+end_src
+
+#+name: latex-feature-checkbox-amssymb
+#+begin_src LaTeX
+\usepackage{amssymb} % provides \square
+#+end_src
+
+#+name: latex-feature-box-warning
+#+begin_src LaTeX
+\defsimplebox{warning}{e66100}{Warning}
+#+end_src
+
+#+name: latex-feature-box-info
+#+begin_src LaTeX
+\defsimplebox{info}{3584e4}{Information}
+#+end_src
+
+#+name: latex-feature-box-notes
+#+begin_src LaTeX
+\defsimplebox{notes}{26a269}{Notes}
+#+end_src
+
+#+name: latex-feature-box-success
+#+begin_src LaTeX
+\defsimplebox{success}{26a269}{\vspace{-\baselineskip}}
+#+end_src
+
+#+name: latex-feature-box-error
+#+begin_src LaTeX
+\defsimplebox{error}{c01c28}{Important}
+#+end_src
+
+#+begin_src emacs-lisp
+(setq! org-latex-feature-implementations
+       '((image         :snippet org-latex-image-preamble :order 2)
+         (svg           :snippet org-latex-svg-preamble :order 2)
+         (maths         :snippet org-latex-maths-preamble :order 0.2)
+         (table         :snippet org-latex-table-preamble :order 2)
+         (cleveref      :snippet org-latex-cleveref-preamble :order 1)
+         (underline     :snippet org-latex-underline-preamble :order 0.5)
+         (float-wrap    :snippet org-latex-float-wrap-preamble :order 2)
+         (rotate        :snippet org-latex-rotate-preamble :order 2)
+         (caption       :snippet org-latex-caption-preamble :order 2.1)
+         (microtype     :snippet org-latex-microtype-preamble :order 0.1)
+         (acronym       :snippet org-latex-acronym-preamble :requires image :order 0.4)
+         (box-drawing   :snippet org-latex-box-drawing-preamble :order 0.05)
+         (italic-quotes :snippet org-latex-italic-quotes-preamble :order 0.5)
+         (par-sep       :snippet org-latex-par-sep-preamble :order 0.5)
+         (.pifont       :snippet org-latex-pifont-preamble)
+         (.xcoffins     :snippet org-latex-xcoffins-preamble)
+         (checkbox      :requires .pifont
+                        :order 3
+                        :snippet (concat (unless (memq 'maths features)
+                                           org-latex-checkbox-amssymb-preamble)
+                                         org-latex-checkbox-preamble))
+         (.fancy-box    :requires (.pifont .xcoffins) :snippet org-latex-box-preamble :order 3.9)
+         (box-warning   :requires .fancy-box :snippet org-latex-box-warning-preamble :order 4)
+         (box-info      :requires .fancy-box :snippet org-latex-box-info-preamble :order 4)
+         (box-notes     :requires .fancy-box :snippet org-latex-box-notes-preamble :order 4)
+         (box-success   :requires .fancy-box :snippet org-latex-box-success-preamble :order 4)
+         (box-error     :requires .fancy-box :snippet org-latex-box-error-preamble :order 4)))
+#+end_src
+
+***** 无条件添加的包
+
+#+begin_src emacs-lisp
+(setq! org-latex-packages-alist
+       '(("svgnames" "xcolor" t)
+         ("" "tikz" t)))
+#+end_src
+
+***** 特征确定
+
+现在我们已经定义了 ~org-latex-conditional-features~ ，我们需要使用它来提取
+在 Org 缓冲区中找到的特征列表。
+
+#+begin_src emacs-lisp
+(defun org-latex-detect-features (&optional buffer info)
+  "List features from `org-latex-conditional-features' detected in BUFFER."
+  (let ((case-fold-search nil))
+    (with-current-buffer (or buffer (current-buffer))
+      (delete-dups
+       (mapcan (lambda (construct-feature)
+                 (when (let ((out (pcase (car construct-feature)
+                                    ((pred stringp) (car construct-feature))
+                                    ((pred functionp) (funcall (car construct-feature) info))
+                                    ((pred listp) (eval (car construct-feature)))
+                                    ((pred symbolp) (symbol-value (car construct-feature)))
+                                    (_ (user-error "org-latex-conditional-features key %s unable to be used" (car construct-feature))))))
+                         (if (stringp out)
+                             (save-excursion
+                               (goto-char (point-min))
+                               (re-search-forward out nil t))
+                           out))
+                   (if (listp (cdr construct-feature)) (cdr construct-feature) (list (cdr construct-feature)))))
+               org-latex-conditional-features)))))
+#+end_src
+
+***** 序言生成
+
+一旦确定了所需功能的列表，我们希望使用 ~org-latex-feature-implementations~
+来生成 LaTeX，该 LaTeX 应该插入到序言中以提供这些功能。
+
+首先，我们要在 ~org-latex-feature-implementations~ 中处理我们的关键字，以
+生成扩展的功能列表。我们将通过执行以下步骤来做到这一点。
+
++ 每个列出的功能的依赖项都添加到功能列表 (src_elisp{:requires}) 中。
++ 每个特性的 src_elisp{:when} 条件，以及带有 src_elisp{:eager t} 的可用特
+  性，都会被评估，并相应地添加 / 删除
++ src_elisp{:prevents} 值中存在的任何特性都将被删除
++ 功能列表清除重复项
++ 特征列表按 src_elisp{:order} (升序) 排序
+
+
+#+begin_src emacs-lisp
+(defun org-latex-expand-features (features)
+  "For each feature in FEATURES process :requires, :when, and :prevents keywords and sort according to :order."
+  (dolist (feature features)
+    (unless (assoc feature org-latex-feature-implementations)
+      (message "Feature %s not provided in org-latex-feature-implementations, ignoring." feature)
+      (setq features (remove feature features))))
+  (let ((current features))
+    (while current
+      (when-let ((requirements (plist-get (cdr (assq (car current) org-latex-feature-implementations)) :requires)))
+        (setcdr current (if (listp requirements)
+                            (append requirements (cdr current))
+                          (cons requirements (cdr current)))))
+      (setq current (cdr current))))
+  (dolist (potential-feature
+           (append features (delq nil (mapcar (lambda (feat)
+                                                (when (plist-get (cdr feat) :eager)
+                                                  (car feat)))
+                                              org-latex-feature-implementations))))
+    (when-let ((prerequisites (plist-get (cdr (assoc potential-feature org-latex-feature-implementations)) :when)))
+      (setf features (if (if (listp prerequisites)
+                             (cl-every (lambda (preq) (memq preq features)) prerequisites)
+                           (memq prerequisites features))
+                         (append (list potential-feature) features)
+                       (delq potential-feature features)))))
+  (dolist (feature features)
+    (when-let ((prevents (plist-get (cdr (assoc feature org-latex-feature-implementations)) :prevents)))
+      (setf features (cl-set-difference features (if (listp prevents) prevents (list prevents))))))
+  (sort (delete-dups features)
+        (lambda (feat1 feat2)
+          (if (< (or (plist-get (cdr (assoc feat1 org-latex-feature-implementations)) :order) 1)
+                 (or (plist-get (cdr (assoc feat2 org-latex-feature-implementations)) :order) 1))
+              t nil))))
+#+end_src
+
+现在我们有一个很好的最终要使用的特性列表，可以提取它们的片段并将结果连接在一起。
+
+#+begin_src emacs-lisp
+(defun org-latex-generate-features-preamble (features)
+  "Generate the LaTeX preamble content required to provide FEATURES.
+This is done according to `org-latex-feature-implementations'"
+  (let ((expanded-features (org-latex-expand-features features)))
+    (concat
+     (format "\n%% features: %s\n" expanded-features)
+     (mapconcat (lambda (feature)
+                  (when-let ((snippet (plist-get (cdr (assoc feature org-latex-feature-implementations)) :snippet)))
+                    (concat
+                     (pcase snippet
+                       ((pred stringp) snippet)
+                       ((pred functionp) (funcall snippet features))
+                       ((pred listp) (eval `(let ((features ',features)) (,@snippet))))
+                       ((pred symbolp) (symbol-value snippet))
+                       (_ (user-error "org-latex-feature-implementations :snippet value %s unable to be used" snippet)))
+                     "\n")))
+                expanded-features
+                "")
+     "% end features\n")))
+#+end_src
+
+然后需要建议 Org 实际使用这个生成的前导内容。
+#+begin_src emacs-lisp
+(defadvice! org-latex-save-info (info &optional t_ s_)
+  :before #'org-latex-make-preamble
+  (setq org-export-latex--preamble-info info))
+#+end_src
+
+原始的 ~org-splice-latex-header~ 建议已移至 §导出模板系统 中，在那里它被扩展
+为同时注入模板的额外序言。
+
+我对 ~org-export-latex--preamble-info~ 的使用有点老套。 当我尝试将其上游化时，这应
+该会变得更加清晰，因为我可以通过直接修改 ~org-latex-make-preamble~ 来传递信息。
+
+**** 数学声明
+:PROPERTIES:
+:header-args:LaTeX: :noweb-ref latex-maths-conveniences :tangle no
+:END:
+
+数学总是层出不穷。我想这既说明了我和这门学科本身。虽然 LaTeX 的命令集相当合理，
+但我们可以让一些常用的符号更方便一些。
+
+***** 宏包
+
+首先我们需要非常常用的包。
+
+#+begin_src LaTeX
+%% Maths-related packages
+% More maths environments, commands, and symbols.
+\usepackage{amsmath, amssymb}
+% Slanted fractions with \sfrac{a}{b}, in text and maths.
+\usepackage{xfrac}
+% Visually cancel expressions with \cancel{value} and \cancelto{expression}{value}
+\usepackage[makeroom]{cancel}
+% Improvements on amsmath and utilities for mathematical typesetting
+\usepackage{mathtools}
+\usepackage{upgreek,extarrows}
+% Differential operator
+\newcommand{\dd}{\mathop{}\!\mathrm{d}}
+#+end_src
+
+***** 自定义分隔符
+
+接下来，我们要将各种类型的四舍五入和绝对值分隔符作为命令访问。
+
+#+begin_src LaTeX
+% Deliminators
+\DeclarePairedDelimiter{\abs}{\lvert}{\rvert}
+\DeclarePairedDelimiter{\norm}{\lVert}{\rVert}
+
+\DeclarePairedDelimiter{\ceil}{\lceil}{\rceil}
+\DeclarePairedDelimiter{\floor}{\lfloor}{\rfloor}
+\DeclarePairedDelimiter{\round}{\lfloor}{\rceil}
+#+end_src
+
+***** 数字集合
+
+然后，我们有各种常见的数字集，如果能有一种方便的方法来键入它们并选择性地赋予它们
+幂，那就更好了。要同时支持 =\XX= 和 =\XX[n]= 是相当容易的。
+
+#+begin_src LaTeX
+\newcommand{\RR}[1][]{\ensuremath{\ifstrempty{#1}{\mathbb{R}}{\mathbb{R}^{#1}}}} % Real numbers
+\newcommand{\NN}[1][]{\ensuremath{\ifstrempty{#1}{\mathbb{N}}{\mathbb{N}^{#1}}}} % Natural numbers
+\newcommand{\ZZ}[1][]{\ensuremath{\ifstrempty{#1}{\mathbb{Z}}{\mathbb{Z}^{#1}}}} % Integer numbers
+\newcommand{\QQ}[1][]{\ensuremath{\ifstrempty{#1}{\mathbb{Q}}{\mathbb{Q}^{#1}}}} % Rational numbers
+\newcommand{\CC}[1][]{\ensuremath{\ifstrempty{#1}{\mathbb{C}}{\mathbb{C}^{#1}}}} % Complex numbers
+#+end_src
+
+***** 导数
+
+导数的排版其实很麻烦，如果能有一个支持 =\dv= 的命令就更好了：
++ =\dv{x}=: =x= 的导数
++ =\dv{f}{x}=: =f= 相对于 =x= 的导数
++ =\dv[2]{f}{x}=: =f= 关于 =x= 的二阶导数
+
+同样，如果能有一个部分派生的对应 =\pdv= 就更好了，它的行为方式类似，但可以提供多
+个逗号分隔的变量 -- 例如 =\pdv{f}{x,y,z}=.
+
+#+begin_src LaTeX
+% Easy derivatives
+\ProvideDocumentCommand\dv{o m g}{%
+  \IfNoValueTF{#3}{%
+    \dv[#1]{}{#2}}{%
+    \IfNoValueTF{#1}{%
+      \frac{\dd #2}{\dd #3}%
+    }{\frac{\dd[#1] #2}{\dd {#3}^{#1}}}}}
+% Easy partial derivatives
+\ExplSyntaxOn
+\ProvideDocumentCommand\pdv{o m g}{%
+  \IfNoValueTF{#3}{\pdv[#1]{}{#2}}%
+  {\ifnum\clist_count:n{#3}<2
+    \IfValueTF{#1}{\frac{\partial^{#1} #2}{\partial {#3}^{#1}}}%
+    {\frac{\partial #2}{\partial #3}}
+    \else
+    \frac{\IfValueTF{#1}{\partial^{#1}}{\partial^{\clist_count:n{#3}}}#2}%
+    {\clist_map_inline:nn{#3}{\partial ##1 \,}\!}
+    \fi}}
+\ExplSyntaxOff
+#+end_src
+
+***** 公共运算符
+
+公共运算符集可以进行一些扩展。
+
+#+begin_src LaTeX
+% Laplacian
+\DeclareMathOperator{\Lap}{\mathcal{L}}
+
+% Statistics
+\DeclareMathOperator{\Var}{Var} % varience
+\DeclareMathOperator{\Cov}{Cov} % covarience
+\newcommand{\EE}{\ensuremath{\mathbb{E}}} % expected value
+\DeclareMathOperator{\E}{E} % expected value
+#+end_src
+
+***** 矩阵列对齐
+
+默认情况下，矩阵中的所有内容都是居中排列的，但我发现这往往并不可取。如果能将对齐
+方式作为环境的一个可选参数，并默认为右对齐，那就更好了。
+
+#+begin_src LaTeX
+% Redefine the matrix environment to allow for alignment
+% via an optional argument, and use r as the default.
+\makeatletter
+\renewcommand*\env@matrix[1][r]{\hskip -\arraycolsep%
+    \let\@ifnextchar\new@ifnextchar
+    \array{*\c@MaxMatrixCols #1}}
+\makeatother
+#+end_src
+
+**** 封面
+
+要制作漂亮的封面，想到的一个简单方法就是重新定义 =\maketitle= 。为了精确控制定位
+，我们将使用 =tikz= 包，然后添加 Tikz 库 =calc= 和 =shape.geometric= 来为背
+景做一些漂亮的装饰。
+
+首先为序言设置必要的补充。 这将完成以下任务：
++ 加载所需的包
++ 重新定义 =\maketitle=
++ 用 Tikz 画一个 =Org= 图标，用在封面上 (这是一个小彩蛋)
++ 通过重新定义 =\tableofcontents= 在目录之后开始一个新页面
+
+#+name: latex-cover-page
+#+begin_src LaTeX
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric}
+\usetikzlibrary{calc}
+
+\newsavebox\orgicon
+\begin{lrbox}{\orgicon}
+  \begin{tikzpicture}[y=0.80pt, x=0.80pt, inner sep=0pt, outer sep=0pt]
+    \path[fill=black!6] (16.15,24.00) .. controls (15.58,24.00) and (13.99,20.69) .. (12.77,18.06)arc(215.55:180.20:2.19) .. controls (12.33,19.91) and (11.27,19.09) .. (11.43,18.05) .. controls (11.36,18.09) and (10.17,17.83) .. (10.17,17.82) .. controls (9.94,18.75) and (9.37,19.44) .. (9.02,18.39) .. controls (8.32,16.72) and (8.14,15.40) .. (9.13,13.80) .. controls (8.22,9.74) and (2.18,7.75) .. (2.81,4.47) .. controls (2.99,4.47) and (4.45,0.99) .. (9.15,2.41) .. controls (14.71,3.99) and (17.77,0.30) .. (18.13,0.04) .. controls (18.65,-0.49) and (16.78,4.61) .. (12.83,6.90) .. controls (10.49,8.18) and (11.96,10.38) .. (12.12,11.15) .. controls (12.12,11.15) and (14.00,9.84) .. (15.36,11.85) .. controls (16.58,11.53) and (17.40,12.07) .. (18.46,11.69) .. controls (19.10,11.41) and (21.79,11.58) .. (20.79,13.08) .. controls (20.79,13.08) and (21.71,13.90) .. (21.80,13.99) .. controls (21.97,14.75) and (21.59,14.91) .. (21.47,15.12) .. controls (21.44,15.60) and (21.04,15.79) .. (20.55,15.44) .. controls (19.45,15.64) and (18.36,15.55) .. (17.83,15.59) .. controls (16.65,15.76) and (15.67,16.38) .. (15.67,16.38) .. controls (15.40,17.19) and (14.82,17.01) .. (14.09,17.32) .. controls (14.70,18.69) and (14.76,19.32) .. (15.50,21.32) .. controls (15.76,22.37) and (16.54,24.00) .. (16.15,24.00) -- cycle(7.83,16.74) .. controls (6.83,15.71) and (5.72,15.70) .. (4.05,15.42) .. controls (2.75,15.19) and (0.39,12.97) .. (0.02,10.68) .. controls (-0.02,10.07) and (-0.06,8.50) .. (0.45,7.18) .. controls (0.94,6.05) and (1.27,5.45) .. (2.29,4.85) .. controls (1.41,8.02) and (7.59,10.18) .. (8.55,13.80) -- (8.55,13.80) .. controls (7.73,15.00) and (7.80,15.64) .. (7.83,16.74) -- cycle;
+  \end{tikzpicture}
+\end{lrbox}
+
+\makeatletter
+\g@addto@macro\tableofcontents{\clearpage}
+\renewcommand\maketitle{
+  \thispagestyle{empty}
+  \hyphenpenalty=10000 % hyphens look bad in titles
+  \renewcommand{\baselinestretch}{1.1}
+  \let\oldtoday\today
+  \renewcommand{\today}{\LARGE\number\year\\\large%
+    \ifcase \month \or Jan\or Feb\or Mar\or Apr\or May \or Jun\or Jul\or Aug\or Sep\or Oct\or Nov\or Dec\fi
+    ~\number\day}
+  \begin{tikzpicture}[remember picture,overlay]
+    %% Background Polygons %%
+    \foreach \i in {2.5,...,22} % bottom left
+    {\node[rounded corners,black!3.5,draw,regular polygon,regular polygon sides=6, minimum size=\i cm,ultra thick] at ($(current page.west)+(2.5,-4.2)$) {} ;}
+    \foreach \i in {0.5,...,22} % top left
+    {\node[rounded corners,black!5,draw,regular polygon,regular polygon sides=6, minimum size=\i cm,ultra thick] at ($(current page.north west)+(2.5,2)$) {} ;}
+    \node[rounded corners,fill=black!4,regular polygon,regular polygon sides=6, minimum size=5.5 cm,ultra thick] at ($(current page.north west)+(2.5,2)$) {};
+    \foreach \i in {0.5,...,24} % top right
+    {\node[rounded corners,black!2,draw,regular polygon,regular polygon sides=6, minimum size=\i cm,ultra thick] at ($(current page.north east)+(0,-8.5)$) {} ;}
+    \node[fill=black!3,rounded corners,regular polygon,regular polygon sides=6, minimum size=2.5 cm,ultra thick] at ($(current page.north east)+(0,-8.5)$) {};
+    \foreach \i in {21,...,3} % bottom right
+    {\node[black!3,rounded corners,draw,regular polygon,regular polygon sides=6, minimum size=\i cm,ultra thick] at ($(current page.south east)+(-1.5,0.75)$) {} ;}
+    \node[fill=black!3,rounded corners,regular polygon,regular polygon sides=6, minimum size=2 cm,ultra thick] at ($(current page.south east)+(-1.5,0.75)$) {};
+    \node[align=center, scale=1.4] at ($(current page.south east)+(-1.5,0.75)$) {\usebox\orgicon};
+    %% Text %%
+    \node[left, align=right, black, text width=0.8\paperwidth, minimum height=3cm, rounded corners,font=\Huge\bfseries] at ($(current page.north east)+(-2,-8.5)$)
+    {\@title};
+    \node[left, align=right, black, text width=0.8\paperwidth, minimum height=2cm, rounded corners, font=\Large] at ($(current page.north east)+(-2,-11.8)$)
+    {\scshape \@author};
+    \renewcommand{\baselinestretch}{0.75}
+    \node[align=center,rounded corners,fill=black!3,text=black,regular polygon,regular polygon sides=6, minimum size=2.5 cm,inner sep=0, font=\Large\bfseries ] at ($(current page.west)+(2.5,-4.2)$)
+    {\@date};
+  \end{tikzpicture}
+  \let\today\oldtoday
+  \clearpage}
+\makeatother
+#+end_src
+
+现在我们有了一个不错的封面页，我们只需要不时使用它。将此添加到 =#+options= 感觉
+最合适。让封面选项接受 auto 作为值，然后根据字数决定是否应使用封面。然后我们只想
+插入一个 LaTeX 片段在封面中来调整标题格式。
+
+#+begin_src emacs-lisp :noweb no-export :noweb-prefix no
+(defvar org-latex-cover-page 'auto
+  "When t, use a cover page by default.
+When auto, use a cover page when the document's wordcount exceeds
+`org-latex-cover-page-wordcount-threshold'.
+Set with #+option: coverpage:{yes,auto,no} in org buffers.")
+(defvar org-latex-cover-page-wordcount-threshold 5000
+  "Document word count at which a cover page will be used automatically.
+This condition is applied when cover page option is set to auto.")
+(defvar org-latex-subtitle-coverpage-format "\\\\bigskip\n\\LARGE\\mdseries\\itshape\\color{black!80} %s\\par"
+  "Variant of `org-latex-subtitle-format' to use with the cover page.")
+(defvar org-latex-cover-page-maketitle "
+<<latex-cover-page>>
+"
+  "LaTeX preamble snippet that sets \\maketitle to produce a cover page.")
+
+(eval '(cl-pushnew '(:latex-cover-page nil "coverpage" org-latex-cover-page)
+                   (org-export-backend-options (org-export-get-backend 'latex))))
+
+(defun org-latex-cover-page-p ()
+  "Whether a cover page should be used when exporting this Org file."
+  (pcase (or (car
+              (delq nil
+                    (mapcar
+                     (lambda (opt-line)
+                       (plist-get (org-export--parse-option-keyword opt-line 'latex) :latex-cover-page))
+                     (cdar (org-collect-keywords '("OPTIONS"))))))
+             org-latex-cover-page)
+    ((or 't 'yes) t)
+    ('auto (when (> (count-words (point-min) (point-max)) org-latex-cover-page-wordcount-threshold) t))
+    (_ nil)))
+
+(defadvice! org-latex-set-coverpage-subtitle-format-a (contents info)
+  "Set the subtitle format when a cover page is being used."
+  :before #'org-latex-template
+  (when (org-latex-cover-page-p)
+    (setf info (plist-put info :latex-subtitle-format org-latex-subtitle-coverpage-format))))
+
+(add-to-list 'org-latex-feature-implementations '(cover-page :snippet org-latex-cover-page-maketitle :order 9) t)
+(add-to-list 'org-latex-conditional-features '((org-latex-cover-page-p) . cover-page) t)
+#+end_src
+
+或许之后可以再加一些不同的封面。
+
+**** 导出模板系统
+
+为了灵活管理不同类型 LaTeX 文档的导出设置，我们引入一个导出模板系统。通过在 Org
+文件中使用 =#+options: template:NAME= 来选择预定义的模板，模板可以捆绑文档类、
+强制特征、额外序言和编译器设置。
+
+#+begin_src emacs-lisp :noweb-ref ox-latex-conf :noweb no-export :tangle no
+(defvar org-latex-export-templates nil
+  "Alist of named LaTeX export templates.
+Each entry is (NAME . PLIST) where PLIST can contain:
+  :class            - `org-latex-classes' key to use
+  :compiler         - \"pdflatex\", \"xelatex\", or \"lualatex\"
+  :forced-features  - list of features to always enable
+  :extra-preamble   - additional preamble string to inject
+  :cover-page       - cover page setting: t, nil, or \\='auto
+  :packages         - extra packages alist like `org-latex-packages-alist'")
+
+(setq! org-latex-export-templates
+       '(("academic"
+          :class "article"
+          :compiler "lualatex"
+          :forced-features (cleveref caption microtype)
+          :extra-preamble "\\usepackage{setspace}\n\\onehalfspacing\n"
+          :cover-page nil)
+         ("thesis"
+          :class "book"
+          :compiler "lualatex"
+          :forced-features (cleveref caption microtype)
+          :extra-preamble "\\usepackage{setspace}\n\\onehalfspacing\n"
+          :cover-page t)
+         ("notes"
+          :class "article"
+          :compiler "lualatex"
+          :forced-features (caption)
+          :cover-page nil)
+         ("report"
+          :class "report"
+          :compiler "lualatex"
+          :forced-features (cleveref caption)
+          :cover-page auto)
+         ("minimal"
+          :class "blank"
+          :compiler "pdflatex"
+          :forced-features ()
+          :cover-page nil)))
+
+(eval '(cl-pushnew '(:latex-template nil "template" nil)
+                   (org-export-backend-options (org-export-get-backend 'latex))))
+
+(defun org-latex-get-template (&optional info)
+  "Get the LaTeX template plist for the current document.
+Template is specified via #+options: template:NAME."
+  (when-let* ((template-name
+               (or (and info (plist-get info :latex-template))
+                   (car (delq nil
+                              (mapcar
+                               (lambda (opt-line)
+                                 (plist-get (org-export--parse-option-keyword opt-line 'latex)
+                                            :latex-template))
+                               (cdar (org-collect-keywords '("OPTIONS"))))))))
+              (template (cdr (assoc template-name org-latex-export-templates))))
+    template))
+
+(defun org-latex-template-forced-features ()
+  "Return forced features from the active LaTeX template, or nil."
+  (when-let ((template (org-latex-get-template)))
+    (plist-get template :forced-features)))
+#+end_src
+
+将模板的强制特性注入到特征检测中，并将额外序言注入到最终输出中。
+
+#+begin_src emacs-lisp
+(defadvice! org-latex-detect-features-with-template-a (fn &optional buffer info)
+  "Prepend forced features from the active LaTeX template."
+  :around #'org-latex-detect-features
+  (let ((detected (funcall fn buffer info))
+        (forced (org-latex-template-forced-features)))
+    (if forced
+        (delete-dups (append forced detected))
+      detected)))
+#+end_src
+
+将模板的额外序言注入到现有的 ~org-splice-latex-header~ 建议中，并在导出前应用
+模板对文档类和编译器的覆盖。
+
+#+begin_src emacs-lisp
+(defadvice! org-latex-apply-template-settings-a (info &optional t_ s_)
+  "Apply LaTeX template class, compiler and cover-page overrides before preamble generation."
+  :before #'org-latex-make-preamble
+  (when-let ((template (org-latex-get-template info)))
+    ;; Override class only when the document does not explicitly set #+LATEX_CLASS
+    (when-let ((class (plist-get template :class)))
+      (let ((explicit (cdar (org-collect-keywords '("LATEX_CLASS")))))
+        (unless explicit
+          (plist-put info :latex-class class))))
+    ;; Override compiler
+    (when-let ((compiler (plist-get template :compiler)))
+      (let ((explicit (cdar (org-collect-keywords '("LATEX_COMPILER")))))
+        (unless explicit
+          (plist-put info :latex-compiler compiler))))
+    ;; Override cover-page
+    (when (plist-member template :cover-page)
+      (let ((explicit (cl-find-if
+                       (lambda (opt-line)
+                         (plist-get (org-export--parse-option-keyword opt-line 'latex) :latex-cover-page))
+                       (cdar (org-collect-keywords '("OPTIONS"))))))
+        (unless explicit
+          (setq org-latex-cover-page (plist-get template :cover-page)))))))
+#+end_src
+
+修改现有的 ~org-splice-latex-header~ 建议以追加模板的额外序言。
+
+#+begin_src emacs-lisp
+;; NOTE: The original `org-splice-latex-header-and-generated-preamble-a' is
+;; defined in §序言生成.  Here we replace it with a version that also injects
+;; the template's :extra-preamble.
+(defadvice! org-splice-latex-header-and-generated-preamble-a (orig-fn tpl def-pkg pkg snippets-p &optional extra)
+  "Dynamically insert preamble content and template extra-preamble."
+  :around #'org-splice-latex-header
+  (let ((header (funcall orig-fn tpl def-pkg pkg snippets-p extra)))
+    (if snippets-p header
+      (let ((template (org-latex-get-template org-export-latex--preamble-info)))
+        (concat header
+                (org-latex-generate-features-preamble (org-latex-detect-features nil org-export-latex--preamble-info))
+                (when template (or (plist-get template :extra-preamble) ""))
+                "\n")))))
+#+end_src
+
+使用方法非常简单，在 Org 文件头部添加：
+#+begin_example
+,#+options: template:academic
+#+end_example
+
+也可以显式覆盖模板中的某些设置：
+#+begin_example
+,#+options: template:thesis coverpage:no
+,#+latex_class: article
+,#+latex_compiler: xelatex
+#+end_example
+
+自定义模板只需要向 ~org-latex-export-templates~ 中添加新项即可：
+#+begin_src emacs-lisp :tangle no
+;; 例: 添加一个 IEEE 会议论文模板
+(add-to-list 'org-latex-export-templates
+             '("ieee"
+               :class "blank"
+               :compiler "pdflatex"
+               :forced-features (caption cleveref)
+               :extra-preamble "\\documentclass[conference]{IEEEtran}\n"
+               :cover-page nil))
+#+end_src
+
+**** 更好看的代码块
+
+来个序言区模板，主要采用 ~tcblisting~ 生成主题 box
+
+#+name: latex-tcblisting-code-preamble
+#+begin_src LaTeX
+\usepackage{accsupp}
+\usepackage[most,breakable,minted]{tcolorbox}
+\definecolor{solarized-light-background}{HTML}{FDF6E3}
+\definecolor{solarized-light-frame}{HTML}{EEE8D6}
+\definecolor{solarized-light-title}{HTML}{979797}
+\definecolor{solarized-light-lineno}{HTML}{237D99}
+\newcommand{\SetFancyVerbLine}{
+  \renewcommand{\theFancyVerbLine}{
+    \protect\BeginAccSupp{ActualText={}}\sffamily\textcolor{solarized-light-lineno}{\scriptsize\oldstylenums{\arabic{FancyVerbLine}}}\protect\EndAccSupp{}
+  }
+}
+\newenvironment{orglisting}[2][]{
+  \SetFancyVerbLine
+  \tcblisting{
+    frame empty,
+    enhanced jigsaw,
+    drop fuzzy shadow,
+    breakable,
+    center,
+    width=\linewidth,
+    bottom=1mm, top=1mm, left=6mm,
+    fonttitle=\bfseries,
+    listing only,
+    listing engine=minted,
+    colback=solarized-light-background,
+    colframe=solarized-light-frame,
+    coltitle=solarized-light-title,
+    minted style=solarized-light,
+    minted language=#2,
+    minted options={
+      breaklines=t,
+      breakbefore=.,
+      samepage=nil,
+      encoding=utf8,
+      fontsize=\small,
+      mathescape=t,
+      escapeinside=,
+      autogobble=t,
+      breakautoindent=t,
+      tabsize=4,
+      numbersep=2mm,
+      % numbers=left,
+      numberblanklines=t,
+      firstline=1,
+      firstnumber=1,
+      % lastline=,
+      showspaces=nil,
+      space=\textvisiblespace, %% only showspaces=true
+      obeytabs=nil,
+      showtabs=nil,
+      #1
+    },
+  }
+}{
+  \endtcblisting
+}
+#+end_src
+
+设置一下自己的代码渲染方式
+#+begin_src emacs-lisp :noweb-ref ox-latex-conf :noweb no-export :tangle no
+(setq! org-latex-listings 'tcblisting
+       org-latex-tcblisting-code-preamble "
+<<latex-tcblisting-code-preamble>>
+")
+#+end_src
+
+修改一下导出代码块的行为
+
+#+begin_src emacs-lisp
+(defadvice! org-latex-src-block-tcblisting (orig-fn src-block contents info)
+  "Like `org-latex-src-block', but supporting an tcblisting backend"
+  :around #'org-latex-src-block
+  (if (eq 'tcblisting org-latex-src-block-backend)
+      (ginshio/org-latex-scr-block src-block contents info)
+    (funcall orig-fn src-block contents info)))
+
+(defun ginshio/org-latex-src-block-getlang (language minted-langs)
+  (if (not (string-equal-ignore-case language "fundamental"))
+      (or (cadr (assq (intern language) minted-langs))
+          (downcase language))
+    "text"))
+
+(defun ginshio/org-latex-scr-block (src-block contents info)
+  (let* ((lang (org-element-property :language src-block))
+         (attributes (org-export-read-attribute :attr_latex src-block))
+         (float (plist-get attributes :float))
+         (num-start (org-export-get-loc src-block info))
+         (retain-labels (org-element-property :retain-labels src-block))
+         (caption (org-element-property :caption src-block))
+         (caption-above-p (org-latex--caption-above-p src-block info))
+         (caption-str (org-latex--caption/label-string src-block info))
+         (placement (or (org-unbracket-string "[" "]" (plist-get attributes :placement))
+                        (plist-get info :latex-default-figure-position)))
+         (float-env
+          (cond
+           ((string= "multicolumn" float)
+            (format "\\begin{listing*}[%s]\n%s%%s\n%s\\end{listing*}"
+                    placement
+                    (if caption-above-p caption-str "")
+                    (if caption-above-p "" caption-str)))
+           (caption
+            (format "\\begin{listing}[%s]\n%s%%s\n%s\\end{listing}"
+                    placement
+                    (if caption-above-p caption-str "")
+                    (if caption-above-p "" caption-str)))
+           ((string= "t" float)
+            (concat (format "\\begin{listing}[%s]\n" placement)
+                    "%s\n\\end{listing}"))
+           (t "%s")))
+         (options (plist-get info :latex-minted-options))
+         (body
+          (format
+           "\\begin{orglisting}[%s]{%s}\n%s\\end{orglisting}"
+           ;; Options.
+           (concat
+            (org-latex--make-option-string
+             (if (or (not num-start) (assoc "linenos" options))
+                 options
+               (append
+                `(("linenos")
+                  ("firstnumber" ,(number-to-string (1+ num-start))))
+                options)))
+            (let ((local-options (plist-get attributes :options)))
+              (and local-options (concat "," local-options))))
+           ;; Language.
+           (ginshio/org-latex-src-block-getlang lang (plist-get info :latex-minted-langs))
+           ;; Source code.
+           (let* ((code-info (org-export-unravel-code src-block))
+                  (max-width
+                   (apply 'max
+                          (mapcar 'length
+                                  (org-split-string (car code-info)
+                                                    "\n")))))
+             (org-export-format-code
+              (car code-info)
+              (lambda (loc _num ref)
+                (concat
+                 loc
+                 (when ref
+                   ;; Ensure references are flushed to the right,
+                   ;; separated with 6 spaces from the widest line
+                   ;; of code.
+                   (concat (make-string (+ (- max-width (length loc)) 6)
+                                        ?\s)
+                           (format "(%s)" ref)))))
+              nil (and retain-labels (cdr code-info)))))))
+    ;; Return value.
+    (format float-env body)))
+#+end_src
+
+内联代码块的行为相对更好修改
+#+begin_src emacs-lisp
+(defadvice! org-latex-inline-src-block-tcblisting (orig-fn inline-src-block contents info)
+  "Like `org-latex-inline-src-block', but supporting an tcblisting backend"
+  :around #'org-latex-inline-src-block
+  (if (eq 'tcblisting org-latex-src-block-backend)
+      ;; (funcall orig-fn inline-src-block contents (plist-put info :latex-listings 'minted))
+      (ginshio/org-latex-inline-src-block inline-src-block contents info)
+    (funcall orig-fn inline-src-block contents info)))
+
+(defun ginshio/org-latex-inline-src-block (inline-src-block _contents info)
+  (let* ((code (org-element-property :value inline-src-block))
+         (org-lang (org-element-property :language inline-src-block))
+         (mint-lang (ginshio/org-latex-src-block-getlang org-lang (plist-get info :latex-minted-langs)))
+         (options (org-latex--make-option-string
+                   (plist-get info :latex-minted-options))))
+    (format "\\mintinline%s{%s}{%s}"
+            (if (string= options "") "" (format "[%s]" options))
+            mint-lang code)))
+#+end_src
+
+最终将其添加到智能序言中
+#+begin_src emacs-lisp
+(add-to-list 'org-latex-conditional-features '("^[ \t]*#\\+begin_src\\|^[ \t]*#\\+BEGIN_SRC\\|src_[A-Za-z]" . tcblisting-code-preamble) t)
+(add-to-list 'org-latex-feature-implementations '(tcblisting-code-preamble :snippet org-latex-tcblisting-code-preamble :order 99) t)
+#+end_src
+
+有一个问题，就是代码中的所有引号有问题。
+
+**** 使 verbatim 与 code 不同
+
+区分 =verbatim= 和 ~verb~
+
+#+begin_src emacs-lisp
+(setq! org-latex-text-markup-alist
+       '((bold . "\\textbf{%s}")
+         (code . protectedtexttt)
+         (italic . "\\emph{%s}")
+         (strike-through . "\\sout{%s}")
+         (underline . "\\uline{%s}")
+         (verbatim . verb)))
+#+end_src
+
+*** Pandoc 导出
+:properties:
+:CUSTOM_ID: org_export_pandoc
+:header-args:emacs-lisp: :tangle no :noweb-ref ox-pandoc-conf
+:end:
+
+顾名思义，这是一个语言的巴别塔，我们可以在 org-mode 中运行所有编程语言！当然，我
+们需要定制一些东西。
+
+#+begin_src emacs-lisp :noweb no-export :noweb-ref org-export-conf :tangle no
+(after! ox-pandoc
+  <<ox-pandoc-conf>>
+  )
+#+end_src
+
+**** GitHub Flavored Markdown
+
+在使用 Pandoc 进行导出 gfm 时，链接 headline 时链接会被导出为数字。具体参见
+[[https://github.com/kawabata/ox-pandoc/issues/58][Issue #58]]。
+
+#+begin_src emacs-lisp
+(advice-add 'org-pandoc-link
+            :around #'(lambda (fun link contents info)
+                        (let* ((dest (when (string= (org-element-property :type link) "fuzzy")
+                                       (org-export-resolve-fuzzy-link link info)))
+                               (dest-type (when dest (org-element-type dest)))
+                               (path (org-element-property :path link)))
+                          (if (eq dest-type 'headline)
+                              (format "[[#%s][%s]]" path path)
+                            (funcall fun link contents info)))))
+#+end_src

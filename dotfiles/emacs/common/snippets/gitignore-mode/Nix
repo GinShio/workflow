@@ -1,0 +1,17 @@
+# -*- mode: snippet -*-
+# name: nix
+# key: nix
+# expand-env: ((yas-indent-line nil))
+# --
+######################### Nix #########################
+# repo: github/gitignore; pin: c5bf3caf29b; file: Nix.gitignore
+# LICENSE: Creative Commons Zero v1.0 Universal
+# Ignore build outputs from performing a nix-build or `nix build` command
+result
+result-*
+
+# Ignore automatically generated direnv output
+.direnv
+
+# Ignore NixOS interactive test driver history
+**/.nixos-test-history

@@ -1,0 +1,27 @@
+[project]
+org = "{{@@ wits.projects.source_info['vvl'].org @@}}"
+build_system = "cmake"
+generator = "Ninja Multi-Config"
+toolchain = "clang"
+default_presets = ["common"]
+
+[repos.main]
+path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
+build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+main_branch = "main"
+[repos.main.remotes]
+origin = "https://github.com/KhronosGroup/Vulkan-ValidationLayers.git"
+
+[project.presets."common.linux"]
+applies_when = { os = "linux" }
+[project.presets."common.linux".definitions]
+BUILD_WSI_XCB_SUPPORT = false
+BUILD_WSI_XLIB_SUPPORT = false
+BUILD_WSI_WAYLAND_SUPPORT = true
+
+[project.presets.common]
+extends = ["common.linux"]
+[project.presets.common.definitions]
+UPDATE_DEPS = true
+BUILD_WERROR = true
+BUILD_TESTS = true

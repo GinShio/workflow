@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText:
+# SPDX-License-Identifier: MIT
+# Title: Doom Emacs 配置文件
+#+title: Doom Emacs Configuration
+#+html_head: <link rel='shortcut icon' type='image/png' href='https://www.gnu.org/software/emacs/favicon.png'>
+#+property: header-args:emacs-lisp :tangle yes :comments link
+#+property: header-args:elisp :exports code
+#+property: header-args :tangle "no" :results silent :eval no
+#+options: coverpage:yes
+#+startup: fold
+#+latex_compiler: lualatex
+#+latex_header: \usepackage{ctex}
+
+#+begin_quote
+让我们改变对程序构建的传统态度：
+与其想象我们的主要任务是指导计算机做什么，
+不如专注于向人们解释我们想让计算机做什么。
+@@latex:\mbox{@@--- 高德纳@@latex:}@@
+#+end_quote
+
+
+#+include: org/00-basic.org
+#+include: org/10-packages.org
+#+include: org/20-lang-common.org
+#+include: org/21-lang-lsp-dap.org
+#+include: org/25-org-mode.org
+#+include: org/27-org-html.org
+#+include: org/27-org-latex.org
+#+include: org/29-lang-others.org
+#+include: org/90-workarounds.org
+#+include: org/99-references.org

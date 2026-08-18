@@ -1,0 +1,11 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+# Ask before committing straight onto a shared branch. Opt-in.
+cfg_bool wits.hooks.pre-commit.warn-protected-enable || exit 0
+
+protected=$(cfg_value wits.hooks.protected-branch '^(main|master|dev|release-.*|patch-.*)$')
+printf '%s\n' "$CURRENT_BRANCH" | grep -qE "$protected" || exit 0
+
+log_warn "Committing to protected branch '$CURRENT_BRANCH' — think before you type."
+prompt_confirm || { log_warn "Aborted."; exit 1; }

@@ -1,0 +1,2 @@
+[variables.grub.amdgpu]
+kernel_parameters = ['amdgpu.dcdebugmask=0x600']

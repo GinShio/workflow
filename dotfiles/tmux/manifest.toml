@@ -1,0 +1,6 @@
+[[install]]
+id = 'tmux'
+dst = '~/.config/tmux/'
+path = '.'
+capabilities = ['develop']
+planes = ['user']

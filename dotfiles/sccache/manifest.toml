@@ -1,0 +1,6 @@
+[[install]]
+id = 'sccache'
+dst = '~/.config/sccache/'
+path = '.'
+capabilities = ['develop']
+planes = ['user']

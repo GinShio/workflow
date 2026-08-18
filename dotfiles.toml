@@ -1,0 +1,22 @@
+# Where everything is. Every path below is relative to this file's directory,
+# which is what makes it the repository root.
+#
+# The defaults assume a repository keeps its generated output beside its
+# composition table; this one puts the bundle in a subdirectory so the
+# per-overlay encryption rules in dotfiles/dotdrop/.gitattributes have a stable
+# prefix to match on.
+
+[layout]
+modules = 'dotfiles'
+module_manifest = 'manifest.toml'
+module_fragments = 'manifest'
+composition = 'dotfiles/dotdrop/hosts.toml'
+globals = 'dotfiles/dotdrop/globals.toml'
+fragments = 'dotfiles/dotdrop/manifest'
+
+[output]
+dir = 'dotfiles/dotdrop'
+entrypoint = '{plane}.{host}.toml'
+variables = 'bundle/variables.toml'
+actions = 'bundle/actions.toml'
+overlay_variables = 'bundle/{overlay}/variables.toml'

@@ -1,0 +1,6 @@
+[[install]]
+id = 'proxychains'
+dst = '~/.proxychains/'
+path = '.'
+capabilities = ['develop']
+planes = ['user']

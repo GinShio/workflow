@@ -1,0 +1,337 @@
+* 語言框架
+
+本模塊只回答一個問題：*Emacs 怎麼理解一段代碼的結構*。哪裏是一個函數、哪裏是一個
+字符串、按下 Tab 該縮進幾格、按下摺疊該收起哪一段。至於「這個符號指向哪裏」屬於語
+義，歸 lsp；「這一行此刻的值是什麼」屬於運行時，歸 dap。
+
+它不認識任何具體語言。每種語言在自己的文件裏（=80-lang-*.org=）向這裏註冊它的
+grammar 和主模式，向 lsp 註冊它的語言服務器。這樣一種語言的所有事情在一個文件裏，
+停用它就是註釋掉 =init.el= 裏的一行。
+
+Emacs 的 parser、grammar 安裝與 tree-sitter major mode 接口見
+[[info:elisp#Parsing Program Source][Elisp manual: Parsing Program Source]]；outline 的摺疊模型見
+[[info:emacs#Outline Mode][Emacs manual: Outline Mode]]。結構移動與摺疊鍵集中在
+[[file:../GUIDE.org::*結構與摺疊][GUIDE.org]]。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el" :comments no
+;;; ginshio-lang.el --- how this editor reads code -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+(require 'ginshio-path)
+(require 'ginshio-doctor)
+(require 'ginshio-keys)
+(require 'outline)
+(require 'seq)
+#+end_src
+
+** 為什麼要語法樹
+
+Emacs 傳統的語法高亮建立在正則式上。對 C++ 這種語言，正則式能做的只是猜測——它分
+不清 =foo(bar)= 是函數調用還是變量聲明，因為那需要上下文，而正則式沒有上下文。症狀
+是高亮偶爾錯得莫名其妙，並且沒有辦法修，因為問題不在某一條規則裏，在方法本身。
+
+tree-sitter 維護一棵真正的語法樹，並在你每次擊鍵時增量更新它。高亮、縮進、按函數跳
+轉、按聲明摺疊於是全都變成對樹的查詢，答案要麼對要麼是解析錯誤，不會是猜測。
+
+代價是 grammar 不隨 Emacs 分發，它是每種語言一個要現場編譯的動態庫。下面大半篇幅在
+處理「它可能不在」這件事。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+(defconst ginshio-lang-treesit-available
+  (and (fboundp 'treesit-available-p) (treesit-available-p))
+  "Whether this Emacs can parse with tree-sitter at all.
+Asked once.  Everything below degrades to the classic modes when it
+cannot, because a module that refuses to load would take the language
+setup with it.")
+
+(when ginshio-lang-treesit-available
+  (require 'treesit))
+#+end_src
+
+** grammar 從哪裏來
+
+*先用系統裝好的。* 發行版打包的 grammar 已經編譯好、跟着系統更新、和其他用到
+tree-sitter 的程序共用一份。自己編譯只在系統沒有的時候才有必要。
+
+這一點決定了搜索路徑的順序：我們自己的目錄 *追加* 在系統目錄後面，而不是插在前面。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+(defconst ginshio-lang-grammar-dir
+  (expand-file-name "tree-sitter/" ginshio-data-dir)
+  "Grammars compiled here, for the ones the system does not provide.")
+
+(when ginshio-lang-treesit-available
+  (add-to-list 'treesit-extra-load-path ginshio-lang-grammar-dir t))
+#+end_src
+
+按「丟了損失什麼」的標準，編譯好的 grammar 接近緩存——刪掉重編即可。但重編需要網絡
+和一個編譯器，和包樹是同一類情況：自動清理緩存的規則不該有能力讓你的編輯器在下次啓
+動時失去語法高亮。所以歸 data。
+
+** 註冊
+
+一種語言用一次調用說清它需要什麼。
+
+grammar 釘住具體版本。不釘住的後果很隱蔽：主模式裏的高亮和縮進規則是照着特定
+grammar 的節點名寫的，上游改了節點名之後，你得到的不是報錯，而是某一類語法元素的高
+亮悄悄消失，或者縮進在某種寫法下悄悄偏移。等你察覺，已經想不起是哪一次更新引入的。
+釘住之後升級變成一個明確的動作：改版本號、重裝、有問題就改回去。
+
+註冊是冪等的：同一種語言註冊兩次是替換而不是累積，所以重新加載一個語言模塊不會留下
+重複條目。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+(defvar ginshio-lang-grammars nil
+  "Alist of LANGUAGE to (URL REVISION), filled in by the language modules.")
+
+(defvar ginshio-lang-modes nil
+  "Alist of CLASSIC-MODE to (TREE-SITTER-MODE . LANGUAGES).")
+
+(defun ginshio-lang-register (&rest properties)
+  "Declare what a language needs in order to be read structurally.
+
+PROPERTIES is a plist:
+
+  :grammars  list of (LANGUAGE URL REVISION), pinned to a known-good tag
+  :modes     list of (CLASSIC-MODE TREE-SITTER-MODE . LANGUAGES), naming
+             the grammars each mode cannot work without"
+  (dolist (grammar (plist-get properties :grammars))
+    (setf (alist-get (car grammar) ginshio-lang-grammars) (cdr grammar))
+    (when ginshio-lang-treesit-available
+      (setf (alist-get (car grammar) treesit-language-source-alist)
+            (cdr grammar)))
+    (ginshio-lang--declare-grammar-check (car grammar)))
+  (dolist (row (plist-get properties :modes))
+    (setf (alist-get (car row) ginshio-lang-modes) (cdr row)))
+  (ginshio-lang-apply-mode-remap))
+#+end_src
+
+** 主模式
+
+Emacs 30 為每種語言帶了兩套主模式：傳統的和 tree-sitter 的。切換方式是往
+~major-mode-remap-alist~ 裏放一條轉發。這裏 *逐條* 添加而不是整體賦值——那張表是公
+共的，整體賦值會不聲不響地刪掉別人的條目。
+
+替換是有條件的，這是本節的重點。tree-sitter 主模式在 grammar 缺失時直接報錯，不是
+降級。無條件替換的結果是：一個沒編譯的動態庫，讓你連文件都打不開。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+(defun ginshio-lang-grammar-ready-p (language)
+  "Return non-nil when LANGUAGE's grammar is installed and loadable."
+  (and ginshio-lang-treesit-available (treesit-ready-p language t)))
+
+(defun ginshio-lang-apply-mode-remap ()
+  "Route classic major modes to their tree-sitter counterparts, where usable."
+  (dolist (entry ginshio-lang-modes)
+    (let ((classic (car entry))
+          (replacement (cadr entry))
+          (languages (cddr entry)))
+      (when (and (fboundp replacement)
+                 (seq-every-p #'ginshio-lang-grammar-ready-p languages))
+        (setf (alist-get classic major-mode-remap-alist) replacement)))))
+#+end_src
+
+** 補上缺的
+
+安裝是一個顯式命令，不在啓動時自動進行——拉倉庫再調用編譯器是以分鐘計的事，不該發生
+在你只想打開一個文件的時候。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+(defun ginshio/lang-install-grammars (&optional reinstall)
+  "Build the grammars the system does not already provide.
+With a prefix argument, REINSTALL the ones that are present -- what you
+want after changing a pinned revision, since a grammar that already
+loads is otherwise left alone."
+  (interactive "P")
+  (unless ginshio-lang-treesit-available
+    (user-error "This Emacs was built without tree-sitter support"))
+  (let ((built 0))
+    (dolist (grammar ginshio-lang-grammars)
+      (let ((language (car grammar)))
+        (when (or reinstall (not (treesit-ready-p language t)))
+          (message "Building the %s grammar..." language)
+          (treesit-install-language-grammar language ginshio-lang-grammar-dir)
+          (setq built (1+ built)))))
+    (ginshio-lang-apply-mode-remap)
+    (message "%d grammar(s) built in %s" built ginshio-lang-grammar-dir)))
+#+end_src
+
+知道一個 grammar 是從哪裏來的，在它行為異常時是第一個要問的問題——系統的那份和你編
+譯的那份版本可能差很遠。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+(defun ginshio-lang-grammar-origin (language)
+  "Return the directory LANGUAGE's grammar was loaded from, as a string."
+  (let ((library (format "libtree-sitter-%s%s" language module-file-suffix)))
+    (or (seq-find (lambda (dir) (file-exists-p (expand-file-name library dir)))
+                  treesit-extra-load-path)
+        "a default search path")))
+#+end_src
+
+** 摺疊
+
+一份幾千行的 C++ 文件，讀的時候真正需要看見的是「這個文件裏有哪些東西」，而不是每
+一行。
+
+摺疊的實現有三種常見做法，差別很大。按縮進猜層級，遇到跨行的參數列表就亂；按大括號
+配對，遇到字符串裏的括號就亂。第三種是問語法樹——而 tree-sitter 主模式已經告訴了
+Emacs 自己的大綱結構，所以內建的 ~outline-minor-mode~ 在這些模式下摺疊的是 *聲明*，
+不是縮進塊也不是括號對。
+
+不需要任何包。只要在能回答這個問題的模式裏把它打開。
+
+*** 一處要繞開的上游缺陷
+
+大綱接口有兩種問法：「往下一個標題在哪」和「當前這一行是不是標題」。Emacs 30.2 的
+tree-sitter 實現只答對了第一種。
+
+第二種它是這樣答的：看語法樹上標記標題的那個節點是否覆蓋光標所在位置。問題在於
+C/C++ 用來標記標題的節點是 *函數聲明符*——在 =int helper(int a) {= 這一行裏，它從第
+四列才開始，既不覆蓋行首也不覆蓋行尾。於是每一行都被判定為「不是標題」。
+
+後果是分裂的：全緩衝區的命令（全部收起、全部展開、跳到下一個聲明）正常，而所有需要
+「先確認你站在一個標題上」的命令——收起這一個、展開這一個、循環——一律報「Before
+first heading」。
+
+改用搜索來回答同一個問題：從本行行首往下找一個標題，找到的如果就是本行，那本行就是
+標題。這比原本的判斷貴一點，但它和第一種問法用的是同一套邏輯，所以兩者不可能再打架。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+(defun ginshio-lang-outline-search (&optional bound move backward looking-at)
+  "Find outline headings the way `outline-search-function' expects.
+
+Defers to the tree-sitter implementation except when asked whether point
+is already on a heading.  That question is answered there by testing
+whether the node marking a heading covers point, which is false on every
+heading line in C and C++: the node is the function declarator, and it
+starts several columns in.  Answering by search instead keeps both
+questions consistent.
+
+Delete this once the two agree upstream."
+  (if looking-at
+      (let ((origin (pos-bol)))
+        (save-excursion
+          (goto-char origin)
+          (and (treesit-outline-search bound nil nil nil)
+               (= (pos-bol) origin))))
+    (treesit-outline-search bound move backward looking-at)))
+
+(defun ginshio-lang-enable-outline-h ()
+  "Turn on folding where the major mode can say what its outline is.
+Tree-sitter modes answer from the syntax tree, so folds follow
+declarations rather than indentation or brace counting."
+  (when (eq outline-search-function #'treesit-outline-search)
+    (setq-local outline-search-function #'ginshio-lang-outline-search))
+  (when (local-variable-p 'outline-search-function)
+    (outline-minor-mode 1)))
+
+(add-hook 'prog-mode-hook #'ginshio-lang-enable-outline-h)
+#+end_src
+
+這個 minor mode 自帶一個 ~C-c @~ 前綴。minor mode 的映射不經過全域映射，所以那個前
+綴會在每一個代碼緩衝區裏復活——而 ~C-c~ 這一層是留給主模式的。摘掉它，功能改由
+leader 提供。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+(with-eval-after-load 'outline
+  (keymap-unset outline-minor-mode-map "C-c @" t))
+#+end_src
+
+** 導航
+
+有了語法樹，「上一個函數」就不再是「上一個第一列的左括號」這種近似。
+
+~top-level~ 這個取捨值得說一句：默認行為是跳到 *最近* 的一層定義，在 C++ 裏意味着
+光標在 lambda 或嵌套類裏時跳轉停在那個 lambda 上。改成只認最外層之後，這個鍵回到它
+在肌肉記憶裏的含義——上一個/下一個函數。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+(setq treesit-defun-tactic 'top-level)
+#+end_src
+
+** 鍵位
+
+摺疊自成一支。用 =z= 是因為在 vi 傳統裏摺疊命令全部以 =z= 開頭，而這是少數幾個跨編
+輯器通用的助記符之一。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+(ginshio-leader-define
+ "z"   "fold"
+ "z z" #'outline-cycle
+ "z a" #'outline-cycle-buffer
+ "z c" #'outline-hide-subtree
+ "z o" #'outline-show-subtree
+ "z m" #'outline-hide-body
+ "z r" #'outline-show-all
+ "z n" #'outline-next-visible-heading
+ "z p" #'outline-previous-visible-heading
+ "z u" #'outline-up-heading)
+#+end_src
+
+全部與「讀代碼結構」有關的鍵，包括不是本模塊綁的：
+
+| 鍵         | 命令                          | 來自                     |
+|------------+-------------------------------+--------------------------|
+| ~C-M-a~      | 上一個函數開頭                | 內建，=motion= 組召回      |
+| ~C-M-e~      | 下一個函數結尾                | 同上                     |
+| ~C-M-f~ ~C-M-b~ | 前進/後退一個語法節點      | 同上                     |
+| ~C-M-u~ ~C-M-d~ | 上一層 / 下一層節點        | 同上                     |
+| ~C-M-n~ ~C-M-p~ | 下一個/上一個同級節點      | 同上                     |
+| ~M-m z z~    | 摺疊或展開光標所在的這一個    | 本模塊                   |
+| ~M-m z a~    | 整個緩衝區在幾種摺疊程度間循環 | 本模塊                  |
+| ~M-m z c~ ~z o~ | 收起 / 展開                | 本模塊                   |
+| ~M-m z m~ ~z r~ | 全部收起 / 全部展開        | 本模塊                   |
+| ~M-m z n~ ~z p~ ~z u~ | 下一個 / 上一個 / 上一層聲明 | 本模塊           |
+| ~TAB~ ~S-TAB~  | 在大綱標題行上循環摺疊        | outline 自帶，僅標題行生效 |
+
+~C-M-h~（選中整個函數）不在 =motion= 組裏，所以目前沒有綁定。要的話把它加進
+=06-keys.org=。
+
+** 加一種語言
+
+寫一個 =org/80-lang-NAME.org=，生成 =lisp/ginshio-lang-NAME.el=，在 =config.org= 加
+一行 =#+include=，在 =init.el= 的 ~ginshio-modules~ 裏加 ~lang-NAME~。文件裏做四件
+事，缺哪件就少哪項能力：
+
+| 要什麼        | 怎麼做                                  |
+|---------------+-----------------------------------------|
+| 語法高亮、摺疊 | ~ginshio-lang-register~ 的 ~:grammars~ 與 ~:modes~ |
+| 縮進風格       | 該主模式自己的變量，就地 ~setq~           |
+| 跳轉、診斷、補全 | ~ginshio-lsp-register-server~             |
+| 調試           | 多半不用做，見 dap 模塊                  |
+
+** 自檢項
+
+grammar 缺失只是降級不是故障，所以是 warn，而且順帶報出它實際來自哪裏。編譯器缺失
+要單獨報——沒有它，那條補救命令會失敗，而失敗信息埋在編譯輸出裏，離原因很遠。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+(defun ginshio-lang--declare-grammar-check (language)
+  "Have the doctor report on LANGUAGE's grammar."
+  (ginshio-doctor-declare 'lang (format "%s grammar" language)
+                          (lambda () (ginshio-lang-grammar-ready-p language))
+                          :severity 'warn
+                          :note "without it this language falls back to the classic mode"
+                          :detail (lambda ()
+                                    (format "not found under %s"
+                                            (string-join treesit-extra-load-path " ")))
+                          :remedy "install it from the distribution, or M-x ginshio/lang-install-grammars"
+                          :when (lambda () ginshio-lang-treesit-available)))
+
+(ginshio-doctor-declare 'lang "tree-sitter support"
+                        (lambda () ginshio-lang-treesit-available)
+                        :note "structural parsing for code buffers"
+                        :remedy "install libtree-sitter and rebuild Emacs against it")
+
+(ginshio-doctor-declare 'lang "C compiler"
+                        (lambda () (or (executable-find "cc") (executable-find "gcc")))
+                        :severity 'warn
+                        :note "only needed for grammars the system does not package"
+                        :remedy "zypper install gcc gcc-c++")
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el" :comments no
+(provide 'ginshio-lang)
+;;; ginshio-lang.el ends here
+#+end_src

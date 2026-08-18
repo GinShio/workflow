@@ -1,0 +1,16 @@
+[tests.radv-vk]
+driver = "radv"
+suite = "deqp-vk"
+
+[tests.radv-zink-gl]
+driver = "radv"
+backend = "zink"
+suite = "piglit"
+
+[tests.amdvlk-vk]
+driver = "amdvlk"
+suite = "deqp-vk"
+
+[tests.lvp-vk]
+driver = "lvp"
+suite = "deqp-vk"

@@ -1,0 +1,517 @@
+#+title: Ginshio Emacs 使用指南
+#+author: GinShio
+#+startup: overview
+
+這份文件回答「配置已經裝好了，接下來怎麼用」。實作理由仍在 =config.org= 與
+=org/*.org=；這裏只整理入口、工作流、模式鍵與上游手冊。
+
+* 先學會發現功能
+
+這份配置清空的是 *全域* keymap，沒有清空 major mode 與 minor mode 的 map。也就是說：
+
+- 自己的跨模式命令都從 leader ~M-m~ 進入。
+- 某個模式自己的命令仍然留在 =C-c=、單鍵或 mode-local 前綴下。
+- 引入一個包，不等於要把它的全部命令重新綁一次；先用 Emacs 的自省能力讀它。
+
+| 入口       | 用途                                                        |
+|------------+-------------------------------------------------------------|
+| ~M-m~        | 打開 leader；停 0.5 秒，which-key 顯示下一層                 |
+| ~M-m SPC~    | 執行任意命令，等同 ~M-x~                                     |
+| ~M-m h m~    | ~describe-mode~：當前 major/minor mode、模式鍵與說明          |
+| ~M-m h k~    | ~describe-key~：按一個鍵，查看它在此處實際解析成什麼          |
+| ~M-m h f~    | ~describe-function~：函數文檔、定義位置、來源文件             |
+| ~M-m h v~    | ~describe-variable~：變量文檔、當前值、custom group          |
+| ~M-m h b~    | ~describe-bindings~：列出當前緩衝區所有有效鍵位               |
+| ~M-m h a~    | ~apropos-command~：按名字或概念搜索命令                       |
+| ~M-m h i~    | 打開 Info                                                     |
+| ~M-m h r~    | 打開 GNU Emacs manual                                        |
+| ~M-m f g~    | 打開本指南                                                    |
+| ~M-m f p~    | 打開文學配置源碼                                              |
+
+按了 leader 後 which-key 顯示的是這份配置的樹；進入 Dired、Magit、Dape、Markdown 等
+模式後，~M-m h m~ 顯示的是該模式自己的完整接口。兩者合起來纔是全部功能。
+
+上游基礎文檔：[[info:emacs#Key Bindings][Emacs: Key Bindings]]、[[info:elisp#Keymaps][Elisp: Keymaps]]、
+[[https://github.com/justbur/emacs-which-key][which-key README]]。
+
+* 安裝、同步、清理與診斷
+
+普通 Emacs 是套件 *消費者*。它只讀 =elpaca.lock=、source 與當前 Emacs 版本的 build；缺
+任何一項就中止，不嘗試聯網修復。
+
+| shell 命令                           | 何時使用                                             |
+|--------------------------------------+------------------------------------------------------|
+| =bin/vanilla-emacs sync=               | 第一次安裝，或配置/lock 改變後按鎖安裝與重建          |
+| =bin/vanilla-emacs sync --upgrade=     | 主動接受上游新 revision，重建並更新 lock              |
+| =bin/vanilla-emacs clean=              | 丟棄 tangle、套件與 native-comp 產物，回到未同步狀態  |
+| =bin/vanilla-emacs doctor=             | 配置能啓動，但某個外部功能不工作時                    |
+
+=clean= 只刪除可由 =sync= 重建的內容：=early-init.el=、=init.el=、=lisp/= 與
+=$XDG_DATA_HOME/emacs/elpaca/，以及 =$XDG_CACHE_HOME/emacs/eln-cache/=。文學源碼、
+=elpaca.lock=、書籤、歷史、grammar、auto-save 與 backup 等都保留。先由 system/service
+停止所有使用這份配置的 Emacs 再清理；腳本不探測或管理 daemon。執行後不要直接啓動
+Emacs：普通啓動會按契約失敗，下一步應是
+=bin/vanilla-emacs sync=。
+
+套件查看入口：
+
+| 命令                 | 用途                                             |
+|----------------------+--------------------------------------------------|
+| ~M-x elpaca-manager~   | 查看已排入配置的套件、狀態與 recipe              |
+| ~M-x elpaca-log~       | 查看本輪構建與激活事件                           |
+| ~M-x elpaca-info~      | 查看一個套件的 recipe、source 與依賴             |
+| ~M-x elpaca-visit~     | 打開套件 source；帶前綴參數則打開 build          |
+
+上述查看命令可用；fetch、update、merge、rebuild、delete、write-lock 一律在正常會話中被
+拒絕。需要改動套件樹時退出編輯流程，使用 =bin/vanilla-emacs sync=；要接受上游新 revision 時加
+=--upgrade=。
+
+手冊：[[info:elpaca#Top][Elpaca manual]]、[[file:org/08-packages.org][本配置的 package lifecycle]]。
+
+** XDG 目錄
+
+| 變量               | 這份配置放什麼                                  |
+|--------------------+-------------------------------------------------|
+| =XDG_CONFIG_HOME=    | auth source 等真正的配置資料                    |
+| =XDG_DATA_HOME=      | 套件 source/build、書籤、縮寫                   |
+| =XDG_STATE_HOME=     | 歷史、最近文件、位置、項目、layout、斷點        |
+| =XDG_CACHE_HOME=     | 備份、自動保存、native compilation、TRAMP cache |
+| =XDG_RUNTIME_DIR=    | 本機 Emacs server socket                        |
+
+五個變量都必須存在且是絕對路徑；runtime 必須已存在、可寫、權限 =0700=。其餘
+=…/emacs/= 子目錄由配置建立並收緊成 =0700=。
+
+* Server 與啓動
+
+** 默認 server
+
+配置本身同時兼容普通圖形 Emacs 與 daemon；=bin/vanilla-emacs= 不包裝它們。普通圖形 Emacs
+啓動後會自動開 server，daemon 則應由 system/service 管理。
+
+絕大多數時候只用 Emacs 的默認名字 =server=。daemon service 的底層命令與日常客戶端可以
+直接使用 Emacs 原生接口：
+
+#+begin_src shell
+emacs --init-directory=/path/to/emacs-next --fg-daemon
+emacsclient -c
+#+end_src
+
+不指定名字時，=server-name= 保持 Emacs 的默認值，所以裸 =emacsclient=、Git 的
+=emacsclient= 與桌面啓動器都沿用 Emacs 原本的行為。
+
+** 多 server
+
+需要隔離另一套 daemon 時才顯式命名：
+
+#+begin_src shell
+emacs --init-directory=/path/to/emacs-next --fg-daemon=work
+emacsclient -s work -c
+GINSHIO_SERVER_NAME=scratch emacs --init-directory=/path/to/emacs-next
+#+end_src
+
+daemon 名由 ~--daemon=NAME~ / ~--fg-daemon=NAME~ 帶入；=GINSHIO_SERVER_NAME= 只用於讓普通
+圖形 Emacs 顯式成為另一個具名 server。不要把它全局設成非默認值，否則普通 Emacs 也會
+離開日常使用的默認 =server=。
+
+** 啓動畫面與 initial-buffer-choice
+
+沒有文件要打開時顯示 dashboard；命令行已要求打開文件時，那個文件直接佔滿 frame，不先
+插入 dashboard 造成分屏。空的 emacsclient frame 仍顯示 dashboard。
+
+dashboard 的 =r=、=p=、=m= 分別進入最近文件、項目、書籤；在 dashboard 裏先用
+~M-m h m~ 查看它完整的 mode-local 鍵位。上游文檔：
+[[https://github.com/emacs-dashboard/emacs-dashboard][emacs-dashboard README]]。
+
+* Leader 總覽
+
+| 前綴       | 主題             | 主要來源                |
+|------------+------------------+-------------------------|
+| ~M-m SPC~    | 執行命令         | keys                    |
+| ~M-m b~      | 緩衝區           | keys、minibuffer        |
+| ~M-m f~      | 文件與配置       | keys、file              |
+| ~M-m s~      | 搜索與跳轉       | keys、minibuffer        |
+| ~M-m h~      | 幫助             | Emacs help-map          |
+| ~M-m q~      | 退出與重啓       | keys                    |
+| ~M-m .~      | 對當前候選項動手 | Embark                  |
+| ~M-m ,~      | 重跑上次選擇     | Vertico                 |
+| ~M-m i~      | 插入             | Consult                 |
+| ~M-m w~      | 窗口             | window                  |
+| ~M-m p~      | 項目             | project.el、tab-bar     |
+| ~M-m e~      | 編輯與多光標     | edit                    |
+| ~M-m !~      | 外部命令與終端   | shell、Eat              |
+| ~M-m r~      | 遠程             | TRAMP                   |
+| ~M-m z~      | 結構與摺疊       | treesit、outline        |
+| ~M-m c~      | 語義與診斷       | Eglot、xref、Flymake    |
+| ~M-m d~      | 調試             | Dape                    |
+| ~M-m g~      | 版本控制         | VC、diff-hl、smerge     |
+
+大寫通常是同一動作的較大範圍：~b s~ / ~b S~ 是保存一個 / 所有緩衝區，~s s~ / ~s S~ 是
+搜索一個 / 多個緩衝區，~g d~ / ~g D~ 是文件 / 倉庫 diff。
+
+完整聲明在 [[file:org/06-keys.org][keys 模塊]]，各分支在自己的模塊中。
+
+* 選擇、搜索與補全
+
+** Minibuffer
+
+Vertico 只改候選項的呈現；Orderless 決定匹配；Marginalia 添加註解；Consult 提供候選
+來源；Embark 對候選項執行動作。
+
+Orderless 用空格分片且順序無關。例如輸入 =key el= 可以匹配 =ginshio-keys.el=。文件名
+類別保留 =basic= / =partial-completion=，所以 =~/=、環境變量與 TRAMP 路徑仍按 Emacs 的
+文件規則工作。
+
+Vertico 會話裏：
+
+| 鍵              | 用途                                      |
+|-----------------+-------------------------------------------|
+| ~C-n~ / ~C-p~     | 下一個 / 上一個候選項                     |
+| ~M-v~ / ~C-v~     | 上一頁 / 下一頁                           |
+| ~RET~             | 接受候選項                                |
+| ~TAB~             | 把候選項插入 minibuffer，繼續補全         |
+| ~M-RET~           | 接受當前原始輸入，不強制選候選項          |
+| 文件補全中 ~DEL~ | 按目錄層級向上刪                          |
+| 文件補全中 ~M-DEL~ | 刪除上一段路徑                          |
+| ~M-r~             | 用 Consult 選擇 minibuffer 歷史           |
+
+常用 Consult 入口：
+
+| 鍵         | 用途                                               |
+|------------+----------------------------------------------------|
+| ~M-m b b~    | 當前項目的緩衝區；不在項目中則顯示全域來源       |
+| ~M-m b B~    | 全域 buffer、最近文件、書籤、項目來源            |
+| ~M-m s s~    | 當前緩衝區全部匹配                               |
+| ~M-m s S~    | 多個緩衝區全部匹配                               |
+| ~M-m s g~    | ripgrep；默認從項目根開始                        |
+| ~M-m s G~    | git grep                                          |
+| ~M-m s f~    | fd 按文件名尋找                                  |
+| ~M-m s i~    | 當前緩衝區 imenu                                 |
+| ~M-m s I~    | 多緩衝區 imenu                                   |
+| ~M-m s m~    | mark ring                                         |
+| ~M-m f r~    | 最近文件                                         |
+| ~M-m i y~    | kill ring                                         |
+| ~M-m i r~ / ~i s~ | 跳到 / 儲存 register                         |
+
+跨文件命令不自動預覽；在候選項上按 ~M-.~ 才預覽。Consult 提示中按 =<= 進入 narrow，
+可用來源字母會顯示在列表中。給 =s g=、=s f= 等命令前綴參數時會先詢問目錄。
+
+上游文檔：[[https://github.com/minad/vertico][Vertico]]、[[info:orderless#Top][Orderless]]、
+[[https://github.com/minad/marginalia][Marginalia]]、[[https://github.com/minad/consult][Consult]]。
+
+** Embark 與批量修改搜索結果
+
+在 minibuffer 候選項或普通緩衝區中的文件名、URL、符號上按 ~M-m .~：
+
+| 動作鍵 | 用途                                      |
+|--------+-------------------------------------------|
+| =w=      | 複製候選項                               |
+| =i=      | 插入候選項                               |
+| =E=      | export 成對應的專用緩衝區               |
+| =S=      | snapshot 成 Embark Collect 緩衝區       |
+| =SPC=    | 選中多個候選項，之後可一次對全部操作    |
+| =A=      | 對全部候選項執行動作                     |
+
+批量改 grep 結果：
+
+1. ~M-m s g~ 搜索。
+2. ~M-m . E~ 導出成 grep 緩衝區。
+3. ~C-c C-p~ 進入 wgrep 可編輯狀態。
+4. 像普通文本一樣修改；~C-c C-d~ 標記刪除整行匹配。
+5. ~C-c C-c~ 或 ~C-x C-s~ 寫回原文件；~C-c C-k~ 放棄。
+6. ~C-x C-q~ 離開 wgrep。
+
+手冊：[[info:embark#Top][Embark]]、[[https://github.com/mhayashi1120/Emacs-wgrep][wgrep README]]。
+
+** 緩衝區內補全
+
+Corfu 自動在輸入兩個字符後彈出，候選項由 Eglot、major mode 與 Cape 共同提供：
+
+| 鍵          | 用途                                      |
+|-------------+-------------------------------------------|
+| ~C-n~ / ~C-p~ | 下一個 / 上一個候選項                   |
+| ~RET~         | 插入候選項                              |
+| ~TAB~         | 繼續補全或完成共同前綴                  |
+| ~M-TAB~       | 展開候選項                              |
+| ~M-SPC~       | 插入 Orderless 分隔符                   |
+| ~M-h~         | 候選項文檔                              |
+| ~M-g~         | 候選項定義位置                          |
+| ~C-g~         | 關閉 popup                              |
+
+圖形 frame 使用 child frame；TTY frame 由 corfu-terminal 畫 popup。同一 daemon 混用 GUI
+與終端不需切換模式。手動觸發仍是 major mode 的 ~completion-at-point~；可用
+~M-x completion-at-point~。
+
+上游文檔：[[https://github.com/minad/corfu][Corfu]]、[[https://github.com/minad/cape][Cape]]、
+[[https://codeberg.org/akib/emacs-corfu-terminal][corfu-terminal]]。
+
+* 窗口、項目與 layout
+
+一個項目對應一個 tab，但 tab-bar 故意隱藏。tab 是工作區實作，不是需要直接操作的 UI。
+
+| 鍵                         | 用途                                  |
+|----------------------------+---------------------------------------|
+| ~M-m w w~                    | 下一個窗口                            |
+| ~M-m w b/n/p/f~              | 左 / 下 / 上 / 右窗口                 |
+| ~M-m w B/N/P/F~              | 與左 / 下 / 上 / 右窗口交換內容       |
+| ~M-m w 1~ … ~w 9~            | 按 modeline 顯示的編號直達窗口        |
+| ~M-m w v~ / ~w s~            | 垂直 / 水平分割                       |
+| ~M-m w k~ / ~w K~            | 刪當前 / 刪其他窗口                   |
+| ~M-m w =~                    | 平衡窗口                              |
+| ~M-m w z~                    | 顯示或隱藏 side windows               |
+| ~M-m w u~ / ~w r~            | layout 歷史後退 / 前進                |
+| ~M-m w l s~ / ~r~ / ~k~      | 保存 / 恢復 / 忘記具名 layout        |
+| ~M-m p p~                    | 選項目；通常切到它自己的 tab          |
+| ~M-m p P~                    | 在當前 tab 臨時切項目                 |
+| ~M-m p d~                    | 項目根 Dired                          |
+| ~M-m p c~                    | 項目編譯                              |
+| ~M-m p r~                    | 項目範圍正則替換                      |
+| ~M-m p k~                    | 關閉項目及其緩衝區                    |
+| ~M-m p ]~ / ~p [~            | 下一個 / 上一個項目 tab               |
+| ~M-m p u~                    | 恢復剛關閉的項目 tab                  |
+
+Help、Info、Eldoc 等短讀緩衝區去右側 side window；compile、grep、xref、Flymake、Messages
+等持續觀察的輸出去底部且不搶焦點。~M-m w z~ 可以暫時收起全部 side windows。
+
+手冊：[[info:emacs#Windows][Emacs: Windows]]、[[info:emacs#Projects][Emacs: Projects]]、
+[[info:emacs#Tab Bars][Emacs: Tab Bars]]、[[https://github.com/deb0ch/emacs-winum][winum]]；配置細節見
+[[file:org/22-window.org][window 模塊]]。
+
+* 文件與 Dired
+
+| 入口       | 用途                                  |
+|------------+---------------------------------------|
+| ~M-m f f~    | 打開文件或輸入 TRAMP 路徑             |
+| ~M-m f d~    | 打開一個目錄                          |
+| ~M-m f j~    | 跳到當前文件所在 Dired                |
+| ~M-m f J~    | 在另一窗口跳到當前文件所在 Dired      |
+| ~M-m p d~    | 項目根 Dired                          |
+
+Dired 是文件管理器，也是批處理界面：
+
+| Dired 鍵       | 用途                                      |
+|----------------+-------------------------------------------|
+| ~m~ / ~u~ / ~U~  | 標記 / 取消 / 全部取消                   |
+| ~% m~            | 按正則標記                               |
+| ~t~              | 反轉標記                                 |
+| ~C~ / ~R~ / ~D~  | 複製 / 改名或移動 / 刪除                 |
+| ~r~              | 進入 wdired，直接編輯文件名後 ~C-c C-c~  |
+| ~=~              | 用 Ediff 比較標記的兩個文件              |
+| ~E~              | 交給桌面默認程序                         |
+| ~i~              | 就地插入子目錄                           |
+| ~$~              | 隱藏或顯示插入的子目錄                   |
+| ~g~              | 重新讀目錄                               |
+
+兩個 Dired 窗口時，複製與移動默認把另一個窗口的目錄當目的地。刪除使用桌面回收站。
+
+手冊：[[info:emacs#Dired][Emacs: Dired]]、[[info:emacs#Wdired][Emacs: Wdired]]、
+[[info:ediff#Top][Ediff]]；配置細節見 [[file:org/40-file.org][file 模塊]]。
+
+* 編輯、撤銷與多光標
+
+~C-_~ 撤銷，~M-_~ 重做。撤銷歷史由 undo-fu-session 存在 state 目錄，關閉再打開文件仍可
+繼續撤銷；保存時 ws-butler 只清理你改過行尾的多餘空白。
+
+| 鍵                    | 用途                                  |
+|-----------------------+---------------------------------------|
+| ~M-m e r~               | 矩形選區                              |
+| ~M-m e f f~             | fill paragraph                        |
+| ~M-m e f c~             | 設定 fill-column                      |
+| ~M-m e l~               | 選區每一行一個光標                    |
+| ~M-m e b~ / ~e e~       | 每行行首 / 行尾一個光標               |
+| ~M-m e n~ / ~e p~       | 下一個 / 上一個相同文本               |
+| ~M-m e N~ / ~e P~       | 跳過此處，選下一個 / 上一個           |
+| ~M-m e u~ / ~e U~       | 收回下一個 / 上一個光標               |
+| ~M-m e m~               | 進入 extended 選擇，用方向鍵加減      |
+| ~M-m e a~ / ~e A~       | 智能標全部 / 標全部相同文本           |
+| ~M-m e #~               | 每個光標插入遞增數字                  |
+| ~M-m e s~ / ~e v~       | 排序 / 反轉各區域                     |
+| ~C-S-鼠標左鍵~          | 在點擊處切換額外光標                  |
+
+多光標裏 ~RET~ 結束，~C-g~ 結束並回到原始光標。第一次執行某些命令時 multiple-cursors 會
+詢問是否對所有光標執行，答案持久化在 =mc-lists.el=。
+
+文檔：[[https://github.com/magnars/multiple-cursors.el][multiple-cursors README]]、
+[[file:org/24-edit.org][edit 模塊]]。
+
+* 外部命令、終端與遠程
+
+** Shell 與 Eat
+
+| 鍵         | 用途                                              |
+|------------+---------------------------------------------------|
+| ~M-m ! !~    | 同步跑一條 shell command，輸出進緩衝區            |
+| ~M-m ! &~    | 異步跑命令，每次建立新的輸出緩衝區                |
+| ~M-m ! |~    | 把選區送給命令；帶前綴參數則用輸出替換選區        |
+| ~M-m ! t~    | 當前目錄開 Eat                                    |
+| ~M-m ! p~    | 項目根開 Eat                                      |
+
+Emacs 自己拼出的命令固定交給 POSIX shell；Eat 使用 =$SHELL= 作為互動 shell。Eat 裏 leader
+仍由 Emacs 接收；若某個終端程序真的需要 ~M-m~，臨時關閉 ~ginshio-override-mode~。
+
+文檔：[[https://codeberg.org/akib/emacs-eat][Eat]]、[[info:emacs#Shell][Emacs: Shell Commands]]。
+
+** TRAMP
+
+直接在 ~M-m f f~ 輸入：
+
+| 路徑                              | 用途                         |
+|-----------------------------------+------------------------------|
+| =/ssh:host:/path=                   | SSH 到另一台機器             |
+| =/sudo::/etc/file=                  | 本機提權                     |
+| =/ssh:host|sudo:host:/etc/file=     | 遠程後再提權                 |
+| =/podman:container:/path=           | Podman 容器                  |
+
+| 鍵         | 用途                                      |
+|------------+-------------------------------------------|
+| ~M-m r s~    | 當前文件或目錄以 root 重新打開           |
+| ~M-m r k~    | 清理當前連接                             |
+| ~M-m r K~    | 清理全部連接                             |
+| ~M-m r b~    | 清理全部連接並關閉遠程緩衝區             |
+
+主機名從 SSH config 補全。遠程 Dired、Eat、編譯與普通文件使用同一套 =default-directory=；
+版本控制刻意不在遠程自動探測。
+
+手冊：[[info:tramp#Top][TRAMP]]、[[file:org/46-remote.org][remote 模塊]]。
+
+* 代碼結構、語義與調試
+
+** 結構與摺疊
+
+| 鍵                    | 用途                               |
+|-----------------------+------------------------------------|
+| ~C-M-a~ / ~C-M-e~       | 上一個函數開頭 / 下一個函數結尾   |
+| ~C-M-f~ / ~C-M-b~       | 下一個 / 上一個語法節點            |
+| ~C-M-u~ / ~C-M-d~       | 上一層 / 下一層節點                |
+| ~C-M-n~ / ~C-M-p~       | 下一個 / 上一個同級節點            |
+| ~M-m z z~               | 摺疊或展開當前 subtree             |
+| ~M-m z a~               | 整個緩衝區循環摺疊層級             |
+| ~M-m z c~ / ~z o~       | 收起 / 展開 subtree                |
+| ~M-m z m~ / ~z r~       | 全部收起 / 全部展開                |
+| ~M-m z n~ / ~z p~ / ~z u~ | 下一個 / 上一個 / 上層 heading  |
+
+Tree-sitter grammar 缺失時保留可用的傳統 major mode，doctor 以 warn 報告。手冊：
+[[info:elisp#Parsing Program Source][Elisp: Parsing Program Source]]、[[file:org/60-lang.org][lang 模塊]]。
+
+** Eglot、xref、Eldoc 與 Flymake
+
+| 鍵                    | 用途                                  |
+|-----------------------+---------------------------------------|
+| ~M-m c e~ / ~c q~ / ~c Q~ | 啓動 / 關閉 / 重連語言服務器      |
+| ~M-m c d~ / ~c D~       | 定義 / 引用                          |
+| ~M-m c b~               | 回到跳轉前                           |
+| ~M-m c i~ / ~c t~       | 實現 / 類型定義                      |
+| ~M-m c S~               | 全項目符號搜索                       |
+| ~M-m c a~ / ~c r~       | code action / rename                 |
+| ~M-m c h~               | 完整 Eldoc 文檔緩衝區                |
+| ~M-m c n~ / ~c p~       | 下一個 / 上一個診斷                  |
+| ~M-m c x~ / ~c X~       | 本文件 / 全項目診斷列表              |
+| ~M-m s i~ / ~s I~       | 本緩衝區 / 多緩衝區符號              |
+
+跳轉綁 xref 而不是只綁 Eglot，因此沒有服務器時仍可使用 Elisp、TAGS 或搜索後端。Corfu
+消費 Eglot completion；Cape 把它改成 non-exclusive，註釋、字符串與不完整代碼裏仍可回退
+到路徑或 dabbrev。
+
+手冊：[[info:eglot#Top][Eglot]]、[[info:flymake#Top][Flymake]]、[[info:emacs#Xref][Xref]]、
+[[file:org/62-lsp.org][lsp 模塊]]。
+
+** Dape
+
+最短工作流：
+
+1. 在想停的位置 ~M-m d b~。
+2. ~M-m d d~ 選配置並啓動。
+3. ~M-m d n~ 單步越過，~d i~ 步入，~d o~ 步出，~d c~ 繼續。
+4. ~M-m d v~ 臨時求值，~d w~ 加入 watch，~d ?~ 打開資訊面板。
+5. ~M-m d q~ 結束；~d Q~ 連被調試程序一起殺掉。
+
+| 鍵                         | 用途                               |
+|----------------------------+------------------------------------|
+| ~M-m d b~ / ~d B~           | 切換斷點 / 刪除全部斷點           |
+| ~M-m d e~ / ~d h~ / ~d l~   | 條件 / hit count / log breakpoint |
+| ~M-m d p~ / ~d r~           | pause / restart                    |
+| ~M-m d u~                    | 運行到光標行                       |
+| ~M-m d m~ / ~d a~           | memory / disassembly               |
+| ~M-m d R~                    | REPL                               |
+| ~M-m d s~ / ~d t~           | 選 stack frame / thread            |
+
+固定配置寫進項目 =.dir-locals.el= 的 ~dape-command~；配置例與完整流程在
+[[file:org/64-dap.org][dap 模塊]]。上游文檔：[[https://elpa.gnu.org/packages/dape.html][GNU ELPA: Dape]]。
+
+* 版本控制
+
+日常提交、分支與 rebase 仍以終端 Git 為主；Emacs 負責文件旁的差異、歷史追蹤、選行暫存、
+Git 叫出的編輯器與衝突解決。
+
+| 鍵                    | 用途                                  |
+|-----------------------+---------------------------------------|
+| ~M-m g d~ / ~g D~       | 當前文件 / 整個倉庫 diff             |
+| ~M-m g l~ / ~g L~       | 文件 / 倉庫 log                      |
+| ~M-m g b~               | annotate / blame                      |
+| ~M-m g h~               | 選中行的歷史                         |
+| ~M-m g f~               | 打開另一 revision                    |
+| ~M-m g s~               | vc-dir                               |
+| ~M-m g r~               | 刷新 VC 與 diff-hl                   |
+| ~M-m g n~ / ~g p~       | 下一個 / 上一個 hunk                 |
+| ~M-m g v~               | 顯示 hunk                            |
+| ~M-m g a~               | 暫存當前 hunk 或選區                 |
+| ~M-m g x~               | 還原當前 hunk                        |
+
+衝突：
+
+| 鍵                         | 用途                         |
+|----------------------------+------------------------------|
+| ~M-m g c n~ / ~g c p~       | 下一個 / 上一個衝突         |
+| ~M-m g c u~ / ~g c l~       | 保留 upper / lower          |
+| ~M-m g c b~                 | 保留 base                   |
+| ~M-m g c a~ / ~g c c~       | 保留全部 / 當前             |
+| ~M-m g c r~                 | 智能 resolve                |
+| ~M-m g c e~                 | 交給 Ediff                  |
+
+Git 用 emacsclient 打開提交信息或 rebase todo 時，緩衝區獨佔 frame；完成後 with-editor 還原
+原 layout。提交信息用 ~C-c C-c~ 完成、~C-c C-k~ 取消。rebase todo 的單鍵表與 mergetool
+流程在 [[file:org/66-vc.org][vc 模塊]] 有完整表格。
+
+手冊：[[info:emacs#Version Control][Emacs VC]]、[[info:magit#Top][Magit]]、
+[[info:ediff#Top][Ediff]]、[[https://github.com/dgutov/diff-hl][diff-hl]]。
+
+* 文檔標記模式
+
+這些模式的 =C-c= 鍵保留原樣；進入文件後先用 ~M-m h m~ 查看完整 mode help。
+
+| 格式 | 第一批入口                                                   | 上游文檔 |
+|------+--------------------------------------------------------------+----------|
+| Markdown | ~C-c C-s~ 插入、~C-c C-o~ 跟鏈接、~C-c C-c p~ 瀏覽器預覽、~C-c C-c l~ EWW | [[https://jblevins.org/projects/markdown-mode/#usage][markdown-mode Usage]] |
+| reST | ~C-c C-a C-a~ 標題、~C-c C-t C-t~ 目錄、~C-c C-c C-c~ 編譯 | [[https://docutils.sourceforge.io/docs/user/emacs.html][Docutils Emacs support]] |
+| AsciiDoc | ~C-c C-s~ 插入、~C-c C-o~ 跟鏈接、~C-c C-c~ 預覽/導出 | [[https://github.com/bbatsov/adoc-mode#usage][adoc-mode Usage]] |
+
+三者都開 visual-line、保留源標記可見，~TAB~ / ~S-TAB~ 處理結構摺疊。詳細設定見
+[[file:org/82-lang-markup.org][lang-markup 模塊]]。
+
+* 上游手冊索引
+
+| 主題                   | 文檔                                                       |
+|------------------------+------------------------------------------------------------|
+| GNU Emacs              | [[info:emacs#Top][Emacs manual]]                           |
+| Emacs Lisp             | [[info:elisp#Top][Elisp manual]]                           |
+| Keymaps                | [[info:elisp#Keymaps][Elisp: Keymaps]]                     |
+| Elpaca                 | [[info:elpaca#Top][Elpaca manual]]                         |
+| Vertico                | [[https://github.com/minad/vertico][Vertico README]]       |
+| Orderless              | [[info:orderless#Top][Orderless manual]]                   |
+| Marginalia             | [[https://github.com/minad/marginalia][Marginalia README]]   |
+| Consult                | [[https://github.com/minad/consult][Consult README]]         |
+| Embark                 | [[info:embark#Top][Embark manual]]                         |
+| Corfu                  | [[https://github.com/minad/corfu][Corfu README]]             |
+| Cape                   | [[https://github.com/minad/cape][Cape README]]               |
+| Dired / Wdired         | [[info:emacs#Dired][Dired]] / [[info:emacs#Wdired][Wdired]] |
+| Projects / Tab Bars    | [[info:emacs#Projects][Projects]] / [[info:emacs#Tab Bars][Tab Bars]] |
+| TRAMP                  | [[info:tramp#Top][TRAMP manual]]                           |
+| Eglot                  | [[info:eglot#Top][Eglot manual]]                           |
+| Flymake                | [[info:flymake#Top][Flymake manual]]                       |
+| Dape                   | [[https://elpa.gnu.org/packages/dape.html][GNU ELPA Dape]]  |
+| VC / Magit / Ediff     | [[info:emacs#Version Control][VC]] / [[info:magit#Top][Magit]] / [[info:ediff#Top][Ediff]] |
+| Eat                    | [[https://codeberg.org/akib/emacs-eat][Eat manual and README]] |
+| multiple-cursors       | [[https://github.com/magnars/multiple-cursors.el][multiple-cursors README]] |
+| Markdown / reST / AsciiDoc | [[file:org/82-lang-markup.org][本配置的入口與上游鏈接]] |
+
+遇到「知道包名，但不知道它能做什麼」時，按這個順序：~M-m h m~ → ~M-m h a~ 搜包名前綴 →
+~M-m h f~ 看命令 → Info/README。不要從配置裏的一個 ~use-package~ form 推測那就是包的全部。

@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+emacs_bin=${EMACS:-emacs}
+
+die() {
+  printf 'vanilla-emacs: %s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+require_xdg() {
+  local value variable
+  for variable in \
+    XDG_CONFIG_HOME \
+    XDG_DATA_HOME \
+    XDG_STATE_HOME \
+    XDG_CACHE_HOME \
+    XDG_RUNTIME_DIR
+  do
+    value=${!variable:-}
+    [[ -n $value ]] || die "required environment variable is not set: $variable"
+    [[ $value == /* ]] || die "required environment variable is not absolute: $variable=$value"
+  done
+  [[ -d $XDG_RUNTIME_DIR ]] || die "XDG_RUNTIME_DIR does not exist: $XDG_RUNTIME_DIR"
+  [[ -w $XDG_RUNTIME_DIR ]] || die "XDG_RUNTIME_DIR is not writable: $XDG_RUNTIME_DIR"
+  [[ $(stat -c '%a' "$XDG_RUNTIME_DIR") == 700 ]] ||
+    die "XDG_RUNTIME_DIR must be private (0700): $XDG_RUNTIME_DIR"
+}
+
+tangle() {
+  require_command "$emacs_bin"
+  "$emacs_bin" -Q --batch -l "$root/tangle.el"
+}
+
+batch_config() {
+  env -u GINSHIO_EMACS_COMMAND \
+    "$emacs_bin" -Q --batch \
+    --init-directory="$root" \
+    -l "$root/early-init.el" \
+    -l "$root/init.el" \
+    "$@"
+}
+
+manage_packages() {
+  local command=$1
+  require_command "$emacs_bin"
+  require_command git
+  require_xdg
+  tangle
+  env GINSHIO_EMACS_COMMAND="$command" \
+    "$emacs_bin" -Q --batch \
+    --init-directory="$root" \
+    -l "$root/early-init.el" \
+    -l "$root/init.el" \
+    --eval '(princ "Package graph is synchronized.\n")'
+}
+
+doctor() {
+  require_command "$emacs_bin"
+  require_xdg
+  tangle
+  batch_config -f ginshio-doctor-batch
+}
+
+clean() {
+  local native_cache_dir package_dir
+  require_xdg
+  package_dir="${XDG_DATA_HOME%/}/emacs/elpaca"
+  native_cache_dir="${XDG_CACHE_HOME%/}/emacs/eln-cache"
+  rm -f -- \
+    "$root/early-init.el" \
+    "$root/early-init.elc" \
+    "$root/init.el" \
+    "$root/init.elc"
+  rm -rf -- "$root/lisp" "$package_dir" "$native_cache_dir"
+  printf 'Removed tangled Lisp, package tree, and native-comp cache.\n'
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  bin/vanilla-emacs sync [--upgrade]
+  bin/vanilla-emacs clean
+  bin/vanilla-emacs doctor
+
+Commands:
+  sync [--upgrade]   Reproduce the package graph recorded in elpaca.lock
+  clean              Remove tangled Lisp, packages, and native-comp cache
+  doctor             Check the loaded configuration and external dependencies
+
+Sync option:
+  --upgrade          Fetch upstream updates, rebuild, and rewrite elpaca.lock
+
+Environment:
+  EMACS               Override the Emacs executable
+EOF
+}
+
+case ${1:-} in
+  sync)
+    if (( $# == 1 )); then
+      manage_packages sync
+    elif (( $# == 2 )) && [[ $2 == --upgrade ]]; then
+      manage_packages upgrade
+    else
+      usage >&2
+      die "sync accepts only the optional --upgrade flag"
+    fi
+    ;;
+  clean)
+    (( $# == 1 )) || die "clean accepts no arguments"
+    clean
+    ;;
+  doctor)
+    (( $# == 1 )) || die "doctor accepts no arguments"
+    doctor
+    ;;
+  '')
+    usage
+    ;;
+  help|-h|--help)
+    (( $# == 1 )) || die "$1 accepts no arguments"
+    usage
+    ;;
+  *)
+    usage >&2
+    die "unknown command: $1"
+    ;;
+esac

@@ -1,0 +1,4 @@
+escape ^Tt
+autodetach on
+defutf8 on
+defshell /bin/fish

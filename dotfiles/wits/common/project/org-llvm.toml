@@ -1,0 +1,27 @@
+[org]
+name = "llvm"
+
+[org.presets."base.unix"]
+applies_when = { os = "linux" }
+
+[org.presets."base.unix".definitions]
+LLVM_CCACHE_BUILD = true
+LLVM_ENABLE_ZSTD = "FORCE_ON"
+LLVM_USE_LINKER = "{{toolchain.linker}}"
+LLVM_PARALLEL_LINK_JOBS = "[[str(system.mem.gb // 16)]]"
+LLVM_ENABLE_LTO = false
+LLVM_USE_SPLIT_DWARF = true
+
+[org.presets."base.windows"]
+applies_when = { os = "windows" }
+
+[org.presets."base.windows".definitions]
+LLVM_CCACHE_BUILD = false
+LLVM_ENABLE_ZSTD = "OFF"
+
+[org.presets.common]
+extends = [
+    "llvm/base.windows",
+    "llvm/base.unix",
+]
+definitions = { LLVM_OPTIMIZED_TABLEGEN = true }

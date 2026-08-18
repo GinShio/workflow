@@ -1,0 +1,575 @@
+* 包
+
+** 加载结构
+:properties:
+:header-args:emacs-lisp: :tangle no
+:end:
+
+Doom 通过 =packages.el= 来安装包，非常简单，只需要 ~package!~ 就可以安装。
+需要注意，不应该将该文件编译为字节码。
+#+begin_src emacs-lisp :tangle "packages.el" :comments no
+;; -*- no-byte-compile: t; -*-
+;;; $DOOMDIR/packages.el
+#+end_src
+
+*警告*: 不要禁用 =~/.emacs.d/core/packages.el= 中列出的包。Doom 依赖这些，禁用它们
+可能出现严重问题。
+
+- 从官方的源 [[https://melpa.org/][MELPA]] / [[http://elpa.gnu.org/][GNU ELPA]] / [[https://emacsmirror.net/][emacsmirror]] 安装
+  #+begin_src emacs-lisp
+(package! some-package)
+  #+end_src
+- 关闭某些包
+  #+begin_src emacs-lisp
+(package! some-package :disable t)
+  #+end_src
+- 从 Git Repo 安装
+  #+begin_src emacs-lisp
+;; github
+(package! github-package :recipe (:host github :repo "username/repo"))
+;; gitlab
+(package! gitlab-package :recipe (:host gitlab :repo "username/repo"))
+;; other
+(package! other-package :recipe (:host nil :repo "https://example.com/repo"))
+  #+end_src
+  如果 repo 仅中只有某个 / 某些文件是你需要的
+  #+begin_src emacs-lisp
+(package! some-package
+  :recipe (:host github :repo "username/repo"
+           :files ("some-file.el" "src/elisp/*.el")))
+  #+end_src
+  如果需要指定某个 =commit= 或某个 =branch=
+  #+begin_src emacs-lisp
+;; commit
+(package! some-package :pin "abcdefghijk")
+;; branch
+(package! some-package :recipe (:branch "stable"))
+  #+end_src
+- 使用本地的 repo
+  #+begin_src emacs-lisp
+(package! some-package :recipe (:local-repo "/path/to/repo"))
+  #+end_src
+
+** 工具
+
+*** Which-key
+
+#+begin_comment
+来自 =:core packages= 模块
+#+end_comment
+
+让快捷键提示变得更快！
+#+begin_src emacs-lisp
+(setq which-key-idle-delay 0.5)
+#+end_src
+
+*** Input
+
+**** String Inflection
+
++变形汽车人！+ 变形字符串！
+#+begin_src emacs-lisp :tangle packages.el
+(package! string-inflection)
+#+end_src
+
+#+begin_src emacs-lisp
+(use-package! string-inflection
+  :defer t
+  :init
+  (map! :leader :prefix ("cS" . "naming convention")
+        :desc "cycle" "~" #'string-inflection-all-cycle
+        :desc "toggle" "t" #'string-inflection-toggle
+        :desc "CamelCase" "c" #'string-inflection-camelcase
+        :desc "downCase" "d" #'string-inflection-lower-camelcase
+        :desc "kebab-case" "k" #'string-inflection-kebab-case
+        :desc "under_score" "u" #'string-inflection-underscore
+        :desc "Upper_Score" "_" #'string-inflection-capital-underscore
+        :desc "UP_CASE" "U" #'string-inflection-upcase))
+#+end_src
+
+*** hungry delete
+
+一次 ~backspace~ 吃掉所有空白符 (当前光标限定)
+#+begin_src emacs-lisp :tangle packages.el
+(package! hungry-delete :recipe (:host github :repo "nflath/hungry-delete"))
+#+end_src
+
+只让它应用在编程模式是最好的
+#+begin_src emacs-lisp
+(use-package! hungry-delete
+  :config
+  (setq-default hungry-delete-chars-to-skip " \t\v")
+  (add-hook! prog-mode #'hungry-delete-mode))
+#+end_src
+
+*** Dired
+
+#+begin_comment
+来自 =:emacs dired= 模块
+#+end_comment
+
+emacs 自带的强大文件管理器，和之后提到的 [[Magit]]、[[TRAMP]] 都是 Emacs 的杀手级应用。
+还出现了很多增强性的包来增加其能力，不过对我来说，稍微修改一下也就够了。
+
+#+begin_src emacs-lisp
+(after! dired
+  (require 'dired-async)
+  (define-key! dired-mode-map "RET" #'dired-find-alternate-file)
+  (define-key! dired-mode-map "C" #'dired-async-do-copy)
+  (define-key! dired-mode-map "H" #'dired-async-do-hardlink)
+  (define-key! dired-mode-map "R" #'dired-async-do-rename)
+  (define-key! dired-mode-map "S" #'dired-async-do-symlink)
+  (define-key! dired-mode-map "n" #'dired-next-marked-file)
+  (define-key! dired-mode-map "p" #'dired-prev-marked-file)
+  (define-key! dired-mode-map "=" #'ginshio/dired-ediff-files)
+  (define-key! dired-mode-map "<mouse-2>" #'dired-mouse-find-file)
+  (defun ginshio/dired-ediff-files ()
+    "Mark files and ediff in dired mode, you can mark 1, 2 or 3 files and diff.
+see: https://oremacs.com/2017/03/18/dired-ediff/"
+    (let ((files (dired-get-marked-files)))
+      (cond ((= (length files) 0))
+            ((= (length files) 1)
+             (let ((file1 (nth 0 files))
+                   (file2 (read-file-name "file: " (dired-dwim-target-directory))))
+               (ediff-files file1 file2)))
+            ((= (length files) 2)
+             (let ((file1 (nth 0 files)) (file2 (nth 1 files)))
+               (ediff-files file1 file2)))
+            ((= (length files) 3)
+             (let ((file1 (car files)) (file2 (nth 1 files)) (file3 (nth 2 files)))
+               (ediff-files3 file1 file2 file3)))
+            (t (error "no more than 3 files should be marked")))))
+  (define-advice dired-do-print (:override (&optional _))
+    "show/hide dotfiles in current dired
+see: https://www.emacswiki.org/emacs/DiredOmitMode"
+    (cond ((or (not (boundp 'dired-dotfiles-show-p)) dired-dotfiles-show-p)
+           (setq-local dired-dotfiles-show-p nil)
+           (dired-mark-files-regexp "^\\.")
+           (dired-do-kill-lines))
+          (t (revert-buffer)
+             (setq-local dired-dotfiles-show-p t))))
+  (define-advice dired-up-directory (:override (&optional _))
+    "goto up directory in this buffer"
+    (find-alternate-file ".."))
+  (define-advice dired-do-compress-to (:override (&optional _))
+    "Compress selected files and directories to an archive."
+    (let* ((output (read-file-name "Compress to: "))
+           (command-assoc (assoc output dired-compress-files-alist 'string-match))
+           (files-str (mapconcat 'identity (dired-get-marked-files t) " ")))
+      (when (and command-assoc (not (string= "" files-str)))
+        (let ((command (format-spec (cdr command-assoc)
+                                    `((?o . ,output)
+                                      (?i . ,files-str)))))
+          (async-start (lambda () (shell-command command)) nil))))))
+#+end_src
+
+*** Magit
+:properties:
+:header-args:emacs-lisp: :tangle no :noweb-ref magit-tweaks
+:end:
+
+#+begin_comment
+来自 =:tools magit= 模块
+#+end_comment
+
+[[https://xkcd.com/1597][xkcd:1597]]
+
+这应该是 Emacs 的杀手应用之一了，感谢 [[https://github.com/tarsius][Jonas]] 及其他贡献者。
+
+#+begin_src emacs-lisp :noweb no-export :tangle yes :noweb-prefix no :noweb-ref nil
+(after! magit
+  <<magit-tweaks>>
+  )
+#+end_src
+
+**** Delta
+
+[[https://github.com/dandavison/delta/][Delta]] 是用 rust 实现的 git diff 语法高亮的工具。该作者还将其挂接到了 magit 的
+diff 视图上 (默认不会有语法高亮)。不过这需要 =delta= 二进制文件，在 cargo 安装
+显得简单些，不过你也可以选择 [[https://github.com/dandavison/delta/releases/latest][GitHub Release]]。当然，我在用 openSUSE tumbleweed，
+可以从软件源中下载
+
+#+begin_src shell :tangle no
+cargo install git-delta
+sudo zypper install git-delta
+#+end_src
+
+简单地配置它就行
+#+begin_src emacs-lisp :noweb-ref none :tangle packages.el
+(package! magit-delta :recipe (:host github :repo "dandavison/magit-delta"))
+#+end_src
+
+#+begin_src emacs-lisp
+(use-package! magit-delta
+  :after magit
+  :hook (magit-mode . magit-delta-mode))
+#+end_src
+
+**** Code Review
+
+Github / Gitlab 上去还是有点麻烦了，在本地直接访问、操作还是很不错的。Magit 提供
+了 forge 来实现在 emacs 中 code review！
+
+#+begin_src emacs-lisp :noweb-ref none :tangle packages.el
+(package! forge :recipe (:host github :repo "magit/forge"))
+#+end_src
+
+#+begin_src emacs-lisp
+(use-package! forge
+  :after magit)
+#+end_src
+
+**** 冲突
+
+在 Emacs 中处理冲突也是不错的体验，或许可以尝试自己制造一点。当然，ediff 相当好
+用。
+emmm... 之前为什么要用 smerge 来着。应该是不想离开 emacs 环境。
+
+#+begin_src emacs-lisp :tangle no
+(defun smerge-repeatedly ()
+  "Perform smerge actions again and again"
+  (interactive)
+  (smerge-mode 1)
+  (smerge-transient))
+(after! transient
+  (transient-define-prefix smerge-transient ()
+    [["Move"
+      ("n" "next" (lambda () (interactive) (ignore-errors (smerge-next)) (smerge-repeatedly)))
+      ("p" "previous" (lambda () (interactive) (ignore-errors (smerge-prev)) (smerge-repeatedly)))]
+     ["Keep"
+      ("b" "base" (lambda () (interactive) (ignore-errors (smerge-keep-base)) (smerge-repeatedly)))
+      ("u" "upper" (lambda () (interactive) (ignore-errors (smerge-keep-upper)) (smerge-repeatedly)))
+      ("l" "lower" (lambda () (interactive) (ignore-errors (smerge-keep-lower)) (smerge-repeatedly)))
+      ("a" "all" (lambda () (interactive) (ignore-errors (smerge-keep-all)) (smerge-repeatedly)))
+      ("RET" "current" (lambda () (interactive) (ignore-errors (smerge-keep-current)) (smerge-repeatedly)))]
+     ["Diff"
+      ("<" "upper/base" (lambda () (interactive) (ignore-errors (smerge-diff-base-upper)) (smerge-repeatedly)))
+      ("=" "upper/lower" (lambda () (interactive) (ignore-errors (smerge-diff-upper-lower)) (smerge-repeatedly)))
+      (">" "base/lower" (lambda () (interactive) (ignore-errors (smerge-diff-base-lower)) (smerge-repeatedly)))
+      ("R" "refine" (lambda () (interactive) (ignore-errors (smerge-refine)) (smerge-repeatedly)))
+      ("E" "ediff" (lambda () (interactive) (ignore-errors (smerge-ediff)) (smerge-repeatedly)))]
+     ["Other"
+      ("c" "combine" (lambda () (interactive) (ignore-errors (smerge-combine-with-next)) (smerge-repeatedly)))
+      ("r" "resolve" (lambda () (interactive) (ignore-errors (smerge-resolve)) (smerge-repeatedly)))
+      ("k" "kill current" (lambda () (interactive) (ignore-errors (smerge-kill-current)) (smerge-repeatedly)))
+      ("q" "quit" (lambda () (interactive) (smerge-auto-leave)))]]))
+#+end_src
+
+*** Completion
+
+#+begin_comment
+来自 =:completion corfu= 模块
+#+end_comment
+
+没有补全怎么写代码，尤其是 =Java=​！！！
+#+begin_src emacs-lisp
+(after! corfu
+ (corfu-history-mode t)
+ (corfu-indexed-mode t)
+ )
+#+end_src
+
+*** Vertico
+
+#+begin_comment
+来自 =:completion vertico= 模块
+#+end_comment
+
+#+begin_src emacs-lisp
+(after! consult
+  (set-face-attribute 'consult-file nil :inherit 'consult-buffer)
+  (setf (plist-get (alist-get 'perl consult-async-split-styles-alist) :initial) ";"))
+#+end_src
+
+*** 格式化
+
+#+begin_comment
+来自 =:tools format= 模块
+#+end_comment
+
+格式化代码是一个很重要的事情，但是，我希望还是不要再保存的时候格式化了！这会让代
+码变得奇怪，尤其是合作的项目上。当然你可以手动用 ~+format/buffer~ 在需要的时候格式
+化代码。格式化相關配置已遷移到 [[file:21-lang-lsp-dap.org][LSP/DAP 配置]]​。
+
+#+begin_src emacs-lisp :tangle no
+(appendq! +format-on-save-disabled-modes
+          '(c-mode
+            c++-mode
+            python-mode))
+#+end_src
+
+*** TRAMP
+
+关于其他很有用的功能，TRAMP 算一个，它是多协议透明远程访问 (/Transparent Remote
+Access, Multiple Protocol/) 工具。简单说这是简单访问其他主机文件系统的方法。
+
+如果你想使用 =ssh-key=​，建议开始使用 ~ssh config~​，并用 ~sshx:~ 进行 tramp 连接。
+
+不幸的是，TRAMP 对远程连接时 SHELL 的提示格式很挑剔，尝试使用 bash 并放宽松提示
+区域的识别。
+
+#+begin_src emacs-lisp
+(after! tramp
+  (setenv "SHELL" "/bin/bash")
+  (setq tramp-shell-prompt-pattern
+        "\\(?:^\\|
+\\)[^]#$%>\n]*#?[]#$%>] *\\(\\[[0-9;]*[a-zA-Z] *\\)*"))  ;; default + 
+#+end_src
+
+*** VTerm
+
+#+begin_quote
+As good as terminal emulation gets in Emacs
+#+end_quote
+
+VTerm 的安装相对麻烦一些，需要编译一些依赖。当然对于 Unix 用户，用系统库更加方便！
+#+begin_src emacs-lisp
+(setq! vterm-module-cmake-args "-DUSE_SYSTEM_LIBVTERM=yes")
+#+end_src
+
+*** YASnippet
+
+#+begin_comment
+来自 =:editor snippets= 模块
+#+end_comment
+
+snippets 套娃谁用谁知道！
+#+begin_src emacs-lisp
+(setq yas-triggers-in-field t)
+#+end_src
+
+*** Screenshot
+
+#+begin_notes
+screenshot 依赖于 [[https://imagemagick.org/index.php][ImageMagick]]
+#+end_notes
+
+让截图变得轻而易举！
+#+begin_src emacs-lisp :tangle packages.el
+(package! screenshot
+  :recipe (:host github :repo "tecosaur/screenshot")
+  )
+#+end_src
+
+#+begin_src emacs-lisp
+(use-package! screenshot
+  :defer t
+  :config (setq screenshot-upload-fn "upload %s 2>/dev/null"))
+#+end_src
+
+作者并没有打算添加 TUI 支持。
+
+** UI
+
+*** Nyan
+
+首先添加一下彩虹猫，这不能忘！
+#+begin_src emacs-lisp :tangle "packages.el"
+(package! nyan-mode :recipe (:host github :repo "TeMPOraL/nyan-mode"))
+#+end_src
+
+#+begin_src emacs-lisp
+(use-package! nyan-mode
+  :config
+  (setq nyan-animate-nyancat t
+        nyan-wavy-trail t
+        nyan-cat-face-number 4
+        nyan-bar-length 16
+        nyan-minimum-window-width 64)
+  (add-hook! doom-modeline #'nyan-mode))
+#+end_src
+
+*** Eros
+
+#+begin_comment
+来自 =:tools eval= 模块
+#+end_comment
+
+这个包可以修改 emacs lisp 内联执行的视觉效果，让这个结果的前缀更好看一点。
+#+begin_src emacs-lisp
+(setq eros-eval-result-prefix "⟹ ") ; default =>
+#+end_src
+
+你可以用 =C-x C-e= 来对比一下前后变化
+#+begin_src emacs-lisp :tangle no :results vaule replace
+(+ 1 1 (* 2 2) 1)
+#+end_src
+
+#+RESULTS:
+: 7
+
+#+begin_src python :tangle no :results vaule replace
+return 2 ** 4
+#+end_src
+
+#+RESULTS:
+: 16
+
+*** Theme Magic
+
+非常神奇的是你可以在 Emacs 中用现有的 Theme，改变终端的 Theme，且 GUI 和 TUI 都
+可用！作者说 Linux 和 Mac 可用，​=Windows Terminal= + =WSL= 同样适用，压力来到了
+纯 Windows 下的 Emacs。
+
+#+begin_src emacs-lisp :tangle packages.el
+(package! theme-magic)
+#+end_src
+
+这个操作使用 =pywal=​，你可以通过仓库安装它，不过最简单的方式就是 =pip=​。
+
+#+begin_src shell :tangle no
+sudo python3 -m pip install pywal
+#+end_src
+
+Theme Magic 提供了一个数字界面，尝试从饱和度、色彩差异来有效的选取八个颜色。然而，它
+可能会为 light 选择相同的颜色，并不总能够选取最佳颜色。我们可以用 Doom themes
+提供的色彩工具来轻松获取合理的配色来生成 light 版本 --- 现在就开始！
+
+#+begin_src emacs-lisp
+(use-package! theme-magic
+  :defer t
+  :after +doom-dashboard
+  :config
+  (defadvice! theme-magic--auto-extract-16-doom-colors ()
+    :override #'theme-magic--auto-extract-16-colors
+    (list
+     (face-attribute 'default :background)
+     (doom-color 'error)
+     (doom-color 'success)
+     (doom-color 'type)
+     (doom-color 'keywords)
+     (doom-color 'constants)
+     (doom-color 'functions)
+     (face-attribute 'default :foreground)
+     (face-attribute 'shadow :foreground)
+     (doom-blend 'base8 'error 0.1)
+     (doom-blend 'base8 'success 0.1)
+     (doom-blend 'base8 'type 0.1)
+     (doom-blend 'base8 'keywords 0.1)
+     (doom-blend 'base8 'constants 0.1)
+     (doom-blend 'base8 'functions 0.1)
+     (face-attribute 'default :foreground))))
+#+end_src
+
+*** Info 着色
+
+让 info 变得更加绚丽夺目。
+
+#+begin_src emacs-lisp :tangle packages.el
+(package! info-colors)
+#+end_src
+
+#+begin_src emacs-lisp
+(use-package! info-colors
+  :after info
+  :commands (info-colors-fontify-node)
+  :hook (Info-selection . info-colors-fontify-node))
+#+end_src
+
+*** Tabs
+
+#+begin_comment
+来自 =:ui tabs= 模块
+#+end_comment
+
+如果你想像现代编辑器一样拥有 tabs，或许你可以考虑一下。如果想要 tabs 底下显示
+=bar=​，需要开启 ~x-underline-at-descent-line~
+#+begin_src emacs-lisp :tangle no
+(after! centaur-tabs
+  (setq! centaur-tabs-style "bar"
+         centaur-tabs-set-icons t
+         centaur-tabs-plain-icons nil
+         centaur-tabs-set-modified-marker t
+         centaur-tabs-show-navigation-buttons nil
+         centaur-tabs-gray-out-icons 'buffer
+         centaur-tabs-set-bar 'under
+         x-underline-at-descent-line t
+         centaur-tabs-label-fixed-length 9)
+  (defun centaur-tabs-hide-tab (x)
+    "Do no to show buffer X in tabs."
+    (let ((name (format "%s" x)))
+      (or
+       ;; Current window is not dedicated window.
+       (window-dedicated-p (selected-window))
+       ;; Buffer name not match below blacklist.
+       (string-prefix-p "*epc" name)
+       (string-prefix-p "*helm" name)
+       (string-prefix-p "*Helm" name)
+       (string-prefix-p "*Compile-Log*" name)
+       (string-prefix-p "*lsp" name)
+       (string-prefix-p "*company" name)
+       (string-prefix-p "*Flycheck" name)
+       (string-prefix-p "*tramp" name)
+       (string-prefix-p " *Mini" name)
+       (string-prefix-p "*help" name)
+       (string-prefix-p "*straight" name)
+       (string-prefix-p " *temp" name)
+       (string-prefix-p "*Help" name)
+       (string-prefix-p "*mybuf" name)
+       (string-prefix-p "► Doom" name)
+       ;; Is not magit buffer.
+       (and (string-prefix-p "magit" name)
+            (not (file-name-extension name)))
+       )))
+  (centaur-tabs-group-by-projectile-project)
+  (centaur-tabs-mode t))
+#+end_src
+
+但是别忘了，需要在配置文件[[接口]]中开启 =tabs= 选项。还不能忘记添加快捷键
+#+begin_src emacs-lisp :tangle no
+(map! :map ctl-x-map
+      :prefix ("t" . "Tab and Treemacs")
+      "a"   #'centaur-tabs-select-beg-tab
+      "e"   #'centaur-tabs-select-end-tab
+      "f"   #'centaur-tabs-forward-tab
+      "F"   #'centaur-tabs-forward-group
+      "b"   #'centaur-tabs-backward-tab
+      "B"   #'centaur-tabs-backward-group
+      "g"   #'centaur-tabs-switch-group
+      "G"   #'centaur-tabs-toggle-groups
+      "l"   #'centaur-tabs-move-current-tab-to-left
+      "r"   #'centaur-tabs-move-current-tab-to-right
+      "k"   #'centaur-tabs-kill-other-buffers-in-current-group
+      "K"   #'centaur-tabs-kill-unmodified-buffers-in-current-group
+      "C-5" #'centaur-tabs-extract-window-to-new-frame
+      "C-o" #'centaur-tabs-open-in-external-application
+      "C-d" #'centaur-tabs-open-directory-in-external-application
+      )
+#+end_src
+
+*** Nerd Icons
+
+#+begin_comment
+来自 =:core packages= 模块
+#+end_comment
+
+现在 Doom emacs 使用 =nerd-icons=​。
+
+#+begin_src emacs-lisp :tangle no
+(after! nerd-icons
+  (when-let ((matlab-icon (assoc "matlab" nerd-icons-extension-icon-alist)))
+    (setcdr (assoc "m" nerd-icons-extension-icon-alist)
+            (cdr matlab-icon))))
+#+end_src
+
+*** hl todo
+
+#+begin_comment
+来自 =:ui hl-todo= 模块
+#+end_comment
+
+~hl-todo~ 允许你设置一些关键字，这些关键字将高亮并且便于查找。往往用于代码注释中
+强调某些内容。
+#+begin_src emacs-lisp
+(custom-set-variables
+ '(hl-todo-keyword-faces '(("NOTE" font-lock-builtin-face bold) ;; needs discussion or further investigation.
+                           ("REVIEW" font-lock-keyword-face bold) ;; review was conducted.
+                           ("HACK" font-lock-variable-name-face bold) ;; workaround a known problem.
+                           ("DEPRECATED" region bold) ;; why it was deprecated and to suggest an alternative.
+                           ("XXX+" font-lock-constant-face bold) ;; warn other programmers of problematic or misguiding code.
+                           ("TODO" font-lock-function-name-face bold) ;; tasks/features to be done.
+                           ("FIXME" font-lock-warning-face bold) ;; problematic or ugly code needing refactoring or cleanup.
+                           ("KLUDGE" font-lock-preprocessor-face bold )
+                           ("BUG" error bold) ;; a known bug that should be corrected.
+                           )))
+#+end_src

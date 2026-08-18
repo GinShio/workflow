@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = ["crates/wits-util", "crates/wits"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# Shared dependency versions: members opt in with `<dep>.workspace = true`, so
+# the version and feature set are declared once for the whole tree (including
+# future plugin crates).
+[workspace.dependencies]
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+ureq = { version = "2", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+aes-gcm = "0.10"
+chacha20poly1305 = "0.10"
+pbkdf2 = "0.12"
+argon2 = "0.5"
+sha1 = "0.10"
+sha2 = "0.10"
+sha3 = "0.10"
+blake2 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+toml = "0.8"
+tempfile = "3"
+wits-util = { path = "crates/wits-util" }

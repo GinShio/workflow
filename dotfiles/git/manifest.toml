@@ -1,0 +1,6 @@
+[[install]]
+id = 'git'
+dst = '~/.config/git/'
+path = '.'
+capabilities = ['develop']
+planes = ['user']

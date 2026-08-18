@@ -1,0 +1,34 @@
+# -*- mode: gitignore; coding: utf-8; indent-tabs-mode: nil; -*-
+# Build directories
+_build/
+
+# Vulkan
+*.spv
+*.qpa
+
+# be found at https://github.com/github/gitignore/blob/main/Python.gitignore
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[codz]
+*$py.class
+# Environments
+.env
+.envrc
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/C' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/C++' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/Diff' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/Emacs' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/JetBrains' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/Kate' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/Linux' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/macOS' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/Vim' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/VisualStudioCode' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/Windows' @@%}

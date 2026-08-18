@@ -1,0 +1,14 @@
+# -*- mode: systemd; coding: utf-8; indent-tabs-mode: nil; -*-
+[Unit]
+After=network.target nss-lookup.target
+
+[Service]
+# added automatically, for details please see
+# https://en.opensuse.org/openSUSE:Security_Features#Systemd_hardening_effort
+Type=simple
+ExecStart={{@@ v2ray_bin @@}} run -c {{@@ sysenv.xdg_config_home @@}}/v2core/%i.json
+Restart=on-failure
+RestartPreventExitStatus=23
+
+[Install]
+WantedBy=default.target

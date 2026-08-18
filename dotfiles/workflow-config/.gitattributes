@@ -1,0 +1,2 @@
+manifest/personal.toml filter=transcrypt-personal diff=transcrypt-personal merge=transcrypt-personal
+manifest/khronos3d.toml filter=transcrypt-khronos3d diff=transcrypt-khronos3d merge=transcrypt-khronos3d

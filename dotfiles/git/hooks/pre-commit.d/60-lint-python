@@ -1,0 +1,31 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+# Static analysis of staged Python. ruff (or flake8) reads the staged blob on
+# stdin with the real path, so a partially-staged file is linted exactly as it
+# will be committed and config/reporting stay accurate. A finding blocks the
+# commit; a missing tool warns.
+files=$(staged_lang_files .py .pyi)
+[ -n "$files" ] || exit 0
+
+rc=0
+oldifs=$IFS
+IFS='
+'
+set -f
+if command -v ruff >/dev/null 2>&1; then
+    for f in $files; do
+        staged_blob "$f" | ruff check --stdin-filename "$f" - || rc=1
+    done
+elif command -v flake8 >/dev/null 2>&1; then
+    for f in $files; do
+        staged_blob "$f" | flake8 --stdin-display-name "$f" - || rc=1
+    done
+else
+    log_warn "python lint enabled but neither ruff nor flake8 is installed"
+fi
+IFS=$oldifs
+set +f
+
+[ "$rc" -eq 0 ] || log_error "python lint failed; fix the issues above or commit with --no-verify"
+exit $rc

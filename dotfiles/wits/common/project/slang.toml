@@ -1,0 +1,29 @@
+[project]
+org = "{{@@ wits.projects.source_info['slang'].org @@}}"
+build_system = "cmake"
+generator = "Ninja Multi-Config"
+toolchain = "clang"
+default_presets = ["common"]
+
+[repos.main]
+path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
+build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+install_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+main_branch = "master"
+[repos.main.remotes]
+upstream = "https://github.com/shader-slang/slang.git"
+origin = "https://github.com/GinShio/slang.git"
+
+[project.presets.common.definitions]
+SLANG_SLANG_LLVM_FLAVOR = "DISABLE"
+SLANG_ENABLE_CUDA = false
+SLANG_ENABLE_OPTIX = false
+SLANG_ENABLE_DX_ON_VK = false
+SLANG_ENABLE_DXIL = true
+
+# Test run notes:
+# SLANG_RUN_SPIRV_VALIDATION=1 SLANG_USE_SPV_SOURCE_LANGUAGE_UNKNOWN=1 \
+#   _build/Debug/bin/slang-test -use-test-server -category full \
+#   -expected-failure-list tests/expected-failure-github.txt \
+#   -expected-failure-list tests/expected-failure-no-gpu.txt \
+#   -skip-reference-image-generation -show-adapter-info -enable-debug-layers true

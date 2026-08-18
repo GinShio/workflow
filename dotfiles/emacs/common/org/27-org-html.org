@@ -1,0 +1,482 @@
+*** HTML 导出
+:properties:
+:CUSTOM_ID: org_export_html
+:header-args:emacs-lisp: :tangle no :noweb-ref ox-html-conf
+:end:
+
+#+begin_src emacs-lisp :noweb no-export :noweb-ref org-export-conf :tangle no
+(setq! org-html-style-plain org-html-style-default
+       org-html-htmlize-output-type 'css
+       org-html-doctype "html5"
+       org-html-html5-fancy t)
+(after! ox-html
+  <<ox-html-conf>>
+  )
+#+end_src
+**** Fancy 導出模式
+
+將所有 HTML 導出的自定義行為集中到一個 minor mode 中控制。这樣可以
+方便地在 "fancy" 和 "plain" 之間切換。
+#+begin_src emacs-lisp
+(define-minor-mode org-fancy-html-export-mode
+  "Toggle my fabulous org export tweaks. While this mode itself does a little bit,
+the vast majority of the change in behaviour comes from switch statements in:
+ - `org-html-template-fancier'
+ - `org-html--build-meta-info-extended'
+ - `org-html-src-block-collapsable'
+ - `org-html-block-collapsable'
+ - `org-html-table-wrapped'
+ - `org-html--format-toc-headline-colapseable'
+ - `org-html--toc-text-stripped-leaves'
+ - `org-export-html-headline-anchor'"
+  :global t
+  :init-value t
+  (if org-fancy-html-export-mode
+      (setq org-html-style-default org-html-style-fancy
+            org-html-meta-tags #'org-html-meta-tags-fancy
+            org-html-checkbox-type 'html-span)
+    (setq org-html-style-default org-html-style-plain
+          org-html-meta-tags #'org-html-meta-tags-default
+          org-html-checkbox-type 'html)))
+#+end_src
+
+**** 额外的 head
+
+在主体的开头添加更多信息，在页眉中添加日期和作者，实现仅 CSS 的亮/暗主题切换，以及一些
+[[https://ogp.me/][Open Graph]] 元数据。
+
+#+begin_src emacs-lisp
+(defadvice! org-html-template-fancier (orig-fn contents info)
+  "Return complete document string after HTML conversion.
+CONTENTS is the transcoded contents string.  INFO is a plist
+holding export options. Adds a few extra things to the body
+compared to the default implementation."
+  :around #'org-html-template
+  (if (or (not org-fancy-html-export-mode) (bound-and-true-p org-msg-export-in-progress))
+      (funcall orig-fn contents info)
+    (concat
+     (when (and (not (org-html-html5-p info)) (org-html-xhtml-p info))
+       (let* ((xml-declaration (plist-get info :html-xml-declaration))
+              (decl (or (and (stringp xml-declaration) xml-declaration)
+                        (cdr (assoc (plist-get info :html-extension)
+                                    xml-declaration))
+                        (cdr (assoc "html" xml-declaration))
+                        "")))
+         (when (not (or (not decl) (string= "" decl)))
+           (format "%s\n"
+                   (format decl
+                           (or (and org-html-coding-system
+                                    (fboundp 'coding-system-get)
+                                    (coding-system-get org-html-coding-system 'mime-charset))
+                               "iso-8859-1"))))))
+     (org-html-doctype info)
+     "\n"
+     (concat "<html"
+             (cond ((org-html-xhtml-p info)
+                    (format
+                     " xmlns=\"http://www.w3.org/1999/xhtml\" lang=\"%s\" xml:lang=\"%s\""
+                     (plist-get info :language) (plist-get info :language)))
+                   ((org-html-html5-p info)
+                    (format " lang=\"%s\"" (plist-get info :language))))
+             ">\n")
+     "<head>\n"
+     (org-html--build-meta-info info)
+     (org-html--build-head info)
+     (org-html--build-mathjax-config info)
+     "</head>\n"
+     "<body>\n<input type='checkbox' id='theme-switch'><div id='page'><label id='switch-label' for='theme-switch'></label>"
+     (let ((link-up (org-trim (plist-get info :html-link-up)))
+           (link-home (org-trim (plist-get info :html-link-home))))
+       (unless (and (string= link-up "") (string= link-home ""))
+         (format (plist-get info :html-home/up-format)
+                 (or link-up link-home)
+                 (or link-home link-up))))
+     ;; Preamble.
+     (org-html--build-pre/postamble 'preamble info)
+     ;; Document contents.
+     (let ((div (assq 'content (plist-get info :html-divs))))
+       (format "<%s id=\"%s\">\n" (nth 1 div) (nth 2 div)))
+     ;; Document title.
+     (when (plist-get info :with-title)
+       (let ((title (and (plist-get info :with-title)
+                         (plist-get info :title)))
+             (subtitle (plist-get info :subtitle))
+             (html5-fancy (org-html--html5-fancy-p info)))
+         (when title
+           (format
+            (if html5-fancy
+                "<header class=\"page-header\">%s\n<h1 class=\"title\">%s</h1>\n%s</header>"
+              "<h1 class=\"title\">%s%s</h1>\n")
+            (if (or (plist-get info :with-date)
+                    (plist-get info :with-author))
+                (concat "<div class=\"page-meta\">"
+                        (when (plist-get info :with-date)
+                          (org-export-data (plist-get info :date) info))
+                        (when (and (plist-get info :with-date) (plist-get info :with-author)) ", ")
+                        (when (plist-get info :with-author)
+                          (org-export-data (plist-get info :author) info))
+                        "</div>\n")
+              "")
+            (org-export-data title info)
+            (if subtitle
+                (format
+                 (if html5-fancy
+                     "<p class=\"subtitle\" role=\"doc-subtitle\">%s</p>\n"
+                   (concat "\n" (org-html-close-tag "br" nil info) "\n"
+                           "<span class=\"subtitle\">%s</span>\n"))
+                 (org-export-data subtitle info))
+              "")))))
+     contents
+     (format "</%s>\n" (nth 1 (assq 'content (plist-get info :html-divs))))
+     ;; Postamble.
+     (org-html--build-pre/postamble 'postamble info)
+     ;; Possibly use the Klipse library live code blocks.
+     (when (plist-get info :html-klipsify-src)
+       (concat "<script>" (plist-get info :html-klipse-selection-script)
+               "</script><script src=\""
+               org-html-klipse-js
+               "\"></script><link rel=\"stylesheet\" type=\"text/css\" href=\""
+               org-html-klipse-css "\"/>"))
+     ;; Closing document.
+     "</div>\n</body>\n</html>")))
+#+end_src
+
+**** 自定义 CSS/JS
+
+[[https://lepisma.xyz][lepisma.xyz]] 所做的导出风格非常讨喜。
+
+#+begin_src html :tangle misc/org-export-header.html :comments no :mkdirp yes
+<link rel="icon" href="https://tecosaur.com/resources/org/nib.ico" type="image/ico" />
+<link rel="preload" as="font" crossorigin="anonymous" type="font/woff2" href="https://tecosaur.com/resources/org/etbookot-roman-webfont.woff2">
+<link rel="preload" as="font" crossorigin="anonymous" type="font/woff2" href="https://tecosaur.com/resources/org/etbookot-italic-webfont.woff2">
+<link rel="preload" as="font" crossorigin="anonymous" type="font/woff2" href="https://tecosaur.com/resources/org/Merriweather-TextRegular.woff2">
+<link rel="preload" as="font" crossorigin="anonymous" type="font/woff2" href="https://tecosaur.com/resources/org/Merriweather-TextItalic.woff2">
+<link rel="preload" as="font" crossorigin="anonymous" type="font/woff2" href="https://tecosaur.com/resources/org/Merriweather-TextBold.woff2">
+#+end_src
+
+#+begin_src emacs-lisp
+
+
+(defun org-html-reload-fancy-style ()
+  (interactive)
+  (setq org-html-style-fancy
+        (with-temp-buffer
+          (insert-file-contents (expand-file-name "misc/org-export-header.html" doom-user-dir))
+          (goto-char (point-max))
+          (insert "<script>\n")
+          (insert-file-contents (expand-file-name "misc/org-css/main.js" doom-user-dir))
+          (goto-char (point-max))
+          (insert "</script>\n<style>\n")
+          (insert-file-contents (expand-file-name "misc/org-css/main.min.css" doom-user-dir))
+          (goto-char (point-max))
+          (insert "</style>")
+          (buffer-string)))
+  (when org-fancy-html-export-mode
+    (setq org-html-style-default org-html-style-fancy)))
+(org-html-reload-fancy-style)
+#+end_src
+
+**** 可折叠的 src 和示例块
+
+通过将 ~<pre>~ 元素包装在 ~<details>~ 块中，我们可以得到没有 CSS 的可折叠块，
+尽管我们会稍微折腾一下，让这看起来有点漂亮。
+
+由于默认情况下对某些代码块启用可折叠性似乎很有用，因此如果您可以使用
+=#+attr_html: :collapsed t= 设置它会更好。
+
+如果有一个相应的全局/会话本地方式来设置它会很好，但我还没能让它正常工作。
+
+#+begin_src emacs-lisp
+(defvar org-html-export-collapsed nil)
+(eval '(cl-pushnew '(:collapsed "COLLAPSED" "collapsed" org-html-export-collapsed t)
+                   (org-export-backend-options (org-export-get-backend 'html))))
+(add-to-list 'org-default-properties "EXPORT_COLLAPSED")
+#+end_src
+
+我们可以进一步修改 src 块，并在 src 块的一侧添加一个块，其中包含引用当前块的锚点和
+复制块内容的按钮。
+
+#+begin_src emacs-lisp
+(defadvice! org-html-src-block-collapsable (orig-fn src-block contents info)
+  "Wrap the usual <pre> block in a <details>"
+  :around #'org-html-src-block
+  (if (or (not org-fancy-html-export-mode) (bound-and-true-p org-msg-export-in-progress))
+      (funcall orig-fn src-block contents info)
+    (let* ((properties (cadr src-block))
+           (lang (mode-name-to-lang-name
+                  (plist-get properties :language)))
+           (name (plist-get properties :name))
+           (ref (org-export-get-reference src-block info))
+           (collapsed-p (member (or (org-export-read-attribute :attr_html src-block :collapsed)
+                                    (plist-get info :collapsed))
+                                '("y" "yes" "t" t "true" "all"))))
+      (format
+       "<details id='%s' class='code'%s><summary%s>%s</summary>
+<div class='gutter'>
+<a href='#%s'>#</a>
+<button title='Copy to clipboard' onclick='copyPreToClipbord(this)'>⎘</button>\
+</div>
+%s
+</details>"
+       ref
+       (if collapsed-p "" " open")
+       (if name " class='named'" "")
+       (concat
+        (when name (concat "<span class=\"name\">" name "</span>"))
+        "<span class=\"lang\">" lang "</span>")
+       ref
+       (if name
+           (replace-regexp-in-string (format "<pre\\( class=\"[^\"]+\"\\)? id=\"%s\">" ref) "<pre\\1>"
+                                     (funcall orig-fn src-block contents info))
+         (funcall orig-fn src-block contents info))))))
+
+(defvar org-html-lang-name-alist
+  '(("emacs-lisp" . "Emacs Lisp") ("elisp" . "Emacs Lisp")
+    ("cpp" . "C++") ("C" . "C")
+    ("js" . "Javascript") ("sh" . "Shell Script") ("bash" . "Bash")
+    ("plain-tex" . "TeX") ("tex" . "LaTeX")
+    ("conf" . "Configuration File"))
+  "Alist of (MODE-NAME . DISPLAY-NAME) for source block language names.
+Used by `mode-name-to-lang-name'. Only override entries that cannot
+be handled by the auto-capitalization fallback.")
+
+(defun mode-name-to-lang-name (mode)
+  "Convert MODE string to a human-readable language name.
+First checks `org-html-lang-name-alist', then falls back to
+capitalizing the first letter of MODE."
+  (or (cdr (assoc mode org-html-lang-name-alist))
+      (capitalize mode)))
+#+end_src
+
+#+name: Example, fixed width, and property blocks
+#+begin_src emacs-lisp
+(defun org-html-block-collapsable (orig-fn block contents info)
+  "Wrap the usual block in a <details>"
+  (if (or (not org-fancy-html-export-mode) (bound-and-true-p org-msg-export-in-progress))
+      (funcall orig-fn block contents info)
+    (let ((ref (org-export-get-reference block info))
+          (type (pcase (car block)
+                  ('property-drawer "Properties")))
+          (collapsed-default (pcase (car block)
+                               ('property-drawer t)
+                               (_ nil)))
+          (collapsed-value (org-export-read-attribute :attr_html block :collapsed))
+          (collapsed-p (or (member (org-export-read-attribute :attr_html block :collapsed)
+                                   '("y" "yes" "t" t "true"))
+                           (member (plist-get info :collapsed) '("all")))))
+      (format
+       "<details id='%s' class='code'%s>
+<summary%s>%s</summary>
+<div class='gutter'>\
+<a href='#%s'>#</a>
+<button title='Copy to clipboard' onclick='copyPreToClipbord(this)'>⎘</button>\
+</div>
+%s\n
+</details>"
+       ref
+       (if (or collapsed-p collapsed-default) "" " open")
+       (if type " class='named'" "")
+       (if type (format "<span class='type'>%s</span>" type) "")
+       ref
+       (funcall orig-fn block contents info)))))
+
+(advice-add 'org-html-example-block   :around #'org-html-block-collapsable)
+(advice-add 'org-html-fixed-width     :around #'org-html-block-collapsable)
+(advice-add 'org-html-property-drawer :around #'org-html-block-collapsable)
+#+end_src
+
+**** 处理表溢出
+
+为了适应宽表 --- 尤其是在移动设备上 --- 我们想要设置最大宽度和滚动溢出。不幸的是，
+这不能直接应用于 ~表格~ 元素，所以我们必须将它包装在一个 ~div~ 中。
+
+当我们这样做时，我们可以像我们对 src 块所做的那样，设置一个链接块，并显示
+~#+name~ (如果有的话)。
+
+#+begin_src emacs-lisp
+(defadvice! org-html-table-wrapped (orig-fn table contents info)
+  "Wrap the usual <table> in a <div>"
+  :around #'org-html-table
+  (if (or (not org-fancy-html-export-mode) (bound-and-true-p org-msg-export-in-progress))
+      (funcall orig-fn table contents info)
+    (let* ((name (plist-get (cadr table) :name))
+           (ref (org-export-get-reference table info)))
+      (format "<div id='%s' class='table'>
+<div class='gutter'><a href='#%s'>#</a></div>
+<div class='tabular'>
+%s
+</div>\
+</div>"
+              ref ref
+              (if name
+                  (replace-regexp-in-string (format "<table id=\"%s\"" ref) "<table"
+                                            (funcall orig-fn table contents info))
+                (funcall orig-fn table contents info))))))
+#+end_src
+
+**** 可展开的目录树
+
+TOC 作为可折叠树更易于导航。不幸的是，我们不能单独使用 CSS 来实现这一点。值得庆幸
+的是，我们可以通过调整 TOC 生成代码来为每个项目使用一个 ~标签~ ，以及一个隐藏的
+~复选框~ 来跟踪状态，从而避免使用 JS。
+
+要添加它，我们需要在 ~org-html--format-toc-headline~ 中更改一行。
+
+因为我们实际上可以通过在函数周围添加建议来实现所需的效果，而无需覆盖它 --- 让我们这
+样做来减少这个配置的错误表面。
+#+begin_src emacs-lisp
+(defadvice! org-html--format-toc-headline-colapseable (orig-fn headline info)
+  "Add a label and checkbox to `org-html--format-toc-headline's usual output,
+to allow the TOC to be a collapseable tree."
+  :around #'org-html--format-toc-headline
+  (if (or (not org-fancy-html-export-mode) (bound-and-true-p org-msg-export-in-progress))
+      (funcall orig-fn headline info)
+    (let ((id (or (org-element-property :CUSTOM_ID headline)
+                  (org-export-get-reference headline info))))
+      (format "<input type='checkbox' id='toc--%s'/><label for='toc--%s'>%s</label>"
+              id id (funcall orig-fn headline info)))))
+#+end_src
+
+现在，叶子 (没有子标题的标题) 不应该有 ~标签项~ 。实现这一点的明显方法是在
+~org-html--format-toc-headline-colapseable~ 中包含一些 (如果没有子项) 逻辑
+。不幸的是，我的 elisp 无法从 org 提供的大量信息中提取子标题的数量。
+#+begin_src emacs-lisp
+(defadvice! org-html--toc-text-stripped-leaves (orig-fn toc-entries)
+  "Remove label"
+  :around #'org-html--toc-text
+  (if (or (not org-fancy-html-export-mode) (bound-and-true-p org-msg-export-in-progress))
+      (funcall orig-fn toc-entries)
+    (replace-regexp-in-string "<input [^>]+><label [^>]+>\\(.+?\\)</label></li>" "\\1</li>"
+                              (funcall orig-fn toc-entries))))
+#+end_src
+
+**** 使 verbatim 与 code 不同 (HTML)
+
+让我们为 =varbatim= 和 ~code~ 添加一些差异。
+
+我们可以将 ~code~ 专门用于代码片段和命令，例如：在 Emacs 的批处理模式中调用
+src_elisp{(message "Hello")} 会像 ~echo~ 一样打印到标准输出。 可以对
+=verbatim= 使用各种 '其他等宽'，例如键盘快捷键： =C-c C-c= 或 =C-g= 可能是
+Emacs 中最有用的快捷键，或文件名：我将我的配置保存在 =~/.config/doom/= 中，其他
+情况则使用正常样式。
+
+#+begin_src emacs-lisp
+(setq org-html-text-markup-alist
+      '((bold . "<b>%s</b>")
+        (code . "<code>%s</code>")
+        (italic . "<i>%s</i>")
+        (strike-through . "<del>%s</del>")
+        (underline . "<span class=\"underline\">%s</span>")
+        (verbatim . "<kbd>%s</kbd>")))
+#+end_src
+
+**** 改变复选框类型
+
+我们也想使用 HTML 复选框，但是我们想比默认的更漂亮
+#+begin_src emacs-lisp
+(appendq! org-html-checkbox-types
+          '((html-span
+             (on . "<span class='checkbox'></span>")
+             (off . "<span class='checkbox'></span>")
+             (trans . "<span class='checkbox'></span>"))))
+(setq! org-html-checkbox-type 'html-span)
+#+end_src
+
+- [ ] I'm yet to do this
+- [-] Work in progress
+- [X] This is done
+
+**** 额外的特殊字符串
+
+~org-html-special-string-regexps~ 变量定义了以下内容的替换：
++ =\-=, shy 连字符
++ =---=, 增强的破折号
++ =--=, 破折号
++ =...=, (水平的) 省略号
+
+但我认为如果还可以替换左/右箭头 (=->= 和 =<-=) 那就更好了。 这是一个
+~defconst~ ，但正如你可以从这个配置中的大量建议中看出的那样，我并没有放弃我不 '应
+该' 做的事情。
+
+唯一的小麻烦是在这个阶段的输出处理之前 =<= 和 =>= 被转换为 =&lt;= 和 =&gt;=​。
+
+#+begin_src emacs-lisp
+(pushnew! org-html-special-string-regexps
+          '("-&gt;" . "&#8594;")
+          '("&lt;-" . "&#8592;"))
+#+end_src
+
+**** 标题锚点
+
+一个 GitHub 风格的标题链接
+#+begin_src emacs-lisp
+(defun org-export-html-headline-anchor (text backend info)
+  (when (and (org-export-derived-backend-p backend 'html)
+             (not (org-export-derived-backend-p backend 're-reveal))
+             org-fancy-html-export-mode)
+    (unless (bound-and-true-p org-msg-export-in-progress)
+      (replace-regexp-in-string
+       "<h\\([0-9]\\) id=\"\\([a-z0-9-]+\\)\">\\(.*[^ ]\\)<\\/h[0-9]>" ; this is quite restrictive, but due to `org-reference-contraction' I can do this
+       "<h\\1 id=\"\\2\">\\3<a aria-hidden=\"true\" href=\"#\\2\">#</a> </h\\1>"
+       text))))
+(add-to-list 'org-export-filter-headline-functions
+             'org-export-html-headline-anchor)
+#+end_src
+
+**** LaTeX Rendering
+
+如果使用 MathJax，就用 3 而不是 2。通过[[https://www.intmath.com/cg5/katex-mathjax-comparison.php][对比]]我们发现它似乎快了 5 倍，而且它使用单
+个文件而不是多个文件，就是有点大而已。值得庆幸的是，这可以通过添加 ~async~ 属性
+来延迟加载来缓解。
+
+\(D(N) = D(i) + D(N - i - 1) + \frac{1}{N}.\)
+
+\[D(N) = \frac{2}{N}[\sum_{j=0}^{N-1}{D(j)}] + N - 1.\]
+
+#+begin_src emacs-lisp
+(setcdr (assoc 'path org-html-mathjax-options)
+        (list "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"))
+
+(setq! org-html-mathjax-template
+      "<script>
+window.MathJax = {
+  loader: {
+    load: ['[tex]/ams', '[tex]/upgreek', '[tex]/mathtools'],
+  },
+  tex: {
+    ams: {
+      multlineWidth: '%MULTLINEWIDTH'
+    },
+    tags: '%TAGS',
+    tagSide: '%TAGSIDE',
+    tagIndent: '%TAGINDENT',
+    packages: {'[+]': ['ams', 'upgreek', 'mathtools']},
+    mathtools: {
+      pairedDelimiters: {
+        abs: ['\\\\lvert', '\\\\rvert'],
+        norm: ['\\\\lVert', '\\\\rVert'],
+        ceil: ['\\\\lceil', '\\\\rceil'],
+        floor: ['\\\\lfloor', '\\\\rfloor'],
+        round: ['\\\\lfloor', '\\\\rceil'],
+      }
+    }
+  },
+  chtml: {
+    scale: %SCALE,
+    displayAlign: '%ALIGN',
+    displayIndent: '%INDENT'
+  },
+  svg: {
+    scale: %SCALE,
+    displayAlign: '%ALIGN',
+    displayIndent: '%INDENT'
+  },
+  output: {
+    font: '%FONT',
+    displayOverflow: '%OVERFLOW'
+  }
+};
+</script>
+<script id=\"MathJax-script\" async
+        src=\"%PATH\"></script>")
+#+end_src

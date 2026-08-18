@@ -1,0 +1,24 @@
+#!/bin/sh
+# Remove a branch's build directory when the branch is deleted.
+
+. "$HOOKS_DIR/core/lib.sh"
+
+cfg_bool wits.hooks.reference-transaction.cleanup-build-dir-enable || exit 0
+
+# Only act once the refs are actually written (see cleanup-machete for details).
+[ "$1" = "committed" ] || exit 0
+
+repo_name=$(basename "$GIT_TOPLEVEL")
+
+# stdin: <old-sha> <new-sha> <ref-name>. A new-sha of all-zero means deletion.
+while read -r old_sha new_sha ref_name; do
+    [ "$new_sha" = "$NULL_SHA" ] || continue
+    case "$ref_name" in
+        refs/heads/*) branch=${ref_name#refs/heads/} ;;
+        *) continue ;;
+    esac
+
+    resolve_build_dirs "$branch" | while read -r build_dir; do
+        rm -rf "$build_dir"
+    done
+done

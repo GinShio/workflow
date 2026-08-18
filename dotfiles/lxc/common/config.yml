@@ -1,0 +1,9 @@
+default-remote: local
+remotes:
+  local:
+    addr: unix://
+    public: false
+  nju-images:
+    addr: https://mirror.nju.edu.cn/lxc-images/
+    protocol: simplestreams
+    public: true

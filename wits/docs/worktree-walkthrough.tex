@@ -1,0 +1,323 @@
+% =============================================================================
+%  wits worktree -- 一個 bare-backed worktree host 是怎麼建起來的，13 frames。
+%
+%  這是一個「可被引用的片段」：只有 frame，沒有 \documentclass、沒有
+%  document 環境。從主文件拉進來：
+%
+%      \input{worktree-walkthrough}
+%
+%  主文件 preamble 需要（實測可編譯的最小組合，XeLaTeX，14 頁無警告）
+%  ------------------------------------------------------------------
+%      \documentclass[aspectratio=169]{beamer}
+%      \usepackage[fontset=none]{ctex}          % 正文是中文 -> XeLaTeX/LuaLaTeX
+%      \setCJKmainfont{Source Han Sans HK}      % ctex 內建的 Fandol 只有簡體字
+%      \setCJKsansfont{Source Han Sans HK}      % beamer 預設走 sans，要一起設
+%      \setCJKmonofont{Source Han Sans HK}
+%      \usepackage{listings}
+%      \usepackage{xcolor}
+%      \usepackage{booktabs}                    % 只有對照表那張用到
+%
+%  字型換成任何覆蓋繁體的都可以（Noto Sans CJK TC、Microsoft JhengHei、
+%  LXGW Neo ZhiSong…）；用 ctex 預設的 Fandol 會掉字（沒/別/為/刪…）。
+%
+%  所有 listing 刻意只用 ASCII（箭頭寫成 `->`，樹狀圖用 `|--`），等寬字型
+%  不必負擔 CJK 或製表符號；中文全部放在普通 LaTeX 段落裡。
+%
+%  貫穿全場的例子是 KhronosGroup/SPIRV-Reflect：1.4 MB、37 個 branch、
+%  一個 googletest submodule。所有數字都是實測值。
+% =============================================================================
+
+\definecolor{witskey}{RGB}{0,90,160}
+\definecolor{witsdim}{RGB}{130,130,130}
+
+\lstdefinestyle{wits}{%
+  basicstyle=\ttfamily\scriptsize,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  frame=single,
+  framesep=4pt,
+  rulecolor=\color{witsdim},
+  escapeinside={(*@}{@*)},
+}
+\lstset{style=wits}
+
+% 每張 frame 的結論行。
+\providecommand{\takeaway}[1]{%
+  \vspace{0.4em}%
+  {\footnotesize\textcolor{witskey}{$\blacktriangleright$}~#1\par}%
+}
+
+% =============================================================================
+\section{場景}
+% =============================================================================
+
+\begin{frame}[fragile]{場景：一個小專案，一個小 submodule}
+\begin{lstlisting}
+upstream   github.com/KhronosGroup/SPIRV-Reflect   1.4 MB, 37 branches
+  `-- submodule  third_party/googletest
+                 -> github.com/google/googletest   16 MB, pin 52204f78
+
+layout we want
+  /tmp/probe/.bare/spirv-reflect    repository (bare, not a checkout)
+  /tmp/probe/spv-rfl/main           bootstrap worktree
+  /tmp/probe/spv-rfl/<branch>       one worktree per branch afterwards
+\end{lstlisting}
+
+\begin{itemize}\footnotesize
+  \item \textbf{目標一}\quad \texttt{refs/heads} 只放「我要做的 branch」，
+        別人的 37 個放 \texttt{refs/remotes}。
+  \item \textbf{目標二}\quad googletest 的 16\,MB 在磁碟上只有一份，
+        每個 worktree 都來借。
+\end{itemize}
+\end{frame}
+
+% =============================================================================
+\section{一、refs：誰的 branch 放哪}
+% =============================================================================
+
+\begin{frame}[fragile]{建立空殼}
+\begin{lstlisting}
+$ git init --quiet --bare .bare/spirv-reflect
+
+.bare/spirv-reflect/
+    HEAD       -> refs/heads/master     (init default; changed in frame 6)
+    config     core.bare = true
+    objects/   empty
+    refs/      empty
+
+refs/heads 0        refs/remotes 0
+\end{lstlisting}
+
+\takeaway{刻意\emph{不}用 \texttt{git clone -{}-bare}，理由見第 5 張。}
+\end{frame}
+
+\begin{frame}[fragile]{宣告「別人的 branch 該落在哪」}
+\begin{lstlisting}
+$ git remote add origin https://github.com/KhronosGroup/SPIRV-Reflect.git
+
+config gains two lines
+    remote.origin.url   = https://github.com/.../SPIRV-Reflect.git
+    remote.origin.fetch = (*@\textcolor{witskey}{+refs/heads/*:refs/remotes/origin/*}@*)
+                           |___ upstream's ___|  |___ land here __|
+\end{lstlisting}
+
+\takeaway{第二行 \texttt{remote add} 自己會寫（缺了才補）。
+  這一行就是全部的映射規則——\texttt{clone -{}-bare} 不寫它，
+  所以那種 repo 的 \texttt{git fetch} 一個 ref 都不更新。}
+\end{frame}
+
+\begin{frame}[fragile]{抓下來}
+\begin{lstlisting}
+$ git fetch --tags origin
+
+objects/                                  1.7 MB   (full history)
+refs/remotes/origin/
+    main  examples  descriptor-heap  add-license-1  ...        37
+    HEAD -> refs/remotes/origin/main      (git >= 2.46 sets this
+                                           on the first fetch)
+refs/heads/                               empty
+
+refs/heads 0        refs/remotes 38
+\end{lstlisting}
+
+\takeaway{37 個別人的 branch 全在手上，沒有一個變成「我的」branch。}
+\end{frame}
+
+\begin{frame}{對照：兩種做法的結果}
+\begin{center}\footnotesize
+\begin{tabular}{lcc}
+  \toprule
+    & \texttt{clone -{}-bare} & \texttt{init + remote + fetch} \\
+  \midrule
+  \texttt{refs/heads}                 & 37                    & 0 $\rightarrow$ 1 \\
+  \texttt{refs/remotes}               & 0                     & 38 \\
+  \texttt{remote.origin.fetch}        & \emph{(空)}           & \emph{(標準 refspec)} \\
+  \texttt{origin/HEAD}                & \emph{(無)}           & \texttt{origin/main} \\
+  \texttt{git fetch origin}           & 只寫 \texttt{FETCH\_HEAD} & 38 個 ref 全更新 \\
+  \texttt{worktree info} 的 trunk     & \emph{(none)}         & \texttt{origin/main} \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\takeaway{git 的 \texttt{clone.c} 只在「非 bare 或 \texttt{-{}-mirror}」時寫
+  refspec；bare clone 則把上游 \texttt{refs/heads/*} 直接搬進本地
+  \texttt{refs/heads/*}。兩件事一起發生，就是「fetch 沒反應」加上
+  「\texttt{refs/heads} 被灌爆」的來源。}
+\end{frame}
+
+\begin{frame}[fragile]{挑出我要的那一個 branch}
+\begin{lstlisting}
+$ git branch --track main origin/main
+$ git symbolic-ref HEAD refs/heads/main
+
+refs/heads/main -> 3954c1e   (= origin/main)
+    branch.main.remote = origin
+    branch.main.merge  = refs/heads/main      <- written by --track
+HEAD -> refs/heads/main                       (was refs/heads/master)
+
+refs/heads 1  [main]        refs/remotes 38
+\end{lstlisting}
+
+\begin{itemize}\footnotesize
+  \item \texttt{-{}-track} 讓 branch 知道自己的 upstream，
+        \texttt{ahead/behind} 才有得比。
+  \item bare repo 的 symbolic HEAD 有兩個用途：\texttt{git worktree add}
+        的預設分支，以及 \texttt{wits} 判斷「新 worktree 該繼承誰的
+        sparse patterns」的依據。
+\end{itemize}
+\end{frame}
+
+% =============================================================================
+\section{二、objects：一份 store，人人來借}
+% =============================================================================
+
+\begin{frame}[fragile]{開出 bootstrap worktree}
+\begin{lstlisting}
+$ git -C <add-source> worktree add spv-rfl/main main
+
+.bare/spirv-reflect/worktrees/main/       <- this worktree's bookkeeping
+    HEAD   index   gitdir -> .../spv-rfl/main/.git
+spv-rfl/main/
+    .git                 "gitdir: ../../.bare/.../worktrees/main"
+    include/  src/  CMakeLists.txt  ...
+    third_party/googletest/   (*@\textcolor{witskey}{<- empty dir; gitlink not materialised}@*)
+\end{lstlisting}
+
+\takeaway{\texttt{<add-source>}：bare 沒有 main worktree，於是依序取
+  「持有 symbolic HEAD branch 的 worktree」$\rightarrow$ 任一活著的 worktree
+  $\rightarrow$ bare 自己。第一次落在最後那個。}
+\end{frame}
+
+\begin{frame}[fragile]{解析 submodule 的 URL（不下載）}
+\begin{lstlisting}
+$ git submodule init -- third_party/googletest
+
+.gitmodules (in the checkout, from upstream)
+    [submodule "third_party/googletest"]
+        path = third_party/googletest
+        url  = https://github.com/google/googletest
+                    |
+                    v  written into <bare>/config (config is shared)
+    submodule.third_party/googletest.url
+        = https://github.com/google/googletest
+\end{lstlisting}
+
+\takeaway{不下載、不 checkout，價值只在解析：\texttt{url} 可能是相對的
+  （\texttt{../googletest}），得拿 superproject 自己的 remote 去解。
+  那條規則交給 git，我們只把答案讀回來。}
+\end{frame}
+
+\begin{frame}[fragile]{把 store 播種到 repository 手上}
+\begin{lstlisting}
+$ git clone --bare <url> <bare>/modules/third_party/googletest
+
+(1) assemble under a staging name, publish with one rename
+    modules/third_party/.googletest.1991514.incoming/
+                        |
+                        v  rename
+    modules/third_party/googletest/    16 MB  (*@\textcolor{witskey}{<- the only download}@*)
+
+(2) seal it: fetchable, but nothing may be deleted
+    core.repositoryformatversion = 1
+    extensions.preciousObjects   = true
+        $ git -C <store> prune
+        fatal: cannot prune in a precious-objects repo
+    remote.origin.url   = https://github.com/google/googletest
+    remote.origin.fetch = +refs/heads/*:refs/remotes/origin/*
+\end{lstlisting}
+
+\takeaway{落點在 \texttt{<bare>/} 底下，不在任何 worktree 底下。
+  這是它能活過 \texttt{git worktree remove} 的唯一原因。}
+\end{frame}
+
+\begin{frame}[fragile]{借用成立}
+\begin{lstlisting}
+$ git -c submodule.alternateLocation=superproject \
+      -c submodule.alternateErrorStrategy=info \
+      submodule update --init --reference <store> -- third_party/googletest
+
+.bare/.../worktrees/main/modules/third_party/googletest/     148 KB
+    HEAD  index  refs  logs  packed-refs   <- bookkeeping only
+    objects/                                     4.0 KB
+    objects/info/alternates
+        `-> (*@\textcolor{witskey}{<bare>/modules/third\_party/googletest/objects}@*)
+spv-rfl/main/third_party/googletest/
+    .git -> "gitdir: ../../../../.bare/.../worktrees/main/modules/..."
+    googletest/  googlemock/  CMakeLists.txt     <- real files
+\end{lstlisting}
+
+\begin{itemize}\footnotesize
+  \item git 找 object 的順序：自己的 \texttt{objects/} $\rightarrow$
+        \texttt{alternates} 列出的每個目錄。16\,MB 走第二條，4\,KB 是自己的。
+  \item 沒有 \texttt{-{}-dissociate}：那會把借來的物件複製回來，
+        正是要省掉的成本。
+\end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{第二個 worktree，然後刪掉 bootstrap}
+\begin{lstlisting}
+$ git branch descriptor-heap origin/descriptor-heap   # create invents nothing
+$ wits worktree create descriptor-heap spv-rfl/dh --submodules
+
+.bare/.../modules/third_party/googletest      16 MB   <- still one copy
+.bare/.../worktrees/main/.../googletest      148 KB   alt -> that one
+.bare/.../worktrees/dh/.../googletest        148 KB   alt -> the same one
+.bare/.../worktrees  (everything together)   200 KB
+
+$ git worktree remove --force spv-rfl/main
+\end{lstlisting}
+
+\takeaway{被刪掉的是 \texttt{worktrees/main/} 和 checkout 目錄；
+  \texttt{modules/} 不在其中。\texttt{dh} 的 alternates 依然指得到，
+  \texttt{git fsck} 乾淨。「從別的 worktree 借」會壞、
+  「從 repo 借」不會壞，差別就在這一步。}
+\end{frame}
+
+\begin{frame}[fragile]{嵌套為什麼要一層一層走}
+\footnotesize SPIRV-Reflect 只有一層；假設 googletest 自己也帶一個 submodule B。
+
+\medskip
+\footnotesize\textbf{壞的做法}——只播種頂層，然後一次 \texttt{-{}-recursive}：
+\begin{lstlisting}
+submodule 'B' cannot add alternate:
+  path '<store>/modules/B/' does not exist
+Cloning into '<worktree>/.../B'...     <- full download, unreclaimable
+\end{lstlisting}
+
+\footnotesize\textbf{好的做法}——每層都：解析 URL $\rightarrow$ 播種它的 store
+$\rightarrow$ 借它 $\rightarrow$ 再遞迴進去：
+\begin{lstlisting}
+<bare>/modules/<A>                    store for A
+<bare>/modules/<A>/modules/<B>        store for B
+              |____ the path git derives itself; we mirror it ____|
+\end{lstlisting}
+
+\takeaway{遞迴一定在 materialise \emph{之後}：父層沒 checkout 出來，
+  子層的 \texttt{.gitmodules} 讀不到、URL 也解析不了。store 依 submodule 的
+  \emph{name} 命名（可含斜線，如 \texttt{third\_party/googletest}）而非 path，
+  就是因為 git 推導上面那條路徑時用的是 name。}
+\end{frame}
+
+\begin{frame}[fragile]{之後每一次 \texttt{wits update}}
+\begin{lstlisting}
+ensure_remotes                     additive; fills in what is missing
+    git remote add ... / git config remote.X.fetch ...
+    git remote set-url --add --push ...
+    `-- filling in the refspec is the in-place repair of an old
+        clone --bare host
+
+git fetch <sync>                   38 tracking refs in one go
+ |- a worktree holds main
+ |     git -C <that> merge --ff-only <sync>/main
+ `- none does (the bootstrap was reclaimed)
+       git merge-base --is-ancestor refs/heads/main <oid>   # refuse non-ff
+       git update-ref refs/heads/main <oid>
+
+git submodule update --recursive -- <materialised paths>
+\end{lstlisting}
+
+\takeaway{\texttt{update} 永不切 branch、永不擴張 sparse cone、永不
+  \texttt{-{}-init}。\texttt{-{}-init} 只出現在「新工作樹誕生」時：
+  clone 或 \texttt{worktree create}。}
+\end{frame}

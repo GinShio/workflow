@@ -1,0 +1,52 @@
+[[install]]
+id = 'systemd-user-service'
+dst = '~/.config/systemd/user/'
+path = 'user-service.d'
+capabilities = ['develop', 'desktop']
+planes = ['user']
+actions = ['systemd-user-reload']
+
+[[install]]
+id = 'systemd-user-environment'
+dst = '~/.config/environment.d/'
+path = 'user-environment.d'
+capabilities = ['develop']
+planes = ['user']
+actions = ['histfile-install']
+
+[[install]]
+id = 'systemd-user-tmpfiles'
+dst = '~/.config/user-tmpfiles.d/'
+path = 'user-tmpfiles.d'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'systemd-logind'
+dst = '/etc/systemd/logind.conf.d/'
+path = 'logind.conf.d'
+capabilities = ['develop']
+planes = ['system']
+
+[[install]]
+id = 'systemd-user-instance'
+dst = '/etc/systemd/user@.service.d/'
+path = 'user@.service.d'
+capabilities = ['develop']
+planes = ['system']
+
+[[install]]
+id = 'systemd-system'
+dst = '/etc/systemd/system/'
+path = 'system'
+capabilities = ['develop']
+planes = ['system']
+actions = ['systemd-sys-reload']
+
+[actions]
+systemd-sys-reload = 'systemctl daemon-reload || true'
+systemd-user-reload = 'systemctl daemon-reload --user || true'
+
+[variables.lsp]
+runtime_dir = "{{@@ env['XDG_RUNTIME_DIR'] @@}}/lsp"
+clangd_runtime_dir = '{{@@ lsp.runtime_dir @@}}/clangd'

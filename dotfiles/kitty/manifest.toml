@@ -1,0 +1,6 @@
+[[install]]
+id = 'kitty'
+dst = '~/.config/kitty/'
+path = '.'
+capabilities = ['desktop']
+planes = ['user']

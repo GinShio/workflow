@@ -1,0 +1,30 @@
+#!/bin/sh
+# Ask for confirmation before pushing to a protected branch on the remote.
+
+. "$HOOKS_DIR/core/lib.sh"
+
+cfg_bool wits.hooks.pre-push.warn-protected-enable || exit 0
+
+remote_name="$1"
+protected=$(cfg_value wits.hooks.protected-branch '^(main|master|dev|release-.*|patch-.*)$')
+
+# stdin (one line per ref): <local_ref> <local_sha> <remote_ref> <remote_sha>
+while read -r local_ref local_sha remote_ref remote_sha; do
+    # Skip branch deletions (local sha is all-zero).
+    [ "$local_sha" = "$NULL_SHA" ] && continue
+
+    # Only warn on updates to remote branches; ignore tags and other refs.
+    case "$remote_ref" in
+        refs/heads/*) branch=${remote_ref#refs/heads/} ;;
+        *) continue ;;
+    esac
+
+    if printf '%s\n' "$branch" | grep -qE "$protected"; then
+        log_warn "Pushing to protected branch '$branch' on remote '$remote_name'."
+        prompt_confirm "Continue pushing to '$branch'? [y/N] " || {
+            log_warn "Push aborted."
+            exit 1
+        }
+        break
+    fi
+done

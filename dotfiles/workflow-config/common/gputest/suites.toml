@@ -1,0 +1,69 @@
+[suites.deqp-vk]
+type = "deqp"
+executable = "deqp-vk"
+post_run_hooks = ["get_git_info", "get_flakes"]
+archive_files = ["flakes.txt", "git-sha1.txt", "*.csv"]
+runner_args = ["--tests-per-group", "4096", "--timeout", "300.0", "--jobs", "{{@@ gputest_max_jobs @@}}"]
+deqp_args = [
+    "--deqp-log-images=disable",
+    "--deqp-log-shader-sources=disable",
+    "--deqp-log-decompiled-spirv=disable",
+    "--deqp-shadercache=disable",
+    "--deqp-waiver-file=waivers/vk.xml",
+]
+caselists = [
+    "mustpass/vk-default/binding-model.txt",
+    "mustpass/vk-default/descriptor-indexing.txt",
+    "mustpass/vk-default/image/*.txt",
+    "mustpass/vk-default/robustness.txt",
+    "mustpass/vk-default/sparse-resources.txt",
+    "mustpass/vk-default/ssbo.txt",
+    "mustpass/vk-default/texture.txt",
+    "mustpass/vk-default/ubo.txt",
+    "mustpass/vk-default/compute.txt",
+    "mustpass/vk-default/cooperative-vector.txt",
+    #"mustpass/vk-default/tessellation.txt",
+    #"mustpass/vk-default/geometry.txt",
+    #"mustpass/vk-default/clipping.txt",
+    #"mustpass/vk-default/transform-feedback.txt",
+    "mustpass/vk-default/mesh-shader.txt",
+    #"mustpass/vk-default/depth.txt",
+    #"mustpass/vk-default/fragment-*.txt",
+    "mustpass/vk-default/ray-tracing-pipeline.txt",
+    "mustpass/vk-default/ray-query.txt",
+    "mustpass/vk-default/pipeline/*.txt",
+    "mustpass/vk-default/shader-object/*.txt",
+    #"mustpass/vk-default/conditional-rendering.txt",
+    #"mustpass/vk-default/dynamic-state.txt",
+    #"mustpass/vk-default/dynamic-rendering.txt",
+    #"mustpass/vk-default/renderpass.txt",
+    #"mustpass/vk-default/renderpasses.txt",
+    "mustpass/vk-default/reconvergence.txt",
+    "mustpass/vk-default/subgroups.txt",
+    "mustpass/vk-default/dgc.txt",
+]
+
+[suites.deqp-gl]
+type = "deqp"
+executable = "glcts"
+post_run_hooks = ["get_git_info", "get_flakes"]
+archive_files = ["flakes.txt", "git-sha1.txt", "*.csv"]
+runner_args = ["--timeout", "300.0", "--jobs", "[[min(4, {{@@ gputest_max_jobs @@}})]]"]
+deqp_args = [
+    "--deqp-gl-config-name=rgba8888d24s8ms0",
+    "--deqp-surface-height=256",
+    "--deqp-surface-width=256",
+    "--deqp-visibility=hidden",
+    "--deqp-waiver-file=waivers/gl.xml",
+]
+caselists = [
+    "mustpass/gl/khronos_mustpass/main/*-main.txt",
+    "mustpass/gles/khronos_mustpass/main/*-main.txt",
+    "mustpass/gl/khronos_mustpass_single/main/*-single.txt",
+]
+
+[suites.piglit]
+type = "piglit"
+post_run_hooks = ["get_git_info", "get_flakes"]
+archive_files = ["flakes.txt", "git-sha1.txt", "*.csv"]
+runner_args = ["--timeout", "300", "--jobs", "[[min(4, {{@@ gputest_max_jobs @@}})]]", "--profile", "quick"]

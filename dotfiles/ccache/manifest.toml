@@ -1,0 +1,23 @@
+# ccache_max_size is also read by the sccache module template.
+
+[[install]]
+id = 'ccache-config'
+dst = '~/.config/ccache/'
+path = 'config'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'ccache-tmpfiles'
+dst = '~/.config/user-tmpfiles.d/'
+path = 'tmpfiles.d'
+capabilities = ['develop']
+planes = ['user']
+
+[dynvariables]
+ccache_max_size = """df -h / |tail -n1 |awk '{print $2*0.2 substr($2,length($2),1) "i"}'"""
+
+[variables.ccache]
+runtime_dir = "{{@@ env['XDG_RUNTIME_DIR'] @@}}/ccache"
+remote_dir = '{{@@ ccache.runtime_dir @@}}/remote'
+tmp_dir = '{{@@ ccache.runtime_dir @@}}/tmp'

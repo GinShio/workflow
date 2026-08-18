@@ -1,0 +1,6 @@
+[global]
+result_dir = "{{@@ testing.result_dir @@}}"
+runner_root = "{{@@ testing.runner_dir @@}}"
+project_root = "{{@@ projects.root_dir @@}}"
+archive_retention_days = 360
+result_retention_days = 16

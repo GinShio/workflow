@@ -1,0 +1,6 @@
+[[install]]
+id = 'bluetooth'
+dst = '/etc/bluetooth/main.conf'
+path = 'main.conf'
+capabilities = ['develop']
+planes = ['system']

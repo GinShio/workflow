@@ -1,0 +1,9 @@
+[[install]]
+id = 'fish'
+dst = '~/.config/fish/'
+path = '.'
+capabilities = ['develop']
+planes = ['user']
+
+[dynvariables]
+fish_bin = 'command -v fish 2>/dev/null || echo /bin/fish'

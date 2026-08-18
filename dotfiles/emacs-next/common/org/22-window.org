@@ -1,0 +1,480 @@
+* 空間
+
+東西放在哪：窗口之間怎麼走、一個緩衝區被顯示時出現在哪個窗口、一整套佈局怎麼保存和
+切換。
+
+這些原本散在 keys 模塊裏（~windmove~、~winner-mode~、=w= 和 =p= 兩條分支）。keys 只該
+擁有鍵位機制，所以整批搬過來；搬完它那個文件裏沒有一行是關於窗口或項目的。
+
+上游概念與命令見 [[info:emacs#Windows][Emacs manual: Windows]]、[[info:elisp#Displaying Buffers][Elisp manual: Displaying Buffers]]、
+[[info:emacs#Projects][Emacs manual: Projects]] 與 [[info:emacs#Tab Bars][Emacs manual: Tab Bars]]。實際工作流與完整
+鍵位索引在 [[file:../GUIDE.org::*窗口、項目與 layout][GUIDE.org]]；窗口編號包的入口是 [[https://github.com/deb0ch/emacs-winum][winum README]]。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el" :comments no
+;;; ginshio-window.el --- where things go -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(require 'ginshio-path)
+(require 'ginshio-doctor)
+(require 'ginshio-keys)
+(require 'seq)
+(require 'windmove)
+(require 'tab-bar)
+(require 'project)
+
+(declare-function desktop-release-lock "desktop")
+#+end_src
+
+** 移動與重排
+
+~windmove~ 比它的名字暗示的能做得多，四組命令同構：
+
+| 命令族                   | 作用                           |
+|--------------------------+--------------------------------|
+| ~windmove-左右上下~        | 選中那個方向的窗口             |
+| ~windmove-swap-states-*~   | 與那個方向的窗口交換內容       |
+| ~windmove-delete-*~        | 刪除那個方向的窗口             |
+| ~windmove-display-*~       | 讓下一個彈出的緩衝區去那個方向 |
+
+前兩組綁在 leader 上。後兩組不綁——刪除可以「先過去再 =w k=」，而定向顯示在下面那張
+規則表存在之後基本用不上。沒綁不等於不存在，這個表就是它們的文檔。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(setq windmove-wrap-around nil          ; running off the edge should do nothing
+      window-min-height 3
+      window-min-width 20
+      even-window-sizes 'height-only)
+#+end_src
+
+** 按編號直達
+
+窗口一多，方向移動就要在腦子裏數格子。[[https://github.com/deb0ch/emacs-winum][winum]] 給每個窗口一個按位置排定的編號，同一
+套佈局下不變，=w 3= 一步到位。
+
+編號直接進鍵位，不另留一個「問我要幾號」的入口。那條路是按鍵、看提示、再輸一次數字，而
+編號存在的全部意義就是省掉這幾步。
+
+winum 會安裝一張自己的 ~winum-keymap~，這裏交給它一張空的。它也會往
+~mode-line-format~ 裏插一段編號，但 theme 模塊的 doom-modeline 會把整個
+~mode-line-format~ 換掉，那次插入注定無效——關掉它，由 doom-modeline 自己的
+window-number 分區顯示。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(use-package winum
+  :ensure t
+  :demand t
+  :init
+  (setq winum-keymap (make-sparse-keymap)   ; the leader owns window selection
+        winum-auto-setup-mode-line nil      ; doom-modeline renders the number
+        winum-scope 'frame-local
+        winum-ignored-buffers '(" *which-key*"))
+  :config
+  (winum-mode 1))
+#+end_src
+
+** 緩衝區出現在哪
+
+排好兩個窗口對照代碼，按一下 ~C-h f~，幫助緩衝區把其中一個換掉了。跑一次編譯，佈局
+又變一次。~display-buffer~ 本來就是可以完全掌控的，只是默認沒有規則。
+
+只分三類，超過三類就記不住，而記不住的規則等於沒有規則。讀完就關的去右側並自動獲得
+焦點——你多半緊接着要按 ~q~；盯着它跑的去底部、不搶焦點——你的手還在代碼裏；其餘一切
+不定規則，優先復用已經顯示着它的窗口。
+
+前兩類用側窗。側窗不受 ~delete-other-windows~ 影響，所以 =w o= 清場之後底部那條編譯
+輸出還在——清場是為了專注代碼，不是為了關掉正在跑的編譯。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(defconst ginshio-window-read-and-close
+  '("\\*Help\\*" "\\*Apropos\\*" "\\*Man " "\\*WoMan"
+    "\\*eldoc" "\\*info\\*" "\\*Shortdoc")
+  "Buffers you open, read, and dismiss.")
+
+(defconst ginshio-window-watch-while-running
+  '("\\*compilation\\*" "\\*Compile-Log\\*" "\\*grep\\*" "\\*Occur\\*"
+    "\\*xref\\*" "\\*Warnings\\*" "\\*Messages\\*" "\\*Backtrace\\*"
+    "\\*Flymake diagnostics" "\\*Async Shell Command\\*")
+  "Buffers that report on something in progress.")
+
+(defun ginshio-window--matcher (regexps)
+  "Return one regexp matching any of REGEXPS."
+  (mapconcat #'identity regexps "\\|"))
+#+end_src
+
+每側只給一個槽位，於是同一類的緩衝區共用一個窗口，新的替換舊的。這是「底部只有一條
+輸出」而不是「底部堆了七條」的來源。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(setq window-sides-slots '(0 0 1 1)     ; left top right bottom
+      window-resize-pixelwise t
+      switch-to-buffer-in-dedicated-window 'pop
+      display-buffer-base-action '((display-buffer-reuse-window
+                                    display-buffer-in-previous-window)))
+
+(setq display-buffer-alist
+      `((,(ginshio-window--matcher ginshio-window-read-and-close)
+         (display-buffer-in-side-window)
+         (side . right)
+         (slot . 0)
+         (window-width . 0.35)
+         (body-function . ,#'select-window))
+        (,(ginshio-window--matcher ginshio-window-watch-while-running)
+         (display-buffer-in-side-window)
+         (side . bottom)
+         (slot . 0)
+         (window-height . 0.28))))
+#+end_src
+
+minibuffer 模塊的 consult 預覽也走 ~display-buffer~，所以上面這張表順帶決定了預覽落在
+哪裏。
+
+~window-toggle-side-windows~ 把所有側窗一次收起、再按一次放回來，綁在 =w z=。
+
+** 項目
+
+一個項目就是一個工作區。tab 是它的實現，不是一個要記住的概念——leader 上沒有任何一個
+鍵叫「tab」，你切的永遠是項目。
+
+這個等式讓「工作區」通常要解決的三個問題各自有了答案。*佈局要來回切*：每個 tab 持有一
+份窗口配置。*跨重啓*：desktop，見下一節。*緩衝區列表太吵*：由 ~project.el~ 回答，「屬
+於哪個項目」從文件路徑算得出來，不必提前歸類，也就不需要任何維護平行緩衝區列表的包。
+
+第三個答案要自己接上去，因為 tab 只持有窗口配置，它並不換掉 ~buffer-list~——見「緩衝區
+屬於誰」。
+
+那條 bar 不顯示。有幾個項目不是需要持續盯着的信息。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(setq tab-bar-show nil
+      tab-bar-new-tab-choice "*scratch*"
+      tab-bar-close-last-tab-choice nil   ; refuse to close the only project
+      tab-bar-history-limit 20)
+
+(tab-bar-mode 1)
+(tab-bar-history-mode 1)   ; window layout undo, kept per project
+#+end_src
+
+切換項目就是切換佈局：回到一個項目時，你回到的是離開它時的那套窗口排列。在項目提示
+那裏反悔（~C-g~）要把剛開的空 tab 收掉，否則每次猶豫都留下一個垃圾。
+
+這件事不做成一條新命令，而是改 ~project-switch-project~ 本身。項目不是只從一個入口進去
+的：別的命令會調它，將來裝的東西也會調它。做成新命令的話，等式只在你記得按那一個鍵的時
+候成立；改它本身，等式就是無條件的。想要例外的時候仍然有一個明確的說法，見下面的 =p P=。
+
+配對靠的是項目根目錄，不是 tab 的名字。~project-name~ 取的是目錄的最後一段，而同一個倉
+庫的兩個 worktree、或者兩棵樹下各自的 =build=，重名是常態；按名字配對會把你送去另一個項
+目的 tab，而且看起來像是「它記錯了佈局」。tab 本身就是一張 alist，多放一個它不認識的鍵，
+選擇 tab 和寫進會話文件都不會把它丟掉。
+
+沒有對應 tab 的項目一律開一個新的，不去複用當前那個——哪怕當前那個還沒被任何項目認領（剛
+啓動時的 dashboard 就是）。代價是第一次 =p p= 之後那個 dashboard tab 會留在那裏；換來的是
+「一次 =p p= 就是一個 tab」沒有例外，於是 =p ]= =p [= 從第一次切換之後就有東西可翻，而不
+是要等到你開第二個項目纔忽然開始生效。
+
+那條規則帶例外的時候，代價全落在這裏：一個「有時開有時不開」的動作，配一條看不見的 tab
+bar，結果就是 =p ]= 沒反應時你無法分辨它是沒東西可切還是壞了。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(defun ginshio-window--current-tab ()
+  (assq 'current-tab (frame-parameter nil 'tabs)))
+
+(defun ginshio-window--tab-project (tab)
+  "Return the project root TAB belongs to, or nil when nothing claimed it."
+  (alist-get 'ginshio-project (cdr tab)))
+
+(defun ginshio-window--project-identity (dir)
+  "Return (ROOT . NAME) for the project in DIR.
+Falls back to the directory itself, so that somewhere `project.el' does not
+recognise still gets a tab of its own rather than none."
+  (if-let* ((project (project-current nil dir)))
+      (cons (project-root project) (project-name project))
+    (let ((root (file-name-as-directory (expand-file-name dir))))
+      (cons root (file-name-nondirectory (directory-file-name root))))))
+
+(defun ginshio-window--tab-for (root)
+  "Return the number of the tab belonging to ROOT, or nil when there is none."
+  (when-let* ((index (seq-position
+                      (tab-bar-tabs) root
+                      (lambda (tab candidate)
+                        (equal candidate (ginshio-window--tab-project tab))))))
+    (1+ index)))
+
+(defun ginshio-window--claim-tab (root name)
+  "Make the current tab the one that belongs to ROOT, and call it NAME."
+  (tab-bar-rename-tab name)
+  (setf (alist-get 'ginshio-project (cdr (ginshio-window--current-tab))) root))
+#+end_src
+
+認領放在切換 *之後*：切換的那一步會停下來問你要做什麼，而在那裏按 ~C-g~ 應該什麼都沒發生
+過——包括 tab 的名字。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(defvar ginshio-window-inhibit-project-tab nil
+  "When non-nil, switching projects stays in the tab you are already in.")
+
+(define-advice project-switch-project
+    (:around (switch dir) ginshio-window-own-tab)
+  "Do the switch in the tab that belongs to DIR's project.
+A project you have been in before is restored to the windows you left it
+with, and nothing is asked; one reached for the first time gets a tab and
+then the command's usual menu."
+  (if ginshio-window-inhibit-project-tab
+      (funcall switch dir)
+    (pcase-let ((`(,root . ,name) (ginshio-window--project-identity dir)))
+      (if-let* ((number (ginshio-window--tab-for root)))
+          (tab-bar-select-tab number)
+        (tab-bar-new-tab)
+        (condition-case nil
+            (progn
+              (funcall switch dir)
+              (ginshio-window--claim-tab root name))
+          (quit (tab-bar-close-tab)))))))
+
+(defun ginshio/switch-project-here (dir)
+  "Switch to the project in DIR without leaving this tab.
+For looking something up in another project and coming straight back."
+  (interactive (list (funcall project-prompter)))
+  (let ((ginshio-window-inhibit-project-tab t))
+    (project-switch-project dir)))
+#+end_src
+
+收掉一個項目要收掉的是 *這個 tab 的* 項目，不是光標所在緩衝區的項目——在 A 的 tab 裏開着
+一個 B 的文件，這兩個答案不一樣，而你按下去要的顯然是前者。tab 沒被認領時退回後者。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(defun ginshio/close-project ()
+  "Kill the buffers of the project this tab is for, and drop its layout."
+  (interactive)
+  (let ((project-current-directory-override
+         (or (ginshio-window--tab-project (ginshio-window--current-tab))
+             project-current-directory-override)))
+    (when (project-current nil)
+      (project-kill-buffers)))
+  (when (cdr (tab-bar-tabs))
+    (tab-bar-close-tab)))
+#+end_src
+
+*** 緩衝區屬於誰
+
+上面那個等式在佈局上是完整的，在緩衝區列表上不是：~tab-bar~ 存的是窗口配置，不是
+~buffer-list~。所以默認情況下，你在項目 A 裏按下任何一個列緩衝區的鍵，看到的都是 A、B、C
+的全部緩衝區——一份跨了三個項目的平表。
+
+補齊它不需要一個維護平行緩衝區列表的包，因為「屬於哪個項目」本來就算得出來。兩處各有一個
+內建的接口，各補一處。
+
+問「這個緩衝區屬於哪個項目」時要把遠程目錄擋掉：為了決定一次按鍵落在哪裏而去開一條 ssh
+連接，不划算。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(defun ginshio-window--buffer-project (buffer)
+  "Return the root of the project BUFFER belongs to, or nil.
+A remote directory is answered nil without asking: finding out would open a
+connection, and the answer is only needed to decide where a keypress lands."
+  (when-let* ((directory (buffer-local-value 'default-directory buffer))
+              ((not (file-remote-p directory)))
+              (project (project-current nil directory)))
+    (project-root project)))
+#+end_src
+
+*一份只有這個項目的列表。* Emacs 30 的 ~project-list-buffers~ 就是它，而它的呈現方式是可
+配置的。默認那個是 ~Buffer-menu~，這裏換成 ibuffer：要對一批緩衝區動手——標記、批量殺掉、
+批量存盤——ibuffer 是兩者裏能做事的那一個。
+
+日常換緩衝區不走這裏，走 =b b=。這張表是「一次處理一批」用的，也是整份配置裏唯一還用到
+ibuffer 的地方。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(setq project-buffers-viewer #'project-list-buffers-ibuffer)
+#+end_src
+
+*下一個緩衝區不要走出項目。* =b n= =b p= 翻的是這個 frame 的緩衝區歷史，翻着就到別的項目
+去了。~switch-to-prev-buffer-skip~ 收一個函數，對每個候選問一次「跳過嗎」。
+
+當前緩衝區不屬於任何項目時一個都不跳過。那時沒有一個範圍可以待在裏面，繼續跳只會讓這兩個
+鍵看起來壞了。
+
+函數形式的 ~switch-to-prev-buffer-skip~ 是有最終決定權的：值形式被全部跳過時，Emacs 會退回
+第一個被跳過的緩衝區，函數形式不退。所以一個項目裏只剩一個緩衝區時，這兩個鍵什麼都不做，而
+不是把你帶到別的項目去——這正是想要的。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(defun ginshio-window-skip-other-projects (window buffer _bury-or-kill)
+  "Return non-nil when BUFFER belongs to a project other than WINDOW's."
+  (when-let* ((here (ginshio-window--buffer-project (window-buffer window))))
+    (not (equal here (ginshio-window--buffer-project buffer)))))
+
+(setq switch-to-prev-buffer-skip #'ginshio-window-skip-other-projects)
+#+end_src
+
+** 跨重啓
+
+一套佈局要花力氣纔擺得好：哪個項目在哪個 tab、每個 tab 裏幾個窗口、各自看着什麼。值
+得保存。但自動保存把它變成了另一回事——每過兩分鐘、以及每次退出，當下那一刻的樣子就
+覆蓋掉上一份，不問你那一刻是不是你想留的。
+
+而那一刻通常不是。你臨時劈了個窗口看一眼別的文件、打開了一堆只讀一次的頭文件、正處
+在一次調試的中途——這些都會被當成「你的佈局」存下來，下次啓動原樣還給你。真正想留的
+那套反而早就被覆蓋掉了。
+
+所以這裏改成手動：兩條命令，存和取。存下來的那一份只在你說存的時候變。
+
+=desktop.el= 自己不在這裏加載。它是為「自動」設計的，而這一節要的正是不自動；而下面
+兩條命令的入口 ~desktop-save~ 與 ~desktop-read~ 都聲明過自動加載，按下去的那一刻它纔
+進來。下面這些值全是 ~defcustom~，先賦值不會被之後的定義覆蓋。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(setq desktop-dirname ginshio-state-dir
+      desktop-path (list ginshio-state-dir)
+      desktop-base-file-name "desktop"
+      desktop-base-lock-name "desktop.lock"
+      desktop-restore-frames t
+      desktop-restore-in-current-display t
+      desktop-restore-eager 8           ; the rest arrive when Emacs is idle
+      desktop-lazy-idle-delay 3
+      ;; A stale lock from a crashed session should not turn a restore into a
+      ;; question; `check-pid' takes it over when nobody holds it.
+      desktop-load-locked-desktop 'check-pid
+      desktop-buffers-not-to-save "\\`[[:space:]]*\\*"
+      desktop-modes-not-to-save '(tags-table-mode))
+#+end_src
+
+~desktop-save-mode~ 沒有打開，這是本節的全部要點。打開它就等於把上面那段話裏的自動行
+爲重新裝回來——它掛的是定時器和 ~kill-emacs-hook~，兩者都不經過你。
+
+恢復調成佈局優先：tab 和窗口排列立刻回來，緩衝區只急着讀前幾個，其餘等空閒時加載。把
+幾十個緩衝區同步讀回來只是讓你盯着一個卡住的 frame 等。
+
+*鎖。* ~desktop.el~ 假定一個會話會長期持有它的桌面文件，於是讀寫都伴隨着一把鎖。這裏
+沒有「持有」這回事——兩條命令都是一次性的，做完就撒手。所以存的時候讓它順帶釋放，取
+的時候取完立刻釋放。不這樣做的話，一次恢復會留下一把再也沒人解的鎖，而下一次恢復要靠
+上面那條 ~check-pid~ 去判斷持有者是不是已經死了——能work，但那是給崩潰準備的退路，不
+該是正常路徑。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(defun ginshio-window--layout-file ()
+  (expand-file-name desktop-base-file-name ginshio-state-dir))
+
+(defun ginshio/save-layout ()
+  "Write the current tabs, windows and buffers over the saved layout."
+  (interactive)
+  (desktop-save ginshio-state-dir 'release)
+  (message "Layout saved"))
+
+(defun ginshio/restore-layout ()
+  "Bring back the layout `ginshio/save-layout' last wrote."
+  (interactive)
+  (unless (file-exists-p (ginshio-window--layout-file))
+    (user-error "No layout has been saved yet"))
+  (desktop-read ginshio-state-dir)
+  (desktop-release-lock)
+  (message "Layout restored"))
+
+(defun ginshio/forget-layout ()
+  "Delete the saved layout.
+Asks first: this is the one action here that cannot be undone by saving
+again, because there is nothing left to compare against."
+  (interactive)
+  (let ((file (ginshio-window--layout-file)))
+    (unless (file-exists-p file)
+      (user-error "No layout has been saved yet"))
+    (when (yes-or-no-p (format "Delete the saved layout in %s? "
+                               (abbreviate-file-name ginshio-state-dir)))
+      (delete-file file)
+      (message "Layout forgotten"))))
+#+end_src
+
+存下來的東西在 =XDG_STATE_HOME= 底下，和其他跨會話狀態放在一起，不落在任何項目裏也不
+落在配置目錄裏。~M-m q d~ 會報出它的具體位置。
+
+** 鍵位
+
+窗口移動給了兩套等價的鍵：方向鍵，以及 Emacs 自己的方位約定 ~b f n p~，與 ~C-b~ ~C-f~
+~C-n~ ~C-p~ 的方向完全一致。大寫的同一組字母是交換——交換是移動的變體，鍵位上也該看
+得出這層關係。這是本配置裏唯一一處刻意保留的等價雙份：方向鍵在任何鍵盤上都不用學，字母
+那套則讓交換有一個對得上的大寫形式。
+
+=p= 底下有三個看起來該有、卻故意不在這裏的鍵，它們都在 minibuffer 模塊那邊：「切到本項目
+的某個緩衝區」是 =b b=，「在項目裏搜內容」是 =s g=，「按名字找文件」是 =s f=。
+
+這三件事各自都有一個 ~project.el~ 版本，但那一套和 consult 那一套的範圍規則不是同一個。
+consult 這幾個命令是統一的：不帶前綴參數以項目根為起點，帶前綴纔問你要哪個目錄。都留在
+=s= 和 =b= 底下，「範圍」就只有一個約定要記；分散到兩個前綴底下，每次按之前都得先想一遍
+這個鍵屬於哪一套。
+
+代價要寫清楚：這樣一來 =rg= 與 =fd= 成了硬依賴，因為項目裏搜內容和找文件都只剩下經過它們
+的那條路。doctor 裏那兩條檢查因此都不是 ~warn~。
+
+整片替換仍然留在 =p r=——那件事沒有 consult 版本。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(ginshio-leader-define
+ "w"         "window"
+ "w w"       #'other-window
+ "w v"       #'split-window-right
+ "w s"       #'split-window-below
+ "w k"       #'delete-window
+ "w K"       #'delete-other-windows
+ "w ="       #'balance-windows
+ "w z"       #'window-toggle-side-windows
+
+ "w <left>"  #'windmove-left
+ "w <down>"  #'windmove-down
+ "w <up>"    #'windmove-up
+ "w <right>" #'windmove-right
+ "w b"       #'windmove-left
+ "w n"       #'windmove-down
+ "w p"       #'windmove-up
+ "w f"       #'windmove-right
+
+ "w B"       #'windmove-swap-states-left
+ "w N"       #'windmove-swap-states-down
+ "w P"       #'windmove-swap-states-up
+ "w F"       #'windmove-swap-states-right
+
+ "w u"       #'tab-bar-history-back
+ "w r"       #'tab-bar-history-forward
+
+ "w l"       "layout"
+ "w l s"     #'ginshio/save-layout
+ "w l r"     #'ginshio/restore-layout
+ "w l k"     #'ginshio/forget-layout
+
+ "p"         "project"
+ "p p"       #'project-switch-project
+ "p P"       #'ginshio/switch-project-here  ; in place, when you just want a peek
+ "p d"       #'project-dired
+ "p k"       #'ginshio/close-project
+ "p c"       #'project-compile
+ "p r"       #'project-query-replace-regexp
+ "p ]"       #'tab-next
+ "p ["       #'tab-previous
+ "p u"       #'tab-bar-undo-close-tab)
+#+end_src
+
+編號鍵按規律生成。手寫九遍的話，第七行寫錯一個數字不會被任何東西發現——它照樣是合法
+綁定，只是跳去了別的窗口。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(dotimes (index 9)
+  (let ((number (1+ index)))
+    (ginshio-leader-define
+     (format "w %d" number)
+     (intern (format "winum-select-window-%d" number)))))
+#+end_src
+
+** 自檢項
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el"
+(ginshio-doctor-declare 'window "session file"
+                        (lambda () (file-writable-p ginshio-state-dir))
+                        :severity 'warn
+                        :note "layout restored across restarts"
+                        :remedy (format "make %s writable" ginshio-state-dir))
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-window.el" :comments no
+(provide 'ginshio-window)
+;;; ginshio-window.el ends here
+#+end_src

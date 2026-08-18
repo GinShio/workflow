@@ -1,0 +1,8 @@
+[project]
+org = "{{@@ wits.projects.source_info['spirv-headers'].org @@}}"
+
+[repos.main]
+path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
+main_branch = "main"
+[repos.main.remotes]
+origin = "https://github.com/KhronosGroup/SPIRV-Headers.git"

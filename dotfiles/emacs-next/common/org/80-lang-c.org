@@ -1,0 +1,246 @@
+* C 與 C++
+
+傳統模式的完整命令見 [[info:ccmode#Top][CC Mode manual]]；格式化選項與樣式文件見
+[[https://clang.llvm.org/docs/ClangFormat.html][ClangFormat documentation]]，語言服務器的項目發現、compile_commands 與 troubleshooting 見
+[[https://clangd.llvm.org/][clangd documentation]]。本文件只把它們接入 lang/lsp/dap 三個既有框架。
+
+一種語言的所有事情集中在一個文件裏：語法、主模式、縮進、語言服務器、調試適配器。註
+釋掉 =init.el= 裏的 ~lang-c~，這一切一起消失，其他語言不受影響。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-c.el" :comments no
+;;; ginshio-lang-c.el --- C and C++ -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-c.el"
+(require 'ginshio-doctor)
+(require 'ginshio-lang)
+(require 'ginshio-lsp)
+#+end_src
+
+** 語法與主模式
+
+三行主模式對應三種情況。前兩行不必解釋；第三行是 C 生態獨有的麻煩：一個 =.h= 文件
+可能是 C 也可能是 C++，光看擴展名分不出來，所以 Emacs 把它交給一個讀內容再決定的模
+式。那個模式兩種 grammar 都要，缺一個就整條退回傳統模式。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-c.el"
+(ginshio-lang-register
+ :grammars '((c   "https://github.com/tree-sitter/tree-sitter-c"   "v0.23.6")
+             (cpp "https://github.com/tree-sitter/tree-sitter-cpp" "v0.23.4"))
+ :modes '((c-mode        c-ts-mode        c)
+          (c++-mode      c++-ts-mode      cpp)
+          (c-or-c++-mode c-or-c++-ts-mode c cpp)))
+#+end_src
+
+多數發行版已經打包了這兩個 grammar，那樣上面的 URL 和版本號永遠用不上；它們是系統
+沒有時的退路。~M-x ginshio/doctor~ 會告訴你當前用的是哪一份。
+
+** 縮進
+
+編輯器的縮進不決定代碼最終長什麼樣——那由提交時的格式化工具決定。這裏要的只是「別和
+它打架」：邊寫邊看到的形狀，應該接近它最後被定型的形狀。
+
+一個固定的默認值做不到這件事。同一個倉庫裏不同子樹的風格可以完全不同——用 submodule
+組織的項目尤其如此，每個 submodule 帶着自己的 =.clang-format=，於是任何靜態設置在其
+中一半的目錄裏必然是錯的。
+
+所以問一下那個工具本身。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-c.el"
+(setq c-ts-mode-indent-style 'k&r
+      c-ts-mode-indent-offset 4)
+#+end_src
+
+上面兩行是兜底：一個沒有 =.clang-format= 的目錄裏，只能靠猜。
+
+*** 問 clang-format 而不是讀那個文件
+
+=.clang-format= 通常只寫一行 ~BasedOnStyle~ 加幾條覆蓋，真正生效的縮進寬度藏在那個基
+準風格的默認值裏。自己解析文件意味着要把 clang-format 內建的每一種風格的每一個默認值
+複製一份到這裏，並且跟着它的版本更新——那是一份必然會過期的副本。
+
+~--dump-config~ 讓它自己回答，輸出的是合併之後的最終值。在這台機器上一次調用約十幾毫
+秒，而且結果按目錄緩存，所以一個項目只問幾次。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-c.el"
+(defconst ginshio-lang-c-format-settings-regexp
+  (concat "^\\(IndentWidth\\|TabWidth\\|UseTab\\|ColumnLimit\\)"
+          ":[ \t]*\\([^ \t\n]+\\)")
+  "The clang-format settings worth mirroring, as they appear in its output.")
+
+(defvar ginshio-lang-c--format-cache (make-hash-table :test #'equal)
+  "Resolved clang-format settings, keyed by directory.")
+
+(defun ginshio-lang-c--dump-format-config (directory)
+  "Return what clang-format would do in DIRECTORY, as an alist of strings."
+  (with-temp-buffer
+    (let ((default-directory directory))
+      (when (zerop (call-process "clang-format" nil t nil "--dump-config"))
+        (goto-char (point-min))
+        (let (settings)
+          (while (re-search-forward ginshio-lang-c-format-settings-regexp nil t)
+            (push (cons (match-string 1) (match-string 2)) settings))
+          settings)))))
+
+(defun ginshio-lang-c-format-settings (directory)
+  "Return the clang-format settings governing DIRECTORY, or nil.
+
+Nil when no `.clang-format' applies: without one, clang-format still
+answers, but with its own defaults, and adopting those would quietly
+re-indent every C file on the machine that belongs to no project."
+  (when (and (executable-find "clang-format")
+             (locate-dominating-file directory ".clang-format"))
+    (let* ((key (expand-file-name directory))
+           (cached (gethash key ginshio-lang-c--format-cache)))
+      (unless cached
+        (setq cached (or (ginshio-lang-c--dump-format-config key) 'unavailable))
+        (puthash key cached ginshio-lang-c--format-cache))
+      (unless (eq cached 'unavailable) cached))))
+
+(defun ginshio/lang-c-forget-format-settings ()
+  "Ask clang-format again, after a `.clang-format' has changed."
+  (interactive)
+  (clrhash ginshio-lang-c--format-cache)
+  (message "clang-format settings will be re-read"))
+#+end_src
+
+*** 套用
+
+~ColumnLimit~ 為零在 clang-format 裏表示「不限」，而 ~fill-column~ 沒有這個值，所以那
+種情況保留 core 給的默認寬度。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-c.el"
+(defun ginshio-lang-c-adopt-format-settings-h ()
+  "Indent the way this directory's clang-format would."
+  (when-let* ((file buffer-file-name)
+              (settings (ginshio-lang-c-format-settings (file-name-directory file))))
+    (when-let* ((width (alist-get "IndentWidth" settings nil nil #'equal)))
+      (setq-local c-ts-mode-indent-offset (string-to-number width)
+                  c-basic-offset (string-to-number width)))
+    (when-let* ((width (alist-get "TabWidth" settings nil nil #'equal)))
+      (setq-local tab-width (string-to-number width)))
+    (when-let* ((tabs (alist-get "UseTab" settings nil nil #'equal)))
+      (setq-local indent-tabs-mode (not (equal tabs "Never"))))
+    (when-let* ((limit (alist-get "ColumnLimit" settings nil nil #'equal))
+                (columns (string-to-number limit))
+                ((> columns 0)))
+      (setq-local fill-column columns))))
+
+(add-hook 'c-ts-base-mode-hook #'ginshio-lang-c-adopt-format-settings-h)
+(add-hook 'c-mode-common-hook #'ginshio-lang-c-adopt-format-settings-h)
+#+end_src
+
+兩個鉤子分別覆蓋 tree-sitter 模式和 grammar 缺失時退回的傳統模式；兩邊的縮進變量名不
+同，所以兩個都設。
+
+這是 *推斷*，而 =.editorconfig= 是 *聲明*。項目同時有兩者時應該以後者為準，而這不需
+要在這裏做什麼——內建的 editorconfig 支持是以目錄局部變量的形式生效的，那一步在模式鉤
+子之後，自然壓過上面設的值。
+
+** clangd
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-c.el"
+(defun ginshio-lang-c-clangd-contact (_interactive _project)
+  "Return the command line for clangd in the current buffer."
+  (list "clangd"
+        (format "-j=%d" (max 2 (/ (num-processors) 2)))
+        "--clang-tidy"
+        "--header-insertion=iwyu"
+        "--completion-style=detailed"
+        "--pch-storage=memory"))
+
+(ginshio-lsp-register-server
+ :modes '(c-mode c-ts-mode c++-mode c++-ts-mode)
+ :program "clangd"
+ :contact #'ginshio-lang-c-clangd-contact)
+#+end_src
+
+並行度取核心數的一半。clangd 的工作線程和你的構建搶同一批核心，而在編輯的同時編譯是
+常態；全佔滿只會讓兩邊都變慢。
+
+~--header-insertion=iwyu~ 讓補全一個尚未包含的符號時自動補上 =#include=。它會不問自
+取地改你的緩衝區，覺得突兀就改成 ~never~。
+
+*** 樹外構建
+
+clangd 只沿着源文件的祖先目錄尋找 =compile_commands.json=。樹外構建時它在構建目錄
+裏，怎麼往上找都找不到，症狀是打開文件後語義分析在某一行停住——因為某個生成的頭文件
+不存在，而 clangd 並不知道去哪裏找它。
+
+解決辦法不在這份配置裏，在文件系統上：在源碼樹根放一個指向構建目錄那份的軟鏈接。
+
+#+begin_src shell :tangle no
+ln -sfn _build/release/compile_commands.json compile_commands.json
+#+end_src
+
+這樣做的好處是換構建目錄只要重指軟鏈接，不用改配置也不用重啓 Emacs；而且 clangd 之
+外的工具——clang-tidy、各種靜態分析、你自己的腳本——同樣受益。編輯器不該知道你今天在
+用哪個構建目錄。
+
+** 調試
+
+不需要配置。dape 自帶的配置按主模式過濾，裝了外部程序就會出現在 ~M-m d d~ 的候選裏。
+這台機器上有兩個可用：
+
+- =gdb= —— gdb 自帶的 DAP 接口，需要 14.1 以上。
+- =lldb-dap= —— LLVM 帶的適配器。
+
+選中之後那行配置可以就地編輯：把 ~:program~ 改成真正要跑的可執行文件，往 ~:args~ 裏
+填參數。詳見 dap 模塊。
+
+** 鍵位
+
+本文件不綁任何鍵。C/C++ 的鍵全部來自三個地方——通用的語義操作在 lsp 模塊的 =c= 分
+支，結構導航與摺疊在 lang 模塊，剩下這幾個是主模式自己的：
+
+| 鍵        | 命令                          | 做什麼                       |
+|-----------+-------------------------------+------------------------------|
+| ~C-c C-q~   | ~c-ts-mode-indent-defun~        | 重新縮進整個函數             |
+| ~C-c .~     | ~c-ts-mode-set-style~           | 臨時換一種縮進風格           |
+| ~C-c C-c~   | ~comment-region~                | 註釋掉選中區域               |
+| ~C-c C-k~   | ~c-ts-mode-toggle-comment-style~ | 在 ~/* */~ 和 ~//~ 之間切換      |
+
+~C-c~ 這一層完整地留給主模式，所以這些出廠鍵位原樣可用，不需要召回也不會被搶。
+
+** 自檢項
+
+gdb 的版本是硬門檻而不是偏好：DAP 接口是 14.1 才加進去的，更早的版本連不上，而症狀
+是一條來自適配器內部的錯誤，看不出和版本有關。所以這條檢查報出實際版本號。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-c.el"
+(defconst ginshio-lang-c-gdb-minimum-version 14.1
+  "First GDB release to speak the Debug Adapter Protocol.")
+
+(defun ginshio-lang-c-gdb-version ()
+  "Return the version of GDB on PATH as a number, or nil when there is none."
+  (when (executable-find "gdb")
+    (with-temp-buffer
+      (when (zerop (call-process "gdb" nil t nil "--version"))
+        (goto-char (point-min))
+        (when (re-search-forward "GNU gdb \\(?:(.*) \\)?\\([0-9.]+\\)" nil t)
+          (string-to-number (match-string 1)))))))
+
+(ginshio-doctor-declare 'lang-c "gdb"
+                        (lambda ()
+                          (when-let* ((version (ginshio-lang-c-gdb-version)))
+                            (>= version ginshio-lang-c-gdb-minimum-version)))
+                        :note "debug adapter"
+                        :detail (lambda ()
+                                  (if-let* ((version (ginshio-lang-c-gdb-version)))
+                                      (format "found %s, need %s or later"
+                                              version ginshio-lang-c-gdb-minimum-version)
+                                    "not on PATH"))
+                        :remedy "zypper install gdb")
+
+(ginshio-doctor-executable 'lang-c "lldb-dap"
+                           :severity 'warn
+                           :note "the LLVM alternative to gdb"
+                           :remedy "zypper install lldb")
+#+end_src
+
+clangd 的檢查不在這裏——註冊服務器時 lsp 模塊已經替本語言聲明了一條。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-c.el" :comments no
+(provide 'ginshio-lang-c)
+;;; ginshio-lang-c.el ends here
+#+end_src

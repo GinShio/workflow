@@ -1,0 +1,23 @@
+[drivers.radv]
+layout = "mesa"
+root = "{{env.HOME}}/.local"
+env = { VK_DRIVER_FILES = "{{root}}/share/vulkan/icd.d/radeon_icd.x86_64.json", RADV_DEBUG = "nocache", VK_LOADER_DRIVERS_DISABLE = "*amd*,*lvp*" }
+
+[drivers.lvp]
+layout = "mesa"
+root = "{{env.HOME}}/.local"
+env = { VK_DRIVER_FILES = "{{root}}/share/vulkan/icd.d/lvp_icd.x86_64.json", VK_LOADER_DRIVERS_DISABLE = "*amd*,*radeon*" }
+
+[drivers.amdvlk]
+layout = "amdvlk"
+root = "{{env.HOME}}/.local"
+env = { VK_DRIVER_FILES = "{{root}}/vulkan/icd.d/amd_icd64.json", VK_LOADER_DRIVERS_DISABLE = "*lvp*,*radeon*" }
+
+[backends.zink]
+env = { MESA_LOADER_DRIVER_OVERRIDE = "zink", __GLX_FORCE_VENDOR_LIBRARY_0 = "mesa" }
+
+[backends.rusticl]
+env = { RUSTICL_ENABLE = "zink", OCL_ICD_FILENAMES = "{{root}}/etc/OpenCL/vendors/rusticl.icd" }
+
+[backends.llvmpipe]
+env = { MESA_LOADER_DRIVER_OVERRIDE = "swrast", LIBGL_ALWAYS_SOFTWARE = "1" }

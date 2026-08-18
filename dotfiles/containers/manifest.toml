@@ -1,0 +1,9 @@
+[[install]]
+id = 'containers'
+dst = '~/.config/containers/'
+path = '.'
+capabilities = ['develop']
+planes = ['user']
+
+[variables.beancount]
+port = 16003

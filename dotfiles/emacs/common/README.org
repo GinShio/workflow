@@ -1,0 +1,58 @@
+* Doom Private
+
+** Dependens
+*** Fonts
+  - normal :: [[https://adobe-fonts.github.io/source-code-pro/][Source Code Pro]]
+  - variable :: [[https://adobe-fonts.github.io/source-code-pro/][Source Code Variable]]
+  - unicode :: [[https://juliamono.netlify.app][JuliaMono]]
+  - serif :: [[https://ctan.org/pkg/tex-gyre-cursor][TeX Gyre Cursor]]
+  - icons :: [[https://www.nerdfonts.com][Symbols Nerd Font]]
+
+*** Tools
+  + base
+    - [[https://github.com/BurntSushi/ripgrep][ripgrep]]
+    - [[https://github.com/sharkdp/fd][fd]]
+  + terminal
+    - make
+    - cmake
+    - libvterm (~USE_SYSTEM_LIBVTERM=yes~)
+    - libtool-bin
+  # + org-roam
+  #   - graphviz
+  # + git
+  #   - [[https://github.com/dandavison/delta][git-delta]]
+  + screenshot
+    - [[https://imagemagick.org/index.php][ImageMagick]]
+  + theme magic (*Only* Unix-like system)
+    - [[https://github.com/dylanaraps/pywal][pywal]]
+
+*** LSP
+  + CC :: [[https://github.com/clangd/clangd][clangd]]
+  + Python :: [[https://github.com/microsoft/pyright][pyright]]
+
+Or More...
+
+** Modules
+
+*** LLVM mode
+
+This directory is copy from LLVM projects.
+Copyright © LLVM
+SPDX-License-Identifier: Apache License v2.0 with LLVM Exceptions
+
+git-sha1: d2bfc2b52bf
+
+** Directory
+  + *base* org :: =$HOME/org=
+  + *roam* :: =base/roam=
+  + *agenda* :: =base/agenda=
+  + *capture* :: =base/capture=
+
+** Installation
+#+begin_src shell
+git clone --depth 1 git@github.com:doomemacs/doomemacs.git $HOME/.config/emacs
+git clone git@github.com:GinShio/doom-private $HOME/.config/doom
+emacs --batch --eval "(progn (require 'org) (setq org-confirm-babel-evaluate nil) (org-babel-tangle-file \"$HOME/.config/doom/config.org\"))"
+$HOME/.config/emacs/bin/doom install
+#+end_src
+
