@@ -1,7 +1,7 @@
 //! The data model: what a project *is*, parsed from TOML but not yet resolved.
 //!
 //! These types stay deliberately close to the file on disk. Templated fields
-//! (`build_dir`, an `[environment]` map, …) are kept as *raw* strings and
+//! (`repos.*.build_dir`, an `[environment]` map, …) are kept as *raw* strings and
 //! `toml::Value`s here; turning them into concrete paths and command lines is
 //! [`super::resolve`]'s job, and only once a [`Profile`] is supplied. Keeping the
 //! two apart is the whole reason a read-only `info` never has to run a build
@@ -47,8 +47,6 @@ pub struct RawProject {
     pub build_system: Option<BuildSystem>,
     pub toolchain: Option<String>,
     pub generator: Option<String>,
-    pub build_dir: Option<String>,
-    pub install_dir: Option<String>,
     #[serde(default)]
     pub default_presets: Vec<String>,
     #[serde(default)]
@@ -77,7 +75,8 @@ pub struct RawRepo {
     /// defaulting to that project's `repos.main`. What travels is the repo's
     /// *git identity* (path, main branch, remotes, hooks, branch strategy,
     /// worktree paths, `skip`); what stays local is how *this* build uses it
-    /// (`anchor`, `source_dir`, `presets`). A borrow may not itself be borrowed.
+    /// (`anchor`, `source_dir`, `build_dir`, `install_dir`, `presets`). A borrow
+    /// may not itself be borrowed.
     pub from: Option<String>,
     pub main_branch: Option<String>,
     pub anchor: Option<String>,
@@ -92,6 +91,12 @@ pub struct RawRepo {
     /// `CMakeLists.txt`/`meson.build`/… lives) when it is not the checkout root.
     /// Resolved from the build repo; defaults to its resolved `workdir`.
     pub source_dir: Option<String>,
+    /// Where the backend writes its build tree. Templated; resolved from the
+    /// **build repo** (the focus's `anchor`, or the focus). Absent means this
+    /// repo is not built — `wits build` then has nothing to do.
+    pub build_dir: Option<String>,
+    /// Install prefix. Templated; same owner as [`build_dir`](Self::build_dir).
+    pub install_dir: Option<String>,
     /// Paths this checkout never materialises, as an ordered gitignore-style
     /// pattern list where `!` re-includes (see [`super::skip`]). Not templated:
     /// these are git patterns, and mixing `{{ }}` into `*`/`!` would only make
@@ -582,12 +587,15 @@ mod tests {
             vec!["main_branch", "bootstrap_worktree_dir"]
         );
 
-        // `anchor` / `source_dir` / `presets` are the borrower's own business.
+        // `anchor` / `source_dir` / `build_dir` / `install_dir` / `presets` are
+        // the borrower's own business.
         let clean: RawRepo = toml::from_str(
             r#"
             from = "acme/engine"
             anchor = "main"
             source_dir = "{{repos.main.workdir}}/src"
+            build_dir = "{{repos.main.workdir}}/_build"
+            install_dir = "{{repos.main.workdir}}/_install"
             [presets.x]
             definitions = { A = 1 }
             "#,
@@ -647,11 +655,11 @@ mod tests {
             focus = "main"
             build_system = "cmake"
             toolchain = "clang"
-            build_dir = "{{repos.main.workdir}}/_build/{{build_type}}"
 
             [repos.main]
             path = "~/src/hello"
             main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/_build/{{build_type}}"
             [repos.main.remotes]
             origin = "git@github.com:me/hello.git"
             "#,
@@ -661,8 +669,21 @@ mod tests {
         assert_eq!(project.build_system, Some(BuildSystem::Cmake));
         assert_eq!(file.repos["main"].path.as_deref(), Some("~/src/hello"));
         assert_eq!(
+            file.repos["main"].build_dir.as_deref(),
+            Some("{{repos.main.workdir}}/_build/{{build_type}}")
+        );
+        assert_eq!(
             file.repos["main"].remotes.origin.as_deref(),
             Some("git@github.com:me/hello.git")
+        );
+    }
+
+    #[test]
+    fn build_dir_on_the_project_table_is_rejected() {
+        let err = toml::from_str::<RawProject>(r#"build_dir = "/tmp""#).unwrap_err();
+        assert!(
+            err.to_string().contains("build_dir"),
+            "unknown field should name build_dir: {err}"
         );
     }
 }

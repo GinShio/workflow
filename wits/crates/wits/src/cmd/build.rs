@@ -56,15 +56,15 @@ pub struct BuildArgs {
     /// Install after building.
     #[arg(long)]
     pub install: bool,
-    /// Override the install prefix, ignoring the project's configured
+    /// Override the install prefix, ignoring the build repo's configured
     /// `install_dir` (the backend's install-prefix, e.g. cmake's
     /// `CMAKE_INSTALL_PREFIX`). Affects configure as well as install.
     #[arg(long = "install-dir", value_name = "DIR")]
     pub install_dir: Option<PathBuf>,
-    /// Override the resolved build directory, ignoring the project's `build_dir`
-    /// template — e.g. to build a `review checkout` in an isolated dir without
-    /// touching config. The symmetric partner of `--install-dir`; highest
-    /// priority, verbatim (§5.5).
+    /// Override the resolved build directory, ignoring the build repo's
+    /// `build_dir` template — e.g. to build a `review checkout` in an isolated
+    /// dir without touching config. The symmetric partner of `--install-dir`;
+    /// highest priority, verbatim (§5.5).
     #[arg(long = "build-dir", value_name = "DIR")]
     pub build_dir: Option<PathBuf>,
     /// Build a specific target.
@@ -95,10 +95,10 @@ pub struct BuildOptions {
     pub mode: BuildMode,
     pub install: bool,
     /// A command-line override of the resolved install prefix (§5.5); `None`
-    /// leaves the project's configured `install_dir` in force.
+    /// leaves the build repo's configured `install_dir` in force.
     pub install_dir: Option<PathBuf>,
     /// A command-line override of the resolved build dir (§5.5); `None` leaves
-    /// the project's `build_dir` template in force.
+    /// the build repo's `build_dir` template in force.
     pub build_dir: Option<PathBuf>,
     pub target: Option<String>,
     pub extra_config_args: Vec<String>,
@@ -185,7 +185,7 @@ fn execute(
     let mut plan = make_plan(ws, project, profile, opts, &branch, backend.as_deref())?;
 
     // A `--install-dir`/`--build-dir` on the command line overrides the
-    // project's resolved value (§5.5, highest priority). Each only feeds a
+    // build repo's resolved value (§5.5, highest priority). Each only feeds a
     // backend step (install prefix / build dir), so patching the final plan
     // value is sufficient — no re-plan needed.
     if let Some(dir) = &opts.install_dir {

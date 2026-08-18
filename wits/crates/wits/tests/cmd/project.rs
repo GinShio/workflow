@@ -794,12 +794,12 @@ origin = "{upstream}"
 [project]
 focus = "component"
 build_system = "cargo"
-build_dir = "{{{{repos.main.workdir}}}}/target"
-install_dir = "{{{{repos.component.workdir}}}}"
 [repos.main]
 path = "{host}"
 main_branch = "main"
 skip = ["/vendor"]
+build_dir = "{{{{repos.main.workdir}}}}/target"
+install_dir = "{{{{repos.component.workdir}}}}"
 [repos.main.remotes]
 origin = "{upstream}"
 [repos.component]
@@ -893,13 +893,13 @@ fn hybrid_uses_the_worktree_that_actually_holds_the_branch() {
             r#"
 [project]
 build_system = "cargo"
-build_dir = "{{{{repos.main.workdir}}}}/target"
 [repos.main]
 path = "{bare}"
 main_branch = "main"
 branch_strategy = "hybrid"
 worktree_dir = "{root}/hybrid.wt/{{{{branch.slug}}}}"
 bootstrap_worktree_dir = "main"
+build_dir = "{{{{repos.main.workdir}}}}/target"
 [repos.main.remotes]
 origin = "{upstream}"
 "#,

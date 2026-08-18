@@ -67,7 +67,9 @@ pub struct Plan {
     /// or the build repo's workdir when unset. Distinct from `work_dir`, which
     /// stays the checkout root that carries branch identity and anchors paths.
     pub source_dir: PathBuf,
+    /// The build repo's resolved `build_dir` template, if it declared one.
     pub build_dir: Option<PathBuf>,
+    /// The build repo's resolved `install_dir` template, if it declared one.
     pub install_dir: Option<PathBuf>,
     pub logical: LogicalConfig,
     /// The final context, so callers can resolve arbitrary templates or inspect.
@@ -238,19 +240,20 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
     }
     let work_dir = work_dirs[&build_repo].clone();
 
-    // The configure source: the build repo's `source_dir` template, or the
-    // checkout root when unset. Build outputs should reference the named
-    // `repos.<build_repo>.workdir`, not the repository's `path`.
-    let source_dir = match &project.repos[&build_repo].source_dir {
+    // The configure source and the output dirs live on the **build repo**
+    // (the focus's anchor): that checkout owns work / source / build / install
+    // together. `source_dir` defaults to the checkout root; the other two are
+    // optional, so a repo that is never built simply omits them.
+    let build = &project.repos[&build_repo];
+    let source_dir = match &build.source_dir {
         Some(tpl) => PathBuf::from(ctx.render(tpl)?),
         None => work_dir.clone(),
     };
-
-    let build_dir = match &project.project.build_dir {
+    let build_dir = match &build.build_dir {
         Some(tpl) => Some(PathBuf::from(ctx.render(tpl)?)),
         None => None,
     };
-    let install_dir = match &project.project.install_dir {
+    let install_dir = match &build.install_dir {
         Some(tpl) => Some(PathBuf::from(ctx.render(tpl)?)),
         None => None,
     };
@@ -797,11 +800,11 @@ mod tests {
             [project]
             build_system = "cmake"
             toolchain = "clang"
-            build_dir = "{{repos.main.workdir}}/_build/{{toolchain.name}}/{{build_type}}"
 
             [repos.main]
             path = "/src/hello"
             main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/_build/{{toolchain.name}}/{{build_type}}"
 
             [toolchains.clang]
             cc = "clang"
@@ -839,11 +842,11 @@ mod tests {
         let body = r#"
             [project]
             build_system = "cmake"
-            build_dir = "{{repos.other.workdir}}/_build/{{branch.slug}}"
 
             [repos.main]
             path = "/src/hello.git"
             main_branch = "main"
+            build_dir = "{{repos.other.workdir}}/_build/{{branch.slug}}"
             branch_strategy = "worktree"
             worktree_dir = "{{repo.path}}.worktrees/{{branch.slug}}"
 
@@ -928,11 +931,11 @@ mod tests {
     fn top_level_work_dir_is_not_a_template_variable() {
         let body = r#"
             [project]
-            build_dir = "{{work.dir}}/_build"
 
             [repos.main]
             path = "/src/hello.git"
             main_branch = "main"
+            build_dir = "{{work.dir}}/_build"
         "#;
         let (_d, ws) = ws_with(body, "hello");
         let project = ws.project("hello").unwrap();
@@ -952,11 +955,11 @@ mod tests {
         let body = r#"
             [project]
             build_system = "cmake"
-            build_dir = "{{repos.main.workdir}}/_build/mr-{{spec.mr}}"
 
             [repos.main]
             path = "/src/hello"
             main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/_build/mr-{{spec.mr}}"
         "#;
         let (_d, ws) = ws_with(body, "hello");
         let project = ws.project("hello").unwrap();
@@ -981,11 +984,11 @@ mod tests {
     fn a_referenced_but_unsupplied_spec_is_a_hard_error() {
         let body = r#"
             [project]
-            build_dir = "{{repos.main.workdir}}/_build/{{spec.mr}}"
 
             [repos.main]
             path = "/src/hello"
             main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/_build/{{spec.mr}}"
         "#;
         let (_d, ws) = ws_with(body, "hello");
         let project = ws.project("hello").unwrap();
@@ -1058,11 +1061,11 @@ mod tests {
             [project]
             build_system = "cmake"
             toolchain = "clang"
-            build_dir = "{{repos.main.workdir}}/b"
 
             [repos.main]
             path = "/src/hello"
             main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/b"
 
             [toolchains.clang]
             cc = "clang"
@@ -1101,7 +1104,6 @@ mod tests {
 
             [project]
             org = "acme"
-            build_dir = "{{repos.main.workdir}}/b"
             [project.environment]
             MY_ENV = "{{org.environment.SHARED_VAR}}"
             OVERRIDDEN_VAR = "from-project"
@@ -1111,6 +1113,7 @@ mod tests {
             [repos.main]
             path = "/src/x"
             main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/b"
         "#;
         let (_d, ws) = ws_with(body, "x");
         let project = ws.project("acme/x").unwrap();
@@ -1152,11 +1155,11 @@ mod tests {
 
             [project]
             org = "acme"
-            build_dir = "{{repos.main.workdir}}/b"
 
             [repos.main]
             path = "/src/x"
             main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/b"
         "#;
         let (_d, ws) = ws_with(body, "x");
         let project = ws.project("acme/x").unwrap();
@@ -1186,13 +1189,13 @@ mod tests {
         let body = r#"
             [project]
             org = "ghost"
-            build_dir = "{{repos.main.workdir}}/b"
             [project.definitions]
             OWN = true
 
             [repos.main]
             path = "/src/x"
             main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/b"
         "#;
         let (_d, ws) = ws_with(body, "x");
         let project = ws.project("ghost/x").unwrap();
@@ -1220,7 +1223,6 @@ mod tests {
             [project]
             org = "myorg"
             default_presets = ["use-org"]
-            build_dir = "{{repos.main.workdir}}/b"
 
             [project.presets.use-org]
             environment = { FROM_ORG = "{{org.environment.ORG_SETTING}}" }
@@ -1228,6 +1230,7 @@ mod tests {
             [repos.main]
             path = "/src/y"
             main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/b"
         "#;
         let (_d, ws) = ws_with(body, "y");
         let project = ws.project("myorg/y").unwrap();
@@ -1252,11 +1255,11 @@ mod tests {
             [project]
             build_system = "cmake"
             default_presets = ["warn"]
-            build_dir = "{{repos.main.workdir}}/b"
 
             [repos.main]
             path = "/src/x"
             main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/b"
 
             [project.presets.warn]
             definitions = { WERROR = true }
@@ -1280,5 +1283,75 @@ mod tests {
         let plan = plan(&ws, project, &input).unwrap();
         assert!(plan.logical.has_definition("WERROR"));
         assert!(plan.logical.has_definition("ASSERTS")); // auto-applied for debug
+    }
+
+    /// `build_dir` / `install_dir` belong to the **build repo** (the focus's
+    /// anchor), the same owner as `source_dir`. A focus that builds through
+    /// another checkout uses that checkout's templates; a self-anchored focus
+    /// uses its own. That is what lets two independently-built repos in one
+    /// project keep separate output trees.
+    #[test]
+    fn build_and_install_dirs_come_from_the_build_repo() {
+        let body = r#"
+            [project]
+            focus = "lib"
+
+            [repos.main]
+            path = "/src/root"
+            main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/_build/root"
+            install_dir = "{{repos.main.workdir}}/_install/root"
+
+            [repos.lib]
+            path = "/src/lib"
+            main_branch = "main"
+            anchor = "main"
+
+            [repos.tool]
+            path = "/src/tool"
+            main_branch = "main"
+            build_dir = "{{repos.tool.workdir}}/_build/tool"
+            install_dir = "{{repos.tool.workdir}}/_install/tool"
+        "#;
+        let (_d, ws) = ws_with(body, "hello");
+        let project = ws.project("hello").unwrap();
+        // Default focus is `lib`, which builds through `main`.
+        let via_anchor = plan(
+            &ws,
+            project,
+            &PlanInput::paths_only(&Profile::default(), "main"),
+        )
+        .unwrap();
+        assert_eq!(via_anchor.build_repo, "main");
+        assert_eq!(
+            via_anchor.build_dir.unwrap(),
+            PathBuf::from("/src/root/_build/root")
+        );
+        assert_eq!(
+            via_anchor.install_dir.unwrap(),
+            PathBuf::from("/src/root/_install/root")
+        );
+
+        let self_anchored = plan(
+            &ws,
+            project,
+            &PlanInput::paths_only(
+                &Profile {
+                    focus: Some("tool".into()),
+                    ..Default::default()
+                },
+                "main",
+            ),
+        )
+        .unwrap();
+        assert_eq!(self_anchored.build_repo, "tool");
+        assert_eq!(
+            self_anchored.build_dir.unwrap(),
+            PathBuf::from("/src/tool/_build/tool")
+        );
+        assert_eq!(
+            self_anchored.install_dir.unwrap(),
+            PathBuf::from("/src/tool/_install/tool")
+        );
     }
 }

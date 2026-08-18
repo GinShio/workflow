@@ -649,18 +649,16 @@ fn describe(ws: &Workspace, project: &ProjectData, profile: &ProfileArgs) -> Res
         _ => {
             let build_repo =
                 resolve::anchor_of(project, project.focus_name(profile.focus.as_deref()));
-            if let Some(t) = project
-                .repos
-                .get(&build_repo)
-                .and_then(|r| r.source_dir.as_ref())
-            {
-                println!("  source_dir (template):  {t}");
-            }
-            if let Some(t) = &project.project.build_dir {
-                println!("  build_dir (template):   {t}");
-            }
-            if let Some(t) = &project.project.install_dir {
-                println!("  install_dir (template): {t}");
+            if let Some(repo) = project.repos.get(&build_repo) {
+                if let Some(t) = &repo.source_dir {
+                    println!("  source_dir (template):  {t}");
+                }
+                if let Some(t) = &repo.build_dir {
+                    println!("  build_dir (template):   {t}");
+                }
+                if let Some(t) = &repo.install_dir {
+                    println!("  install_dir (template): {t}");
+                }
             }
         }
     }
@@ -727,7 +725,8 @@ fn check_one(ws: &Workspace, project: &ProjectData) -> Vec<String> {
     }
 
     let p = &project.project;
-    if p.build_dir.is_some() && p.build_system.is_none() {
+    let has_build_dir = project.repos.values().any(|r| r.build_dir.is_some());
+    if has_build_dir && p.build_system.is_none() {
         issues.push("build_dir is set but build_system is not".into());
     }
     // Whether a declared `build_system` actually has a backend is `wits build`'s

@@ -387,10 +387,11 @@ anchor = "main"              # build it through this project's root (§4.2)
 The split of what travels is one sentence: **a repo's git identity travels, how
 *this* build uses it does not.** So `path`, `main_branch`, `remotes`, `hooks`,
 `branch_strategy`, `worktree_dir`, `bootstrap_worktree_dir`, and `skip` come
-from the source; `anchor`, `source_dir`, and `presets` stay with the borrower —
-which is exactly right,
-because the per-consumer build knobs (which feature flags this consumer compiles
-the component with) genuinely differ per consumer while the repo does not.
+from the source; `anchor`, `source_dir`, `build_dir`, `install_dir`, and
+`presets` stay with the borrower — which is exactly right,
+because the per-consumer build knobs (output paths, which feature flags this
+consumer compiles the component with) genuinely differ per consumer while the
+repo does not.
 Declaring a travelling field *and* `from` is a hard error rather than a silent
 precedence rule: a local override would quietly reintroduce the duplication the
 borrow exists to remove.
@@ -528,7 +529,8 @@ for the common case where it is not the checkout root. `source_dir` is a templat
 path on the build repo (`[repos.<name>]`), defaulting to that repo's `workdir`;
 set it to e.g. `"{{repos.main.workdir}}/src"` to configure from a subdirectory.
 It changes only the backend's configure source — the named `workdir` stays the checkout root that carries
-branch identity and anchors `build_dir`/`install_dir` templates, so the two never
+branch identity and anchors `build_dir`/`install_dir` templates (which live on
+the same `[repos.<name>]` table), so the two never
 conflate. A subtree cannot express this: a subtree with `anchor = self` has no
 own git (no branch identity), and with `anchor = "main"` its `workdir` becomes
 the anchor's root, not the subdirectory.
@@ -581,8 +583,9 @@ that is not the root.
 
 A consequence worth stating: when a subtree sets `anchor = "main"`, its own
 subpath carries **no git meaning and no build-source meaning** — the configure
-source is the anchor's path. The subtree entry then contributes only its *name*
-(as the possible `focus`) and its *repo-level presets*. That is intended.
+source is the anchor's path, and so are `build_dir`/`install_dir`. The subtree
+entry then contributes only its *name* (as the possible `focus`) and its
+*repo-level presets*. That is intended.
 
 ---
 
@@ -886,11 +889,14 @@ mr=<n>` to build it — the two commands meet only at a path and a spec value th
 user passes, never in code. For a submodule-of-a-monorepo MR the same seam
 serves both shapes: an independently-built component (`anchor = self`) points
 `--work-dir` at the review worktree, while one that must build via its root is
-checked out in place and disambiguated by a `spec.*`-keyed `build_dir`. Moving
-`build_dir`/`install_dir` onto the repo (so the build base owns
-`work`/`source`/`build`/`install` together) is a coherent future shape but was
-**not** taken: `review` needs an *override*, not a per-repo *default*, and the
-override layer is the smaller, one-directional change (§1.2).
+checked out in place and disambiguated by a `spec.*`-keyed `build_dir`.
+`build_dir`/`install_dir` live on the **build repo** with `source_dir`, so that
+checkout owns `work`/`source`/`build`/`install` together: a consumer that
+borrows a component declares its own output paths (they do not travel with
+`from`), and two self-anchored repos in one project keep separate trees.
+`--build-dir`/`--install-dir` remain the one-shot override for a checkout
+materialised outside the strategy (`review`), which is still the smaller,
+one-directional change (§1.2).
 
 ### 6.4 Branch identity
 

@@ -70,13 +70,12 @@ toolchain    = "clang"
 [repos.main]
 path        = "~/src/hello"
 main_branch = "main"
-[repos.main.remotes]
-origin = "git@github.com:me/hello.git"
-
 # Where the build lands. `repos.main.workdir` is this build's checkout dir;
 # keying by branch means switching branches never clobbers another build.
 build_dir   = "{{repos.main.workdir}}/_build/{{toolchain.name}}/{{build_type}}"
 install_dir = "{{repos.main.workdir}}/_install/{{build_type}}"
+[repos.main.remotes]
+origin = "git@github.com:me/hello.git"
 ```
 
 Declare the `clang` toolchain once (e.g. `~/.wits/project/toolchains.toml`):
@@ -186,6 +185,7 @@ toolchain    = "clang"
 [repos.main]                   # the mesa clone (required root)
 path        = "~/src/mesa"
 main_branch = "main"
+build_dir   = "{{repos.main.workdir}}/_build/lvp/{{build_type}}"
 [repos.main.remotes]
 origin   = "git@github.com:me/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
@@ -193,8 +193,6 @@ upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 [repos.lvp]                    # a subtree (inferred: nested path, no main_branch)
 path   = "src/gallium/frontends/lavapipe"   # relative to repos.main → shares mesa's git
 anchor = "main"                # build via the mesa root
-
-build_dir = "{{repos.main.workdir}}/_build/lvp/{{build_type}}"
 ```
 
 - `anchor = "main"` means "build from the mesa root" — the configure source is
@@ -209,7 +207,7 @@ build_dir = "{{repos.main.workdir}}/_build/lvp/{{build_type}}"
   root, point `source_dir` at it (a template, default
   `{{repos.main.workdir}}`):
   `source_dir = "{{repos.main.workdir}}/src"`. Only the configure source moves;
-  `repos.main.workdir`, `build_dir`, and the branch still key off the checkout.
+  `repos.main.workdir`, that repo's `build_dir`, and the branch still key off the checkout.
 
 ---
 
@@ -238,12 +236,12 @@ origin = "git@github.com:me/engine.git"
 # viewer.toml — a project that consumes it.
 [project]
 focus     = "engine"          # the component is what you are working on
-build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}-{{build_type}}"
 
 [repos.main]
 path        = "~/src/viewer"
 main_branch = "main"
 skip        = ["/third_party/engine"]   # don't check out our own copy
+build_dir   = "{{repos.main.workdir}}/_build/{{branch.slug}}-{{build_type}}"
 
 [repos.engine]
 from   = "engine"             # …use that one instead
@@ -268,9 +266,9 @@ copy of the engine.
 repo's git identity travels; how this build uses it does not.** So `path`,
 `main_branch`, `remotes`, `hooks`, `branch_strategy`, `worktree_dir`,
 `bootstrap_worktree_dir`, and `skip` come from the source — declaring one of
-them here too is an error — while `anchor`, `source_dir`, and `presets` are
-yours, which is what lets each consumer set its own build knobs on the same
-component.
+them here too is an error — while `anchor`, `source_dir`, `build_dir`,
+`install_dir`, and `presets` are yours, which is what lets each consumer set its
+own build knobs (including output paths) on the same component.
 
 Two things follow that are worth knowing before you hit them:
 

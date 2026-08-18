@@ -43,7 +43,7 @@ ambiguous names remain lookup errors.
 The four `*-dir` queries resolve the same build [plan](#5-resolution-pipeline)
 as `build`/`info` and print one of its paths — `build_dir`, `install_dir`,
 `source_dir`, or the selected repo's `workdir` respectively (`build-dir`/`install-dir` error when
-the project declares no such template; `source-dir`/`work-dir` are always
+the **build repo** declares no such template; `source-dir`/`work-dir` are always
 resolvable). The branch defaults to the anchored repo's current one. This is how
 a checkout hook points `compile_commands.json` at the active build, or a script
 `cd`s into a branch's `repos.<name>.workdir`.
@@ -95,7 +95,7 @@ path for a materialised checkout without building.
 | `--reconfig` | | Delete the build dir and configure fresh. |
 | `--install` | | Add an install step after building. |
 | `--install-dir <DIR>` | | Override the resolved `install_dir` prefix (the backend's install-prefix, e.g. cmake's `CMAKE_INSTALL_PREFIX`). Affects configure as well as install. |
-| `--build-dir <DIR>` | | Override the resolved `build_dir`, ignoring the project's template — e.g. to build a `review checkout` in an isolated dir. The symmetric partner of `--install-dir`; verbatim, highest priority. |
+| `--build-dir <DIR>` | | Override the resolved `build_dir`, ignoring the build repo's template — e.g. to build a `review checkout` in an isolated dir. The symmetric partner of `--install-dir`; verbatim, highest priority. |
 | `--uninstall` | | Reverse an install (backend-driven; see §7.3). Mutually exclusive with a build. |
 | `--target <T>` | `-t` | Build a specific target (where the backend supports it). |
 | `--extra-config-args <A>…` | `-Xconfig,<arg>` | Raw args appended to the configure command, verbatim. |
@@ -198,8 +198,6 @@ Naming an org that no file declares is not an error; it simply inherits nothing
 | `build_system` | string | when building | `cmake` \| `meson` \| `cargo` (backends shipping in v1). |
 | `toolchain` | string | no | Default toolchain name (part of the selection chain, §5). |
 | `generator` | string | no | Build-system generator (e.g. `Ninja`). |
-| `build_dir` | template | when building | Build directory; see §6 for templating. |
-| `install_dir` | template | no | Install prefix; templated. |
 | `default_presets` | list\<string\> | no | Presets always applied (§4). |
 
 `[project.environment]` and `[project.definitions]` — templated maps merged at
@@ -409,7 +407,8 @@ recursive delete, because an install prefix may be shared.
 ## 8. `info --check` validation
 
 Reports (does not fix): required fields present (`repos.main`, `main_branch` for
-own-git repos, `build_dir`/`build_system` when building); preset inheritance and
+own-git repos, the build repo's `build_dir` plus the project's `build_system`
+when building); preset inheritance and
 template reference cycles; template resolvability against a representative
 context; referenced toolchains exist; when a toolchain declares `supports`, that
 it covers the project's build system; and, for a cloned checkout, that a declared
@@ -439,7 +438,9 @@ deliberately knows nothing of which build systems are implemented.
 | `skip` | list\<string\> | no | Paths this checkout never materialises: ordered gitignore-style patterns where `!` re-includes. **Not templated.** See §9.5. |
 | `main_branch` | string | own-git repos | The branch `update` fast-forwards. Not allowed for `subtree`. |
 | `anchor` | string | no | Repo whose `path` is this build's source/base; unset → self. |
-| `source_dir` | template | no | Where the backend configures from (the top-level `CMakeLists.txt`/`meson.build`/…) when it is not the checkout root. Read from the build repo; defaults to its `repos.<name>.workdir`. E.g. `"{{repos.main.workdir}}/src"`. Only the configure source changes — the named `workdir` still anchors `build_dir`/`install_dir` and branch identity. |
+| `source_dir` | template | no | Where the backend configures from (the top-level `CMakeLists.txt`/`meson.build`/…) when it is not the checkout root. Read from the **build repo** (the focus's `anchor`, or the focus); defaults to its `repos.<name>.workdir`. E.g. `"{{repos.main.workdir}}/src"`. Only the configure source changes — the named `workdir` still anchors `build_dir`/`install_dir` and branch identity. |
+| `build_dir` | template | when building | Where the backend writes its build tree. Read from the **build repo**, same owner as `source_dir`. A repo that is never the build base omits it. |
+| `install_dir` | template | no | Install prefix. Templated; same owner as `build_dir`. |
 | `branch_strategy` | string | no | `in-place` (default) \| `worktree` \| `hybrid`. Worktree and hybrid use a bare clone. |
 | `worktree_dir` | template | worktree/hybrid | Where a branch's worktree belongs. Hybrid first discovers an existing checkout and uses this only as the fallback/suggested path. A relative result is anchored beside `repo.path`, never at process cwd. |
 | `bootstrap_worktree_dir` | template | hybrid; optional for worktree | Fixed initial `main_branch` checkout created after a bare clone. Must not reference `branch.*`. Worktree defaults to `worktree_dir` rendered for `main_branch`; an explicit relative value is resolved beside that rendered main path. |
@@ -506,7 +507,8 @@ The identity is the branch name of the nearest own-git repo in the
 `focus → anchor` chain. A detached HEAD is unsupported. `branch.slug` replaces
 every character outside `[A-Za-z0-9._-]` (including `/`) with `_`.
 
-`branch_strategy` is read from the **build repo** (the anchor) only. A
+`branch_strategy` is read from the **build repo** (the anchor) only, as are
+`source_dir`, `build_dir`, and `install_dir`. A
 `branch_strategy` on a focus that is not its own anchor has no effect; to build a
 particular worktree of such a focus, pass it with `--work-dir` (§1.2).
 
@@ -525,7 +527,8 @@ path   main_branch   branch_strategy   worktree_dir
 bootstrap_worktree_dir   skip   remotes   hooks
 ```
 
-What stays the borrower's: `anchor`, `source_dir`, `presets`.
+What stays the borrower's: `anchor`, `source_dir`, `build_dir`, `install_dir`,
+`presets`.
 
 - The resolved `path` is the source's **absolute** path, so a nested source
   resolves against its own project's root.
