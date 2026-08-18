@@ -350,9 +350,11 @@ wits review checkout --next            # the MR one step up the stack
 wits review checkout --prev            # one step down
 ```
 
-The default is **one** worktree at a sibling path (`../<repo>.review`), reused for
-every MR: `checkout` and `--next`/`--prev` just switch its `HEAD` to the target
-snapshot. So a whole stack costs one worktree and one submodule tree, and pruning
+The default is **one** worktree beside the repository's own checkouts and named for
+the review (`../<repo>.review`, or a plain `review` under a bare-style repo's
+checkout directory — [`wits worktree`](worktree.md#creating) settles the shape),
+reused for every MR: `checkout` and `--next`/`--prev` just switch its `HEAD` to the
+target snapshot. So a whole stack costs one worktree and one submodule tree, and pruning
 a merged member never disturbs the review of its still-open siblings. Switching it
 **refuses a dirty worktree**, since moving `HEAD` would bury your work; untracked
 build output is left alone.
@@ -474,7 +476,9 @@ The store root is resolved on this ladder, first hit wins:
 
 - **`$WITS_REVIEW_DIR`** — an explicit override, when set.
 - **`$XDG_STATE_HOME/wits/review`** — when `XDG_STATE_HOME` is set.
-- **`$GIT_DIR/wits/review`** — the default, per-clone (beside `.git/machete`).
+- **`<common-git-dir>/wits/review`** — the default, per-clone (beside the machete
+  file, and in the common dir for the same reason: one store per repository, shared
+  by every worktree).
 
 Per-run choices (`--range`, `--snapshot`, `--stack`, `--all`, `-n`) are flags,
 not config — they describe one invocation.

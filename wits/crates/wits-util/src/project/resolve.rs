@@ -53,6 +53,16 @@ pub struct Plan {
     /// The resolved checkout of `build_repo`, also exposed to templates as
     /// `repos.<build_repo>.workdir`.
     pub work_dir: PathBuf,
+    /// Every repo's resolved checkout, by name — the same values bound as
+    /// `repos.<name>.workdir`, kept typed.
+    ///
+    /// This is what a caller that has to **run git somewhere** reads. A repo's
+    /// `path` is its repository, which for a bare-backed repo is a git-dir with no
+    /// working tree; its `workdir` is a checkout. The distinction is invisible for
+    /// an in-place repo, which is exactly why it gets lost — and a project may mix
+    /// the two, taking its branch identity from a bare-backed component it borrows
+    /// while building an in-place checkout of its own.
+    pub work_dirs: std::collections::BTreeMap<String, PathBuf>,
     /// Where the backend configures from: the build repo's `source_dir` template,
     /// or the build repo's workdir when unset. Distinct from `work_dir`, which
     /// stays the checkout root that carries branch identity and anchors paths.
@@ -64,6 +74,13 @@ pub struct Plan {
     /// Part of the read-only query surface (§11); not consumed in-tree yet.
     #[allow(dead_code)]
     pub context: Value,
+}
+
+impl Plan {
+    /// One repo's resolved checkout — see [`work_dirs`](Plan::work_dirs).
+    pub fn work_dir_of(&self, repo: &str) -> Option<&std::path::Path> {
+        self.work_dirs.get(repo).map(PathBuf::as_path)
+    }
 }
 
 /// The one build-system responsibility the pipeline needs: translate a selected
@@ -202,30 +219,24 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
     // `workdir` is the checkout that a branch-specific template should use.
     // The explicit `--work-dir` override applies only to the build repo, while
     // the other repos use their own declared strategy.
-    let mut build_workdir = None;
+    let mut work_dirs = std::collections::BTreeMap::new();
     for name in project.repos.keys() {
         let repo_strategy = if name == &build_repo {
             strategy
         } else {
             BranchStrategy::parse(project.repos[name].branch_strategy.as_deref())?
         };
-        let dir = if name == &build_repo {
-            match &profile.work_dir {
-                Some(dir) => dir.clone(),
-                None => resolve_work_dir(ws, project, &ctx, name, repo_strategy, &branch_raw)?,
-            }
-        } else {
-            resolve_work_dir(ws, project, &ctx, name, repo_strategy, &branch_raw)?
+        let dir = match (&profile.work_dir, name == &build_repo) {
+            (Some(dir), true) => dir.clone(),
+            _ => resolve_work_dir(ws, project, &ctx, name, repo_strategy, &branch_raw)?,
         };
-        if name == &build_repo {
-            build_workdir = Some(dir.clone());
-        }
         ctx.set(
             &format!("repos.{name}.workdir"),
             Value::str(dir.display().to_string()),
         );
+        work_dirs.insert(name.clone(), dir);
     }
-    let work_dir = build_workdir.expect("build repo is present after focus validation");
+    let work_dir = work_dirs[&build_repo].clone();
 
     // The configure source: the build repo's `source_dir` template, or the
     // checkout root when unset. Build outputs should reference the named
@@ -346,6 +357,7 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
         build_system,
         toolchain,
         work_dir,
+        work_dirs,
         source_dir,
         build_dir,
         install_dir,
@@ -394,7 +406,7 @@ fn resolve_work_dir(
             .with_context(|| format!("cannot resolve path of repo '{repo_name}'")),
         BranchStrategy::Worktree | BranchStrategy::Hybrid => {
             if strategy == BranchStrategy::Hybrid {
-                if let Some(path) = worktree_for_branch(ws, project, repo_name, branch)? {
+                if let Some(path) = checkout_holding(ws, project, repo_name, branch)? {
                     return Ok(path);
                 }
             }
@@ -410,14 +422,49 @@ fn resolve_work_dir(
                             .unwrap_or("in-place")
                     )
                 })?;
-            // `worktree_dir` is a field of this repo, so scope `repo` to it.
-            let mut scoped = ctx.clone();
-            scoped.set("repo", repo_value(project, repo_name));
-            let primary = repo_primary_path(ws, project, repo_name)?;
+            // `worktree_dir` is a field of this repo, so scope `repo` to it — and
+            // render it in the namespace of the project that *owns* the repo. For a
+            // repo this project declares itself those are the same thing, and the
+            // plan's own richer context is used. For a **borrowed** one they are not:
+            // the template was written by the owning project, where `{{project.name}}`
+            // means the component, so rendering it here would relocate every worktree
+            // of a shared component under the borrower's name. (`path` is spared
+            // because the loader makes it absolute up front; a branch-keyed template
+            // cannot be, so it carries its owner instead.)
+            let (owner, owner_repo) = template_owner(ws, project, repo_name)?;
+            let mut scoped = match std::ptr::eq(owner, project) {
+                true => ctx.clone(),
+                false => Ctx::new(branch_root(ws, owner, &owner_repo, branch)),
+            };
+            scoped.set("repo", repo_value(owner, &owner_repo));
+            let primary = repo_primary_path(ws, owner, &owner_repo)?;
             scoped.set("repo.path", Value::str(primary.display().to_string()));
-            anchor_worktree_path(ws, project, repo_name, expand_tilde(&scoped.render(tpl)?))
+            anchor_worktree_path(ws, owner, &owner_repo, expand_tilde(&scoped.render(tpl)?))
         }
     }
+}
+
+/// The project whose namespace a repo's **own** path templates belong to, and the
+/// name it goes by there: itself, or the project a `from` borrow points at.
+fn template_owner<'a>(
+    ws: &'a Workspace,
+    project: &'a ProjectData,
+    repo_name: &str,
+) -> Result<(&'a ProjectData, String)> {
+    let Some(spec) = project.repos.get(repo_name).and_then(|r| r.from.as_deref()) else {
+        return Ok((project, repo_name.to_owned()));
+    };
+    let reference = super::model::parse_borrow(spec).map_err(anyhow::Error::msg)?;
+    Ok((ws.project(reference.project)?, reference.repo.to_owned()))
+}
+
+/// A context able to resolve one repo's branch-keyed path templates: its project's
+/// per-repo namespace plus the `branch.*` bindings a `worktree_dir` needs.
+fn branch_root(ws: &Workspace, project: &ProjectData, repo_name: &str, branch: &str) -> Value {
+    let mut root = context_for_repo(ws, project, repo_name);
+    root.insert_path("branch.raw", Value::str(branch));
+    root.insert_path("branch.slug", Value::str(path_slug(branch)));
+    root
 }
 
 fn anchor_worktree_path(
@@ -440,21 +487,137 @@ fn anchor_worktree_path(
     Ok(parent.join(path))
 }
 
-/// The live, non-stale worktree that currently checks out `branch`, if any.
+// --- where a repo's git actually runs -----------------------------------------
+//
+// A repo has two locations, and confusing them is the single mistake this section
+// exists to make impossible. Its **`path`** is the repository — a git-dir, and for
+// a bare-backed repo a git-dir with no working tree at all. Its **`workdir`** is a
+// checkout. Anything that touches a working tree (a branch switch, a merge, a
+// submodule update, a sparse mask, "which branch am I on") has to run in the
+// latter, and the four functions below are the only sanctioned ways to name one.
+//
+// For an in-place repo the two coincide, which is why the distinction gets lost —
+// and a project may freely mix the strategies, building an in-place checkout of its
+// own while taking branch identity from a bare-backed component it borrows.
+
+/// The checkout of `repo_name` for `branch`, following **that repo's own** declared
+/// strategy — the standalone form of what [`plan`] binds as
+/// `repos.<name>.workdir`.
 ///
-/// Hybrid resolution uses Git's inventory as the authority rather than assuming
-/// the checkout lives under `worktree_dir`: users may move or create a worktree
-/// elsewhere and hybrid is specifically the strategy that follows it.
-pub fn worktree_for_branch(
+/// Callers with a [`Plan`] in hand should read [`Plan::work_dir_of`] instead; this
+/// is for the lifecycle commands that have no plan. The path is not promised to
+/// exist: under worktree/hybrid an absent checkout resolves to the location
+/// `worktree_dir` names, which is what makes an error message able to say where the
+/// worktree *should* be.
+pub fn work_dir(
+    ws: &Workspace,
+    project: &ProjectData,
+    repo_name: &str,
+    branch: &str,
+) -> Result<PathBuf> {
+    let repo = project
+        .repos
+        .get(repo_name)
+        .with_context(|| format!("repo '{repo_name}' not found"))?;
+    let strategy = BranchStrategy::parse(repo.branch_strategy.as_deref())?;
+    let ctx = Ctx::new(branch_root(ws, project, repo_name, branch));
+    resolve_work_dir(ws, project, &ctx, repo_name, strategy, branch)
+}
+
+/// The checkout of `repo_name` that currently has `branch` checked out, whatever
+/// shape the repository is: a conventional clone when that is the branch it sits
+/// on, or the linked worktree holding it in a bare-backed one. `None` when no
+/// checkout has it.
+///
+/// Git's live inventory is the authority rather than the `worktree_dir` template:
+/// a worktree may have been created or moved elsewhere, and hybrid is specifically
+/// the strategy that follows it.
+pub fn checkout_holding(
     ws: &Workspace,
     project: &ProjectData,
     repo_name: &str,
     branch: &str,
 ) -> Result<Option<PathBuf>> {
+    Ok(repository_worktree_for_branch(
+        &repository_of(ws, project, repo_name)?,
+        branch,
+    ))
+}
+
+/// The checkout `repo_name`'s working-tree work runs in when no branch selects one:
+/// its own working tree, or a bare-backed repo's stand-in for the main worktree it
+/// does not have. `None` only when the repo has no checkout at all.
+///
+/// Independent of the caller's cwd, which is what a *lifecycle* command needs — a
+/// verification whose target moved with your shell would report different things on
+/// different runs. See [`crate::worktree::primary_checkout`].
+pub fn primary_checkout(
+    ws: &Workspace,
+    project: &ProjectData,
+    repo_name: &str,
+) -> Result<Option<PathBuf>> {
+    Ok(crate::worktree::primary_checkout(&repository_of(
+        ws, project, repo_name,
+    )?))
+}
+
+/// The checkout of `repo_name` that carries its branch identity **right now**, with
+/// no branch supplied to resolve against.
+///
+/// A repository with one working tree has only one answer. A bare-backed one has a
+/// checkout per branch and so no inherent current one — the caller's cwd decides
+/// when it is standing in one of them, since that is precisely what "the branch I
+/// am working on" means, and [`primary_checkout`] answers otherwise. What must
+/// *not* answer is the bare repository's own symbolic HEAD: that names
+/// `main_branch`, whose worktree may not exist at all, so every path derived from
+/// it would point at nothing.
+pub fn current_checkout(
+    ws: &Workspace,
+    project: &ProjectData,
+    repo_name: &str,
+) -> Result<Option<PathBuf>> {
+    let repository = repository_of(ws, project, repo_name)?;
+    if let Ok(cwd) = std::env::current_dir() {
+        let here = Repository::new(cwd);
+        if same_repository(&repository, &here) {
+            if let Some(top) = here.toplevel() {
+                return Ok(Some(top));
+            }
+        }
+    }
+    Ok(crate::worktree::primary_checkout(&repository))
+}
+
+/// The branch `repo_name` is on, read from [`current_checkout`]. `None` on a
+/// detached HEAD, or when the repo has no checkout to read.
+pub fn current_branch(
+    ws: &Workspace,
+    project: &ProjectData,
+    repo_name: &str,
+) -> Result<Option<String>> {
+    Ok(current_checkout(ws, project, repo_name)?
+        .and_then(|dir| Repository::new(dir).current_branch()))
+}
+
+/// A handle on the repo *as a repository* — the one place `path` is the right
+/// answer, because `git worktree list` and the ref plumbing are asked of the
+/// repository rather than of a checkout.
+fn repository_of(ws: &Workspace, project: &ProjectData, repo_name: &str) -> Result<Repository> {
     let path = repo_primary_path(ws, project, repo_name)
         .with_context(|| format!("cannot resolve path of repo '{repo_name}'"))?;
-    let git = Repository::new(path);
-    Ok(repository_worktree_for_branch(&git, branch))
+    Ok(Repository::new(path))
+}
+
+/// Do two handles name the same repository? Compared by common git-dir through the
+/// filesystem, since git spells one directory several ways depending on how it was
+/// reached (a symlinked parent, `/tmp` against `/private/tmp`).
+fn same_repository(a: &Repository, b: &Repository) -> bool {
+    a.git_common_dir()
+        .zip(b.git_common_dir())
+        .is_some_and(|(a, b)| {
+            let real = |p: PathBuf| std::fs::canonicalize(&p).unwrap_or(p);
+            real(a) == real(b)
+        })
 }
 
 fn repository_worktree_for_branch(git: &Repository, branch: &str) -> Option<PathBuf> {
@@ -477,8 +640,8 @@ fn repository_worktree_for_branch(git: &Repository, branch: &str) -> Option<Path
 /// The stable checkout/repository path used for repo-scoped Git operations.
 ///
 /// A nested repo normally lives under `repos.main`. When main is bare-backed,
-/// that relative path belongs under main's bootstrap checkout, not inside the
-/// bare common directory. Standalone and borrowed repos already carry an
+/// that relative path belongs under main's checkout, not inside the bare common
+/// directory — see [`nesting_root`]. Standalone and borrowed repos already carry an
 /// absolute repository path and pass through unchanged.
 pub fn repo_primary_path(
     ws: &Workspace,
@@ -498,21 +661,42 @@ pub fn repo_primary_path(
             main_path.display()
         )
     })?;
-    let main = &project.repos["main"];
-    let strategy = BranchStrategy::parse(main.branch_strategy.as_deref())?;
-    let main_git = Repository::new(&main_path);
-    let root = if strategy.is_bare_backed() && !main_path.exists() {
-        bootstrap_worktree_dir(ws, project, "main")?
-    } else if strategy.is_bare_backed() && main_git.git_dir().is_some() && main_git.is_bare() {
-        match main.main_branch.as_deref() {
-            Some(branch) => repository_worktree_for_branch(&main_git, branch)
-                .unwrap_or(bootstrap_worktree_dir(ws, project, "main")?),
-            None => bootstrap_worktree_dir(ws, project, "main")?,
-        }
-    } else {
-        main_path
-    };
-    Ok(root.join(relative))
+    Ok(nesting_root(ws, project, "main")?.join(relative))
+}
+
+/// The checkout that `repo_name`'s **nested** repos live inside.
+///
+/// A conventional clone is its own answer. A bare-backed repo's is a *worktree* —
+/// the one holding `main_branch`, else its bootstrap — because a git-dir has no tree
+/// for anything to be nested in. Shared with the caller that has to decide whether
+/// the nested lifecycle can run at all, so that check and the paths it guards can
+/// never disagree about which directory is meant.
+pub fn nesting_root(ws: &Workspace, project: &ProjectData, repo_name: &str) -> Result<PathBuf> {
+    let path = project.repo_abs_path(repo_name)?;
+    let repo = project
+        .repos
+        .get(repo_name)
+        .with_context(|| format!("repo '{repo_name}' not found"))?;
+    if !BranchStrategy::parse(repo.branch_strategy.as_deref())?.is_bare_backed() {
+        return Ok(path);
+    }
+    if !path.exists() {
+        return bootstrap_worktree_dir(ws, project, repo_name);
+    }
+    let git = Repository::new(&path);
+    // Declared bare-backed but on disk still a conventional checkout — a migration
+    // in progress. Nest under what is actually there.
+    if git.git_dir().is_none() || !git.is_bare() {
+        return Ok(path);
+    }
+    match repo
+        .main_branch
+        .as_deref()
+        .and_then(|branch| repository_worktree_for_branch(&git, branch))
+    {
+        Some(worktree) => Ok(worktree),
+        None => bootstrap_worktree_dir(ws, project, repo_name),
+    }
 }
 
 /// Resolve the fixed worktree created immediately after a bare clone.
@@ -525,6 +709,10 @@ pub fn bootstrap_worktree_dir(
     project: &ProjectData,
     repo_name: &str,
 ) -> Result<PathBuf> {
+    // Both templates are the repo's own, so both render in the namespace of the
+    // project that owns it — see [`template_owner`].
+    let (project, repo_name) = template_owner(ws, project, repo_name)?;
+    let repo_name = repo_name.as_str();
     let repo = project
         .repos
         .get(repo_name)
@@ -537,10 +725,8 @@ pub fn bootstrap_worktree_dir(
         .worktree_dir
         .as_deref()
         .with_context(|| format!("repo '{repo_name}' has no worktree_dir"))?;
-    let mut worktree_root = context_for_repo(ws, project, repo_name);
-    worktree_root.insert_path("branch.raw", Value::str(branch));
-    worktree_root.insert_path("branch.slug", Value::str(path_slug(branch)));
-    let rendered = Engine::new(worktree_root).resolve_str(template)?;
+    let rendered =
+        Engine::new(branch_root(ws, project, repo_name, branch)).resolve_str(template)?;
     let main_worktree = match rendered {
         Value::Str(path) => anchor_worktree_path(ws, project, repo_name, expand_tilde(&path))?,
         other => bail!("worktree_dir for repo '{repo_name}' resolved to a non-string: {other:?}"),

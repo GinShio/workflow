@@ -79,6 +79,29 @@ together, and means a worktree is never created *inside* another one. Give an
 explicit directory as the second argument when you want it elsewhere; missing
 parent directories are created.
 
+A **bare** repository has no main worktree, so one of its live checkouts stands in
+— the one holding its symbolic-HEAD branch (the project bootstrap, in the layout
+`wits update` builds), else any other. The bare directory itself is the anchor only
+when the repository has no checkout at all. That is what keeps the *bare-style*
+layout working, where the git-dir is deliberately parked away from the checkouts:
+anchoring on the git-dir would drop every default worktree into the `.bare` tree
+instead of beside the checkouts it belongs with.
+
+Bare-style goes one step further and drops the `<repo>.` prefix as well, because
+there is nothing to disambiguate against:
+
+| Layout | Default location |
+|---|---|
+| A working tree of its own (`/src/proj`) | `/src/proj.feature_x` |
+| Bare, git-dir beside the checkouts (`/src/proj.git`, `/src/proj.main`) | `/src/proj.main.feature_x` |
+| Bare-style: git-dir apart from them (`<root>/.bare/<org>/<repo>`, `<root>/<org>/<repo>/main`) | `<root>/<org>/<repo>/feature_x` |
+
+The discriminator is whether the git-dir sits in the same directory as the
+checkouts. Where it does, that directory is shared with everything else in it and a
+worktree has to stay identifiable by name. Where it does not, the checkouts have a
+directory of their own holding one entry per branch — which is exactly what a
+`worktree_dir` template renders to — so the slug names one outright.
+
 `create` is **idempotent**: if the directory already exists it says so and
 succeeds, which makes it safe in a script or a git hook. It deliberately does
 *not* move an existing worktree onto `rev` — that would pull someone's `HEAD` out
@@ -111,9 +134,11 @@ switches.
 Both repository shapes are supported:
 
 - A **bare** repository — "one bare clone, a worktree per branch" is a normal
-  setup. Worktrees land beside the bare directory (`../repo.git.<slug>`), and the
-  bare repository itself is never reclaimable. What such a repository can tell you
-  depends on how it was made; see [below](#a-bare-repository-made-by-git-clone---bare).
+  setup. Worktrees land beside one of its live checkouts (see the table
+  [above](#creating)), falling back to the bare directory only while it has none,
+  and the bare repository itself is never reclaimable. What such a repository can
+  tell you depends on how it was made; see
+  [below](#a-bare-repository-made-by-git-clone---bare).
 - A repository that is itself a **submodule**. Its worktrees land beside its
   working tree (`<super>/sub.<slug>`), never inside `<super>/.git/modules/`.
   This needs saying because `git worktree list` reports a submodule's main
@@ -174,12 +199,16 @@ patterns: git's copy is the file verbatim, where anything replayed through
 `sparse-checkout list`/`set` could only lose fidelity.
 
 One consequence worth knowing: git copies the patterns of the worktree the `add`
-ran **from**. `wits worktree create` drives a normal repository from its main
-worktree. A bare repository has none, so it prefers the worktree holding the
-bare symbolic-HEAD branch (normally the project bootstrap), then another live
-worktree, falling back to the bare directory only when creating the first one.
-The cone therefore never depends on which worktree you happened to be standing
-in.
+ran **from**. That is the same anchor the default location is derived from — the
+main worktree, or for a bare repository one of its live checkouts, preferring the
+one on the symbolic-HEAD branch — so the cone never depends on which worktree you
+happened to be standing in.
+
+Its one gap is the **first** add into a freshly created bare host, which has no
+checkout to copy from and so starts out full. That is why `wits update` writes a
+bare-backed repo's `skip` mask onto the bootstrap before materialising anything in
+it: otherwise a skipped submodule would be cloned in full and only then
+deinitialised.
 
 ### Submodules: borrowed, not re-downloaded
 

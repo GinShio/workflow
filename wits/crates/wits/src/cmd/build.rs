@@ -18,7 +18,7 @@
 //! focus's own-git repo behind a [`RestoreGuard`], so the working tree is always
 //! returned to where it started, even on failure.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::Args;
@@ -205,15 +205,18 @@ fn execute(
     let be = backend.context("build_dir is set but build_system is not")?;
     log::debug!("backend: {}", be.name());
 
-    // Own-git repo the in-place dance acts on; kept alive for the build scope so
-    // the restore guard can borrow it.
-    let identity_git = match (plan.strategy, &plan.identity_repo) {
-        (BranchStrategy::InPlace, Some(name)) => Some(Repository::new(
-            resolve::repo_primary_path(ws, project, name)
-                .with_context(|| format!("cannot resolve path of repo '{name}'"))?,
-        )),
-        _ => None,
-    };
+    // The checkout the branch dance acts on: the identity repo's **workdir**, never
+    // its `path`. Those differ for every bare-backed repo, where `path` is a git-dir
+    // with no working tree — and the identity repo is not necessarily the build
+    // repo, so it is not necessarily the one `plan.strategy` describes. Reading
+    // `path` here is what ran `git switch` inside a bare repository.
+    //
+    // Kept alive for the build scope so the restore guard can borrow it.
+    let identity_git = plan
+        .identity_repo
+        .as_deref()
+        .and_then(|name| plan.work_dir_of(name))
+        .map(Repository::new);
 
     // An explicit `--work-dir` means the caller already materialised the
     // checkout (e.g. a `review checkout` worktree of an MR); build sources from
@@ -226,19 +229,17 @@ fn execute(
         }
         None
     } else {
+        // Two independent requirements, on two possibly different repos. The **build
+        // repo's** checkout must exist where the plan says the sources are…
         match plan.strategy {
-            BranchStrategy::Worktree => {
-                require_worktree(&plan)?;
-                None
-            }
-            BranchStrategy::Hybrid => {
-                require_hybrid_worktree(ws, project, &plan)?;
-                None
-            }
-            BranchStrategy::InPlace => match &identity_git {
-                Some(git) => prepare_in_place(git, &plan)?,
-                None => None,
-            },
+            BranchStrategy::Worktree => require_worktree(&plan.work_dir, &plan.branch_raw)?,
+            BranchStrategy::Hybrid => require_hybrid_worktree(ws, project, &plan)?,
+            BranchStrategy::InPlace => {}
+        }
+        // …and the **identity repo** must be on the branch being built.
+        match (&identity_git, plan.identity_repo.as_deref()) {
+            (Some(git), Some(name)) => prepare_branch(project, git, &plan, name)?,
+            _ => None,
         }
     };
 
@@ -269,38 +270,40 @@ fn execute(
     Ok(())
 }
 
-fn require_worktree(plan: &Plan) -> Result<()> {
-    if !plan.work_dir.exists() {
+/// One repo's declared branch strategy.
+fn repo_strategy(project: &ProjectData, name: &str) -> Result<BranchStrategy> {
+    let repo = project
+        .repos
+        .get(name)
+        .with_context(|| format!("repo '{name}' is not defined in project '{}'", project.name))?;
+    BranchStrategy::parse(repo.branch_strategy.as_deref())
+}
+
+/// A worktree that must already be there, on the branch being built. `build` never
+/// creates one — that is `wits worktree create`'s act, so the error says so.
+fn require_worktree(dir: &Path, branch: &str) -> Result<()> {
+    if !dir.exists() {
         bail!(
-            "worktree for branch '{}' does not exist at {} — create it with \
-             `wits worktree create {} {}`",
-            plan.branch_raw,
-            plan.work_dir.display(),
-            plan.branch_raw,
-            plan.work_dir.display()
+            "worktree for branch '{branch}' does not exist at {} — create it with \
+             `wits worktree create {branch} {}`",
+            dir.display(),
+            dir.display()
         );
     }
-    let actual = Repository::new(&plan.work_dir)
+    let actual = Repository::new(dir)
         .current_branch()
-        .with_context(|| {
-            format!(
-                "{} is not an attached Git worktree",
-                plan.work_dir.display()
-            )
-        })?;
-    if actual != plan.branch_raw {
+        .with_context(|| format!("{} is not an attached Git worktree", dir.display()))?;
+    if actual != branch {
         bail!(
-            "worktree {} is on branch '{}', not '{}'",
-            plan.work_dir.display(),
-            actual,
-            plan.branch_raw
+            "worktree {} is on branch '{actual}', not '{branch}'",
+            dir.display()
         );
     }
     Ok(())
 }
 
 fn require_hybrid_worktree(ws: &Workspace, project: &ProjectData, plan: &Plan) -> Result<()> {
-    let found = resolve::worktree_for_branch(ws, project, &plan.build_repo, &plan.branch_raw)?;
+    let found = resolve::checkout_holding(ws, project, &plan.build_repo, &plan.branch_raw)?;
     let Some(actual) = found else {
         bail!(
             "branch '{}' is not checked out in any worktree of repo '{}' — create it with \
@@ -319,7 +322,7 @@ fn require_hybrid_worktree(ws: &Workspace, project: &ProjectData, plan: &Plan) -
             actual.display()
         );
     }
-    require_worktree(plan)
+    require_worktree(&plan.work_dir, &plan.branch_raw)
 }
 
 fn make_plan(
@@ -387,18 +390,40 @@ fn plan_with(
     )
 }
 
-/// Set up the in-place dance for the identity repo, returning a guard that
-/// restores it. `None` when no switch is needed (already on the target).
-fn prepare_in_place<'a>(git: &'a Repository, plan: &Plan) -> Result<Option<RestoreGuard<'a>>> {
-    let current = git
-        .current_branch()
-        .context("focus repo is in a detached HEAD; pass --branch and check out a branch")?;
+/// Put the identity repo's checkout on the branch being built, returning a guard
+/// that restores it. `None` when nothing had to move.
+///
+/// `git` is that repo's resolved workdir, so the two strategies differ only in what
+/// to do when it is *not* already on the branch, and that difference is real policy
+/// rather than a special case:
+///
+/// - **in-place** owns a single checkout, so it is switched there and back —
+///   the classic stash → switch → build → restore dance.
+/// - **worktree/hybrid** keeps one checkout per branch, so the resolved workdir
+///   already *is* the answer: either it holds the branch, or the worktree has to be
+///   created, which `build` never does implicitly (§3.4). Switching would be wrong
+///   twice over — there may be no working tree to switch, and moving a worktree onto
+///   another branch pulls it out from under whoever else is in it.
+fn prepare_branch<'a>(
+    project: &ProjectData,
+    git: &'a Repository,
+    plan: &Plan,
+    name: &str,
+) -> Result<Option<RestoreGuard<'a>>> {
+    if repo_strategy(project, name)?.is_bare_backed() {
+        require_worktree(git.path(), &plan.branch_raw)
+            .with_context(|| format!("repo '{name}' carries this build's branch identity"))?;
+        return Ok(None);
+    }
+    let current = git.current_branch().with_context(|| {
+        format!("repo '{name}' is in a detached HEAD; pass --branch and check out a branch")
+    })?;
     if current == plan.branch_raw {
         return Ok(None);
     }
     if !git.rev_exists(&plan.branch_raw) {
         bail!(
-            "branch '{}' does not exist in the focus repo",
+            "branch '{}' does not exist in repo '{name}'",
             plan.branch_raw
         );
     }
@@ -408,7 +433,7 @@ fn prepare_in_place<'a>(git: &'a Repository, plan: &Plan) -> Result<Option<Resto
         guard.mark_stashed();
     }
     git.switch(&plan.branch_raw)?;
-    // Align the focus repo's own submodules to the target's recorded state.
+    // Align that checkout's own submodules to the target's recorded state.
     let subs: Vec<String> = git
         .materialised_submodules()
         .into_iter()
@@ -418,33 +443,12 @@ fn prepare_in_place<'a>(git: &'a Repository, plan: &Plan) -> Result<Option<Resto
     Ok(Some(guard))
 }
 
+/// The branch a bare `wits build` is for: whatever the identity repo is currently
+/// on. Read from that repo's *checkout* — see [`resolve::current_branch`], which is
+/// also what the `project` path queries default through, so the two cannot disagree.
 fn current_branch(ws: &Workspace, project: &ProjectData, identity: Option<&str>) -> Result<String> {
     let name = identity.context("project has no own-git repo to take a branch from")?;
-    let path = resolve::repo_primary_path(ws, project, name)
-        .with_context(|| format!("cannot resolve path of repo '{name}'"))?;
-    let configured = Repository::new(path);
-
-    // A bare repository's HEAD normally names main, not the branch of the linked
-    // worktree the user is standing in. When cwd belongs to the same common
-    // repository, its attached branch is the invocation's natural default.
-    if let Ok(cwd) = std::env::current_dir() {
-        let here = Repository::new(cwd);
-        let same_repo = configured
-            .git_common_dir()
-            .zip(here.git_common_dir())
-            .is_some_and(|(a, b)| {
-                let a = std::fs::canonicalize(&a).unwrap_or(a);
-                let b = std::fs::canonicalize(&b).unwrap_or(b);
-                a == b
-            });
-        if same_repo {
-            return here
-                .current_branch()
-                .context("current worktree has a detached HEAD; pass --branch");
-        }
-    }
-
-    configured
-        .current_branch()
-        .context("detached HEAD is unsupported; pass --branch")
+    resolve::current_branch(ws, project, name)?.with_context(|| {
+        format!("repo '{name}' has no branch checked out (a detached HEAD?); pass --branch")
+    })
 }

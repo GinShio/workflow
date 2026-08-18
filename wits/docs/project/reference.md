@@ -482,9 +482,16 @@ A non-zero exit fails fast (§10).
 switched to the target branch within it (its own git, or the git it shares when
 the focus is a subtree).
 
+Every repo resolves its own `workdir` by its own `branch_strategy`, so the strategies
+mix freely in one project. Anything that touches a working tree — a branch switch, a
+merge, a submodule update, a sparse mask, reading the current branch — runs in that
+`workdir`, never in `path`, which for a bare-backed repo is a git-dir with no working
+tree at all.
+
 - **in-place**: `repos.<name>.workdir` = that repo's `path`. Switching the focus to a
   non-current branch stashes, switches, builds, then always restores (branch,
-  stash, and the focus's submodules) on any exit.
+  stash, and the focus's submodules) on any exit. This is the only strategy that
+  switches anything: a bare-backed repo holds each branch in a worktree already.
 - **worktree**: `repos.<name>.workdir` = that repo's resolved `worktree_dir` for the target branch.
   It must already exist; `build` never creates it. `wits worktree create <branch>
   "$(project work-dir … --branch <branch>)"` makes one.

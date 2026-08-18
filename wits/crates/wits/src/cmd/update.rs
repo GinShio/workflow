@@ -63,21 +63,19 @@ fn execute(ws: &Workspace, project: &ProjectData, with_borrowed: bool) -> Result
             log::debug!("repo '{name}': borrowed, left to its owning project");
             continue;
         }
+        // A nested repo lives *inside* main's checkout, so there has to be one. Under
+        // a bare-backed main that is a worktree, which may legitimately not exist yet
+        // — and then the nested lifecycle has nowhere to happen, so it is skipped
+        // rather than failed. Asked of the very root `repo_primary_path` nests under,
+        // so the guard and the path it guards cannot disagree.
         if infer_kind(&name, repo) == Kind::Submodule {
-            let main_path = project.repo_abs_path("main")?;
-            let main_git = Repository::new(main_path);
-            if main_git.is_bare() {
-                let main_branch = project.repos["main"]
-                    .main_branch
-                    .as_deref()
-                    .context("repos.main has no main_branch")?;
-                if resolve::worktree_for_branch(ws, project, "main", main_branch)?.is_none() {
-                    log::debug!(
-                        "repo '{name}': main's bare repository has no '{main_branch}' worktree; \
-                         nested lifecycle skipped"
-                    );
-                    continue;
-                }
+            let root = resolve::nesting_root(ws, project, "main")?;
+            if !root.exists() {
+                log::debug!(
+                    "repo '{name}': main has no checkout at {}; nested lifecycle skipped",
+                    root.display()
+                );
+                continue;
             }
         }
         let path = resolve::repo_primary_path(ws, project, &name)
@@ -205,9 +203,10 @@ fn clone_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Repositor
         git.clone()
     };
 
-    // Bare-backed clones need a checkout before either submodules or sparse
-    // checkout can operate. The default path initialised submodules above; an
-    // override remains in full control of whether it did so.
+    // Both default clone shapes install the mask themselves, ahead of the
+    // materialisation it has to precede. What is left for here is the `clone`
+    // override, which built the tree its own way and may well have left the mask
+    // off; for the other two this is idempotent.
     apply_skip(&checkout, name, repo)?;
     run_hook_opt(
         &engine,
@@ -282,6 +281,18 @@ fn clone_bare_repo(
     // clone is only planned, so no branch exists on disk yet.
     worktree::create_known(git, &bootstrap, main)?;
 
+    // The mask goes on *before* anything is materialised, which is the one thing
+    // a bare host cannot get for free. `git worktree add` copies the sparse
+    // patterns of the checkout it runs from, and a host that has just been
+    // created has no checkout at all — so the bootstrap starts out full, and a
+    // `skip`ped submodule would be cloned in its entirety and only then
+    // deinitialised. For a component the project deliberately does not
+    // materialise (an internal repo it borrows from elsewhere) that download is
+    // not merely wasted: it is a clone that can fail and take the whole `update`
+    // with it. The conventional clone below already has this ordering, through
+    // `--no-checkout`.
+    apply_skip(&Repository::new(&bootstrap), name, repo)?;
+
     // Through the worktree policy rather than a plain recursive init. The
     // bootstrap is a *linked* worktree, so git would file its submodule stores
     // under the bootstrap's own administrative directory, where `git worktree
@@ -296,21 +307,39 @@ fn clone_bare_repo(
 fn update_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Repository) -> Result<()> {
     let repo = &project.repos[name];
     let engine = Engine::new(resolve::context_for_repo(ws, project, name));
-    let main_worktree = if git.is_bare() {
-        repo.main_branch
-            .as_deref()
-            .map(|branch| resolve::worktree_for_branch(ws, project, name, branch))
-            .transpose()?
-            .flatten()
-            .map(Repository::new)
-    } else {
-        Some(git.clone())
+
+    // Two different questions, which used to be one and so were answered wrongly
+    // for a bare-backed repo.
+    //
+    // The checkout **holding `main_branch`** is what a fast-forward may advance —
+    // only that one, since `update` never moves a branch a checkout is not on. It
+    // may genuinely be absent, and then the branch moves as a ref instead.
+    let holding = repo
+        .main_branch
+        .as_deref()
+        .map(|branch| resolve::checkout_holding(ws, project, name, branch))
+        .transpose()?
+        .flatten()
+        .map(Repository::new);
+    // The repo's **working tree**: where hooks run, what the restore guard protects,
+    // and what a `skip` mask is verified in. A hook needs *a* working tree, not that
+    // particular branch — run in the repository path instead, `git submodule` and
+    // friends refuse outright ("cannot be used without a working tree") on exactly
+    // the repos that have a worktree sitting right there.
+    //
+    // Falling back past `holding` is what makes `skip` independent of the branch
+    // strategy. Verifying only the `main_branch` worktree meant a bare-backed repo
+    // whose `main_branch` happened to sit in no worktree had its declaration silently
+    // unverified — while `skip` is a property of the repo and of nothing else.
+    let workdir = match holding.clone() {
+        Some(checkout) => Some(checkout),
+        None => resolve::primary_checkout(ws, project, name)?.map(Repository::new),
     };
 
     // Before anything else: a checkout that contradicts its declared `skip` is a
     // config/reality conflict, and refreshing it would only entrench whichever
     // copy of a shared component should not be there.
-    if let Some(checkout) = &main_worktree {
+    if let Some(checkout) = &workdir {
         verify_skip(checkout, name, repo)?;
     }
 
@@ -318,8 +347,8 @@ fn update_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Reposito
 
     // Fail-fast with guaranteed restoration: if a hook or override switches the
     // branch, the guard returns us to where we started on any exit.
-    let _guard = main_worktree.as_ref().map(RestoreGuard::capture);
-    let hook_cwd = main_worktree
+    let _guard = workdir.as_ref().map(RestoreGuard::capture);
+    let hook_cwd = workdir
         .as_ref()
         .map(Repository::path)
         .unwrap_or_else(|| git.path());
@@ -334,7 +363,7 @@ fn update_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Reposito
     if let Some(action) = repo.hooks.update.as_ref() {
         run_hook(&engine, Some(hook_cwd), action, "update")?;
     } else {
-        default_update(project, name, git, main_worktree.as_ref(), repo)?;
+        default_update(project, name, git, holding.as_ref(), workdir.as_ref(), repo)?;
     }
 
     run_hook_opt(
@@ -350,7 +379,8 @@ fn default_update(
     project: &ProjectData,
     name: &str,
     git: &Repository,
-    main_worktree: Option<&Repository>,
+    holding: Option<&Repository>,
+    workdir: Option<&Repository>,
     repo: &RawRepo,
 ) -> Result<()> {
     let mb = repo
@@ -364,34 +394,32 @@ fn default_update(
     } else {
         "origin"
     };
-    if git.is_bare() {
-        // A plain fetch, because `ensure_remotes` has just guaranteed the refspec
-        // that makes one meaningful: every branch the remote has lands under
-        // `refs/remotes/<sync>/*`, which is what tracking distances and trunk
-        // detection read, and `refs/heads` is left to this repository's own
-        // branches.
-        git.fetch(&[sync])?;
-        match main_worktree {
-            Some(checkout) => {
-                checkout.merge_ff_only(&format!("{sync}/{mb}"))?;
-                refresh_submodules(project, name, checkout)?;
-            }
-            // No worktree holds it, so the branch moves as a ref. No working tree
-            // or submodules exist to refresh.
-            None => git.fast_forward_branch(mb, &format!("{sync}/{mb}"))?,
-        }
-        return Ok(());
+
+    // A plain fetch, because `ensure_remotes` has just guaranteed the refspec that
+    // makes one meaningful: every branch the remote has lands under
+    // `refs/remotes/<sync>/*`, which is what tracking distances and trunk detection
+    // read, and `refs/heads` is left to this repository's own branches.
+    git.fetch(&[sync])?;
+
+    // How `main` advances turns on **whether any checkout has it**, not on whether
+    // the repository is bare. Those were always the same question asked two ways: a
+    // conventional clone is itself the checkout holding whichever branch it is on,
+    // and a bare-backed repo keeps a checkout per branch.
+    match holding {
+        Some(checkout) => checkout.merge_ff_only(&format!("{sync}/{mb}"))?,
+        // Nothing has it, so the branch moves as a ref and no working tree is
+        // touched — which is exactly how a feature checkout keeps its own branch,
+        // and its sparse cone, while `main` catches up underneath.
+        None => git.fast_forward_branch(mb, &format!("{sync}/{mb}"))?,
     }
 
-    if git.current_branch().as_deref() == Some(mb) {
-        git.fetch(&[sync])?;
-        git.merge_ff_only(&format!("{sync}/{mb}"))?;
-    } else {
-        // Ref-only fast-forward: update the local main ref without a checkout,
-        // so the working tree (and a sparse cone) is left untouched.
-        git.fetch(&[sync, &format!("{mb}:{mb}")])?;
+    // Submodules follow whichever checkout exists: `main`'s where that is what is
+    // checked out, else the tree the work is actually on, whose recorded pins are
+    // the ones its build reads. A repo with no checkout at all has none to align.
+    match workdir {
+        Some(checkout) => refresh_submodules(project, name, checkout),
+        None => Ok(()),
     }
-    refresh_submodules(project, name, git)
 }
 
 fn refresh_submodules(project: &ProjectData, name: &str, git: &Repository) -> Result<()> {

@@ -323,7 +323,8 @@ fn resolve_plan<'a>(
 
 /// The branch to resolve for: the explicit `--branch`, else the identity repo's
 /// current branch. Shared by the path queries and `hash` so they default the same
-/// way `build` does (§6.4).
+/// way `build` does (§6.4) — through the one [`resolve::current_branch`], so a
+/// query and the build it describes can never disagree about which branch is meant.
 fn branch_or_current(
     ws: &Workspace,
     project: &ProjectData,
@@ -334,26 +335,8 @@ fn branch_or_current(
         return Ok(branch.to_owned());
     }
     let identity = resolve::identity_repo(project, repo)
-        .and_then(|name| resolve::repo_primary_path(ws, project, &name).ok())
-        .map(git::Repository::new);
-    if let (Some(configured), Ok(cwd)) = (&identity, std::env::current_dir()) {
-        let here = git::Repository::new(cwd);
-        let same_repo = configured
-            .git_common_dir()
-            .zip(here.git_common_dir())
-            .is_some_and(|(a, b)| {
-                let a = std::fs::canonicalize(&a).unwrap_or(a);
-                let b = std::fs::canonicalize(&b).unwrap_or(b);
-                a == b
-            });
-        if same_repo {
-            return here
-                .current_branch()
-                .context("current worktree has a detached HEAD; pass --branch");
-        }
-    }
-    identity
-        .and_then(|git| git.current_branch())
+        .context("no own-git repo to take a branch from; pass --branch")?;
+    resolve::current_branch(ws, project, &identity)?
         .context("could not determine a branch; pass --branch")
 }
 
@@ -419,12 +402,19 @@ fn hash(ws: &Workspace, args: &HashArgs, profile: &ProfileArgs) -> Result<()> {
         )
     })?;
     let branch = branch_or_current(ws, project, &repo, profile.branch.as_deref())?;
-    let path = resolve::repo_primary_path(ws, project, &identity)
+    // The sha comes off a *ref*, so the repository answers it for any `--branch`
+    // without a checkout. The walk below reads working trees (a gitlink is only
+    // reported where it is materialised), so it runs in that branch's checkout —
+    // which for a bare-backed repo is a worktree, and never the git-dir, where
+    // nothing would ever be found.
+    let repository = resolve::repo_primary_path(ws, project, &identity)
         .with_context(|| format!("cannot resolve path of repo '{identity}'"))?;
-    let git = git::Repository::new(&path);
-    let sha = git
+    let sha = git::Repository::new(&repository)
         .rev_parse(&branch)
         .with_context(|| format!("branch '{branch}' does not exist in repo '{identity}'"))?;
+    let path = resolve::work_dir(ws, project, &identity, &branch)
+        .with_context(|| format!("cannot resolve the checkout of repo '{identity}'"))?;
+    let git = git::Repository::new(&path);
 
     // Resolve `--repos` before the scope check so a bad name errors either way.
     let overrides = live_overrides(ws, project, &args.repos)?;
@@ -711,34 +701,25 @@ fn check_one(ws: &Workspace, project: &ProjectData) -> Vec<String> {
         // A declared `skip` that is not in force is the one config fact whose
         // truth lives on disk rather than in the file, so it is checked here
         // rather than validated at load. Only a cloned checkout can answer.
+        // Judged in the repo's own checkout, whatever its shape — the same one
+        // `update` verifies, so a `--check` that passes is a promise `update` will
+        // not then contradict. Which checkout that is belongs to
+        // `resolve::primary_checkout`, not to a strategy test spelled out here.
         if !repo.skip.is_empty() {
-            if let Ok(path) = resolve::repo_primary_path(ws, project, name) {
-                let git = git::Repository::new(&path);
-                let checkout = if git.is_bare() {
-                    repo.main_branch
-                        .as_deref()
-                        .and_then(|branch| {
-                            resolve::worktree_for_branch(ws, project, name, branch)
-                                .ok()
-                                .flatten()
-                        })
-                        .map(git::Repository::new)
-                } else if git.is_repo() {
-                    Some(git)
-                } else {
-                    None
-                };
-                if let Some(checkout) = checkout {
-                    for v in skip::violations(&checkout, &repo.skip) {
-                        issues.push(format!("repo '{name}': {v}"));
-                    }
-                    if wits_util::log::is_verbose() {
-                        for cmd in skip::remedy(&checkout, &repo.skip) {
-                            log::debug!(
-                                "repo '{name}' fix: (cd {} && {cmd})",
-                                checkout.path().display()
-                            );
-                        }
+            if let Some(checkout) = resolve::primary_checkout(ws, project, name)
+                .ok()
+                .flatten()
+                .map(git::Repository::new)
+            {
+                for v in skip::violations(&checkout, &repo.skip) {
+                    issues.push(format!("repo '{name}': {v}"));
+                }
+                if wits_util::log::is_verbose() {
+                    for cmd in skip::remedy(&checkout, &repo.skip) {
+                        log::debug!(
+                            "repo '{name}' fix: (cd {} && {cmd})",
+                            checkout.path().display()
+                        );
                     }
                 }
             }

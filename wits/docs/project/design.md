@@ -281,6 +281,54 @@ Both worktree strategies require `worktree_dir`. `build` requires the worktree
 to exist and errors otherwise — it never implicitly creates one. Worktrees are
 created explicitly with `wits worktree create` (§8.3).
 
+**Strategies mix freely within one project**, and that is the case the rest of this
+section is written against: an ordinary in-place shell may take its branch identity
+from a bare-backed component it borrows. So nothing here may be decided by "the
+project's strategy" — each repo answers for itself, through the one contract below.
+
+#### `path` is a repository; `workdir` is a checkout
+
+A repo has two locations, and every bug this section exists to prevent is the same
+one: using the first where the second was meant.
+
+| | What it is | What it is for |
+|---|---|---|
+| `repos.<name>.path` | the repository — for a bare-backed repo a git-dir with **no working tree** | `git worktree list`, and the ref/object plumbing (`fetch`, `rev-parse`, `update-ref`) |
+| `repos.<name>.workdir` | a checkout, resolved by *that repo's own* strategy | everything touching a working tree: a branch switch, a merge, `submodule update`, a sparse mask, "which branch am I on" |
+
+For an in-place repo the two coincide, which is precisely why the distinction goes
+unnoticed until a bare-backed repo is added — and then `git switch`, `git merge` and
+`git submodule` all refuse outright, because a git-dir is not a working tree.
+
+`resolve` therefore owns the answer, and callers never re-derive it: `work_dir` (a
+repo's checkout for a branch), `checkout_holding` (the checkout a branch is in, if
+any), `primary_checkout` (a repo's checkout when no branch selects one),
+`current_checkout`/`current_branch` (the same, letting the caller's cwd pick when it
+stands inside one of the repo's own worktrees), and `nesting_root` (the checkout
+nested repos live inside). A [`Plan`] additionally carries every repo's resolved
+`workdir` typed, so a build reads rather than recomputes.
+
+Two consequences worth spelling out. **A repo's own path templates render in the
+namespace of the project that owns the repo**, not the one consuming it: a borrowed
+component's `worktree_dir` was written where `{{project.name}}` means the component,
+so rendering it in the borrower's context would relocate every worktree of a shared
+component under the borrower's name. And **"the current branch" of a bare-backed repo
+is read from a checkout**, never from the bare repository's symbolic HEAD — that names
+`main_branch`, whose worktree may not exist, so every path derived from it would point
+at nothing.
+
+#### What the strategies still decide
+
+Only what to do when the identity repo's checkout is *not* on the branch being built:
+
+- **in-place** owns a single checkout, so it is switched there and back (the dance
+  above);
+- **worktree/hybrid** keeps one checkout per branch, so the resolved `workdir`
+  already is the answer — either it holds the branch, or the worktree has to be
+  created, which `build` never does implicitly. Switching would be wrong twice over:
+  there may be no working tree to switch, and moving a worktree onto another branch
+  pulls it out from under whoever is in it.
+
 Because everything downstream references the named build repo's `workdir`,
 switching strategy is transparent to the rest of the config. In a *build*,
 `{{repos.<build_repo>.workdir}}` is the **build repo** (the focus's `anchor`,
@@ -435,8 +483,13 @@ necessary:
 
 - An in-place clone writes patterns **before** checkout (`--no-checkout` →
   sparse → checkout), so skipped paths never materialise.
-- A bare-backed clone must first create a real bootstrap worktree. It initialises
-  submodules there, deinitialises the skipped ones, then writes the sparse mask.
+- A bare-backed clone must first create a real bootstrap worktree, and writes the
+  mask onto it **before materialising any submodule** — the same ordering, for the
+  same reason. A freshly created bare host has no checkout for `worktree add` to
+  copy patterns from, so the bootstrap starts out full; masking afterwards would
+  mean cloning a skipped submodule in its entirety and only then deinitialising it,
+  which for a component the project deliberately does not materialise is a download
+  that can simply fail.
 - `git worktree add` copies the pattern file of the worktree it runs from. Bare
   repositories therefore prefer the worktree holding their symbolic-HEAD branch
   (the bootstrap) as the source for later adds, preserving the mask in cone and

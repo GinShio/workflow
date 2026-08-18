@@ -257,7 +257,7 @@ fn create(repo: &Repository, args: &CreateArgs) -> Result<()> {
         Some(dir) => {
             std::path::absolute(dir).with_context(|| format!("resolving {}", dir.display()))?
         }
-        None => worktree::sibling_dir(&worktree::anchor(repo), &worktree::slug(rev)),
+        None => worktree::default_dir(repo, &worktree::slug(rev)),
     };
 
     // Idempotent, like the rest of the toolset: a second run reports and returns

@@ -364,27 +364,122 @@ impl Filter {
     }
 }
 
-/// The stable directory to drive git from, and to hang sibling worktrees off:
-/// the main worktree's working tree where there is one.
-///
-/// For a **bare** repository there is none, and the common git-dir *is* the
-/// repository — so that is the anchor, and sibling worktrees land beside
-/// `<repo>.git`. This must come before the toplevel fallback: inside a linked
-/// worktree of a bare repo there *is* a toplevel, but it is that worktree, not
-/// the repository.
-pub fn anchor(repo: &Repository) -> PathBuf {
-    repo.main_worktree()
-        .or_else(|| repo.git_common_dir())
-        .or_else(|| repo.toplevel())
-        .unwrap_or_else(|| repo.path().to_path_buf())
+/// What a repository offers as the checkout worktrees are placed beside — and,
+/// with it, which of the two layouts that placement follows.
+enum Primary {
+    /// The repository's own main worktree. Its parent is shared with whatever
+    /// else lives there.
+    Main(PathBuf),
+    /// A live checkout of a **bare** repository, which has no main worktree.
+    Checkout(PathBuf),
+    /// No checkout at all: a bare repository nobody has checked out yet.
+    None,
 }
 
-/// A worktree location beside the main one: `<parent>/<main-name>.<suffix>`.
+/// A worktree that is a checkout you could actually run git in.
+fn live(wt: &crate::git::Worktree) -> bool {
+    !wt.bare && !wt.prunable && wt.path.exists()
+}
+
+/// The checkout this repository is anchored on, never depending on the caller's
+/// cwd — so the answer is the same from anywhere, and linked worktrees can never
+/// nest inside one another.
 ///
-/// Anchored to the *main* worktree rather than the caller's cwd so it names the
-/// same directory from anywhere — and so linked worktrees can never nest inside
-/// one another. `wits worktree` passes a branch slug as the suffix; `review
-/// checkout` passes `review`.
+/// A bare repository's stand-in is the live worktree holding its symbolic HEAD
+/// branch (the project bootstrap, in the layout `wits update` builds), then any
+/// other live worktree.
+fn primary(repo: &Repository) -> Primary {
+    if let Some(main) = repo.main_worktree() {
+        return Primary::Main(main);
+    }
+    let head = repo.current_branch();
+    let worktrees = repo.worktrees();
+    worktrees
+        .iter()
+        .find(|wt| live(wt) && wt.branch.as_deref() == head.as_deref())
+        .or_else(|| worktrees.iter().find(|wt| live(wt)))
+        .map(|wt| Primary::Checkout(wt.path.clone()))
+        .unwrap_or(Primary::None)
+}
+
+/// The checkout a repository's **working-tree** work belongs in: its own main
+/// worktree, or — a bare repository having none — a live worktree standing in for
+/// it, preferring the one on its symbolic HEAD branch.
+///
+/// `None` only for a bare repository with no checkout at all, where there really
+/// is no working tree to run in. That is the case a caller must handle rather than
+/// silently falling back to the repository path: `git switch`, `git submodule`, and
+/// `git merge` all refuse to run in a git-dir, and a `skip` mask has nothing there
+/// to be in force over.
+pub fn primary_checkout(repo: &Repository) -> Option<PathBuf> {
+    match primary(repo) {
+        Primary::Main(dir) | Primary::Checkout(dir) => Some(dir),
+        Primary::None => None,
+    }
+}
+
+/// The stable directory to drive git from, and the one worktree placement is
+/// derived from: the main worktree's working tree where there is one, else a live
+/// checkout of the bare repository. The common git-dir stands in only when the
+/// repository has no checkout at all.
+///
+/// Falling back to the git-dir any earlier is what breaks the *bare-style*
+/// layout, where the git-dir is deliberately parked away from the checkouts
+/// (`<root>/.bare/<org>/<repo>` against `<root>/<org>/<repo>/<branch>`): every
+/// default location would then land inside the `.bare` tree instead of beside the
+/// worktrees it belongs with. It must still come before the toplevel fallback —
+/// inside a linked worktree of a bare repo there *is* a toplevel, but it is that
+/// worktree, not the repository.
+pub fn anchor(repo: &Repository) -> PathBuf {
+    match primary(repo) {
+        Primary::Main(dir) | Primary::Checkout(dir) => dir,
+        Primary::None => repo
+            .git_common_dir()
+            .or_else(|| repo.toplevel())
+            .unwrap_or_else(|| repo.path().to_path_buf()),
+    }
+}
+
+/// Where a worktree named by `suffix` belongs. `wits worktree` passes a branch
+/// slug; `review checkout` passes `review`.
+///
+/// Two shapes, because the two repository layouts own their surroundings
+/// differently. A repository with a working tree of its own shares that tree's
+/// parent with everything else in it, so a new worktree stays identifiable by
+/// name: [`sibling_dir`]'s `<parent>/<main-name>.<suffix>`. A bare repository
+/// that keeps its checkouts in a [directory of their own](checkout_container)
+/// instead holds one per branch, where the suffix alone names one.
+pub fn default_dir(repo: &Repository, suffix: &str) -> PathBuf {
+    match primary(repo) {
+        Primary::Main(main) => sibling_dir(&main, suffix),
+        Primary::Checkout(checkout) => match checkout_container(repo, &checkout) {
+            Some(container) => container.join(suffix),
+            None => sibling_dir(&checkout, suffix),
+        },
+        Primary::None => sibling_dir(&anchor(repo), suffix),
+    }
+}
+
+/// The directory a bare repository keeps **only** its checkouts in, if it has one.
+///
+/// The two bare layouts differ in exactly this. The classic one parks the git-dir
+/// beside the checkouts (`/src/proj.git` with `/src/proj.feat`), so their parent
+/// is shared with everything else in `/src` and a checkout has to carry the
+/// repository's name to stay identifiable. The *bare-style* one puts the git-dir
+/// somewhere else entirely (`<root>/.bare/<org>/<repo>`) and gives the checkouts a
+/// directory of their own (`<root>/<org>/<repo>/<branch>`), where a branch name
+/// alone names one — which is also exactly what a `worktree_dir` template renders
+/// to.
+///
+/// Comparing the two parents tells them apart, with no filesystem probing: both
+/// paths come from git, absolute, by the same route.
+fn checkout_container(repo: &Repository, checkout: &Path) -> Option<PathBuf> {
+    let container = checkout.parent()?;
+    let git_dir = repo.git_common_dir()?;
+    (Some(container) != git_dir.parent()).then(|| container.to_path_buf())
+}
+
+/// A worktree location beside another: `<parent>/<name>.<suffix>`.
 pub fn sibling_dir(main_worktree: &Path, suffix: &str) -> PathBuf {
     let parent = main_worktree.parent().unwrap_or(main_worktree);
     let name = main_worktree
@@ -394,7 +489,7 @@ pub fn sibling_dir(main_worktree: &Path, suffix: &str) -> PathBuf {
     parent.join(format!("{name}.{suffix}"))
 }
 
-/// A branch name reduced to one path component, for [`sibling_dir`]'s suffix.
+/// A branch name reduced to one path component, for [`default_dir`]'s suffix.
 ///
 /// Maps anything outside `[A-Za-z0-9._-]` to `_`, matching how `project` slugs a
 /// branch for its own path templates, so one branch reads the same across the
@@ -464,39 +559,14 @@ pub fn create_known(repo: &Repository, dir: &Path, rev: &str) -> Result<()> {
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
     }
-    Repository::new(add_source(repo))
+    // From the [`anchor`], which is also the checkout whose per-worktree sparse
+    // configuration git copies into the new worktree — the same preference for a
+    // live checkout over the bare common directory that decides where a default
+    // sibling goes.
+    Repository::new(anchor(repo))
         .worktree_add(&dir, rev)
         .with_context(|| format!("adding worktree at {}", dir.display()))?;
     Ok(())
-}
-
-/// The checkout whose per-worktree sparse configuration a new worktree should
-/// inherit. A normal repository uses its primary working tree. A bare-backed
-/// repository has no primary, so prefer the worktree holding the bare symbolic
-/// HEAD branch — normally the project bootstrap — before another live worktree
-/// and finally the bare common directory itself.
-fn add_source(repo: &Repository) -> PathBuf {
-    if let Some(main) = repo.main_worktree() {
-        return main;
-    }
-    let head = repo.current_branch();
-    let worktrees = repo.worktrees();
-    if let Some(worktree) = worktrees
-        .iter()
-        .find(|wt| {
-            !wt.bare && !wt.prunable && wt.path.exists() && wt.branch.as_deref() == head.as_deref()
-        })
-        .or_else(|| {
-            worktrees
-                .iter()
-                .find(|wt| !wt.bare && !wt.prunable && wt.path.exists())
-        })
-    {
-        return worktree.path.clone();
-    }
-    repo.git_common_dir()
-        .or_else(|| repo.toplevel())
-        .unwrap_or_else(|| repo.path().to_path_buf())
 }
 
 /// Move an existing worktree's HEAD to `rev`.
@@ -735,10 +805,25 @@ fn existing_store(common: &Path, rel: &Path) -> Option<PathBuf> {
 /// (see [`Entry::dirty`]) — by the time git refuses, the message is about the
 /// wrong thing.
 pub fn remove(repo: &Repository, dir: &Path, force: bool) -> Result<()> {
-    Repository::new(anchor(repo))
+    // Not from the anchor when the anchor *is* what we are removing, which a bare
+    // repository makes possible — the review worktree of a repo that has no other
+    // checkout is both. The common git-dir outlives any removal, so it is the one
+    // place a removal can always be driven from.
+    let from = match anchor(repo) {
+        at if !under(&at, dir) => at,
+        at => repo.git_common_dir().unwrap_or(at),
+    };
+    Repository::new(from)
         .worktree_remove(dir, force)
         .with_context(|| format!("removing worktree {}", dir.display()))?;
     Ok(())
+}
+
+/// Is `path` inside `root` (or `root` itself)? Compared through the filesystem,
+/// so a symlinked parent does not hide the answer.
+fn under(path: &Path, root: &Path) -> bool {
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    real(path).starts_with(real(root))
 }
 
 /// Drop git's administrative records for worktrees whose directories are gone

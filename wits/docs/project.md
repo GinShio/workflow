@@ -297,13 +297,27 @@ It is not only for borrowing — a monorepo you build one component of is the sa
 need. It is realised as a non-cone sparse-checkout, plus `git submodule deinit`
 for any submodule it covers (sparse alone cannot remove a materialised submodule).
 
+`skip` belongs to the **repo**, not to a branch strategy: declare it on an in-place
+shell, on a bare-backed component, or on both in one project, and it is applied and
+verified the same way. What differs is only the mechanics of getting the mask in
+place before anything materialises.
+
 **`clone` applies it; everything else only checks it.** An in-place clone writes
 the patterns before its first checkout. A worktree/hybrid clone first creates a
-bare repository and its bootstrap worktree, initialises submodules there, then
-deinitialises skipped submodules and applies the sparse mask. Later `wits
-worktree create` calls are driven from that bootstrap checkout, so Git copies
-the mask. But `update` and `project --check` only *verify* and fail — applying a
-mask to a tree wits did not build means deleting content, which is yours to do:
+bare repository and its bootstrap worktree, then applies the mask to that
+bootstrap *before* initialising any submodule in it — a fresh bare host has no
+checkout for `git worktree add` to copy patterns from, so masking afterwards would
+mean cloning a skipped submodule in full and only then deinitialising it. Later
+`wits worktree create` calls are driven from that bootstrap checkout, so Git
+copies the mask.
+
+`update` and `project --check` only *verify*, in that repo's own checkout — the
+in-place clone itself, or for a bare-backed repo the worktree holding `main_branch`,
+falling back to whichever checkout stands in for its missing main worktree. (Verifying
+only the `main_branch` worktree used to leave the declaration silently unchecked
+whenever no worktree held it.) Both look at the same checkout, so a `--check` that
+passes is a promise `update` will not then contradict. Neither *applies* the mask:
+doing that to a tree wits did not build means deleting content, which is yours to do:
 
 ```sh
 update viewer
@@ -325,7 +339,8 @@ into it there instead of declaring `skip`.
 
 ## Branches: in-place, worktree, and hybrid
 
-Each repo picks how multi-branch work is realised:
+Each repo picks how multi-branch work is realised — **per repo**, so an in-place
+shell and a bare-backed component it borrows sit happily in one project:
 
 ```toml
 [repos.main]
@@ -336,7 +351,10 @@ bootstrap_worktree_dir = "{{repo.path}}.primary"
 ```
 
 - **in-place**: `build --branch X` stashes, switches to X, builds, then always
-  switches back and restores your working tree — even if the build fails.
+  switches back and restores your working tree — even if the build fails. This is
+  the only strategy that switches anything, and it switches only the repo carrying
+  branch identity: where a project borrows that identity from a bare-backed
+  component, the branch already sits in one of its worktrees.
 - **worktree**: `path` is a bare clone and each branch resolves deterministically
   to `worktree_dir`. `bootstrap_worktree_dir` is optional; when absent, the
   initial main checkout is `worktree_dir` rendered for `main_branch`.
@@ -361,6 +379,16 @@ does it for **any** repository rather than only a registered one. `project` and
 worktrees meet at a path and nowhere else: ask `project work-dir` where the
 strategy says the checkout goes, or skip the registry entirely and point
 `build --work-dir` at a worktree you made yourself.
+
+One rule underpins all of it: `repos.<name>.path` is the **repository** (a git-dir,
+with no working tree at all when the repo is bare-backed) and `repos.<name>.workdir`
+is a **checkout**. Anything that touches a working tree runs in the latter — including
+reading "the current branch", which for a bare-backed repo comes from a checkout and
+never from the bare repository's own `HEAD`. Standing inside one of a repo's worktrees
+makes *that* the branch a bare `wits build` is for; from anywhere else it is the
+branch its primary checkout is on. See §3.4 of
+[the design notes](project/design.md) for why every path query, build, and update
+resolves this one way.
 
 On a fresh `update`, worktree/hybrid build a bare repository that **tracks** its
 remote (`init --bare` + `remote add` + `fetch`, so the remote's branches stay in

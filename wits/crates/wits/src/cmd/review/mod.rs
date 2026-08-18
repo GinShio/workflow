@@ -289,17 +289,17 @@ where
     out
 }
 
-/// The **single** review worktree's location: a sibling of the main worktree,
-/// `../<main-worktree-name>.review`. There is one review worktree, not one per
-/// MR — `checkout` re-points it at each MR by switching HEAD, so a whole stack
-/// costs one worktree and one submodule tree. `checkout` creates it (unless
+/// The **single** review worktree's location: a peer of the repository's own
+/// checkouts, named `review`. There is one review worktree, not one per MR —
+/// `checkout` re-points it at each MR by switching HEAD, so a whole stack costs
+/// one worktree and one submodule tree. `checkout` creates it (unless
 /// `--worktree` overrides); `prune` reclaims it once the store is empty.
 ///
-/// The `.review` suffix is review's contribution; the sibling-of-the-main-worktree
-/// shape (and why it is anchored there rather than at the caller's cwd) belongs to
-/// [`wits_util::worktree::sibling_dir`].
+/// The `review` suffix is review's contribution; where a worktree of that name
+/// goes (and why it is anchored on the repository rather than the caller's cwd)
+/// belongs to [`wits_util::worktree::default_dir`].
 pub(crate) fn default_worktree_dir(repo: &Repository) -> PathBuf {
-    wits_util::worktree::sibling_dir(&wits_util::worktree::anchor(repo), "review")
+    wits_util::worktree::default_dir(repo, "review")
 }
 
 /// Parse an MR handle: a bare number, or a forge URL whose last numeric path

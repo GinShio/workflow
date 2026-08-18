@@ -664,6 +664,211 @@ anchor = "main"
     );
 }
 
+/// A `skip`ped submodule must never be **materialised** on the way to being
+/// masked. A bare host has no checkout for `git worktree add` to copy sparse
+/// patterns from, so its bootstrap starts out full — and a mask applied only
+/// afterwards means the submodule is cloned in its entirety and then thrown away.
+///
+/// Proven by pointing the skipped submodule at a source that no longer exists: a
+/// clone of it can only fail, so an `update` that succeeds is one that never
+/// tried. That is the real shape of the failure — a `skip`ped component is
+/// typically one whose checkout this project has no business fetching at all.
+#[test]
+fn a_bare_backed_clone_masks_a_skipped_submodule_before_materialising_any() {
+    let fx = Fixture::new();
+    let kept = Fixture::seed(&fx.root, "up-kept", &["kept.c"]);
+    let gone = Fixture::seed(&fx.root, "up-gone", &["gone.c"]);
+    let upstream = Fixture::seed(&fx.root, "up-super", &["top.c"]);
+    for (source, path) in [(&kept, "nested/kept"), (&gone, "nested/gone")] {
+        git(
+            &upstream,
+            &["submodule", "add", "-q", source.to_str().unwrap(), path],
+        );
+    }
+    git(&upstream, &["commit", "-q", "-m", "add submodules"]);
+    std::fs::remove_dir_all(&gone).unwrap();
+
+    let bare = fx.path("masked.git");
+    let bootstrap = fx.path("masked.wt/main");
+    std::fs::write(
+        fx.config.join("masked.toml"),
+        format!(
+            r#"
+[project]
+[repos.main]
+path = "{bare}"
+main_branch = "main"
+branch_strategy = "worktree"
+worktree_dir = "{root}/masked.wt/{{{{branch.slug}}}}"
+skip = ["/nested/gone"]
+[repos.main.remotes]
+origin = "{upstream}"
+"#,
+            bare = bare.display(),
+            root = fx.root.display(),
+            upstream = upstream.display(),
+        ),
+    )
+    .unwrap();
+
+    fx.ok(&["update", "masked"]);
+    assert!(
+        bootstrap.join("nested/kept/kept.c").exists(),
+        "the submodule the project does keep was materialised"
+    );
+    assert!(!bootstrap.join("nested/gone").exists());
+    assert_eq!(index_tag(&bootstrap, "nested/gone"), Some('S'));
+}
+
+/// The two strategies **mixed in one project**, which is the shape that exposes
+/// every way a repo's *repository* can be mistaken for its *checkout*: an ordinary
+/// in-place shell (with a `skip` of its own) that takes its branch identity from a
+/// bare-backed component it **borrows**.
+///
+/// Three things have to hold, and each was broken by reading `repos.<name>.path`
+/// where `repos.<name>.workdir` was meant:
+///
+/// - nothing is switched. The identity repo's checkout already holds the branch, and
+///   `git switch` against its `path` is a bare repository with no working tree —
+///   which is the error this whole shape used to die on;
+/// - the component's own `worktree_dir` resolves in **its** project's namespace, not
+///   the borrower's, even for a branch no worktree holds yet (where the template is
+///   what answers);
+/// - the shell's `skip` is still verified, because `skip` belongs to the repo rather
+///   than to a strategy.
+#[test]
+fn a_mixed_in_place_and_bare_backed_project_resolves_every_repo_to_its_checkout() {
+    let fx = Fixture::new();
+
+    // The component: bare-backed, with `feat` in a worktree of its own. Its
+    // `worktree_dir` names `{{project.name}}`, the way a real one does — so a render
+    // in the wrong project's namespace shows up as a wrong path rather than passing
+    // by luck.
+    let comp_up = Fixture::seed(&fx.root, "up-comp", &["lib.c"]);
+    git(&comp_up, &["branch", "feat"]);
+    let comp_bare = fx.path("comp.git");
+    let comp_feat = fx.path("comp.wt/feat");
+    std::fs::write(
+        fx.config.join("comp.toml"),
+        format!(
+            r#"
+[project]
+[repos.main]
+path = "{bare}"
+main_branch = "main"
+branch_strategy = "hybrid"
+worktree_dir = "{root}/{{{{project.name}}}}.wt/{{{{branch.slug}}}}"
+bootstrap_worktree_dir = "main"
+[repos.main.remotes]
+origin = "{upstream}"
+"#,
+            bare = comp_bare.display(),
+            root = fx.root.display(),
+            upstream = comp_up.display(),
+        ),
+    )
+    .unwrap();
+
+    // The shell: an ordinary in-place clone that builds its own tree, focused on the
+    // borrowed component so the component carries the branch identity. `install_dir`
+    // is only here as a window onto `{{repos.component.workdir}}`, which no path
+    // query prints directly.
+    let host_up = fx.path("up-host");
+    std::fs::create_dir_all(host_up.join("src")).unwrap();
+    git(&host_up, &["init", "-q", "-b", "main", "."]);
+    std::fs::write(
+        host_up.join("Cargo.toml"),
+        "[package]\nname = \"host-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(host_up.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::create_dir_all(host_up.join("vendor")).unwrap();
+    std::fs::write(host_up.join("vendor/blob.bin"), "x").unwrap();
+    git(&host_up, &["add", "-A"]);
+    git(&host_up, &["commit", "-q", "-m", "c1"]);
+    let host = fx.path("src-host");
+    std::fs::write(
+        fx.config.join("host.toml"),
+        format!(
+            r#"
+[project]
+focus = "component"
+build_system = "cargo"
+build_dir = "{{{{repos.main.workdir}}}}/target"
+install_dir = "{{{{repos.component.workdir}}}}"
+[repos.main]
+path = "{host}"
+main_branch = "main"
+skip = ["/vendor"]
+[repos.main.remotes]
+origin = "{upstream}"
+[repos.component]
+from = "comp"
+anchor = "main"
+"#,
+            host = host.display(),
+            upstream = host_up.display(),
+        ),
+    )
+    .unwrap();
+
+    fx.ok(&["update", "comp"]);
+    fx.ok(&["update", "host"]);
+    // The in-place shell's own `skip` took effect, alongside a bare-backed borrow.
+    assert!(!host.join("vendor").exists());
+    assert_eq!(index_tag(&host, "vendor/blob.bin"), Some('S'));
+
+    git(&comp_bare, &["branch", "feat", "origin/feat"]);
+    let created = fx.run_in(
+        &comp_bare,
+        &["worktree", "create", "feat", comp_feat.to_str().unwrap()],
+    );
+    assert!(created.success, "stderr: {}", created.stderr);
+
+    // The component's workdir, seen from the borrower: the live worktree for `feat`…
+    let resolved = fx.ok(&["project", "install-dir", "host", "--branch", "feat"]);
+    assert_eq!(resolved.stdout.trim(), comp_feat.to_str().unwrap());
+    // …and, for a branch no worktree holds, the location the component's *own*
+    // `worktree_dir` names. Rendered in the borrower's namespace this would read
+    // `src-host.wt/` or `host.wt/`, quietly relocating a shared component under
+    // whoever consumes it.
+    let absent = fx.ok(&["project", "install-dir", "host", "--branch", "later"]);
+    assert_eq!(
+        absent.stdout.trim(),
+        fx.path("comp.wt/later").to_str().unwrap()
+    );
+
+    let built = fx.run(&["build", "host", "--branch", "feat"]);
+    assert!(built.success, "stderr: {}", built.stderr);
+    assert!(host.join("target/debug/host-fixture").exists());
+
+    // Nothing moved: the bare repository still points at its own main, the worktree
+    // still holds `feat`, and the shell's checkout is where it was.
+    assert_eq!(
+        git_out(&comp_bare, &["symbolic-ref", "--short", "HEAD"]).trim(),
+        "main"
+    );
+    assert_eq!(
+        git_out(&comp_feat, &["symbolic-ref", "--short", "HEAD"]).trim(),
+        "feat"
+    );
+    assert_eq!(
+        git_out(&host, &["symbolic-ref", "--short", "HEAD"]).trim(),
+        "main"
+    );
+
+    // A branch with no worktree is refused by name, rather than by whatever `git
+    // switch` would have said about a directory that is not a checkout.
+    let missing = fx.run(&["build", "host", "--branch", "later"]);
+    assert!(!missing.success);
+    assert!(
+        missing.stderr.contains("worktree for branch 'later'")
+            && missing.stderr.contains("component"),
+        "the error names the branch and the repo that carries identity: {}",
+        missing.stderr
+    );
+}
+
 #[test]
 fn hybrid_uses_the_worktree_that_actually_holds_the_branch() {
     let fx = Fixture::new();

@@ -842,6 +842,11 @@ fn a_submodules_main_worktree_is_its_working_tree_not_its_git_dir() {
 /// git-dir. `rev-parse --is-bare-repository` reports `false` from there, so only
 /// the common config settles it — and getting it wrong would anchor new worktrees
 /// to the directory merely *containing* the repository.
+///
+/// A bare repository has no main worktree to anchor to, so a *live* checkout of it
+/// stands in. Here the git-dir sits beside that checkout, so their shared parent
+/// belongs to everything else in it too — and the new worktree keeps the
+/// `<checkout>.<slug>` form rather than claiming a plain name in it.
 #[test]
 fn a_bare_repo_anchors_correctly_from_one_of_its_linked_worktrees() {
     let tmp = tempfile::tempdir().unwrap();
@@ -862,13 +867,73 @@ fn a_bare_repo_anchors_correctly_from_one_of_its_linked_worktrees() {
     assert!(listed.success, "stderr: {}", listed.stderr);
     assert!(listed.stdout.contains("(bare)"), "{}", listed.stdout);
 
-    // The default location is beside the bare repo, not beside its parent.
     let created = wits_in(&linked, &["worktree", "create", "main"]);
     assert!(created.success, "stderr: {}", created.stderr);
     assert!(
-        root.join("b.git.main").join("root").exists(),
-        "landed beside b.git, not at {}",
+        root.join("bwt.main").join("root").exists(),
+        "landed beside the live checkout, not at {}",
         root.display()
+    );
+    assert!(
+        !root.join("b.git.main").exists() && !bare.join("b.git.main").exists(),
+        "nothing may be hung off the bare git-dir"
+    );
+    assert!(
+        !root.join("main").exists(),
+        "a parent shared with the git-dir is not the repository's to name into"
+    );
+}
+
+/// The **bare-style** layout: the git-dir parked in a tree of its own
+/// (`.bare/<name>`), the checkouts given a per-repo directory that holds one
+/// directory per branch and nothing else.
+///
+/// Two things follow from that separation. Anchoring on the git-dir would drop each
+/// new worktree into the `.bare` tree, beside the repository's internals rather than
+/// beside the checkouts it belongs with. And since the checkouts' directory is the
+/// repository's alone, a branch slug names one outright — no `<checkout>.` prefix,
+/// which is also what a `worktree_dir` template renders to.
+#[test]
+fn a_bare_style_repo_names_worktrees_by_slug_beside_its_checkouts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let inner = init_repo(root, "inner", &["feat"]);
+
+    let bare = root.join(".bare").join("proj");
+    std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
+    git(
+        root,
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            inner.to_str().unwrap(),
+            ".bare/proj",
+        ],
+    );
+    // The bootstrap: the checkout holding the repository's symbolic HEAD branch,
+    // which is what a bare repository offers in place of a main worktree.
+    let checkouts = root.join("proj");
+    let bootstrap = checkouts.join("main");
+    git(
+        &bare,
+        &["worktree", "add", "-q", bootstrap.to_str().unwrap(), "main"],
+    );
+
+    let created = wits_in(&bootstrap, &["worktree", "create", "feat"]);
+    assert!(created.success, "stderr: {}", created.stderr);
+    assert!(
+        checkouts.join("feat").join("root").exists(),
+        "the worktree belongs beside the other checkouts, under {}",
+        checkouts.display()
+    );
+    assert!(
+        !checkouts.join("main.feat").exists(),
+        "the checkouts' own directory needs no repository name to disambiguate"
+    );
+    assert!(
+        !root.join(".bare").join("proj.feat").exists(),
+        "nothing may be created in the .bare tree"
     );
 }
 

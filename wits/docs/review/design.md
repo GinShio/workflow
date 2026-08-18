@@ -42,7 +42,7 @@ everything below:
 
 - **The target is any MR in the repo, not just my own stack.** I review other
   people's work far more than I re-read mine, so the tool cannot assume a local
-  branch, a `.git/machete` entry, or authorship. Acquisition is therefore
+  branch, a machete entry, or authorship. Acquisition is therefore
   **forge-first** (§4): address an MR by number, ask the forge what it is, fetch
   its objects. Machete/`stack` integration (§13) is a convenience for reviewing
   *my own* stacks, not a prerequisite.
@@ -406,7 +406,7 @@ kept distinct from **config** (§8):
 WITS_REVIEW_DIR  >  $XDG_STATE_HOME/wits/review  >  <common-git-dir>/wits/review
 ```
 
-The default is `<common-git-dir>/wits/review`, per-clone like `.git/machete`;
+The default is `<common-git-dir>/wits/review`, per-clone like the machete file;
 env/XDG lift it out when you want it centralized or shared across clones. It is
 the **common** git dir (not the per-worktree one), so a `checkout` worktree and
 the main clone share one store — you can review from either.
