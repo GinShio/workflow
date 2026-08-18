@@ -12,12 +12,12 @@
 //! a branch checked out outside the declared directory. It never mutates Git or
 //! the filesystem, which is what lets `info` report without running a build.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
 use crate::git::Repository;
-use crate::template::{Engine, Value};
+use crate::template::{Engine, TemplateError, Value};
 
 use super::context::{self, apply_def_map, apply_env_map, fold_env, resolve_args, Ctx};
 use super::model::{infer_kind, BranchStrategy, BuildSystem, LogicalConfig, Profile, Toolchain};
@@ -31,6 +31,14 @@ use super::workspace::{expand_tilde, ProjectData, Workspace};
 // `build_system` backends) don't have to learn the new module layout.
 pub use super::context::{context_for_repo, path_context, path_slug, repo_value, system_facts};
 
+/// A branch-backed build identity. A detached build has no value here: it uses
+/// the selected checkout's `HEAD` without inventing a branch name for templates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchIdentity {
+    pub raw: String,
+    pub slug: String,
+}
+
 /// A fully resolved build plan: everything `build` executes and `info` reports.
 pub struct Plan {
     pub focus: String,
@@ -40,8 +48,8 @@ pub struct Plan {
     /// is switched to the target branch.
     pub identity_repo: Option<String>,
     pub strategy: BranchStrategy,
-    pub branch_raw: String,
-    pub branch_slug: String,
+    /// `None` means the caller explicitly requested a detached-HEAD build.
+    pub branch: Option<BranchIdentity>,
     pub build_type: String,
     pub generator: Option<String>,
     /// The resolved build system. Part of the read-only query surface (§11);
@@ -67,9 +75,9 @@ pub struct Plan {
     /// or the build repo's workdir when unset. Distinct from `work_dir`, which
     /// stays the checkout root that carries branch identity and anchors paths.
     pub source_dir: PathBuf,
-    /// The build repo's resolved `build_dir` template, if it declared one.
+    /// The resolved focus-over-anchor `build_dir`, if either declared one.
     pub build_dir: Option<PathBuf>,
-    /// The build repo's resolved `install_dir` template, if it declared one.
+    /// The resolved focus-over-anchor `install_dir`, if either declared one.
     pub install_dir: Option<PathBuf>,
     pub logical: LogicalConfig,
     /// The final context, so callers can resolve arbitrary templates or inspect.
@@ -100,14 +108,16 @@ pub trait ToolchainInjector {
 
 /// Inputs that vary per invocation but are not part of the file model.
 ///
-/// Deliberately *not* `build::BuildOptions`: the pipeline only ever needs the
-/// verbatim L3 overrides (§5.5), not the build action's `mode`/`install`/
-/// `target`, so callers that just resolve paths (the `*-dir` queries, `--check`)
-/// can leave those empty instead of fabricating a whole `BuildOptions`.
+/// Deliberately *not* `build::BuildOptions`: the pipeline needs only the values
+/// that affect the resolved plan (L3 arguments and output-path overrides), not
+/// action-only state such as `mode`/`install`/`target`. Read-only callers can
+/// leave these empty instead of fabricating a whole `BuildOptions`.
 pub struct PlanInput<'a> {
     pub profile: &'a Profile,
-    /// The target branch (from `--branch` or the caller's git read).
-    pub branch: &'a str,
+    /// The target branch (from `--branch` or the caller's git read). `None`
+    /// explicitly selects the current detached `HEAD`; callers must never use
+    /// it merely because branch discovery failed.
+    pub branch: Option<&'a str>,
     /// Whether to inject the toolchain's env/definitions (skipped when trusting
     /// an already-configured build dir; §5.3). Selection still happens.
     pub inject_toolchain: bool,
@@ -118,6 +128,11 @@ pub struct PlanInput<'a> {
     pub extra_config_args: &'a [String],
     pub extra_build_args: &'a [String],
     pub extra_install_args: &'a [String],
+    /// Verbatim CLI path overrides. They participate in planning so a detached
+    /// build can bypass a configured template that intentionally requires
+    /// `branch.*`.
+    pub build_dir_override: Option<&'a Path>,
+    pub install_dir_override: Option<&'a Path>,
 }
 
 impl<'a> PlanInput<'a> {
@@ -130,12 +145,14 @@ impl<'a> PlanInput<'a> {
     pub fn paths_only(profile: &'a Profile, branch: &'a str) -> Self {
         PlanInput {
             profile,
-            branch,
+            branch: Some(branch),
             inject_toolchain: false,
             injector: None,
             extra_config_args: &[],
             extra_build_args: &[],
             extra_install_args: &[],
+            build_dir_override: None,
+            install_dir_override: None,
         }
     }
 }
@@ -156,8 +173,10 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
     let identity_repo = identity_repo(project, &focus);
     let strategy = BranchStrategy::parse(project.repos[&build_repo].branch_strategy.as_deref())?;
 
-    let branch_raw = input.branch.to_owned();
-    let branch_slug = path_slug(&branch_raw);
+    let branch = input.branch.map(|raw| BranchIdentity {
+        raw: raw.to_owned(),
+        slug: path_slug(raw),
+    });
     let build_type = profile
         .build_type
         .clone()
@@ -189,8 +208,10 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
             ctx.set("repo.path", Value::str(primary.display().to_string()));
         }
     }
-    ctx.set("branch.raw", Value::str(&branch_raw));
-    ctx.set("branch.slug", Value::str(&branch_slug));
+    if let Some(branch) = &branch {
+        ctx.set("branch.raw", Value::str(&branch.raw));
+        ctx.set("branch.slug", Value::str(&branch.slug));
+    }
     ctx.set("build_type", Value::str(&build_type));
     if let Some(gen) = &generator {
         ctx.set("generator", Value::str(gen));
@@ -228,9 +249,12 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
         } else {
             BranchStrategy::parse(project.repos[name].branch_strategy.as_deref())?
         };
-        let dir = match (&profile.work_dir, name == &build_repo) {
-            (Some(dir), true) => dir.clone(),
-            _ => resolve_work_dir(ws, project, &ctx, name, repo_strategy, &branch_raw)?,
+        let dir = match (&profile.work_dir, name == &build_repo, input.branch) {
+            (Some(dir), true, _) => dir.clone(),
+            (_, _, Some(branch)) => {
+                resolve_work_dir(ws, project, &ctx, name, repo_strategy, branch)?
+            }
+            (_, _, None) => resolve_detached_work_dir(ws, project, &ctx, name, repo_strategy)?,
         };
         ctx.set(
             &format!("repos.{name}.workdir"),
@@ -239,23 +263,30 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
         work_dirs.insert(name.clone(), dir);
     }
     let work_dir = work_dirs[&build_repo].clone();
+    if branch.is_none() {
+        validate_detached_head(project, identity_repo.as_deref(), &work_dirs)?;
+    }
 
-    // The configure source and the output dirs live on the **build repo**
-    // (the focus's anchor): that checkout owns work / source / build / install
-    // together. `source_dir` defaults to the checkout root; the other two are
-    // optional, so a repo that is never built simply omits them.
+    // The anchor owns the configure source. Output paths default there too, but
+    // the focus may override them: two variants can build through one root
+    // without forcing the anchor's branch-keyed path onto a detached focus.
     let build = &project.repos[&build_repo];
+    let focused = &project.repos[&focus];
     let source_dir = match &build.source_dir {
         Some(tpl) => PathBuf::from(ctx.render(tpl)?),
         None => work_dir.clone(),
     };
-    let build_dir = match &build.build_dir {
-        Some(tpl) => Some(PathBuf::from(ctx.render(tpl)?)),
-        None => None,
+    let build_template = focused.build_dir.as_ref().or(build.build_dir.as_ref());
+    let build_dir = match (input.build_dir_override, build_template) {
+        (Some(dir), _) => Some(dir.to_path_buf()),
+        (None, Some(tpl)) => Some(PathBuf::from(ctx.render(tpl)?)),
+        (None, None) => None,
     };
-    let install_dir = match &build.install_dir {
-        Some(tpl) => Some(PathBuf::from(ctx.render(tpl)?)),
-        None => None,
+    let install_template = focused.install_dir.as_ref().or(build.install_dir.as_ref());
+    let install_dir = match (input.install_dir_override, install_template) {
+        (Some(dir), _) => Some(dir.to_path_buf()),
+        (None, Some(tpl)) => Some(PathBuf::from(ctx.render(tpl)?)),
+        (None, None) => None,
     };
 
     // --- Pipeline ----------------------------------------------------------
@@ -353,8 +384,7 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
         build_repo,
         identity_repo,
         strategy,
-        branch_raw,
-        branch_slug,
+        branch,
         build_type,
         generator,
         build_system,
@@ -413,10 +443,8 @@ fn resolve_work_dir(
                     return Ok(path);
                 }
             }
-            let tpl = project.repos[repo_name]
-                .worktree_dir
-                .as_deref()
-                .with_context(|| {
+            resolve_declared_worktree_dir(ws, project, ctx, repo_name, Some(branch))?.with_context(
+                || {
                     format!(
                         "repo '{repo_name}' uses {} strategy but has no worktree_dir",
                         project.repos[repo_name]
@@ -424,27 +452,118 @@ fn resolve_work_dir(
                             .as_deref()
                             .unwrap_or("in-place")
                     )
-                })?;
-            // `worktree_dir` is a field of this repo, so scope `repo` to it — and
-            // render it in the namespace of the project that *owns* the repo. For a
-            // repo this project declares itself those are the same thing, and the
-            // plan's own richer context is used. For a **borrowed** one they are not:
-            // the template was written by the owning project, where `{{project.name}}`
-            // means the component, so rendering it here would relocate every worktree
-            // of a shared component under the borrower's name. (`path` is spared
-            // because the loader makes it absolute up front; a branch-keyed template
-            // cannot be, so it carries its owner instead.)
-            let (owner, owner_repo) = template_owner(ws, project, repo_name)?;
-            let mut scoped = match std::ptr::eq(owner, project) {
-                true => ctx.clone(),
-                false => Ctx::new(branch_root(ws, owner, &owner_repo, branch)),
-            };
-            scoped.set("repo", repo_value(owner, &owner_repo));
-            let primary = repo_primary_path(ws, owner, &owner_repo)?;
-            scoped.set("repo.path", Value::str(primary.display().to_string()));
-            anchor_worktree_path(ws, owner, &owner_repo, expand_tilde(&scoped.render(tpl)?))
+                },
+            )
         }
     }
+}
+
+/// Resolve the checkout that contributes each repo to a detached build.
+///
+/// A branch-independent `worktree_dir` is an explicit checkout selection (the
+/// fixed `review` worktree is the motivating case), so it wins over whichever
+/// checkout happens to contain the caller. A branch-keyed template cannot answer
+/// without inventing an identity and falls through to the live checkout:
+/// caller's checkout when it belongs to this repo, otherwise the primary.
+fn resolve_detached_work_dir(
+    ws: &Workspace,
+    project: &ProjectData,
+    ctx: &Ctx,
+    repo_name: &str,
+    strategy: BranchStrategy,
+) -> Result<PathBuf> {
+    if let Some(path) = resolve_declared_worktree_dir(ws, project, ctx, repo_name, None)? {
+        return Ok(path);
+    }
+    if let Some(path) = current_checkout(ws, project, repo_name)? {
+        return Ok(path);
+    }
+    if strategy == BranchStrategy::InPlace {
+        return repo_primary_path(ws, project, repo_name)
+            .with_context(|| format!("cannot resolve path of repo '{repo_name}'"));
+    }
+    bail!("repo '{repo_name}' has no checkout to use for a detached build")
+}
+
+/// Render one repo's declared worktree path in the namespace of the project
+/// that owns it. `None` for a detached build means a missing `branch.*` binding
+/// is not an error: that template describes branch worktrees, not this checkout.
+fn resolve_declared_worktree_dir(
+    ws: &Workspace,
+    project: &ProjectData,
+    ctx: &Ctx,
+    repo_name: &str,
+    branch: Option<&str>,
+) -> Result<Option<PathBuf>> {
+    let Some(tpl) = project.repos[repo_name].worktree_dir.as_deref() else {
+        return Ok(None);
+    };
+    let (owner, owner_repo) = template_owner(ws, project, repo_name)?;
+    let mut scoped = if std::ptr::eq(owner, project) {
+        ctx.clone()
+    } else {
+        let root = match branch {
+            Some(branch) => branch_root(ws, owner, &owner_repo, branch),
+            None => context_for_repo(ws, owner, &owner_repo),
+        };
+        Ctx::new(root)
+    };
+    scoped.set("repo", repo_value(owner, &owner_repo));
+    let primary = repo_primary_path(ws, owner, &owner_repo)?;
+    scoped.set("repo.path", Value::str(primary.display().to_string()));
+    let rendered = match scoped.render(tpl) {
+        Ok(path) => path,
+        Err(error) if branch.is_none() && missing_branch_binding(&error) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    Ok(Some(anchor_worktree_path(
+        ws,
+        owner,
+        &owner_repo,
+        expand_tilde(&rendered),
+    )?))
+}
+
+fn missing_branch_binding(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<TemplateError>(),
+        Some(TemplateError::UnknownPath(path))
+            if path == "branch" || path.starts_with("branch.")
+    )
+}
+
+/// A detached plan is opt-in, so its identity checkout must contain a real,
+/// detached `HEAD`. `current_branch() == None` alone is insufficient: an unborn
+/// branch and a non-repository also have no symbolic branch.
+fn validate_detached_head(
+    project: &ProjectData,
+    identity_repo: Option<&str>,
+    work_dirs: &std::collections::BTreeMap<String, PathBuf>,
+) -> Result<()> {
+    let name = identity_repo.context("project has no own-git repo to take HEAD from")?;
+    let path = work_dirs.get(name).with_context(|| {
+        format!(
+            "repo '{name}' of project '{}' has no resolved checkout",
+            project.name
+        )
+    })?;
+    let git = Repository::new(path);
+    if !git.is_repo() {
+        bail!(
+            "repo '{name}' has no Git checkout at {} for --detach",
+            path.display()
+        );
+    }
+    if let Some(branch) = git.current_branch() {
+        bail!("repo '{name}' is on branch '{branch}'; --detach requires a detached HEAD");
+    }
+    if git.rev_parse("HEAD").is_none() {
+        bail!(
+            "repo '{name}' has no commit checked out at {} for --detach",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// The project whose namespace a repo's **own** path templates belong to, and the
@@ -795,6 +914,14 @@ mod tests {
     }
 
     #[test]
+    fn detached_worktree_fallback_only_ignores_the_missing_branch_namespace() {
+        let branch: anyhow::Error = TemplateError::UnknownPath("branch.slug".into()).into();
+        let typo: anyhow::Error = TemplateError::UnknownPath("brnach.slug".into()).into();
+        assert!(missing_branch_binding(&branch));
+        assert!(!missing_branch_binding(&typo));
+    }
+
+    #[test]
     fn resolves_paths_and_injects_toolchain() {
         let body = r#"
             [project]
@@ -819,12 +946,14 @@ mod tests {
         let injector = MockInjector;
         let input = PlanInput {
             profile: &profile,
-            branch: "main",
+            branch: Some("main"),
             inject_toolchain: true,
             injector: Some(&injector),
             extra_config_args: &[],
             extra_build_args: &[],
             extra_install_args: &[],
+            build_dir_override: None,
+            install_dir_override: None,
         };
         let plan = plan(&ws, project, &input).unwrap();
         assert_eq!(plan.work_dir, PathBuf::from("/src/hello"));
@@ -1031,12 +1160,14 @@ mod tests {
                 project,
                 &PlanInput {
                     profile,
-                    branch: "main",
+                    branch: Some("main"),
                     inject_toolchain: false,
                     injector: None,
                     extra_config_args: &[],
                     extra_build_args: &[],
                     extra_install_args: &[],
+                    build_dir_override: None,
+                    install_dir_override: None,
                 },
             )
             .unwrap()
@@ -1075,12 +1206,14 @@ mod tests {
         let profile = Profile::default();
         let input = PlanInput {
             profile: &profile,
-            branch: "main",
+            branch: Some("main"),
             inject_toolchain: true, // requested, but no injector supplied
             injector: None,
             extra_config_args: &[],
             extra_build_args: &[],
             extra_install_args: &[],
+            build_dir_override: None,
+            install_dir_override: None,
         };
         let plan = plan(&ws, project, &input).unwrap();
         // Toolchain *selection* still happened (paths need the name)…
@@ -1119,12 +1252,14 @@ mod tests {
         let project = ws.project("acme/x").unwrap();
         let input = PlanInput {
             profile: &Profile::default(),
-            branch: "main",
+            branch: Some("main"),
             inject_toolchain: false,
             injector: None,
             extra_config_args: &[],
             extra_build_args: &[],
             extra_install_args: &[],
+            build_dir_override: None,
+            install_dir_override: None,
         };
         let plan = plan(&ws, project, &input).unwrap();
         // Every org entry is inherited, whether or not anything referenced it.
@@ -1236,12 +1371,14 @@ mod tests {
         let project = ws.project("myorg/y").unwrap();
         let input = PlanInput {
             profile: &Profile::default(),
-            branch: "main",
+            branch: Some("main"),
             inject_toolchain: false,
             injector: None,
             extra_config_args: &[],
             extra_build_args: &[],
             extra_install_args: &[],
+            build_dir_override: None,
+            install_dir_override: None,
         };
         let plan = plan(&ws, project, &input).unwrap();
         assert_eq!(plan.logical.env_entry("FROM_ORG"), Some("hello"));
@@ -1273,25 +1410,24 @@ mod tests {
         let profile = Profile::default();
         let input = PlanInput {
             profile: &profile,
-            branch: "main",
+            branch: Some("main"),
             inject_toolchain: false,
             injector: None,
             extra_config_args: &[],
             extra_build_args: &[],
             extra_install_args: &[],
+            build_dir_override: None,
+            install_dir_override: None,
         };
         let plan = plan(&ws, project, &input).unwrap();
         assert!(plan.logical.has_definition("WERROR"));
         assert!(plan.logical.has_definition("ASSERTS")); // auto-applied for debug
     }
 
-    /// `build_dir` / `install_dir` belong to the **build repo** (the focus's
-    /// anchor), the same owner as `source_dir`. A focus that builds through
-    /// another checkout uses that checkout's templates; a self-anchored focus
-    /// uses its own. That is what lets two independently-built repos in one
-    /// project keep separate output trees.
+    /// The anchor supplies output defaults, but a focus may name its own output
+    /// context while still configuring through that anchor.
     #[test]
-    fn build_and_install_dirs_come_from_the_build_repo() {
+    fn focus_output_dirs_override_the_anchor_defaults() {
         let body = r#"
             [project]
             focus = "lib"
@@ -1306,6 +1442,13 @@ mod tests {
             path = "/src/lib"
             main_branch = "main"
             anchor = "main"
+
+            [repos.variant]
+            path = "/src/variant"
+            main_branch = "main"
+            anchor = "main"
+            build_dir = "{{repos.main.workdir}}/_build/variant"
+            install_dir = "{{repos.main.workdir}}/_install/variant"
 
             [repos.tool]
             path = "/src/tool"
@@ -1330,6 +1473,28 @@ mod tests {
         assert_eq!(
             via_anchor.install_dir.unwrap(),
             PathBuf::from("/src/root/_install/root")
+        );
+
+        let overridden = plan(
+            &ws,
+            project,
+            &PlanInput::paths_only(
+                &Profile {
+                    focus: Some("variant".into()),
+                    ..Default::default()
+                },
+                "main",
+            ),
+        )
+        .unwrap();
+        assert_eq!(overridden.build_repo, "main");
+        assert_eq!(
+            overridden.build_dir.unwrap(),
+            PathBuf::from("/src/root/_build/variant")
+        );
+        assert_eq!(
+            overridden.install_dir.unwrap(),
+            PathBuf::from("/src/root/_install/variant")
         );
 
         let self_anchored = plan(

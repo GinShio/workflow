@@ -116,6 +116,41 @@ build hello --install                  # add an install step
 build hello --uninstall                # reverse an install (backend-driven)
 ```
 
+### Building a detached review snapshot
+
+`review checkout` materialises an MR at a detached `HEAD`. From that worktree,
+opt in to building the snapshot as-is:
+
+```sh
+wits review checkout 123
+cd ../hello.review
+build --detach
+```
+
+Without `--detach`, a detached `HEAD` remains an error; use `--branch X` for a
+branch-backed build. `--detach` and `--branch` are mutually exclusive.
+Detached mode neither invents a branch identity nor switches a checkout, so
+`branch.raw` and `branch.slug` are absent. A template that requires either fails
+hard; use a checkout-keyed template such as
+`"{{repos.main.workdir}}/_build/{{build_type}}"`, or pass an explicit
+`--build-dir` / `--install-dir`. These CLI paths bypass the corresponding
+templates.
+
+Checkout selection remains declarative. For each repo, detached planning first
+uses a branch-independent `worktree_dir` when one is declared (for example a
+fixed `.../review` path), then falls back to the caller's checkout or that
+repo's primary checkout. This lets a command run from a bootstrap worktree select
+a detached review repo with `--focus`; the review worktree, not the shell's
+bootstrap, is the HEAD that gets validated.
+
+`--work-dir` remains an independent location override. It does not imply
+detached mode, but may be combined with it when invoking the build from
+elsewhere:
+
+```sh
+build hello --detach --work-dir ../hello.review
+```
+
 Pass raw, untouched flags straight through to the underlying tool when you need
 something one-off — these are applied last, at the highest priority:
 
@@ -198,6 +233,9 @@ anchor = "main"                # build via the mesa root
 - `anchor = "main"` means "build from the mesa root" — the configure source is
   mesa, and lavapipe is selected through meson options. `anchor` may point at any
   repo, or be left unset to build a repo on its own.
+- The anchor supplies default `build_dir`/`install_dir` paths. A focus may
+  override just those two fields while continuing to configure from the anchor;
+  CLI path overrides remain highest priority.
 - The **kind** of each repo is inferred, never declared: a nested path with its
   own `main_branch` is a **submodule**; a nested path without one is a **subtree**;
   a non-nested path is **standalone**. A submodule is cloned through `repos.main`.

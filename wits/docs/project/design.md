@@ -277,6 +277,11 @@ All three are first-class. They are unified behind one resolved per-repo variabl
   `worktree_dir(main_branch)`, so project resolution never leaks process cwd
   into checkout identity.
 
+Those are branch-backed rules. Explicit detached planning has no branch to
+switch/discover: a branch-independent `worktree_dir` becomes a fixed checkout
+selector regardless of strategy, then resolution falls back to the
+caller/primary checkout.
+
 Both worktree strategies require `worktree_dir`. `build` requires the worktree
 to exist and errors otherwise — it never implicitly creates one. Worktrees are
 created explicitly with `wits worktree create` (§8.3).
@@ -528,12 +533,12 @@ base* the build system's top-level file (`CMakeLists.txt`/`meson.build`/…) liv
 for the common case where it is not the checkout root. `source_dir` is a templated
 path on the build repo (`[repos.<name>]`), defaulting to that repo's `workdir`;
 set it to e.g. `"{{repos.main.workdir}}/src"` to configure from a subdirectory.
-It changes only the backend's configure source — the named `workdir` stays the checkout root that carries
-branch identity and anchors `build_dir`/`install_dir` templates (which live on
-the same `[repos.<name>]` table), so the two never
-conflate. A subtree cannot express this: a subtree with `anchor = self` has no
-own git (no branch identity), and with `anchor = "main"` its `workdir` becomes
-the anchor's root, not the subdirectory.
+It changes only the backend's configure source. The anchor also supplies the
+default `build_dir`/`install_dir`, but the focus may override those two paths
+without moving the source — the narrow separation needed when several focuses
+build through one root. A subtree cannot express this: a subtree with `anchor =
+self` has no own git (no branch identity), and with `anchor = "main"` its
+`workdir` becomes the anchor's root, not the subdirectory.
 
 ---
 
@@ -827,8 +832,10 @@ ambiguity between the raw name and its sanitised form.
 
 ### 6.3 Profile vs BuildOptions
 
-The axes that affect *resolution* are separated from the options that affect only
-*command steps* — a distinction worth keeping crisp:
+The reusable profile axes are separated from flags that exist only while a build
+action executes. Most `BuildOptions` affect command steps; its two path
+overrides are fed into planning only to replace the corresponding configured
+template:
 
 ```rust
 pub struct Profile {          // affects identity / build_dir / repo workdir resolution
@@ -842,7 +849,7 @@ pub struct Profile {          // affects identity / build_dir / repo workdir res
     specs:      Map<String,String>,  // --spec K=V → the spec.* namespace (§6.5)
 }
 
-pub struct BuildOptions {     // affects command steps only
+pub struct BuildOptions {     // build-only action and direct path overrides
     mode:    BuildMode,           // auto | config-only | build-only | reconfig | uninstall
     install: bool,
     install_dir: Option<PathBuf>, // --install-dir: override the resolved prefix
@@ -855,8 +862,10 @@ pub struct BuildOptions {     // affects command steps only
 ```
 
 `info --branch X`, a hook resolving a dir for a deleted branch, and `build` all
-share the same `Profile` to resolve paths; `BuildOptions` appears only when a
-build actually executes.
+share the same `Profile` to resolve configured paths; `BuildOptions` appears
+only when a build actually executes. Its path overrides enter `PlanInput`
+before template rendering, so `--build-dir` can intentionally bypass a
+configured `{{branch.slug}}` during a detached build.
 
 ### 6.5 The CLI override layer and the `review` interaction
 
@@ -890,24 +899,39 @@ user passes, never in code. For a submodule-of-a-monorepo MR the same seam
 serves both shapes: an independently-built component (`anchor = self`) points
 `--work-dir` at the review worktree, while one that must build via its root is
 checked out in place and disambiguated by a `spec.*`-keyed `build_dir`.
-`build_dir`/`install_dir` live on the **build repo** with `source_dir`, so that
-checkout owns `work`/`source`/`build`/`install` together: a consumer that
-borrows a component declares its own output paths (they do not travel with
-`from`), and two self-anchored repos in one project keep separate trees.
+The anchor supplies `source_dir` and default output paths; a focus-local
+`build_dir`/`install_dir` overrides only those outputs. This is also the complete
+borrow behaviour: output paths do not travel with `from`, but the borrower may
+declare them locally when this consumer needs a distinct build context.
 `--build-dir`/`--install-dir` remain the one-shot override for a checkout
 materialised outside the strategy (`review`), which is still the smaller,
 one-directional change (§1.2).
 
 ### 6.4 Branch identity
 
-Identity **is the branch name, and only that.** The richer five-layer waterfall
-(ref-tip → Change-Id → slug → hash) sometimes proposed for stacked diffs is
-deliberately **out of scope**: even under stacked-diffs, driving from one stable
-branch
-gives the whole experience and stays compatible with existing scripts, at a
-fraction of the complexity. A **detached HEAD is not supported** — `build`
-requires a branch (its own, or `--branch`). `branch.slug` sanitises the name by
+The normal identity **is the branch name, and only that.** The richer five-layer
+waterfall (ref-tip → Change-Id → slug → hash) sometimes proposed for stacked
+diffs is deliberately **out of scope**: even under stacked-diffs, driving from
+one stable branch gives the whole experience and stays compatible with existing
+scripts, at a fraction of the complexity. `branch.slug` sanitises the name by
 replacing every character outside `[A-Za-z0-9._-]` (including `/`) with `_`.
+
+`build --detach` is a deliberately narrow escape hatch for snapshots that
+already exist as detached checkouts, notably `review checkout`:
+
+- it is mutually exclusive with `--branch`, and an attached `HEAD` is an error;
+- it first honours a repo's branch-independent `worktree_dir` (a fixed review
+  checkout), then falls back to the caller's/primary checkout; `--work-dir`
+  remains the build repo's highest-priority override;
+- it consumes those selected checkouts as-is, never resolves a branch worktree
+  and never runs the in-place switch dance;
+- it binds no `branch.*` namespace and invents no hash/name identity, so a
+  branch-dependent template fails unless `--build-dir` / `--install-dir`
+  bypasses that template.
+
+Without the explicit flag, branch discovery remains mandatory and a detached
+`HEAD` is still an error. Thus failure to discover a branch can never silently
+change the build's identity or checkout selection.
 
 ---
 

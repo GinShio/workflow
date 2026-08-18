@@ -16,7 +16,9 @@
 //! discovers it from Git's inventory — and `build` never creates one
 //! implicitly. Under in-place, building a non-current branch switches the
 //! focus's own-git repo behind a [`RestoreGuard`], so the working tree is always
-//! returned to where it started, even on failure.
+//! returned to where it started, even on failure. `--detach` is the explicit
+//! exception to branch-driven planning: it consumes the selected detached
+//! checkout as-is and never binds `branch.*` or switches anything.
 
 use std::path::{Path, PathBuf};
 
@@ -40,6 +42,10 @@ pub struct BuildArgs {
     pub target: Option<String>,
     #[command(flatten)]
     pub profile: ProfileArgs,
+    /// Build the selected detached HEAD as-is, without assigning it a branch
+    /// identity or switching any checkout.
+    #[arg(long, conflicts_with = "branch")]
+    pub detach: bool,
 
     /// Configure only; do not compile.
     #[arg(long = "config-only", conflicts_with_all = ["build_only", "reconfig", "uninstall"])]
@@ -56,12 +62,12 @@ pub struct BuildArgs {
     /// Install after building.
     #[arg(long)]
     pub install: bool,
-    /// Override the install prefix, ignoring the build repo's configured
+    /// Override the install prefix, ignoring the resolved focus/anchor
     /// `install_dir` (the backend's install-prefix, e.g. cmake's
     /// `CMAKE_INSTALL_PREFIX`). Affects configure as well as install.
     #[arg(long = "install-dir", value_name = "DIR")]
     pub install_dir: Option<PathBuf>,
-    /// Override the resolved build directory, ignoring the build repo's
+    /// Override the resolved build directory, ignoring the focus/anchor
     /// `build_dir` template — e.g. to build a `review checkout` in an isolated
     /// dir without touching config. The symmetric partner of `--install-dir`;
     /// highest priority, verbatim (§5.5).
@@ -88,17 +94,17 @@ pub struct BuildArgs {
 /// What a build *does*, not where it resolves to (that is `project::Profile`).
 /// Extra args are verbatim and applied last, at the highest priority (§5.5).
 /// Lives here, not in `project::model`, because nothing outside this module
-/// reads it — `resolve::plan` only ever needs the three extra-args lists,
+/// reads it — `resolve::plan` receives only its path/extra-argument fields,
 /// passed separately so `project` doesn't need to know this type exists.
 #[derive(Debug, Clone, Default)]
 pub struct BuildOptions {
     pub mode: BuildMode,
     pub install: bool,
     /// A command-line override of the resolved install prefix (§5.5); `None`
-    /// leaves the build repo's configured `install_dir` in force.
+    /// leaves the resolved focus/anchor `install_dir` in force.
     pub install_dir: Option<PathBuf>,
     /// A command-line override of the resolved build dir (§5.5); `None` leaves
-    /// the build repo's `build_dir` template in force.
+    /// the resolved focus/anchor `build_dir` template in force.
     pub build_dir: Option<PathBuf>,
     pub target: Option<String>,
     pub extra_config_args: Vec<String>,
@@ -115,6 +121,7 @@ pub fn run(args: &BuildArgs) -> Result<()> {
         project,
         &args.profile.to_profile(),
         &build_options(args)?,
+        args.detach,
     )
 }
 
@@ -165,14 +172,24 @@ fn execute(
     project: &ProjectData,
     profile: &Profile,
     opts: &BuildOptions,
+    detach: bool,
 ) -> Result<()> {
     let focus = project.focus_name(profile.focus.as_deref()).to_owned();
     let identity = resolve::identity_repo(project, &focus);
 
-    // The target branch: --branch, else the identity repo's current branch.
-    let branch = match &profile.branch {
-        Some(b) => b.clone(),
-        None => current_branch(ws, project, identity.as_deref())?,
+    // Detached mode is explicit: failed branch discovery never silently widens
+    // into it. Clap rejects this combination, and the check keeps direct callers
+    // honest too.
+    if detach && profile.branch.is_some() {
+        bail!("--branch and --detach cannot be used together");
+    }
+    let branch = if detach {
+        None
+    } else {
+        Some(match &profile.branch {
+            Some(b) => b.clone(),
+            None => current_branch(ws, project, identity.as_deref())?,
+        })
     };
 
     // Resolve the backend once, from the project's declared build_system — it is
@@ -182,18 +199,14 @@ fn execute(
     // name was rejected when the project file was parsed.
     let backend = project.project.build_system.map(backend_for);
 
-    let mut plan = make_plan(ws, project, profile, opts, &branch, backend.as_deref())?;
-
-    // A `--install-dir`/`--build-dir` on the command line overrides the
-    // build repo's resolved value (§5.5, highest priority). Each only feeds a
-    // backend step (install prefix / build dir), so patching the final plan
-    // value is sufficient — no re-plan needed.
-    if let Some(dir) = &opts.install_dir {
-        plan.install_dir = Some(dir.clone());
-    }
-    if let Some(dir) = &opts.build_dir {
-        plan.build_dir = Some(dir.clone());
-    }
+    let plan = make_plan(
+        ws,
+        project,
+        profile,
+        opts,
+        branch.as_deref(),
+        backend.as_deref(),
+    )?;
 
     let Some(build_dir) = plan.build_dir.clone() else {
         log::warn!(
@@ -228,17 +241,26 @@ fn execute(
             bail!("--work-dir {} does not exist", plan.work_dir.display());
         }
         None
+    } else if detach {
+        // Resolution already verified that the identity checkout has a real
+        // detached HEAD. Detached builds consume the selected checkouts as-is:
+        // no branch worktree gate and no in-place branch dance.
+        None
     } else {
+        let branch = plan
+            .branch
+            .as_ref()
+            .context("attached build plan has no branch identity")?;
         // Two independent requirements, on two possibly different repos. The **build
         // repo's** checkout must exist where the plan says the sources are…
         match plan.strategy {
-            BranchStrategy::Worktree => require_worktree(&plan.work_dir, &plan.branch_raw)?,
-            BranchStrategy::Hybrid => require_hybrid_worktree(ws, project, &plan)?,
+            BranchStrategy::Worktree => require_worktree(&plan.work_dir, &branch.raw)?,
+            BranchStrategy::Hybrid => require_hybrid_worktree(ws, project, &plan, &branch.raw)?,
             BranchStrategy::InPlace => {}
         }
         // …and the **identity repo** must be on the branch being built.
         match (&identity_git, plan.identity_repo.as_deref()) {
-            (Some(git), Some(name)) => prepare_branch(project, git, &plan, name)?,
+            (Some(git), Some(name)) => prepare_branch(project, git, &branch.raw, name)?,
             _ => None,
         }
     };
@@ -302,27 +324,32 @@ fn require_worktree(dir: &Path, branch: &str) -> Result<()> {
     Ok(())
 }
 
-fn require_hybrid_worktree(ws: &Workspace, project: &ProjectData, plan: &Plan) -> Result<()> {
-    let found = resolve::checkout_holding(ws, project, &plan.build_repo, &plan.branch_raw)?;
+fn require_hybrid_worktree(
+    ws: &Workspace,
+    project: &ProjectData,
+    plan: &Plan,
+    branch: &str,
+) -> Result<()> {
+    let found = resolve::checkout_holding(ws, project, &plan.build_repo, branch)?;
     let Some(actual) = found else {
         bail!(
             "branch '{}' is not checked out in any worktree of repo '{}' — create it with \
              `wits worktree create {} {}`",
-            plan.branch_raw,
+            branch,
             plan.build_repo,
-            plan.branch_raw,
+            branch,
             plan.work_dir.display()
         );
     };
     if actual != plan.work_dir {
         bail!(
             "worktree for branch '{}' moved from {} to {} while planning; retry the build",
-            plan.branch_raw,
+            branch,
             plan.work_dir.display(),
             actual.display()
         );
     }
-    require_worktree(&plan.work_dir, &plan.branch_raw)
+    require_worktree(&plan.work_dir, branch)
 }
 
 fn make_plan(
@@ -330,7 +357,7 @@ fn make_plan(
     project: &ProjectData,
     profile: &Profile,
     opts: &BuildOptions,
-    branch: &str,
+    branch: Option<&str>,
     be: Option<&dyn Backend>,
 ) -> Result<Plan> {
     // Select-vs-inject (§5.3): in auto/build-only, an already-configured build
@@ -371,7 +398,7 @@ fn plan_with(
     project: &ProjectData,
     profile: &Profile,
     opts: &BuildOptions,
-    branch: &str,
+    branch: Option<&str>,
     inject_toolchain: bool,
     be: Option<&dyn Backend>,
 ) -> Result<Plan> {
@@ -386,6 +413,8 @@ fn plan_with(
             extra_config_args: &opts.extra_config_args,
             extra_build_args: &opts.extra_build_args,
             extra_install_args: &opts.extra_install_args,
+            build_dir_override: opts.build_dir.as_deref(),
+            install_dir_override: opts.install_dir.as_deref(),
         },
     )
 }
@@ -407,32 +436,32 @@ fn plan_with(
 fn prepare_branch<'a>(
     project: &ProjectData,
     git: &'a Repository,
-    plan: &Plan,
+    branch: &str,
     name: &str,
 ) -> Result<Option<RestoreGuard<'a>>> {
     if repo_strategy(project, name)?.is_bare_backed() {
-        require_worktree(git.path(), &plan.branch_raw)
+        require_worktree(git.path(), branch)
             .with_context(|| format!("repo '{name}' carries this build's branch identity"))?;
         return Ok(None);
     }
     let current = git.current_branch().with_context(|| {
-        format!("repo '{name}' is in a detached HEAD; pass --branch and check out a branch")
+        format!(
+            "repo '{name}' is in a detached HEAD; pass --detach to build HEAD as-is, \
+             or check out the requested branch"
+        )
     })?;
-    if current == plan.branch_raw {
+    if current == branch {
         return Ok(None);
     }
-    if !git.rev_exists(&plan.branch_raw) {
-        bail!(
-            "branch '{}' does not exist in repo '{name}'",
-            plan.branch_raw
-        );
+    if !git.rev_exists(branch) {
+        bail!("branch '{branch}' does not exist in repo '{name}'");
     }
 
     let mut guard = RestoreGuard::capture(git);
     if git.stash_push("wits project auto-stash")? {
         guard.mark_stashed();
     }
-    git.switch(&plan.branch_raw)?;
+    git.switch(branch)?;
     // Align that checkout's own submodules to the target's recorded state.
     let subs: Vec<String> = git
         .materialised_submodules()
@@ -449,6 +478,9 @@ fn prepare_branch<'a>(
 fn current_branch(ws: &Workspace, project: &ProjectData, identity: Option<&str>) -> Result<String> {
     let name = identity.context("project has no own-git repo to take a branch from")?;
     resolve::current_branch(ws, project, name)?.with_context(|| {
-        format!("repo '{name}' has no branch checked out (a detached HEAD?); pass --branch")
+        format!(
+            "repo '{name}' has no branch checked out; pass --detach to build HEAD as-is, \
+             or --branch to select a branch"
+        )
     })
 }

@@ -91,11 +91,12 @@ pub struct RawRepo {
     /// `CMakeLists.txt`/`meson.build`/… lives) when it is not the checkout root.
     /// Resolved from the build repo; defaults to its resolved `workdir`.
     pub source_dir: Option<String>,
-    /// Where the backend writes its build tree. Templated; resolved from the
-    /// **build repo** (the focus's `anchor`, or the focus). Absent means this
-    /// repo is not built — `wits build` then has nothing to do.
+    /// Where the backend writes its build tree. Templated; a focus declaration
+    /// overrides its anchor's default. Absent on both means there is nothing to
+    /// build.
     pub build_dir: Option<String>,
-    /// Install prefix. Templated; same owner as [`build_dir`](Self::build_dir).
+    /// Install prefix. Templated; the focus-over-anchor precedence matches
+    /// [`build_dir`](Self::build_dir).
     pub install_dir: Option<String>,
     /// Paths this checkout never materialises, as an ordered gitignore-style
     /// pattern list where `!` re-includes (see [`super::skip`]). Not templated:

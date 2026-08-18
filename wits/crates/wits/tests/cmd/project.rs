@@ -798,7 +798,7 @@ build_system = "cargo"
 path = "{host}"
 main_branch = "main"
 skip = ["/vendor"]
-build_dir = "{{{{repos.main.workdir}}}}/target"
+build_dir = "{{{{repos.main.workdir}}}}/target/{{{{branch.slug}}}}"
 install_dir = "{{{{repos.component.workdir}}}}"
 [repos.main.remotes]
 origin = "{upstream}"
@@ -817,6 +817,38 @@ anchor = "main"
     // The in-place shell's own `skip` took effect, alongside a bare-backed borrow.
     assert!(!host.join("vendor").exists());
     assert_eq!(index_tag(&host, "vendor/blob.bin"), Some('S'));
+
+    // Add the fixed detached checkout as a separately selectable repo after the
+    // initial lifecycle. This mirrors an owner exposing `repos.review` and a
+    // consumer borrowing it as `--focus component-review`.
+    let comp_review = fx.path("comp.wt/review");
+    let comp_config = fx.config.join("comp.toml");
+    let mut body = std::fs::read_to_string(&comp_config).unwrap();
+    body.push_str(&format!(
+        r#"
+[repos.review]
+path = "{}"
+main_branch = "main"
+branch_strategy = "in-place"
+worktree_dir = "{}"
+"#,
+        comp_bare.display(),
+        comp_review.display()
+    ));
+    std::fs::write(&comp_config, body).unwrap();
+
+    let host_config = fx.config.join("host.toml");
+    let mut body = std::fs::read_to_string(&host_config).unwrap();
+    body.push_str(
+        r#"
+[repos.component-review]
+from = "comp:review"
+anchor = "main"
+build_dir = "{{repos.main.workdir}}/target/component-review"
+install_dir = "{{repos.component-review.workdir}}"
+"#,
+    );
+    std::fs::write(&host_config, body).unwrap();
 
     git(&comp_bare, &["branch", "feat", "origin/feat"]);
     let created = fx.run_in(
@@ -840,7 +872,33 @@ anchor = "main"
 
     let built = fx.run(&["build", "host", "--branch", "feat"]);
     assert!(built.success, "stderr: {}", built.stderr);
-    assert!(host.join("target/debug/host-fixture").exists());
+    assert!(host.join("target/feat/debug/host-fixture").exists());
+
+    // The same mixed project can build a detached review snapshot of the
+    // borrowed identity repo. The root remains the in-place build base, while
+    // the component's current checkout supplies the detached HEAD.
+    git(
+        &comp_bare,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            comp_review.to_str().unwrap(),
+            "origin/feat",
+        ],
+    );
+    let comp_bootstrap = fx.path("comp.wt/main");
+    let reviewed = fx.run_in(
+        &comp_bootstrap,
+        &["build", "host", "--detach", "--focus", "component-review"],
+    );
+    assert!(reviewed.success, "stderr: {}", reviewed.stderr);
+    assert!(
+        host.join("target/component-review/debug/host-fixture")
+            .exists(),
+        "focus-local build_dir did not override the branch-keyed anchor default"
+    );
 
     // Nothing moved: the bare repository still points at its own main, the worktree
     // still holds `feat`, and the shell's checkout is where it was.
@@ -956,4 +1014,123 @@ origin = "{upstream}"
         missing.stderr
     );
     assert!(!fx.path("hybrid.wt/absent").exists());
+}
+
+/// Review checkouts are deliberately detached snapshots. Building one must be
+/// an explicit choice, must source from that checkout rather than the primary,
+/// and must not fabricate `branch.*` for path templates.
+#[test]
+fn detached_head_builds_a_review_checkout_only_when_requested() {
+    let fx = Fixture::new();
+    let upstream = fx.path("up-reviewable");
+    std::fs::create_dir_all(upstream.join("src")).unwrap();
+    git(&upstream, &["init", "-q", "-b", "main", "."]);
+    std::fs::write(
+        upstream.join("Cargo.toml"),
+        "[package]\nname = \"reviewable\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(upstream.join("src/main.rs"), "fn main() {}\n").unwrap();
+    git(&upstream, &["add", "Cargo.toml", "src/main.rs"]);
+    git(&upstream, &["commit", "-q", "-m", "add cargo fixture"]);
+
+    let checkout = fx.path("src-reviewable");
+    let config = fx.config.join("reviewable.toml");
+    std::fs::write(
+        &config,
+        format!(
+            r#"
+[project]
+build_system = "cargo"
+[repos.main]
+path = "{checkout}"
+main_branch = "main"
+build_dir = "{{{{repos.main.workdir}}}}/target"
+[repos.main.remotes]
+origin = "{upstream}"
+"#,
+            checkout = checkout.display(),
+            upstream = upstream.display(),
+        ),
+    )
+    .unwrap();
+    fx.ok(&["update", "reviewable"]);
+
+    let review = fx.path("src-reviewable.review");
+    git(
+        &checkout,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            review.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+
+    let implicit = fx.run_in(&review, &["build"]);
+    assert!(!implicit.success);
+    assert!(
+        implicit.stderr.contains("--detach") && implicit.stderr.contains("--branch"),
+        "default detached HEAD error names both explicit choices: {}",
+        implicit.stderr
+    );
+
+    let attached = fx.run_in(&checkout, &["build", "--detach"]);
+    assert!(!attached.success);
+    assert!(
+        attached
+            .stderr
+            .contains("--detach requires a detached HEAD"),
+        "stderr: {}",
+        attached.stderr
+    );
+
+    let conflict = fx.run_in(&review, &["build", "--detach", "--branch", "main"]);
+    assert!(!conflict.success);
+    assert!(
+        conflict.stderr.contains("--detach") && conflict.stderr.contains("--branch"),
+        "clap reports the mutually exclusive selectors: {}",
+        conflict.stderr
+    );
+
+    // If detached resolution accidentally fell back to the configured in-place
+    // checkout, Cargo would now fail before producing the review binary.
+    std::fs::remove_file(checkout.join("Cargo.toml")).unwrap();
+    let built = fx.run_in(&review, &["build", "--detach"]);
+    assert!(built.success, "stderr: {}", built.stderr);
+    assert!(review.join("target/debug/reviewable").exists());
+
+    // A branch-dependent template stays unavailable in detached mode, while an
+    // explicit output override bypasses it. `--work-dir` remains an independent
+    // location override rather than an implicit request for detached semantics.
+    let body = std::fs::read_to_string(&config).unwrap().replace(
+        r#"build_dir = "{{repos.main.workdir}}/target""#,
+        r#"build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+install_dir = "{{repos.main.workdir}}/_install/{{branch.slug}}""#,
+    );
+    std::fs::write(&config, body).unwrap();
+    let unresolved = fx.run_in(&review, &["build", "--detach"]);
+    assert!(!unresolved.success);
+    assert!(
+        unresolved.stderr.contains("branch.slug"),
+        "stderr: {}",
+        unresolved.stderr
+    );
+
+    let override_dir = review.join("override-target");
+    let overridden = fx.run(&[
+        "build",
+        "reviewable",
+        "--detach",
+        "--work-dir",
+        review.to_str().unwrap(),
+        "--build-dir",
+        override_dir.to_str().unwrap(),
+        "--install-dir",
+        override_dir.to_str().unwrap(),
+    ]);
+    assert!(overridden.success, "stderr: {}", overridden.stderr);
+    assert!(override_dir.join("debug/reviewable").exists());
 }

@@ -623,10 +623,11 @@ fn describe(ws: &Workspace, project: &ProjectData, profile: &ProfileArgs) -> Res
                 project,
                 &resolve::PlanInput::paths_only(&profile.to_profile(), &branch),
             )?;
-            println!(
-                "  resolved (branch {}, {}):",
-                plan.branch_slug, plan.build_type
-            );
+            let branch = plan
+                .branch
+                .as_ref()
+                .context("branch path query resolved as detached")?;
+            println!("  resolved (branch {}, {}):", branch.slug, plan.build_type);
             println!("    focus:       {}", plan.focus);
             if let Some(tc) = &plan.toolchain {
                 println!("    toolchain:   {}", tc.name);
@@ -647,18 +648,18 @@ fn describe(ws: &Workspace, project: &ProjectData, profile: &ProfileArgs) -> Res
             }
         }
         _ => {
-            let build_repo =
-                resolve::anchor_of(project, project.focus_name(profile.focus.as_deref()));
-            if let Some(repo) = project.repos.get(&build_repo) {
-                if let Some(t) = &repo.source_dir {
-                    println!("  source_dir (template):  {t}");
-                }
-                if let Some(t) = &repo.build_dir {
-                    println!("  build_dir (template):   {t}");
-                }
-                if let Some(t) = &repo.install_dir {
-                    println!("  install_dir (template): {t}");
-                }
+            let focus = project.focus_name(profile.focus.as_deref());
+            let build_repo = resolve::anchor_of(project, focus);
+            let anchor = &project.repos[&build_repo];
+            let focused = &project.repos[focus];
+            if let Some(t) = &anchor.source_dir {
+                println!("  source_dir (template):  {t}");
+            }
+            if let Some(t) = focused.build_dir.as_ref().or(anchor.build_dir.as_ref()) {
+                println!("  build_dir (template):   {t}");
+            }
+            if let Some(t) = focused.install_dir.as_ref().or(anchor.install_dir.as_ref()) {
+                println!("  install_dir (template): {t}");
             }
         }
     }
