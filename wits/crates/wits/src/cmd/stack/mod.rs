@@ -47,7 +47,7 @@ pub enum StackAction {
     Decorate(DecorateArgs),
     /// Interactively cut HEAD's commits into a stack of branches.
     Slice(SliceArgs),
-    /// Edit the stack's structure in `.git/machete` (prune, remove, move).
+    /// Edit the stack's structure in the machete file (prune, remove, move).
     Tree(TreeArgs),
 }
 

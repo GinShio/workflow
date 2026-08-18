@@ -13,7 +13,8 @@ shown to users is per-host, but everything here calls it an MR.
 
 ## 1. The machete forest
 
-`.git/machete` records a dependency **forest**: each line is a branch, and
+The machete file (`<common-git-dir>/machete`, one per repository and so shared by all
+its worktrees) records a dependency **forest**: each line is a branch, and
 indentation means "sits on top of". It is a forest, not just a chain — a branch
 may fork into several.
 

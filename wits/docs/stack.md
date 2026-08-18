@@ -26,8 +26,11 @@ Plus a few helpers: `wits stack slice` cuts commits into the stack in the first
 place, `wits stack decorate` adds labels/reviewers/assignees to an MR, and
 `wits stack tree` edits the stack's structure.
 
-The dependency tree itself lives in `.git/machete` (the same format
-`git-machete` uses): one branch per line, indentation meaning "sits on top of".
+The dependency tree itself lives in the **machete file** (the same format
+`git-machete` uses): one branch per line, indentation meaning "sits on top of". It
+sits at `<common-git-dir>/machete` — one forest per *repository*, so every worktree
+of it reads and writes the same stack rather than each keeping a private one that
+`git worktree remove` would take with it.
 
 ```
 main
@@ -112,12 +115,12 @@ pick d4e5f6a Wire up the UI
 
 Uncomment the `update-ref` lines where you want a branch to start, save, and let
 the rebase finish. The branches are created at the end of the rebase (safe even
-for the branch you're on), and `.git/machete` is written to match. Branch-name
+for the branch you're on), and the machete file is written to match. Branch-name
 suggestions use `wits.stack.prefix` if set, otherwise a slug of your
 `user.name`, otherwise `stack/`.
 
 You don't *have* to use `slice` — any branches you create yourself and record in
-`.git/machete` work identically. And a branch that isn't in the file at all is
+the machete file work identically. And a branch that isn't in the file at all is
 treated as a one-branch stack (see [Single branches](#single-branches)).
 
 ### Growing or reshaping an existing stack
@@ -162,7 +165,7 @@ one rule that's worth knowing:
 - **On a fork-point** (two or more children): it acts on the *whole tree* you're
   the root of — every branch below you, plus your ancestors.
 
-Pass `--all` to act on every stack recorded in `.git/machete`, regardless of
+Pass `--all` to act on every stack recorded in the machete file, regardless of
 where you're standing.
 
 ```sh
@@ -182,7 +185,7 @@ The branch is a **scope anchor**, not the single target: the whole stack around
 it is operated on, exactly as if you'd checked it out (an anchor mid-line still
 pulls in its ancestors and downstream chain). That is the per-stack meaning —
 different from `decorate`, whose branch names the one MR to touch. The anchor
-must be a real branch (a local ref, or a name recorded in `.git/machete`), and it
+must be a real branch (a local ref, or a name recorded in the machete file), and it
 can't be combined with `--all`.
 
 The base branch (`main`/`master`/…) is never pushed and never gets an MR, but it
@@ -212,7 +215,7 @@ wits stack submit --title-source first   # oldest commit instead
 
 ## Single branches
 
-Not everything is a tall stack. A branch that isn't recorded in `.git/machete`
+Not everything is a tall stack. A branch that isn't recorded in the machete file
 is treated as its own one-node stack sitting on the base branch — so `sync` and
 `submit` work on an ordinary feature branch with zero setup:
 
@@ -333,7 +336,7 @@ invocation rather than a standing preference.
 
 The short version: the **base branch** comes from the merge target's remote HEAD
 (`upstream`, else `origin`), then `main`/`master`/`trunk`; each **MR's base** is
-its parent in `.git/machete` (or the base branch at a root); **cross-fork** MRs
+its parent in the machete file (or the base branch at a root); **cross-fork** MRs
 work on all platforms (GitHub/Gitea via an `origin-owner:branch` head, GitLab via
 its cross-project API). The full rules, including fork scope and dynamic edits,
 are in the [behaviour reference](stack/behavior.md).

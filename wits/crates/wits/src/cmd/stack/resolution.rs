@@ -38,8 +38,34 @@ impl StackPlan {
     }
 }
 
+/// The machete file: `<common-git-dir>/machete`, one per **repository**.
+///
+/// The common dir, not the plain git dir, and for the same reason the review store
+/// and the submodule object stores use it. A stack is a set of branches, which is a
+/// repository-wide fact; inside a linked worktree the plain git dir is that
+/// worktree's *private* administrative directory
+/// (`<common>/worktrees/<id>`), so writing there gives every worktree its own
+/// invisible forest and hands the file to `git worktree remove` to delete. In a
+/// bare-style layout that is the whole file, since no checkout is the main worktree.
+///
+/// For a conventional clone the two are the same directory, which is why this went
+/// unnoticed — and `$GIT_COMMON_DIR/machete` is already what the
+/// `reference-transaction` hook prunes, so this is the location the toolset had
+/// settled on everywhere but here.
 fn machete_path(repo: &Repository) -> Option<PathBuf> {
-    repo.git_dir().map(|dir| dir.join("machete"))
+    repo.git_common_dir()
+        .or_else(|| repo.git_dir())
+        .map(|dir| dir.join("machete"))
+}
+
+/// A forest left in a *worktree-private* git dir by an earlier version. Read as a
+/// fallback so a stack does not silently vanish, and only while the shared file does
+/// not exist — the first [`save_topology`] writes the shared one and this stops being
+/// consulted.
+fn stale_private_path(repo: &Repository) -> Option<PathBuf> {
+    let private = repo.git_dir()?.join("machete");
+    let shared = machete_path(repo)?;
+    (private != shared && private.exists()).then_some(private)
 }
 
 /// Load the machete forest. An *absent* file is a legitimately empty stack
@@ -49,15 +75,31 @@ fn machete_path(repo: &Repository) -> Option<PathBuf> {
 /// the caller surfaces rather than a warning it might miss. Parsing itself never
 /// fails (indentation always yields a forest).
 pub fn load_topology(repo: &Repository) -> anyhow::Result<Topology> {
-    let Some(path) = machete_path(repo).filter(|p| p.exists()) else {
-        return Ok(Topology::default());
+    let shared = machete_path(repo).filter(|p| p.exists());
+    let path = match shared {
+        Some(path) => path,
+        None => match stale_private_path(repo) {
+            Some(private) => {
+                log::warn!(
+                    "reading the stack from {}, which belongs to this worktree alone and goes \
+                     with it when the worktree is removed; the next structure edit writes {} \
+                     instead, after which the old file can be deleted",
+                    private.display(),
+                    machete_path(repo)
+                        .expect("a path exists to read one")
+                        .display()
+                );
+                private
+            }
+            None => return Ok(Topology::default()),
+        },
     };
     let text = fs::read_to_string(&path)
         .with_context(|| format!("reading {} (the machete stack file)", path.display()))?;
     Ok(Topology::parse(&text))
 }
 
-/// Persist the forest back to `.git/machete`. A local-state mutation, so it
+/// Persist the forest back to the machete file. A local-state mutation, so it
 /// honours dry-run rather than silently rewriting the file underneath a `-n`.
 pub fn save_topology(repo: &Repository, topology: &Topology) -> anyhow::Result<()> {
     let path = machete_path(repo).ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
@@ -281,5 +323,86 @@ mod tests {
         std::fs::write(git_dir.join("machete"), "main\n    feat\n").unwrap();
         let topo = load_topology(&repo).unwrap();
         assert_eq!(topo.parent("feat"), Some("main"));
+    }
+
+    /// One forest per **repository**, so a linked worktree reads and writes the very
+    /// file the repository holds. Writing to the plain git dir instead gives every
+    /// worktree its own invisible stack and loses it with `git worktree remove` — and
+    /// for a bare-backed repo that is the whole file.
+    #[test]
+    fn the_forest_is_shared_by_every_worktree_of_a_repository() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let run = |dir: &std::path::Path, args: &[&str]| {
+            wits_util::process::Command::new("git")
+                .args(args.iter().copied())
+                .current_dir(dir)
+                .force_run()
+                .exec()
+                .unwrap();
+        };
+        run(root, &["init", "-q", "-b", "main", "src"]);
+        let main = root.join("src");
+        for (key, value) in [("user.email", "t@e.com"), ("user.name", "T")] {
+            run(&main, &["config", key, value]);
+        }
+        run(&main, &["commit", "-q", "--allow-empty", "-m", "c1"]);
+        run(&main, &["branch", "feat"]);
+        let linked = root.join("wt");
+        run(
+            &main,
+            &["worktree", "add", "-q", linked.to_str().unwrap(), "feat"],
+        );
+
+        // Saved from the linked worktree, the forest lands in the repository's own
+        // git dir — not in `<common>/worktrees/<id>`, which belongs to that worktree.
+        let from_worktree = Repository::new(&linked);
+        save_topology(&from_worktree, &Topology::parse("main\n    feat\n")).unwrap();
+        assert!(main.join(".git/machete").exists());
+        assert!(!main.join(".git/worktrees/wt/machete").exists());
+
+        // And every handle on the repository sees the same one.
+        for repo in [&from_worktree, &Repository::new(&main)] {
+            assert_eq!(load_topology(repo).unwrap().parent("feat"), Some("main"));
+        }
+    }
+
+    /// A forest an older version left in a worktree's private git dir is still read
+    /// while no shared one exists, so a stack does not silently vanish — and the next
+    /// save moves it, after which the stale file is ignored.
+    #[test]
+    fn a_worktree_private_forest_is_still_read_until_one_is_saved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let run = |dir: &std::path::Path, args: &[&str]| {
+            wits_util::process::Command::new("git")
+                .args(args.iter().copied())
+                .current_dir(dir)
+                .force_run()
+                .exec()
+                .unwrap();
+        };
+        run(root, &["init", "-q", "-b", "main", "src"]);
+        let main = root.join("src");
+        for (key, value) in [("user.email", "t@e.com"), ("user.name", "T")] {
+            run(&main, &["config", key, value]);
+        }
+        run(&main, &["commit", "-q", "--allow-empty", "-m", "c1"]);
+        run(&main, &["branch", "feat"]);
+        let linked = root.join("wt");
+        run(
+            &main,
+            &["worktree", "add", "-q", linked.to_str().unwrap(), "feat"],
+        );
+
+        let repo = Repository::new(&linked);
+        let private = repo.git_dir().unwrap().join("machete");
+        std::fs::write(&private, "main\n    feat\n").unwrap();
+        assert_eq!(load_topology(&repo).unwrap().parent("feat"), Some("main"));
+
+        // Once a shared forest exists it is the only one consulted, stale file or not.
+        save_topology(&repo, &Topology::parse("main\n")).unwrap();
+        std::fs::write(&private, "main\n    stale\n").unwrap();
+        assert_eq!(load_topology(&repo).unwrap().parent("stale"), None);
     }
 }

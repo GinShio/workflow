@@ -281,9 +281,11 @@ aborted rebase or a rolled-back transaction never triggers them.
 ### Machete cleanup
 
 Keeps your `git-machete`/stack layout honest as branches come and go. Delete a
-branch and it is removed from `.git/machete` with its children spliced up to its
-parent, so the tree stays valid instead of collecting dangling entries you'd have
-to prune by hand. Runs wherever a machete file exists; nothing to configure.
+branch and it is removed from `$GIT_COMMON_DIR/machete` with its children spliced up
+to its parent, so the tree stays valid instead of collecting dangling entries you'd
+have to prune by hand. The common dir means one forest per repository, so the cleanup
+reaches the same file from any worktree; `wits stack` reads and writes it there too.
+Runs wherever a machete file exists; nothing to configure.
 
 ### Build-directory cleanup
 

@@ -30,7 +30,7 @@ just a presentation detail a forge supplies, §7.)
 
 The division of labour:
 
-- **Local topology is given to us, not computed by us.** `.git/machete` records
+- **Local topology is given to us, not computed by us.** `<common-git-dir>/machete` records
   which branch sits on which (a forest, not just a chain). We read it; we never
   reimplement restack/rebase. `slice` (§9) is the one place we *write* it, and
   even there git does the commit movement — we only assign names and record the
@@ -67,7 +67,7 @@ set across the stack) and additive-only, so it never fights a project's own
 label/reviewer automation — see [`behavior.md`](behavior.md) §7.
 
 `tree` is a separate group on purpose: `prune`/`rm`/`mv` change *what the stack
-is* (structure edits to `.git/machete`), as opposed to the four verbs that *act
+is* (structure edits to `<common-git-dir>/machete`), as opposed to the four verbs that *act
 on* it. Their behaviour — and the splice-up rule that keeps a removal from
 destroying the line above it — is specified in [`behavior.md`](behavior.md) §9.
 
@@ -99,7 +99,7 @@ dynamic-edit examples). Given the current branch **N**:
 |---|---|
 | N is a **fork-point** (≥2 children) | `ancestors(N)` + the **entire subtree** under N — "I'm managing this whole tree." |
 | N is **linear** (≤1 child) | the **linear stack**: ancestors + N + the first-child chain down to the next fork/leaf. Sibling branches are someone else's line of work and are left alone. |
-| N is **not in `.git/machete`** | N alone, as a one-node stack on the base branch (§5.3). This is what makes single-branch MRs work with zero machete setup. |
+| N is **not in `<common-git-dir>/machete`** | N alone, as a one-node stack on the base branch (§5.3). This is what makes single-branch MRs work with zero machete setup. |
 | `--all` | every branch in every tree in the file. No filtering. |
 
 The base branch (usually `main`) is never itself pushed or given an MR, but it
@@ -150,6 +150,19 @@ the annotation slot and use it to cache MR identity (e.g. `!123`) so a later run
 need not re-discover numbers — but the annotation is a cache, never the source of
 truth; the live forge is.
 
+It lives at **`<common-git-dir>/machete`**, one forest per *repository*. A stack is a
+set of branches, which is a repository-wide fact, so the file belongs where every
+worktree can see it — the same reasoning that puts the review store and the submodule
+object stores in the common dir. The plain git dir is the wrong home for exactly the
+reason a worktree's submodule store is: inside a linked worktree it is that worktree's
+*private* administrative directory (`<common>/worktrees/<id>`), so a forest written
+there is invisible from every other checkout and is deleted by `git worktree remove`.
+For a conventional clone the two directories are the same, which is why the
+distinction only surfaces once you keep a worktree per branch — and under a bare-style
+layout it is the entire file, since no checkout is the main worktree. A forest an
+earlier version left in a worktree-private dir is still *read* while no shared one
+exists, with a warning; the next structure edit writes the shared file.
+
 The tree algebra is small and total:
 
 - `ancestors(n)` — root→…→parent, excluding n.
@@ -193,7 +206,7 @@ root of the tree), the MR targets the base branch on the **merge-target repo**
 
 ### 5.3 Branches not in the file → synthetic one-node stack
 
-When the current branch is absent from `.git/machete`, resolution synthesizes a
+When the current branch is absent from `<common-git-dir>/machete`, resolution synthesizes a
 trivial tree: `base → branch`. `sync` and `submit` then operate on exactly that
 branch. `anno` **skips** it: a lone MR has no neighbours to navigate to, so a
 navigation block would be pure noise. This single-node path requires zero machete
@@ -355,7 +368,7 @@ the end of the rebase — safe for the current branch and for worktrees, unlike
 `branch -f`. The captured todo, not a post-rebase `base..HEAD` scan, is the
 authoritative list of assigned branches, because git leaves HEAD in a misleading
 position when the checked-out branch is itself an intermediate update-ref target.
-From that list we (re)write `.git/machete`.
+From that list we (re)write `<common-git-dir>/machete`.
 
 Suggested branch names use a configurable prefix (`wits.stack.prefix`, else a
 slug of `user.name`, else `stack/`).
