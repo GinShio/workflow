@@ -21,6 +21,7 @@ rand.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+serde_json.workspace = true
 
 # The black-box filter tests live under tests/cmd/ to mirror src/cmd/; a nested
 # path is not auto-discovered, so wire it explicitly.

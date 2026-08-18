@@ -49,10 +49,33 @@ to be hand-edited (edits are overwritten on the next fetch).
 |---|---|
 | `schema` | Store version. |
 | `mr` | The MR object (id, display, state, draft, title, author, base, source, head_sha, updated_at, labels, web_url — see [json.md](json.md#mr-object)). |
-| `snapshots` | The review points fetched so far, oldest first: each a `{ base_sha, start_sha, head_sha }` diff version. The last is the current one. Every snapshot's objects are pinned (below). |
+| `snapshots` | The review points fetched so far, oldest first: each a `{ fork_sha, start_sha, head_sha }`. The last is the current one. Every snapshot's objects are pinned (below). |
 | `fetched_at` | Unix seconds of the **last** `fetch` that synced this MR — updated on every fetch (even for an unchanged head), so dormancy tracks real staleness. `0` for a feed-only entry (never fully fetched). |
-| `commits` | Commits in the current snapshot's `base..head`, derived **locally** from the fetched objects. |
+| `commits` | Commits in the current snapshot's `fork..head`, derived **locally** from the fetched objects. |
 | `files` | Files the current snapshot touched, derived locally. |
+
+Three SHAs describe a review point:
+
+| Field | Meaning |
+|---|---|
+| `fork_sha` | `merge-base(target, head)` — where the series left its target, computed at fetch. **The diff endpoint**, and what GitLab's comment `position` wants for its `base_sha`, those being the same commit on that forge. |
+| `start_sha` | GitLab's separate diff-version start. A copy of the fork on GitHub, which has no such notion. |
+| `head_sha` | The reviewed tip. |
+
+**The forge's own `base` is deliberately not stored.** The two forges do not agree
+on what it means — GitLab's `diff_refs.base_sha` is already the merge base,
+GitHub's `baseRefOid` is the target branch's *current tip* — so it is an input to
+a fetch, not a property of a review point. Keeping it invited exactly one bug: a
+value that is not an ancestor of `head`, quietly serving as a diff endpoint and
+widening every comparison built on it (22 files reported against 4 real ones, on
+the MR where this was found).
+
+**A fork point must be an ancestor of its own head.** That is what makes
+`fork..head` a patch series rather than a two-endpoint tree compare, and `fetch`
+now enforces it: it acquires the target's objects properly — the bare commit
+first, then the target branch by name — and **fails** rather than recording a
+snapshot whose fork it could not resolve. A record from before that rule can only
+be repaired by re-fetching, so the read path checks the ancestry and says so.
 
 A **feed** fetch fills only `mr` (and stamps `fetched_at`), leaving
 `snapshots`/`commits`/`files` empty; a full `fetch <mr>` fills them and appends a

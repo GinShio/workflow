@@ -11,12 +11,14 @@ use std::collections::{BTreeSet, HashSet};
 
 use anyhow::{Context, Result};
 
-use wits_util::forge::{DiffVersion, MergeRequest, MrState, MrSummary};
+use wits_util::forge::{MergeRequest, MrState, MrSummary};
 use wits_util::git::Repository;
 use wits_util::time::now_secs;
 
 use super::config::{self, Config};
-use super::model::{range_artifacts, Comments, Info, StoredCommit, StoredFile, Thread, SCHEMA};
+use super::model::{
+    range_artifacts, Comments, Info, Snapshot, StoredCommit, StoredFile, Thread, SCHEMA,
+};
 use super::store::{refs, Store};
 use super::{online, parse_mr_handle, Online, StackMode};
 
@@ -62,19 +64,20 @@ fn fetch_one(ctx: &Online, remote: &str, id: &str) -> Result<()> {
     let repo = &ctx.local.repo;
 
     let details = forge.mr_details(id)?;
-    let v = details.version;
-    let head_sha = v.head_sha.clone();
+    let version = details.version;
+    let head_sha = version.head_sha.clone();
 
     if !head_sha.is_empty() {
         let mr_ref = forge.mr_ref(id)?;
         repo.fetch_ref(remote, &mr_ref, &refs::pin(id, &head_sha))
             .with_context(|| format!("fetching MR {id} objects"))?;
     }
-    if !v.base_sha.is_empty() && repo.rev_parse(&v.base_sha).is_none() {
-        repo.try_fetch_object(remote, &v.base_sha, &refs::base_pin(id, &head_sha));
-    }
-
-    let (commits, files) = local_range(repo, &v.base_sha, &head_sha);
+    let snapshot = Snapshot {
+        fork_sha: fork_point(ctx, remote, id, &details.summary.base, &version, &head_sha)?,
+        start_sha: version.start_sha,
+        head_sha: head_sha.clone(),
+    };
+    let (commits, files) = local_range(repo, &snapshot);
     // Preserve the snapshot history across fetches; append only when the head
     // moved. Metadata and current-snapshot diff state are refreshed wholesale,
     // and `fetched_at` is stamped every time (even for an unchanged head) so
@@ -87,11 +90,7 @@ fn fetch_one(ctx: &Online, remote: &str, id: &str) -> Result<()> {
         commits,
         files,
     };
-    info.record_snapshot(DiffVersion {
-        base_sha: v.base_sha,
-        start_sha: v.start_sha,
-        head_sha,
-    });
+    info.record_snapshot(snapshot);
     store.save_info(id, &info)?;
 
     let threads: Vec<Thread> = forge
@@ -413,14 +412,72 @@ fn refresh_untouched(ctx: &Online, touched: &HashSet<String>) -> Result<()> {
     Ok(())
 }
 
-/// Commits (oldest-first) and changed files in `base..head`, derived from the
-/// fetched objects. Empty when the range can't be computed locally (a missing
-/// endpoint), delegating the mapping to [`range_artifacts`].
-fn local_range(repo: &Repository, base: &str, head: &str) -> (Vec<StoredCommit>, Vec<StoredFile>) {
+/// Where the MR forked from what it targets: `merge-base(target, head)`.
+///
+/// This one value is what makes a review point mean the same thing on every
+/// forge. GitLab hands us a base that already *is* the merge base; GitHub hands
+/// us the target branch's current tip, and diffing against a tip that has moved
+/// replays the target's own progress as inverted hunks. One `merge-base` call
+/// normalizes both, and the result is an ancestor of the pinned head, so it
+/// stays resolvable for as long as the snapshot does.
+///
+/// Getting it **right at fetch is the only chance**: nothing downstream keeps
+/// the forge's base to re-derive from. So the target's objects are acquired
+/// properly rather than best-effort — first the bare SHA (cheap when the server
+/// allows it), then the target branch by name (which every server allows) — and
+/// a fork that still cannot be computed is an error, not a silently empty field
+/// that would quietly widen every diff built on this snapshot.
+fn fork_point(
+    ctx: &Online,
+    remote: &str,
+    id: &str,
+    target_branch: &str,
+    version: &wits_util::forge::DiffVersion,
+    head: &str,
+) -> Result<String> {
+    let repo = &ctx.local.repo;
+    let base = &version.base_sha;
     if base.is_empty() || head.is_empty() {
+        anyhow::bail!(
+            "{} {id}: the forge reported no base or head",
+            ctx.forge.noun()
+        );
+    }
+    if let Some(fork) = repo.merge_base(base, head) {
+        return Ok(fork);
+    }
+
+    // The base's objects aren't here yet. Try the commit directly, then fall
+    // back to fetching the branch it sits on.
+    if repo.try_fetch_object(remote, base, &refs::base_pin(id, head)) {
+        if let Some(fork) = repo.merge_base(base, head) {
+            return Ok(fork);
+        }
+    }
+    if !target_branch.is_empty() {
+        let branch_ref = format!("refs/heads/{target_branch}");
+        let _ = repo.fetch_ref(remote, &branch_ref, &refs::base_pin(id, head));
+        if let Some(fork) = repo.merge_base(base, head) {
+            return Ok(fork);
+        }
+    }
+
+    anyhow::bail!(
+        "{} {id}: cannot locate where it forked from '{target_branch}' — the base commit \
+         {base} is not available from '{remote}'. Try `git fetch {remote} {target_branch}` \
+         and fetch again.",
+        ctx.forge.noun()
+    )
+}
+
+/// Commits (oldest-first) and changed files of a snapshot's own change,
+/// `fork..head`, derived from the fetched objects. Delegates the mapping to
+/// [`range_artifacts`].
+fn local_range(repo: &Repository, snapshot: &Snapshot) -> (Vec<StoredCommit>, Vec<StoredFile>) {
+    if snapshot.fork().is_empty() || snapshot.head_sha.is_empty() {
         return (Vec::new(), Vec::new());
     }
-    range_artifacts(repo, &format!("{base}..{head}"))
+    range_artifacts(repo, snapshot.fork(), &snapshot.head_sha)
 }
 
 #[cfg(test)]

@@ -79,6 +79,19 @@ fn parse_ahead_behind(field: &str) -> Option<(u32, u32)> {
     Some((ahead, behind))
 }
 
+/// How willing [`Repository::range_diff`] is to call two commits *the same
+/// commit, amended* rather than one deleted and another created.
+///
+/// Git's default of 60 is tuned for comparing whole patch series; it is far too
+/// strict for the amend-and-force-push loop, where a one-line fix to a small
+/// commit easily exceeds 60% of that commit's diff and so gets reported as a
+/// deletion plus an unrelated addition — which hides the very edit you asked to
+/// see. The two failure directions are not symmetric: under-pairing loses the
+/// information silently, while over-pairing shows up as an obviously enormous
+/// "changed" hunk. So we bias toward pairing, stopping just short of 100, the
+/// point at which git will pair two *entirely* unrelated commits.
+const RANGE_DIFF_CREATION_FACTOR: &str = "--creation-factor=90";
+
 /// One entry of a `diff --name-status` over a range: a file the MR touched, its
 /// change kind, and its former path when the change was a rename.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -398,6 +411,14 @@ impl Repository {
         self.succeeds(&["merge-base", "--is-ancestor", ancestor, descendant])
     }
 
+    /// The best common ancestor of two revisions — where a branch forked from
+    /// what it targets. `None` when either side is missing locally or the two
+    /// share no history, which a caller must treat as "unknown" rather than
+    /// substituting one of the endpoints.
+    pub fn merge_base(&self, a: &str, b: &str) -> Option<String> {
+        self.query(&["merge-base", a, b])
+    }
+
     /// The commit time of `rev` as a Unix instant.
     pub fn commit_time(&self, rev: &str) -> Option<i64> {
         self.query(&["log", "-1", "--format=%ct", rev])?
@@ -450,11 +471,16 @@ impl Repository {
             .collect()
     }
 
-    /// The files a range (`base..head`) touched, rename-aware. Empty when the
-    /// range can't be computed (e.g. the base object isn't present locally),
-    /// which the caller treats as "unknown" rather than "nothing changed".
-    pub fn changed_files(&self, range: &str) -> Vec<FileChange> {
-        let Some(out) = self.query(&["diff", "--name-status", "-M", range]) else {
+    /// The files that differ between two tree-ish objects, rename-aware. Empty
+    /// when the comparison can't be computed (e.g. an object isn't present
+    /// locally), which the caller treats as "unknown" rather than "nothing
+    /// changed".
+    ///
+    /// Two endpoints rather than a range, for the same reason as
+    /// [`diff_patch`](Self::diff_patch): a merge-tree result has no range
+    /// spelling.
+    pub fn changed_files(&self, from: &str, to: &str) -> Vec<FileChange> {
+        let Some(out) = self.query(&["diff", "--name-status", "-M", from, to]) else {
             return Vec::new();
         };
         out.lines()
@@ -481,15 +507,36 @@ impl Repository {
             .collect()
     }
 
-    /// A textual diff for a range, optionally narrowed to one path — the
-    /// `diff --patch` convenience for a terminal or for debugging, never the
-    /// editor's render path.
-    pub fn diff_patch(&self, range: &str, path: Option<&str>) -> Option<String> {
-        let mut args = vec!["diff", range];
+    /// A textual diff between two tree-ish objects, optionally narrowed to one
+    /// path — the `diff --patch` convenience for a terminal or for debugging,
+    /// never the editor's render path.
+    ///
+    /// Two endpoints rather than an `A..B` string, since that is all a diff ever
+    /// needs: `git diff A..B` is itself just a two-endpoint compare, and a
+    /// caller holding a tree rather than a commit has no range to spell.
+    ///
+    /// `--no-ext-diff` because callers either parse this (hunk headers) or feed
+    /// it onward: a user's configured difftool would emit something neither can
+    /// read.
+    pub fn diff_patch(&self, from: &str, to: &str, path: Option<&str>) -> Option<String> {
+        let mut args = vec!["diff", "--no-ext-diff", "--no-color", from, to];
         if let Some(p) = path {
             args.push("--");
             args.push(p);
         }
+        self.query(&args)
+    }
+
+    /// `git range-diff` between two commit ranges: how one version of a branch
+    /// corresponds to another, which is the question a force-push raises. With
+    /// `patch` it carries the diff of diffs; without, just the correspondence
+    /// table (`1: abc = 1: def subject`), which is a coordinate answer.
+    pub fn range_diff(&self, old_range: &str, new_range: &str, patch: bool) -> Option<String> {
+        let mut args = vec!["range-diff", "--no-color", RANGE_DIFF_CREATION_FACTOR];
+        if !patch {
+            args.push("--no-patch");
+        }
+        args.extend([old_range, new_range]);
         self.query(&args)
     }
 
@@ -753,6 +800,83 @@ mod tests {
         assert_eq!(commits[0].body, "first body line");
         assert_eq!(commits[1].subject, "second subject");
         assert_eq!(commits[1].body, "");
+    }
+
+    #[test]
+    fn merge_base_finds_the_fork_and_survives_a_moved_trunk() {
+        let _guard = crate::log::test_flag_guard();
+        let dir = init_repo();
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args.iter().copied())
+                .current_dir(dir.path())
+                .force_run()
+                .exec()
+                .unwrap();
+        };
+        let repo = Repository::new(dir.path());
+
+        // Fork a feature off `main`, then move `main` on — the shape that makes
+        // `git diff main..feature` show trunk drift as reverted hunks.
+        run(&["checkout", "-b", "feature"]);
+        run(&["commit", "--allow-empty", "-m", "feature work"]);
+        let fork = repo.rev_parse("main").unwrap();
+        run(&["checkout", "main"]);
+        run(&["commit", "--allow-empty", "-m", "trunk moves on"]);
+
+        assert_eq!(repo.merge_base("main", "feature").as_deref(), Some(&*fork));
+        assert_eq!(
+            repo.merge_base("main", "0000000000000000000000000000000000000000"),
+            None,
+            "an unresolvable side is unknown, not one of the endpoints"
+        );
+    }
+
+    #[test]
+    fn range_diff_pairs_a_small_amend_rather_than_calling_it_two_commits() {
+        let _guard = crate::log::test_flag_guard();
+        let dir = init_repo();
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args.iter().copied())
+                .current_dir(dir.path())
+                .force_run()
+                .exec()
+                .unwrap();
+        };
+        let write = |name: &str, text: &str| std::fs::write(dir.path().join(name), text).unwrap();
+
+        write("a.c", "one\ntwo\nthree\n");
+        run(&["add", "-A"]);
+        run(&["commit", "-m", "base file"]);
+
+        // Two versions of one small commit, differing by a single line — the
+        // amend-and-force-push shape. Git's default creation factor calls this
+        // a deletion plus an unrelated addition; ours must pair it (`!`).
+        run(&["checkout", "-b", "v1"]);
+        write("a.c", "one\ntwo\nTHREE\n");
+        run(&["commit", "-am", "raise the third line"]);
+        run(&["checkout", "-b", "v2", "main"]);
+        write("a.c", "one\ntwo\nTHREE (reworked)\n");
+        run(&["commit", "-am", "raise the third line"]);
+
+        let repo = Repository::new(dir.path());
+        let table = repo.range_diff("main..v1", "main..v2", false).unwrap();
+        assert!(
+            table.contains('!') && !table.contains('<'),
+            "a one-line amend must pair, not read as drop + add:\n{table}"
+        );
+
+        // …without going so far that an unrelated commit pairs too.
+        run(&["checkout", "-b", "v3", "main"]);
+        write("b.c", "an entirely different concern\nwith its own lines\n");
+        run(&["add", "-A"]);
+        run(&["commit", "-m", "something else entirely"]);
+        let unrelated = repo.range_diff("main..v1", "main..v3", false).unwrap();
+        assert!(
+            unrelated.contains('<') && unrelated.contains('>'),
+            "unrelated commits must not be paired as an amend:\n{unrelated}"
+        );
     }
 
     #[test]

@@ -8,18 +8,52 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use wits_util::forge::{Anchor, DiffVersion, MrSummary, Side};
+use wits_util::forge::{Anchor, MrSummary, Side};
 use wits_util::git::Repository;
+use wits_util::time::age_since;
 
 use super::model::{
-    short, state_word, Action, Comment, Info, Local, StoredCommit, StoredFile, Thread, SCHEMA,
+    short, state_word, Action, Comment, Info, Local, Snapshot, StoredCommit, StoredFile, Thread,
+    SCHEMA,
 };
 use super::{local, ShowArgs};
 
+/// The current review point, as the read contract exposes it: the two endpoints
+/// to render a diff between. See [`Snapshot`] for why the forge's own "base" is
+/// not among them.
 #[derive(Serialize)]
 struct SnapshotView {
-    base_sha: String,
+    fork_sha: String,
     head_sha: String,
+}
+
+/// Counts over *all* the MR's threads, before the display filters narrow the
+/// `threads` list — so a filtered view still reports the true shape of the
+/// discussion.
+#[derive(Serialize, Default)]
+struct ThreadStats {
+    total: usize,
+    unresolved: usize,
+    resolved: usize,
+    outdated: usize,
+    /// Someone else's comment is last — likely waiting on you.
+    unread: usize,
+    /// Present only in your pending draft.
+    pending: usize,
+}
+
+impl ThreadStats {
+    fn of(threads: &[Thread]) -> ThreadStats {
+        let count = |f: fn(&Thread) -> bool| threads.iter().filter(|t| f(t)).count();
+        ThreadStats {
+            total: threads.len(),
+            unresolved: count(|t| !t.resolved),
+            resolved: count(|t| t.resolved),
+            outdated: count(|t| t.outdated),
+            unread: count(|t| t.comments.last().is_some_and(|c| c.origin == "remote")),
+            pending: count(|t| t.origin == "local"),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -47,11 +81,14 @@ struct DetailView {
     mr: MrSummary,
     snapshot: SnapshotView,
     /// The full snapshot history, oldest first, so the editor can offer
-    /// switching (`diff --snapshot <sha>`).
-    snapshots: Vec<DiffVersion>,
+    /// switching (`diff --range <sha>`) or comparing (`diff --against <sha>`).
+    snapshots: Vec<Snapshot>,
+    /// Unix seconds of the last `fetch` that synced this MR.
+    fetched_at: i64,
     neighbors: Neighbors,
     commits: Vec<StoredCommit>,
     files: Vec<StoredFile>,
+    thread_stats: ThreadStats,
     threads: Vec<Thread>,
     draft: DraftView,
 }
@@ -59,6 +96,10 @@ struct DetailView {
 #[derive(Serialize)]
 struct InboxReview {
     pending: usize,
+    /// How many review points have been fetched — `0` for a feed-only row that
+    /// has never had a full `fetch <mr>`.
+    snapshots: usize,
+    fetched_at: i64,
 }
 
 #[derive(Serialize)]
@@ -86,9 +127,15 @@ fn show_detail(ctx: &super::ReviewCtx, id: &str, args: &ShowArgs) -> Result<()> 
     let view = build_detail_view(ctx, id, args)?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&view)?);
-    } else {
-        print_detail_human(&view);
+        return Ok(());
     }
+    print_headline(&view);
+    if args.details {
+        print_detail_metadata(&view);
+    } else {
+        print_detail_summary(&view);
+    }
+    print_detail_body(&view);
     Ok(())
 }
 
@@ -107,21 +154,24 @@ fn build_detail_view(ctx: &super::ReviewCtx, id: &str, args: &ShowArgs) -> Resul
 
     let mut threads = merge_threads(comments.threads, &draft, info.head());
     recompute_outdated(&ctx.repo, &mut threads, info.head());
+    // Counted before filtering: a `--file`-narrowed view should still be able to
+    // say how many threads the MR has in total.
+    let thread_stats = ThreadStats::of(&threads);
     apply_filters(&mut threads, args);
 
+    let current = info.current();
     Ok(DetailView {
         schema: SCHEMA,
         snapshot: SnapshotView {
-            base_sha: info
-                .current()
-                .map(|s| s.base_sha.clone())
-                .unwrap_or_default(),
-            head_sha: info.head().unwrap_or_default().to_owned(),
+            fork_sha: current.map(|s| s.fork().to_owned()).unwrap_or_default(),
+            head_sha: current.map(|s| s.head_sha.clone()).unwrap_or_default(),
         },
         snapshots: info.snapshots.clone(),
+        fetched_at: info.fetched_at,
         neighbors: neighbors(&ctx.store.list_infos(), id),
         commits: info.commits.clone(),
         files: info.files.clone(),
+        thread_stats,
         threads,
         draft: DraftView {
             verdict: draft.verdict,
@@ -288,8 +338,7 @@ fn recompute_outdated(repo: &Repository, threads: &mut [Thread], head: Option<&s
 /// The old-side line ranges a file changed across `from..to`, from the unified
 /// diff hunk headers (`@@ -start,count +… @@`).
 fn changed_old_ranges(repo: &Repository, from: &str, to: &str, path: &str) -> Vec<(u32, u32)> {
-    let range = format!("{from}..{to}");
-    repo.diff_patch(&range, Some(path))
+    repo.diff_patch(from, to, Some(path))
         .map(|patch| patch.lines().filter_map(parse_hunk_old_range).collect())
         .unwrap_or_default()
 }
@@ -350,8 +399,12 @@ fn show_inbox(ctx: &super::ReviewCtx, args: &ShowArgs) -> Result<()> {
                 }
             };
             InboxItem {
+                review: InboxReview {
+                    pending,
+                    snapshots: info.snapshots.len(),
+                    fetched_at: info.fetched_at,
+                },
                 mr: info.mr,
-                review: InboxReview { pending },
             }
         })
         .collect();
@@ -382,30 +435,188 @@ fn show_inbox(ctx: &super::ReviewCtx, args: &ShowArgs) -> Result<()> {
                 item.mr.title,
                 item.mr.author
             );
+            if args.details {
+                println!("        {}", inbox_details_line(item));
+            }
         }
     }
     Ok(())
 }
 
-fn print_detail_human(view: &DetailView) {
+/// The second line `show --details` gives each inbox row: the metadata that
+/// decides whether an MR is worth opening — where it sits, how it is labelled,
+/// and whether what we hold is current.
+fn inbox_details_line(item: &InboxItem) -> String {
+    let mut parts = vec![format!("{} -> {}", item.mr.source, item.mr.base)];
+    if !item.mr.labels.is_empty() {
+        parts.push(item.mr.labels.join(","));
+    }
+    parts.push(format!("updated {}", iso_day(&item.mr.updated_at)));
+    parts.push(match item.review.fetched_at {
+        0 => "not fetched".to_owned(),
+        at => format!(
+            "fetched {} · {} snapshot(s)",
+            age_since(at),
+            item.review.snapshots
+        ),
+    });
+    parts.join(" · ")
+}
+
+/// The date part of an ISO-8601 timestamp — enough to judge staleness at a
+/// glance, where the wall-clock time would just be column noise.
+fn iso_day(timestamp: &str) -> &str {
+    timestamp.split('T').next().unwrap_or(timestamp)
+}
+
+/// The `--details` block: everything the store knows *about* the MR, laid out
+/// for a person. Deliberately metadata only — no diff, no comment bodies. Those
+/// are what `diff` and the thread list below are for; this answers "what am I
+/// actually looking at, and how did it get here".
+fn print_detail_metadata(view: &DetailView) {
+    let field = |name: &str, value: &str| println!("  {name:<10} {value}");
+    field("author", &view.mr.author);
+    field(
+        "branches",
+        &format!("{} -> {}", view.mr.source, view.mr.base),
+    );
+    if !view.mr.labels.is_empty() {
+        field("labels", &view.mr.labels.join(", "));
+    }
+    field("url", &view.mr.web_url);
+    field("updated", &view.mr.updated_at);
+    field(
+        "fetched",
+        &match view.fetched_at {
+            0 => "never (feed entry only — `wits review fetch` for full detail)".to_owned(),
+            at => age_since(at),
+        },
+    );
+    if view.neighbors.nodes.len() > 1 {
+        let chain: Vec<String> = view
+            .neighbors
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                if i == view.neighbors.position {
+                    format!("*{id}*")
+                } else {
+                    id.clone()
+                }
+            })
+            .collect();
+        field(
+            "stack",
+            &format!(
+                "{}   ({} of {})",
+                chain.join(" -> "),
+                view.neighbors.position + 1,
+                view.neighbors.nodes.len()
+            ),
+        );
+    }
+
+    println!();
+    if view.snapshots.is_empty() {
+        field(
+            "snapshot",
+            "none fetched — `wits review fetch` for the diff",
+        );
+    } else {
+        field(
+            "snapshot",
+            &format!("the current of {} fetched", view.snapshots.len()),
+        );
+        field("  fork", short(&view.snapshot.fork_sha));
+        field("  head", short(&view.snapshot.head_sha));
+        field(
+            "  change",
+            &format!(
+                "{} commit(s), {} file(s)",
+                view.commits.len(),
+                view.files.len()
+            ),
+        );
+    }
+
+    // These head SHAs are how `diff --range`/`--against` name a review point —
+    // there is no shorthand for "the previous one" — so print them in a form
+    // that is copied straight onto a command line, and mark the rebases, the
+    // points where a plain head-to-head diff would mislead.
+    if view.snapshots.len() > 1 {
+        println!();
+        println!("  history");
+        let mut prev_fork: Option<&str> = None;
+        for (i, s) in view.snapshots.iter().enumerate() {
+            let rebased = prev_fork.is_some_and(|f| f != s.fork());
+            prev_fork = Some(s.fork());
+            let marks = [
+                (rebased, "rebased"),
+                (i + 1 == view.snapshots.len(), "current"),
+            ]
+            .iter()
+            .filter(|(on, _)| *on)
+            .map(|(_, s)| *s)
+            .collect::<Vec<_>>()
+            .join(", ");
+            let marks = if marks.is_empty() {
+                String::new()
+            } else {
+                format!("   ({marks})")
+            };
+            println!(
+                "    {:<3} {}  fork {}{marks}",
+                i + 1,
+                short(&s.head_sha),
+                short(s.fork())
+            );
+        }
+    }
+
+    println!();
+    let t = &view.thread_stats;
+    field(
+        "threads",
+        &format!(
+            "{} total · {} unresolved · {} outdated · {} awaiting you · {} pending",
+            t.total, t.unresolved, t.outdated, t.unread, t.pending
+        ),
+    );
+    println!();
+}
+
+/// The one-line identity every detail view opens with, whichever header
+/// follows it.
+fn print_headline(view: &DetailView) {
     println!(
         "{} [{}] {}",
         view.mr.display,
         state_word(view.mr.state, view.mr.draft),
         view.mr.title
     );
+}
+
+/// The default header: the three facts you need to orient, on three lines.
+/// `--details` replaces this with [`print_detail_metadata`].
+fn print_detail_summary(view: &DetailView) {
     println!(
         "  by {} · base {} · {}",
         view.mr.author, view.mr.base, view.mr.web_url
     );
     println!(
         "  snapshot {}..{}",
-        short(&view.snapshot.base_sha),
+        short(&view.snapshot.fork_sha),
         short(&view.snapshot.head_sha)
     );
     if view.neighbors.nodes.len() > 1 {
         println!("  stack: {}", view.neighbors.nodes.join(" -> "));
     }
+}
+
+/// The discussion itself — files, threads, and what the draft holds. Shared by
+/// both headers, since this is the part you actually read.
+fn print_detail_body(view: &DetailView) {
     if !view.files.is_empty() {
         println!("  files:");
         for f in &view.files {

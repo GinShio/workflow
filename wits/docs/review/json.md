@@ -35,12 +35,15 @@ The detail view, with the pending draft folded into the remote discussion.
 {
   "schema": 1,
   "mr": { "...": "MrSummary, see below" },
-  "snapshot": { "base_sha": "aaaa…", "head_sha": "9f8e…" },
-  "snapshots": [ { "base_sha": "aaaa…", "start_sha": "aaaa…", "head_sha": "9f8e…" } ],
+  "snapshot": { "fork_sha": "1a2b…", "head_sha": "9f8e…" },
+  "snapshots": [ { "fork_sha": "1a2b…", "start_sha": "1a2b…", "head_sha": "9f8e…" } ],
+  "fetched_at": 1755500000,
   "neighbors": { "position": 1, "prev_mr": "122", "next_mr": "124",
                  "nodes": ["121","122","123","124"] },
   "commits": [ { "sha": "9f8e…", "subject": "Fix the lock ordering" } ],
   "files": [ { "path": "src/x.c", "old_path": "src/old.c", "status": "R" } ],
+  "thread_stats": { "total": 12, "unresolved": 3, "resolved": 9,
+                    "outdated": 2, "unread": 1, "pending": 0 },
   "threads": [ { "...": "Thread, see below" } ],
   "draft": { "verdict": "request-changes", "summary": "…", "pending": 2 }
 }
@@ -52,14 +55,25 @@ The detail view, with the pending draft folded into the remote discussion.
 |---|---|---|
 | `schema` | int | Payload version. |
 | `mr` | object | MR metadata (table below). |
-| `snapshot.base_sha` | string | The base SHA of the current reviewed diff. |
-| `snapshot.head_sha` | string | The current head SHA under review. **Render your diff between these two.** |
-| `snapshots` | array | The full snapshot history, oldest first: `{ base_sha, start_sha, head_sha }` (a diff version). Each is a fetched, pinned review point; browse an older one with `diff --snapshot <head_sha>`. Distinct from an ad-hoc diff *range*. (When the MR was last synced is tracked once on the MR, not per snapshot.) |
+| `snapshot.fork_sha` | string | Where the MR forked from its target. |
+| `snapshot.head_sha` | string | The current head under review. **Render your diff between this and `fork_sha`.** |
+| `snapshots` | array | The full snapshot history, oldest first: `{ fork_sha, start_sha, head_sha }`. Each is a fetched, pinned review point; browse an older one with `diff --range <head_sha>`, or compare two with `diff --against <head_sha>`. Distinct from an ad-hoc diff *range*. (When the MR was last synced is tracked once on the MR, not per snapshot.) |
+| `fetched_at` | int | Unix seconds of the last `fetch` that synced this MR; `0` for a feed-only entry. |
 | `neighbors` | object | This MR's place in its stack (table below). |
-| `commits` | array | Commits in `base..head`, oldest first: `{ sha, subject }`. |
+| `commits` | array | Commits in `fork..head`, oldest first: `{ sha, subject }`. |
 | `files` | array | Files the MR touched: `{ path, old_path?, status }`. `status` is git's letter (`A`/`M`/`D`/`R`/`C`); `old_path` present on a rename/copy. |
-| `threads` | array | Every discussion, remote + pending, merged (table below). |
+| `thread_stats` | object | Counts over **all** threads, before the display filters narrow `threads`: `total`, `unresolved`, `resolved`, `outdated`, `unread` (someone else commented last), `pending` (draft-only). |
+| `threads` | array | Every discussion, remote + pending, merged (table below) — narrowed by any filter flags. |
 | `draft` | object | The pending review after append-only compaction: `verdict?`, effective `summary?`, and `pending` — a count of live actions plus one if a verdict is set. |
+
+Why `fork_sha` and no `base_sha`: the forges disagree about what "base" means.
+GitLab reports the merge base; GitHub reports the target branch's current tip.
+Diffing against a tip that has moved since the fork shows the target's own
+commits as inverted hunks, so `fetch` computes `merge-base(target, head)` once
+and stores that instead. The forge's own base is an input to a fetch, not a
+property of a review point, and keeping it only invited it to be mistaken for a
+diff endpoint. GitLab's comment `position` still gets a `base_sha` at submit —
+`fork_sha`, which on GitLab is the same commit.
 
 ### `mr` object
 
@@ -132,7 +146,7 @@ level, plus a `review` block.
       "base": "main", "source": "fix-lock", "head_sha": "9f8e…",
       "updated_at": "2026-07-01T12:00:00Z", "labels": ["bug"],
       "web_url": "https://…/123",
-      "review": { "pending": 2 } }
+      "review": { "pending": 2, "snapshots": 3, "fetched_at": 1755500000 } }
   ]
 }
 ```
@@ -141,16 +155,38 @@ level, plus a `review` block.
 |---|---|---|
 | (mr fields) | — | Same as the `mr` object above, flattened. |
 | `review.pending` | int | Count of live unsubmitted actions in this MR's draft (plus one for a set verdict). |
+| `review.snapshots` | int | Review points fetched so far; `0` for a feed-only row never fully fetched. |
+| `review.fetched_at` | int | Unix seconds of the last sync; `0` for a feed-only row. |
 
 Items are sorted by `updated_at`, newest first.
 
 ---
 
-## `diff <mr> --json` — diff coordinates
+## `diff <mr> --json` — range coordinates
+
+Two shapes, told apart by `mode` and by whether `from` is present. The tool
+renders no diff — these are the coordinates an editor renders its own against.
+
+Both shapes describe an end with the same **end object**:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `fork_sha` | string | Where this series starts. Always an ancestor of `head_sha`. |
+| `head_sha` | string | Its tip. **Render your diff between these two.** |
+| `range` | string | `fork_sha..head_sha`, spelled out. |
+| `review_point` | bool | True when this end is a fetched review point, whose fork was pinned at fetch; false for a hand-written range, whose fork was derived on the spot. |
+
+A spec resolves to an end in one of two ways: a fetched review point's head SHA
+reuses the fork point recorded when its objects were pinned, and `A..B` resolves
+to `merge-base(A,B)..B`. Nothing else is accepted — a bare revision would need the
+tool to guess a base for it.
+
+### `mode: "range"` — one range described
 
 ```json
-{ "schema": 1, "mr": "123", "range": "aaaa…..9f8e…",
-  "base_sha": "aaaa…", "head_sha": "9f8e…",
+{ "schema": 1, "mr": "123", "mode": "range",
+  "to": { "fork_sha": "1a2b…", "head_sha": "9f8e…",
+          "range": "1a2b…..9f8e…", "review_point": true },
   "commits": [ { "sha": "…", "subject": "…" } ],
   "files": [ { "path": "src/x.c", "status": "M" } ] }
 ```
@@ -158,13 +194,48 @@ Items are sorted by `updated_at`, newest first.
 | Field | Type | Meaning |
 |---|---|---|
 | `mr` | string | The MR number. |
-| `range` | string | The resolved range (`all` expands to `base..head`). |
-| `base_sha`, `head_sha` | string | The two SHAs to diff against. |
-| `commits` | array | Commits in the range: `{ sha, subject }`. |
+| `to` | object | The range described (end object above). |
+| `commits` | array | Commits in the range, oldest first: `{ sha, subject }`. |
 | `files` | array | Files touched in the range: `{ path, old_path?, status }`. |
 
-The tool renders no diff — this gives the coordinates so the editor renders its
-own against `base_sha`/`head_sha`.
+### `mode: "interdiff"` — two ranges compared
+
+What `--against` produces: the "what changed since I last looked" answer, with the
+base's own progress kept out of it. Neither end has to be a review point.
+
+```json
+{ "schema": 1, "mr": "123", "mode": "interdiff",
+  "from": { "fork_sha": "1a2b…", "head_sha": "5c6d…",
+            "range": "1a2b…..5c6d…", "review_point": true },
+  "to":   { "fork_sha": "3e58…", "head_sha": "9f8e…",
+            "range": "3e58…..9f8e…", "review_point": true },
+  "rebased": true,
+  "commits": [
+    { "pairing": "unchanged", "old_sha": "a1a3…", "new_sha": "be3e…", "subject": "Add a file" },
+    { "pairing": "reworked",  "old_sha": "c25d…", "new_sha": "168d…", "subject": "Edit the header" },
+    { "pairing": "added",     "new_sha": "fab7…", "subject": "Handle the null case" },
+    { "pairing": "dropped",   "old_sha": "cde3…", "subject": "Drop the workaround" }
+  ],
+  "files": [ { "path": "src/x.c", "status": "M" } ] }
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `from`, `to` | object | The two ends (end object above); `from` is the older side. |
+| `rebased` | bool | The fork point moved between them — exactly when a plain head-to-head diff misleads. |
+| `commits` | array | The commits paired across the rebase (table below). |
+| `files` | array | Files that really differ: those touched by either range. A file neither range touches can only differ because the base moved, so it is dropped. |
+
+| `pairing` | Meaning |
+|---|---|
+| `unchanged` | The same patch on both sides — carried through the rebase untouched. |
+| `reworked` | Paired, but the patch differs: the real edit, or a conflict resolution. |
+| `added` | Only in `to` — a new commit. |
+| `dropped` | Only in `from` — a commit that went away. |
+
+`old_sha`/`new_sha` are omitted on the side a commit does not exist. Pairing
+comes from `git range-diff`, biased toward matching so a small amend reads as
+`reworked` rather than a `dropped` plus an unrelated `added`.
 
 ---
 

@@ -12,7 +12,7 @@ language, and the resolution rules. For a gentle introduction read
 
 ```
 project [<name|path>] [--check] [--focus <repo>] [profile flags]
-build   [<name|path>] [--focus <repo>] [profile flags] [build options]
+build   [<name|path>] [--focus <repo>] [profile flags] [--detach] [build options]
 update  [<name|path>] [--with-borrowed]
 
 # --with-borrowed also refreshes repos declared with `from` (§9.4), which update
@@ -86,16 +86,17 @@ These set the `Profile` axes and therefore change how paths
 queries (`build-dir`, …) as well as `build` — a script can resolve the effective
 path for a materialised checkout without building.
 
-### 1.3 Build options (affect command steps only)
+### 1.3 Build-only flags
 
 | Flag | Alias | Meaning |
 |---|---|---|
+| `--detach` | | Build the selected detached `HEAD` as-is, without a branch identity or checkout switch. Mutually exclusive with `--branch`; an attached selected checkout is an error. |
 | `--config-only` | | Configure only; do not compile. |
 | `--build-only` | | Compile only; assume already configured (errors if not). |
 | `--reconfig` | | Delete the build dir and configure fresh. |
 | `--install` | | Add an install step after building. |
 | `--install-dir <DIR>` | | Override the resolved `install_dir` prefix (the backend's install-prefix, e.g. cmake's `CMAKE_INSTALL_PREFIX`). Affects configure as well as install. |
-| `--build-dir <DIR>` | | Override the resolved `build_dir`, ignoring the build repo's template — e.g. to build a `review checkout` in an isolated dir. The symmetric partner of `--install-dir`; verbatim, highest priority. |
+| `--build-dir <DIR>` | | Override the resolved `build_dir`, ignoring the focus/anchor template — e.g. to build a `review checkout` in an isolated dir. The symmetric partner of `--install-dir`; verbatim, highest priority. |
 | `--uninstall` | | Reverse an install (backend-driven; see §7.3). Mutually exclusive with a build. |
 | `--target <T>` | `-t` | Build a specific target (where the backend supports it). |
 | `--extra-config-args <A>…` | `-Xconfig,<arg>` | Raw args appended to the configure command, verbatim. |
@@ -331,7 +332,7 @@ repos.<name>.*             # any repo by explicit name; same fields as repo.*
 org.environment.<K>        # org entry (§2.1); inherited, and nameable here too
 org.definitions.<K>        # org entry (§2.1); inherited, and nameable here too
 repos.<name>.workdir       # effective checkout dir for the named repo (§9)
-branch.{ raw, slug }       # raw = branch name; slug = filesystem-sanitised
+branch.{ raw, slug }       # attached builds only: raw branch + filesystem slug
 build_type
 toolchain.{ name, cc, cxx, rustc, ar, nm, ranlib, strip,
             linker, launcher, c_flags, cxx_flags, link_flags }
@@ -344,6 +345,9 @@ spec.*                     # CLI-registered vars (--spec K=V); required if refer
 - `repo` is a **relative** alias for the repo being resolved; use `repos.<name>`
   to reference any other repo.
 - There is no bare `{{branch}}`; use `{{branch.raw}}` or `{{branch.slug}}`.
+- An explicit `build --detach` does not bind `branch.*`. References therefore
+  fail hard unless the corresponding path is replaced by `--build-dir` /
+  `--install-dir`.
 - `repo.upstream` falls back to `repo.origin` when no upstream is declared.
 - `spec.*` holds only what `--spec K=V` supplied on the command line, so a
   template referencing `{{spec.mr}}` fails loudly unless the caller passes it —
@@ -407,8 +411,8 @@ recursive delete, because an install prefix may be shared.
 ## 8. `info --check` validation
 
 Reports (does not fix): required fields present (`repos.main`, `main_branch` for
-own-git repos, the build repo's `build_dir` plus the project's `build_system`
-when building); preset inheritance and
+own-git repos, a focus/anchor `build_dir` plus the project's `build_system` when
+building); preset inheritance and
 template reference cycles; template resolvability against a representative
 context; referenced toolchains exist; when a toolchain declares `supports`, that
 it covers the project's build system; and, for a cloned checkout, that a declared
@@ -438,11 +442,11 @@ deliberately knows nothing of which build systems are implemented.
 | `skip` | list\<string\> | no | Paths this checkout never materialises: ordered gitignore-style patterns where `!` re-includes. **Not templated.** See §9.5. |
 | `main_branch` | string | own-git repos | The branch `update` fast-forwards. Not allowed for `subtree`. |
 | `anchor` | string | no | Repo whose `path` is this build's source/base; unset → self. |
-| `source_dir` | template | no | Where the backend configures from (the top-level `CMakeLists.txt`/`meson.build`/…) when it is not the checkout root. Read from the **build repo** (the focus's `anchor`, or the focus); defaults to its `repos.<name>.workdir`. E.g. `"{{repos.main.workdir}}/src"`. Only the configure source changes — the named `workdir` still anchors `build_dir`/`install_dir` and branch identity. |
-| `build_dir` | template | when building | Where the backend writes its build tree. Read from the **build repo**, same owner as `source_dir`. A repo that is never the build base omits it. |
-| `install_dir` | template | no | Install prefix. Templated; same owner as `build_dir`. |
+| `source_dir` | template | no | Where the backend configures from (the top-level `CMakeLists.txt`/`meson.build`/…) when it is not the checkout root. Read from the **anchor** (or the focus when self-anchored); defaults to its `repos.<name>.workdir`. E.g. `"{{repos.main.workdir}}/src"`. |
+| `build_dir` | template | when building | Where the backend writes its build tree. The focus's value overrides its anchor's default; CLI overrides both. |
+| `install_dir` | template | no | Install prefix. Templated; the same focus-over-anchor precedence as `build_dir`. |
 | `branch_strategy` | string | no | `in-place` (default) \| `worktree` \| `hybrid`. Worktree and hybrid use a bare clone. |
-| `worktree_dir` | template | worktree/hybrid | Where a branch's worktree belongs. Hybrid first discovers an existing checkout and uses this only as the fallback/suggested path. A relative result is anchored beside `repo.path`, never at process cwd. |
+| `worktree_dir` | template | worktree/hybrid; optional otherwise | Where a worktree belongs. Attached worktree/hybrid builds use it for the target branch (hybrid first discovers an existing checkout). During `build --detach`, a template resolvable without `branch.*` is a fixed checkout selector even for an in-place entry; a branch-keyed template falls back to the caller's/primary checkout. A relative result is anchored beside `repo.path`, never at process cwd. |
 | `bootstrap_worktree_dir` | template | hybrid; optional for worktree | Fixed initial `main_branch` checkout created after a bare clone. Must not reference `branch.*`. Worktree defaults to `worktree_dir` rendered for `main_branch`; an explicit relative value is resolved beside that rendered main path. |
 
 **Kind is inferred, not declared**: a non-nested `path` → `standalone`; a nested
@@ -501,11 +505,24 @@ tree at all.
   returns `worktree_dir` as the suggested path; `build` then fails with the
   creation command rather than creating it.
 
+For `build --detach`, these branch rules are replaced by the fixed-selector
+rule: a `worktree_dir` that resolves without `branch.*` wins regardless of
+strategy; otherwise the caller's checkout or the repo's primary checkout wins.
+
 ### 9.3 Branch identity
 
-The identity is the branch name of the nearest own-git repo in the
-`focus → anchor` chain. A detached HEAD is unsupported. `branch.slug` replaces
-every character outside `[A-Za-z0-9._-]` (including `/`) with `_`.
+The normal identity is the branch name of the nearest own-git repo in the
+`focus → anchor` chain. `branch.slug` replaces every character outside
+`[A-Za-z0-9._-]` (including `/`) with `_`.
+
+`build --detach` is the explicit branchless exception. It requires that
+identity repo's selected checkout to have a real detached `HEAD`, consumes the
+selected checkout of each repo without switching, and exposes no `branch.*`
+variables. A declared `worktree_dir` that resolves without `branch.*` selects
+that repo's checkout first; otherwise resolution falls back to the caller's or
+primary checkout. Without the flag, encountering a detached `HEAD` remains a
+hard error naming `--detach` and `--branch`. `--work-dir` only overrides the
+build repo's checkout location; it neither implies nor replaces `--detach`.
 
 `branch_strategy` is read from the **build repo** (the anchor) only, as are
 `source_dir`, `build_dir`, and `install_dir`. A
@@ -529,6 +546,12 @@ bootstrap_worktree_dir   skip   remotes   hooks
 
 What stays the borrower's: `anchor`, `source_dir`, `build_dir`, `install_dir`,
 `presets`.
+
+That list is the complete local override surface. In particular, a source
+repo's build/install paths do **not** travel: they describe building that
+project, while the borrower may consume the same checkout through a different
+anchor. A borrowed focus may declare local build/install paths; they override
+the anchor defaults exactly like any other focus.
 
 - The resolved `path` is the source's **absolute** path, so a nested source
   resolves against its own project's root.

@@ -147,13 +147,22 @@ pub struct StoredFile {
     pub status: String,
 }
 
-/// A git range's commits (oldest first) and changed files, lifted into the
-/// stored review shapes. The single place `repo.commits`/`changed_files` become
+/// A series' commits (oldest first) and changed files, lifted into the stored
+/// review shapes. The single place `repo.commits`/`changed_files` become
 /// [`StoredCommit`]/[`StoredFile`] — shared by `fetch` (a snapshot's artifacts)
-/// and `diff` (an ad-hoc range), so the mapping can't drift between them.
-pub fn range_artifacts(repo: &Repository, range: &str) -> (Vec<StoredCommit>, Vec<StoredFile>) {
+/// and `diff` (any range), so the mapping can't drift between them.
+///
+/// `from` must be an ancestor of `to`, which every caller guarantees by
+/// resolving through a fork point first: the commit list and the file list would
+/// otherwise disagree, `git log` excluding a divergent side that `git diff`
+/// replays backwards.
+pub fn range_artifacts(
+    repo: &Repository,
+    from: &str,
+    to: &str,
+) -> (Vec<StoredCommit>, Vec<StoredFile>) {
     let commits = repo
-        .commits(range)
+        .commits(&format!("{from}..{to}"))
         .into_iter()
         .map(|c| StoredCommit {
             sha: c.hash,
@@ -161,7 +170,7 @@ pub fn range_artifacts(repo: &Repository, range: &str) -> (Vec<StoredCommit>, Ve
         })
         .collect();
     let files = repo
-        .changed_files(range)
+        .changed_files(from, to)
         .into_iter()
         .map(|f| StoredFile {
             path: f.path,
@@ -172,25 +181,72 @@ pub fn range_artifacts(repo: &Repository, range: &str) -> (Vec<StoredCommit>, Ve
     (commits, files)
 }
 
+/// One fetched, pinned review point: `fork`, `start`, `head`.
+///
+/// Three SHAs describe everything, and the forge's own `base` is deliberately
+/// **not** among them. The forges do not agree on what "base" means — GitLab's
+/// `diff_refs.base_sha` is already the merge base, GitHub's `baseRefOid` is the
+/// *current tip* of the target branch — so it is an input to a fetch, not a
+/// property of a review point. Persisting it invited exactly one bug: a value
+/// that is not an ancestor of `head`, silently standing in as a diff endpoint.
+///
+/// [`fork_sha`](Self::fork_sha) is what a review point actually needs:
+/// `merge-base(target, head)`, computed once at fetch from the objects it just
+/// pinned, uniform across forges, and **always an ancestor of `head`** — which
+/// is what makes `fork..head` a patch series rather than a two-endpoint tree
+/// compare. It is also what GitLab's comment `position` wants for its
+/// `base_sha`, since on GitLab the two are the same commit.
+///
+/// [`start_sha`](Self::start_sha) is GitLab's separate diff-version start; on
+/// GitHub it mirrors the fork, that forge having no such notion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Snapshot {
+    /// Where the series left its target. The diff endpoint, and GitLab's
+    /// `position.base_sha`.
+    pub fork_sha: String,
+    /// GitLab's `position.start_sha`; a copy of the fork on GitHub.
+    pub start_sha: String,
+    pub head_sha: String,
+}
+
+impl Snapshot {
+    /// Where this snapshot's diff starts.
+    pub fn fork(&self) -> &str {
+        &self.fork_sha
+    }
+
+    /// The forge-facing diff version, rebuilt for `submit`. GitLab's `position`
+    /// wants a `base_sha`, and on GitLab that *is* the merge base — the very
+    /// commit we stored as the fork — so nothing is lost by not keeping a
+    /// separate copy.
+    pub fn version(&self) -> DiffVersion {
+        DiffVersion {
+            base_sha: self.fork_sha.clone(),
+            start_sha: self.start_sha.clone(),
+            head_sha: self.head_sha.clone(),
+        }
+    }
+}
+
 /// `info.json` — the MR's necessary metadata and its snapshot history. A pure
 /// **cache**: `fetch` overwrites it, so it is not meant to be hand-edited. A feed
 /// refresh fills only `mr`, leaving the snapshot history empty until a full
 /// `fetch <mr>`. `commits`/`files` describe the current (latest) snapshot.
 ///
-/// A *snapshot* in the history is exactly a [`DiffVersion`] — the `base/start/
-/// head` triple we diff against and pin (`refs/wits/review/*`), distinct from an
-/// ad-hoc diff *range* (a throwaway query). When each was first seen is
-/// deliberately **not** stored per-snapshot: dormancy is about the last time the
-/// MR was synced, so that lives once on [`Info::fetched_at`] and is refreshed on
-/// every fetch — a re-fetch of an unchanged head must not look dormant.
+/// A *snapshot* is a [`Snapshot`] — a review point we have fetched and pinned
+/// (`refs/wits/review/*`), distinct from an ad-hoc diff *range* (a throwaway
+/// query). When each was first seen is deliberately **not** stored per-snapshot:
+/// dormancy is about the last time the MR was synced, so that lives once on
+/// [`Info::fetched_at`] and is refreshed on every fetch — a re-fetch of an
+/// unchanged head must not look dormant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Info {
     pub schema: u32,
     pub mr: MrSummary,
     /// Every review point we have fetched and pinned, oldest first; the last is
-    /// the current one. Each is a `base/start/head` diff version.
+    /// the current one.
     #[serde(default)]
-    pub snapshots: Vec<DiffVersion>,
+    pub snapshots: Vec<Snapshot>,
     /// Unix time (seconds) of the last `fetch` that synced this MR — updated on
     /// *every* fetch, even when the head hasn't moved, so `prune`'s dormancy
     /// reflects real staleness rather than when a snapshot first appeared. `0`
@@ -203,7 +259,7 @@ pub struct Info {
 
 impl Info {
     /// The current (latest) snapshot, if any has been fetched.
-    pub fn current(&self) -> Option<&DiffVersion> {
+    pub fn current(&self) -> Option<&Snapshot> {
         self.snapshots.last()
     }
 
@@ -213,11 +269,22 @@ impl Info {
         self.current().map(|s| s.head_sha.as_str())
     }
 
-    /// Record a freshly-fetched snapshot, appending it only when the head moved
-    /// (so a re-fetch of an unchanged MR doesn't grow the history).
-    pub fn record_snapshot(&mut self, version: DiffVersion) {
-        if self.snapshots.last().map(|s| &s.head_sha) != Some(&version.head_sha) {
-            self.snapshots.push(version);
+    /// The snapshot whose head SHA starts with `prefix` — how a user names a
+    /// historical review point on the command line.
+    pub fn snapshot_matching(&self, prefix: &str) -> Option<&Snapshot> {
+        self.snapshots
+            .iter()
+            .find(|s| s.head_sha.starts_with(prefix))
+    }
+
+    /// Record a freshly-fetched snapshot, appending it only when the head moved.
+    /// A re-fetch of an unchanged head instead *refreshes* the existing entry, so
+    /// a review point re-derived from better objects replaces the older reading
+    /// without growing the history.
+    pub fn record_snapshot(&mut self, snapshot: Snapshot) {
+        match self.snapshots.last_mut() {
+            Some(last) if last.head_sha == snapshot.head_sha => *last = snapshot,
+            _ => self.snapshots.push(snapshot),
         }
     }
 }

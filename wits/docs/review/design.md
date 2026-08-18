@@ -77,8 +77,8 @@ wits review fetch  [mr | --feed name] [--stack auto|all|none]   # an MR+stack (f
 wits review submit [mr | --stack | --all]   # merge + flush the local.json draft, batched
 
 # Reading — from the local files, no network; each supports --json.
-wits review show  [mr] [--outdated|--resolved|--unread|--file P]   # inbox, or one MR (merged)
-wits review diff  <mr> [--range S | --snapshot SHA] [--patch|--json]   # diff coordinates
+wits review show  [mr] [--details] [--outdated|--resolved|--unread|--file P]   # inbox, or one MR (merged)
+wits review diff  <mr> [--range SPEC] [--against SPEC] [--patch[=2way|3way]|--json]   # one range, or two compared
 wits review draft <mr> [FILE|-] [--dedup]                          # show, append, or compact local.json
 
 # Materialize / housekeep.
@@ -104,7 +104,17 @@ Notes on shape, each with its reason:
   the members a feed's filter missed are pulled in so a stack is never left half
   in the store.
 - **`show` with no MR is the inbox; with an MR it is the merged detail view.** No
-  separate `list`; the human print is secondary to `--json` (§12).
+  separate `list`; the human print is secondary to `--json` (§12). `--details` is
+  the *human's* `--json`: the same metadata, laid out to read — and metadata
+  only, since a person who wants the diff runs `diff` and a person who wants the
+  discussion already has the thread list.
+- **`diff` takes ranges, and the number of them is the question** (§5.1). One
+  range describes a series; two compare them modulo their bases — the force-push
+  question. `--patch[=2way|3way]` is orthogonal: the count decides *what* is
+  asked, the mode decides *how many things are printed*. Excluding the base is
+  not a rendering choice at all — it falls out of standing both sides on one
+  base (§5.1) — so there is no renderer to select and no third-party tool in the
+  path.
 - **Navigation is a flag on `checkout`.** `--next`/`--prev` walk the stack from
   the last checkout (§13); `show`/`diff` take an explicit `<mr>`, since the editor
   computes "next" from the `neighbors` block `show` returns.
@@ -179,30 +189,166 @@ Four types, no more, and each maps onto something a forge can actually represent
 
 ### 5.1 `Snapshot` — outdating made structural
 
-A review is always pinned to a **snapshot** — the `base/head` pair we diff and
-the SHAs comments anchor against. It needs no type of its own: a snapshot *is* a
-`DiffVersion { base_sha, start_sha, head_sha }` (the same triple the forge
-boundary speaks), and the history is a `Vec<DiffVersion>` on `info.json`. When
-each was first synced is deliberately not per-snapshot — that would make a
-re-fetch of an unchanged head look dormant — so the last-sync time lives once on
-the MR (`Info::fetched_at`) and `prune` reads it. **Branch outdate** is then just
-`reviewed.head_sha != current head`; **comment outdate** is just "the anchored
-line does not exist at the current head." Neither needs a state machine; both are
-inferences from "the pinned snapshot is no longer the tip." We never assume the
-tip is latest, so submitting against an old snapshot is the normal path, not an
-error path (§6).
+A review is always pinned to a **snapshot** — the pair of commits we diff and the
+SHAs comments anchor against:
 
-For GitLab, a snapshot also carries the forge's version SHAs
-(`base_sha / start_sha / head_sha`) captured at `fetch`, because GitLab's comment
-`position` requires them and they are not derivable from local git alone (§10,
-capability A1).
+```
+Snapshot { fork_sha, start_sha, head_sha }
+```
+
+The history is a `Vec<Snapshot>` on `info.json`. When each was first synced is
+deliberately not per-snapshot — that would make a re-fetch of an unchanged head
+look dormant — so the last-sync time lives once on the MR (`Info::fetched_at`)
+and `prune` reads it. **Branch outdate** is then just `reviewed.head_sha !=
+current head`; **comment outdate** is just "the anchored line does not exist at
+the current head." Neither needs a state machine; both are inferences from "the
+pinned snapshot is no longer the tip." We never assume the tip is latest, so
+submitting against an old snapshot is the normal path, not an error path (§6).
+
+**Why the forge's `base` is not among them.** The forges do not agree on what
+`base` means: GitLab's `diff_refs.base_sha` is already the merge base, GitHub's
+`baseRefOid` is the target branch's current tip. Diffing against a tip that has
+moved replays the target's own progress as inverted hunks, and the busier the
+target, the more of the review is somebody else's work. So the forge's base is an
+*input to a fetch*, not a property of a review point — and persisting it invited
+exactly one bug, found on a live MR: a recorded value that was not an ancestor of
+its head, quietly serving as a diff endpoint and reporting 22 changed files where
+4 had changed.
+
+`fork_sha` is what a review point actually needs: one `merge-base(target, head)`
+at fetch, over objects just pinned. It is uniform across forges, **always an
+ancestor of the head** (so it stays resolvable exactly as long as the snapshot
+does, and `fork..head` is a series rather than a two-endpoint compare), and it
+makes that range mean *the MR's own change* everywhere — the stored commit and
+file lists, `diff`, `--patch`, `show`. It is also what GitLab's `position` wants
+for its `base_sha` (§10, capability A1), those being the same commit there, so
+dropping the separate copy costs the forge boundary nothing. `start_sha` stays
+because GitLab's diff version genuinely has one; on GitHub it mirrors the fork.
+
+Getting the fork right is therefore load-bearing, and there is no second chance:
+nothing downstream keeps the forge's base to re-derive from. `fetch` acquires the
+target's objects deliberately — the bare commit first, then the target branch by
+name, which every server allows — and **fails** rather than recording a snapshot
+whose fork it could not resolve. A silently empty fork was how the live bug got
+in; an error is the honest alternative.
 
 A **snapshot is a distinct property from a diff range**: a snapshot is a
 historical identity whose objects are pinned (§4), whereas a range is a throwaway
 query. So `info.json` keeps the *history* of snapshots (each `fetch` that sees a
-new head appends one), not just the latest — which is what lets you browse an
-outdated context freely: `diff --snapshot <sha>` resolves to that pinned point's
-`base..head`, and `show` lists the history for an editor to switch between.
+new head appends one), not just the latest. That history is what makes two things
+possible, and they are different questions:
+
+- **Browse an older review point** — `diff --range <head>` resolves to that
+  pinned point's `fork..head`. This is "show me what I reviewed."
+- **Compare two ranges** — `diff --against <spec>` is the question a force-push
+  raises in a stack-based workflow: *what did the author actually change, as
+  opposed to what the rebase dragged in?* Because each end carries its own fork
+  point, each side's contribution is known independently of the other's base,
+  which is the whole precondition for subtracting the base out (below).
+
+**An end of a comparison is a range, not a commit.** This is forced, not
+stylistic: subtracting the base requires knowing what each side does *relative to
+its own base*, and only a range carries that. A bare commit makes the tool guess a
+base — and a guess in the interface is a hidden assumption that no amount of
+documentation fixes. So the spec grammar has exactly two forms, one of which is
+git's own:
+
+- a fetched review point's head SHA, which expands to its pinned `fork..head`.
+  The one shorthand, and only a shorthand: `<base>..<head>` lands in the same
+  place.
+- `A..B`, resolved to `merge-base(A,B)..B`.
+
+Deriving the merge base **unconditionally** is what makes the second form safe
+rather than surprising. Where `A` is an ancestor of `B` — the common case —
+`merge-base(A,B)` *is* `A`, so it is a no-op. The two only diverge when `A` is on
+a different line, and there the two-endpoint `git diff A..B` is exactly the
+inverted-hunk answer this whole design exists to avoid. `git log` agrees either
+way, since `A`'s divergent commits are unreachable from `B` and so were never in
+`A..B` to begin with. Commits and diff therefore describe the same series, which
+is why a separate `A...B` spelling would add syntax and no meaning.
+
+Everything else is refused: a bare revision, a half-written `..B`, `A...B`. That
+also removes the last thing needing a "target" to measure against, so two
+explicit ranges consult no review state at all — which is what makes the
+cherry-pick comparison a first-class use rather than something riding on an MR's
+snapshot history.
+
+#### Subtracting the base: the modulo-base reduction
+
+Excluding the base is [`diff-modulo-base`](https://github.com/nhaehnle/vctools)'s
+idea, reimplemented in `cmd/review/modulo.rs` rather than shelled out to. A hunk
+of the target diff survives only if one of the two series is responsible for
+something in it; otherwise both heads hold unmodified base content there and the
+difference can only be the base having moved.
+
+Two tests, cheapest first. The **range** test is an interval intersection over
+hunk headers, because the coordinates already agree:
+
+```
+target hunk's old side == from.head lines == from's own diff, new side
+target hunk's new side == to.head   lines == to's   own diff, new side
+```
+
+with a small fuzz margin for edits landing just outside a neighbouring hunk's
+context. No content matching, no similarity scoring.
+
+The **attribution** test then asks who wrote each changed line, and it is not
+redundant: a hunk can sit squarely inside a series' edit and still contain
+nothing but base movement, when both review points contribute byte-identical work
+there and the base changed a neighbouring line. Range overlap cannot tell that
+apart. So an added line counts as the series' doing when the newer series added
+it, or the older one removed it; a removed line symmetrically; and a hunk with no
+such line is dropped. This matches on line *text*, since a line's position in the
+target diff says nothing about who is responsible for it — which means
+coincidental matches err towards keeping the hunk, the safe direction.
+
+Measured on the MR that drove this work: the range test alone reduced 24,767
+lines across 353 files to 1,456 across 3; the attribution test removed the third
+file, whose sole difference was a line the base had added beside the author's
+unchanged one, landing on 1,444 across 2 — the same two files the upstream tool
+keeps.
+
+**A merge-based alternative was tried and rejected.** Replaying the older series
+onto the newer's base (`git merge-tree --write-tree`) and diffing the trees is
+*exact* — base movement cancels by construction rather than by judgement, and it
+even catches the reverted-base-change case below. But it fails where it is needed
+most: when the base rewrote lines the series also touches, the replay conflicts,
+and "this series on that base" genuinely has no answer. Falling back to
+`git range-diff` there turned out to be worse than useless on a real MR — it
+printed 32 lines that silently **omitted three added commits' patches entirely**.
+A comparison that is exact when the change is easy and absent when it is hard has
+the incentives exactly backwards. The reduction always terminates, always emits a
+valid patch, and is bounded by the target diff; an overlapping base change is
+simply kept, which is the conflict-resolution zone a reviewer wants anyway.
+
+The reduction's own limit is narrower and is surfaced rather than hidden: when
+the two heads have identical content there is no target diff to reduce, so a
+rebase that reverted one of the base's changes yields nothing. That is checked
+against the commit pairing and reported, and `3way` — which works from each
+series' own diff rather than from the difference between heads — does show it.
+
+The same reduction drives the coordinate view's file list, so `--patch` and the
+`files` array cannot disagree about what changed.
+
+`3way`'s base section is restricted, by file, to what the two series touch. Left
+whole it is the trunk's entire progress — 23,000 lines on the MR that motivated
+this — which does not show the base's change so much as bury it.
+
+Commit pairing is `git range-diff`'s, biased toward pairing
+(`--creation-factor=90`, against git's 60) because in the amend-and-force-push
+loop a one-line fix to a small commit otherwise reads as a deletion plus an
+unrelated addition — hiding the very edit being asked for. The two failure
+directions are not symmetric: under-pairing loses the information silently,
+over-pairing shows up as an obviously enormous "changed" hunk.
+
+`--patch[=2way|3way]` is the only rendering knob, and it is about **how many
+things are shown**. `2way` is one diff: a range's own patch, or the base-free
+older-to-newer diff for two. `3way` prints the three constituent diffs in full
+and labelled (A against its base, B against its base, and the base's own change
+restricted to the files under review) — the raw material rather than the
+conclusion, for seeing a base change whole or for reading the identical-heads
+case `2way` cannot show; it needs two ranges, so one range is an error rather
+than two blank sections.
 
 ### 5.2 `Anchor` — file coordinates, computed locally, translated at submit
 
@@ -637,7 +783,13 @@ The editor is a client of the tool, and the boundary is two contracts:
   Even a large MR is a small JSON document and cheap I/O; pagination is not worth
   the complexity. What is worth it is *filtering* — `--outdated`, `--resolved`,
   `--unread`, `--file` — so the editor (or a terminal user) can pull just the
-  threads that matter.
+  threads that matter. `thread_stats` is counted *before* filtering, so a
+  narrowed view still reports the true shape of the discussion.
+- **`--details` is this contract's human twin.** The same facts, laid out to
+  read rather than to parse, so a terminal user is not asked to pipe `--json`
+  through `jq` to learn when an MR was last synced or whether the author rebased.
+  It is metadata only — the diff has its own verb and the threads print below —
+  which is what keeps it a *view* of the payload rather than a second dump of it.
 
 The exact, field-by-field payloads (`show` detail and inbox, `diff`, and the
 `local.json` write contract) are specified in `docs/review/json.md`; this section
@@ -784,7 +936,12 @@ dormant ones) and lets git GC the objects.
 
 ## 17. What is delivered, and future work
 
-Delivered: forge-first acquisition with object pinning and **snapshot history**,
+Delivered: forge-first acquisition with object pinning and **snapshot history**
+(each point carrying a locally-derived **fork point**, so a review diff is the
+MR's own change on every forge — §5.1), **range-based `diff`** where two ranges
+compare modulo their bases (`diff --against`, the base subtracted by the
+diff-modulo-base reduction, reimplemented in-tree — no third-party tool), a
+human-readable **`show --details`** metadata view,
 the snapshot/anchor/thread model with a hand-edited `local.json` draft (plus a
 `draft <mr> -` ingest verb so the tool owns the write), per-comment snapshot
 anchoring with **cross-snapshot drafting on GitLab**, the three-file store on the

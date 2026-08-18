@@ -14,7 +14,7 @@ use wits_util::forge::{BatchAction, DiffVersion, Forge, ReviewBatch};
 use wits_util::git::Repository;
 use wits_util::log as wits_log;
 
-use super::model::{comment_anchor, Action, Local, StoredFile};
+use super::model::{comment_anchor, Action, Local, Snapshot, StoredFile};
 use super::{online, Online, SubmitArgs};
 
 pub fn run(repo: &Repository, args: &SubmitArgs) -> Result<()> {
@@ -126,9 +126,12 @@ fn submit_draft(ctx: &Online, id: &str, mut local: Local, stale: Vec<String>) ->
     let info = store
         .load_info(id)
         .with_context(|| format!("MR {id} isn't fetched — run `wits review fetch {id}` first"))?;
+    // The forge's own diff version, verbatim — GitLab's comment `position`
+    // requires these exact SHAs, so the locally-derived fork point stays out of
+    // everything that crosses the forge boundary.
     let version = info
         .current()
-        .cloned()
+        .map(|s| s.version())
         .filter(|v| !v.head_sha.is_empty())
         .with_context(|| {
             format!(
@@ -249,7 +252,7 @@ fn action_key(action: &Action) -> &str {
 fn build_batch(
     local: &Local,
     version: &DiffVersion,
-    snapshots: &[DiffVersion],
+    snapshots: &[Snapshot],
     files: &[StoredFile],
     forge: &dyn Forge,
     stale: Vec<String>,
@@ -322,12 +325,12 @@ fn build_batch(
 /// triple. An unset or un-found `commit` falls back to the current version.
 fn comment_version(
     action_commit: Option<&str>,
-    snapshots: &[DiffVersion],
+    snapshots: &[Snapshot],
     version: &DiffVersion,
 ) -> DiffVersion {
     if let Some(sha) = action_commit {
         if let Some(s) = snapshots.iter().rev().find(|s| s.head_sha == sha) {
-            return s.clone();
+            return s.version();
         }
     }
     version.clone()

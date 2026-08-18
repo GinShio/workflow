@@ -17,6 +17,7 @@ mod config;
 mod diff;
 mod fetch;
 mod model;
+mod modulo;
 mod prune;
 mod show;
 mod store;
@@ -44,7 +45,7 @@ pub enum ReviewAction {
     Fetch(FetchArgs),
     /// Show the inbox, or one MR's review state (`--json` for editors).
     Show(ShowArgs),
-    /// Show a diff's coordinates for an MR (`--patch` for text, `--json` for editors).
+    /// Describe a range of an MR, or compare two (`--patch` for text, `--json` for editors).
     Diff(DiffArgs),
     /// Show the pending local draft for an MR (`--json` for editors).
     Draft(DraftArgs),
@@ -93,6 +94,12 @@ pub struct FetchArgs {
 pub struct ShowArgs {
     /// The MR to show. Omit for the inbox (every fetched MR).
     pub mr: Option<String>,
+    /// Print the MR's metadata in full, for a human: branches, labels, times,
+    /// the snapshot history and its rebases, stack position, and thread counts.
+    /// Metadata only — the diff is `wits review diff`. On the inbox, this adds a
+    /// detail line under each row.
+    #[arg(long)]
+    pub details: bool,
     /// Only threads whose anchored line has fallen out of the current diff.
     #[arg(long)]
     pub outdated: bool,
@@ -113,20 +120,54 @@ pub struct ShowArgs {
     pub json: bool,
 }
 
+/// How `diff --patch` renders. Orthogonal to how many ranges were given: the
+/// range count decides *what question* is asked, this decides *how the answer is
+/// printed*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum PatchMode {
+    /// One diff. For a single range, its patch; for two, the reduced diff from
+    /// the older series to the newer, with base movement filtered out.
+    #[value(name = "2way")]
+    TwoWay,
+    /// The three diffs a two-range comparison is made of, in full and labelled:
+    /// what A does to its base, what B does to its base, and what the base did
+    /// in between. Needs two ranges.
+    #[value(name = "3way")]
+    ThreeWay,
+}
+
 #[derive(Debug, Args)]
 pub struct DiffArgs {
     /// The MR whose diff to describe.
     pub mr: String,
-    /// A git range or rev: `A..B`, a single `<sha>`, or `all` (base..head).
-    #[arg(long, default_value = "all")]
-    pub range: String,
-    /// Browse a historical snapshot by its head SHA (a prefix is fine); its
-    /// base..head replaces `--range`.
-    #[arg(long, value_name = "SHA", conflicts_with = "range")]
-    pub snapshot: Option<String>,
-    /// Print the textual patch (shells to git) instead of coordinates.
-    #[arg(long)]
-    pub patch: bool,
+    /// Which range to describe. Either a range `A..B`, or the head SHA of a
+    /// fetched review point (a prefix is fine), which is shorthand for that
+    /// review point's own `fork..head`. Defaults to the current review point.
+    ///
+    /// `A..B` always resolves to `merge-base(A,B)..B`, so a range is always a
+    /// real patch series rather than a two-endpoint tree compare. When `A` is
+    /// already an ancestor of `B` that changes nothing.
+    #[arg(long, value_name = "SPEC")]
+    pub range: Option<String>,
+    /// A second range to compare `--range` against, with each side measured from
+    /// its own base so the base's movement cancels out. This is the "what
+    /// changed since I last looked" question a force-push raises.
+    ///
+    /// Takes the same SPEC grammar as `--range`. Comparing modulo the base works
+    /// on any two ranges; two review points of one MR is simply the common case.
+    #[arg(long, value_name = "SPEC")]
+    pub against: Option<String>,
+    /// Print the textual patch instead of coordinates. Bare, or `=2way` / `=3way`
+    /// to choose how (`3way` needs `--against`).
+    #[arg(
+        long,
+        value_name = "MODE",
+        value_enum,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "2way"
+    )]
+    pub patch: Option<PatchMode>,
     /// Emit machine-readable JSON.
     #[arg(long, conflicts_with = "patch")]
     pub json: bool,
