@@ -1,0 +1,42 @@
+{
+  "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/master/doc/json_schema.json",
+  "modules": [
+    "title",
+    "separator",
+    "os",
+    "host",
+    "kernel",
+    "uptime",
+    "packages",
+    "shell",
+    "display",
+    "de",
+    "wm",
+    "theme",
+    "icons",
+    "font",
+    "cursor",
+    "terminal",
+    {
+      "type": "cpu",
+      "format": "{name} [{cores-logical} threads] @ {march}"
+    },
+    {
+      "type": "gpu",
+      "format": "{name} [{core-count} CU, {type}]",
+      "driverSpecific": true
+    },
+    "vulkan",
+    "memory",
+    "swap",
+    "disk",
+    "battery",
+    "poweradapter",
+    "break",
+    "colors"
+  ],
+  "logo": {
+    "type": "file-raw",
+    "source": "{{@@ _dotdrop_dotpath @@}}/emacs-next/common/banners/aperture.txt"
+  }
+}

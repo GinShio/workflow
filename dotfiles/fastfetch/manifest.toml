@@ -1,0 +1,5 @@
+[[install]]
+id = 'fastfetch'
+dst = '~/.config/fastfetch/'
+path = '.'
+planes = ['user']
