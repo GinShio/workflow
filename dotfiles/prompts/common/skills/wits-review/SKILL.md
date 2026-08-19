@@ -1,45 +1,48 @@
 ---
 name: wits-review
-description: Review a numbered MR/PR locally with `wits review` — check it out into an isolated sibling worktree for full on-disk context, then draft findings into a `local.json` you never submit. Use when reviewing a numbered merge/pull request locally, drafting review comments, or driving the wits review store; judgment and phrasing come from `review-protocol`.
+description: Review or re-review a numbered MR/PR locally with `wits review` — refresh and materialize its snapshot in the dedicated review worktree, inspect the full tree and stored history, then draft or revise `local.json` without submitting. Use for numbered merge/pull-request reviews and local wits review drafts; judgment and wording come from `review-protocol`.
 ---
 
 # Wits Review
 
-Review a numbered MR/PR through `wits review`: you check the MR out into an isolated sibling **worktree** and do the whole review from there, with the full tree on disk for context, and your one output is a local **draft** the author later submits themselves. Your own working tree is never touched.
+Review a numbered MR/PR through `wits review`. Work from its dedicated, reusable review **worktree**, where the full tree is available, and persist the result only as a local **draft** the author later submits.
 
-Judgment and phrasing are not here — what to flag, how to weigh it, how to word it, and any report you give the user come from the `review-protocol` skill. This skill is how you drive the tool.
+Apply `review-protocol` for what to flag, how to weigh and word it, and any report to the user. Use this skill only for the `wits review` mechanics.
 
 ## Read-only, draft-only
 
-- Work inside the review worktree, and leave your own tree untouched — never move its `HEAD`: no `wits review checkout --in-place`, and no `git checkout`/`switch`/`reset`/`restore` in your own worktree.
-- `fetch` is the only forge call, and it only reads; everything you find stays in the local draft until the author submits. Don't `submit`, `push`, or write through `gh`/`glab`.
-- The draft only comments: always set `verdict` to `comment`, and leave threads as they are. Approving, requesting changes, and resolving are the author's at submit time.
+- Treat the checked-out source as read-only, and keep the main worktree's files and `HEAD` unchanged. Use `wits review checkout` for every review-worktree `HEAD` change; never use `checkout --in-place` or raw `git checkout`/`switch`/`reset`/`restore` in either worktree.
+- Let `fetch` be the only forge access, and use it only to read. Keep authored output local: never `submit`, `push`, or write through `gh`/`glab`.
+- Draft commentary only: set `verdict` to `comment`, emit no `resolve` action, and use `reply` only when the review calls for a response to an existing thread. The tool supports other verdicts and resolution; this workflow leaves those decisions to the author.
 
-## 1. Initialize the review in its worktree
+## 1. Refresh and materialize the review
 
-Get the MR onto disk on its current snapshot, then work from there:
+Start from the forge's current snapshot and the complete local review state:
 
-- `wits review fetch <mr>` acquires or refreshes the MR. Re-fetch when the snapshot is stale — an old `updated_at`, or the author just pushed — so you review the current head, not a superseded one.
-- `wits review checkout <mr>` materializes that snapshot in an isolated sibling worktree (`../<repo>.review`), which leaves your own tree alone. `cd` there and run the rest of the review from inside it; `--next`/`--prev` move to another MR in the stack.
-- `wits review show <mr> --json` gives the metadata (`threads`, `neighbors`, `updated_at`); `wits review diff <mr> --json` gives the `base_sha`/`head_sha`, files, and commits.
+- Run `wits review fetch <mr>` at the start so the snapshot, discussion, and stack state are current.
+- Run `wits review checkout <mr>`. It creates or repoints the one reusable review worktree; use the path it reports, `cd` there, and run the rest of the review from it. `--next`/`--prev` repoint that same worktree within the stack.
+- Read `wits review show <mr> --json` for `snapshot.fork_sha`, `snapshot.head_sha`, snapshot history, commits, files, threads, and neighbors. Read `wits review draft <mr> --json` for the exact pending action stream before changing it.
 
-Done when the current snapshot is checked out in its worktree, you are working inside it, and you hold its base/head SHAs, files, threads, and neighbors.
+Done when the refreshed `head_sha` is checked out in the review worktree and you hold its `fork_sha`, history, files, threads, neighbors, and existing draft.
 
 ## 2. Read the change in full context
 
-You have the whole tree on disk at head, so read past the diff — read entire files, follow symbols, and run tooling directly in the worktree:
+Read past the diff: read entire files, follow symbols, and run project tooling from the review worktree.
 
-- **The patch:** `wits review diff <mr> --patch` shows the change line by line. A `new`-side line is added or context; an `old`-side line was removed.
-- **Around the change:** read the changed files whole and grep the worktree to follow a symbol to its definition and other uses, so you see the change's reach.
-- **Before/after:** the worktree is the new file; `git show <base_sha>:<path>` gives the pre-image when you need to compare.
-- **Intent:** `git log <base_sha>..<head_sha>` and `git show <sha>` for the commit messages.
-- **The stack:** when `neighbors` lists MRs beneath this one, `checkout --prev` and read them the same way — this change assumes the state they establish, so judge it against that base, not the trunk alone.
-- **Build or run it:** the worktree is a real checkout, so compile, run, or fuzz the code here whenever behavior is easier to confirm than to reason about.
+- **Current change:** read `wits review diff <mr> --patch`. This is the patch the final review assesses and the source of comment line/side coordinates.
+- **Re-review:** identify the newest earlier `snapshots[].head_sha` also attached to the existing local or remote comments. Read `wits review diff <mr> --against <old-head> --patch` for the change since that review point. If no comment identifies one, assess the current patch instead of guessing. When the comparison reports identical-content ambiguity, inspect the same comparison without `--patch`, then with `--patch=3way`.
+- **Around the change:** read the changed files whole and use `rg` to follow each affected symbol to its definition and other uses, so you see the change's reach.
+- **Before/after:** the worktree holds the post-image. Read the pre-image with `git show <fork_sha>:<pre-image-path>`, where `<pre-image-path>` is `files[].old_path` for a rename or copy and `files[].path` otherwise.
+- **Intent:** read `git log <fork_sha>..<head_sha>` and the relevant `git show <sha>` output.
+- **The stack:** walk MRs below this one with `wits review checkout --prev` far enough to understand the state this MR assumes, then restore the target with `wits review checkout <mr>`.
+- **Behavior:** use the project's documented build/test/run recipe when execution can establish behavior more reliably than inspection.
 
-Done when every changed file has been read in full with its surrounding context, and any stack beneath it is understood.
+Done when every changed file has been read in full, every affected symbol and lower-stack assumption is understood, the commit intent is known, and any relevant re-review delta and executable checks have been assessed.
 
-## 3. Draft findings into `local.json`
+## 3. Draft the review into `local.json`
 
-Record findings by piping a JSON batch to `wits review draft <mr> -`. The action shape — where a comment anchors, how to reference other code with `[[path:line]]`, the required trailer, and how to revise or withdraw — lives in [`draft.md`](draft.md); read it before your first write.
+Read [`draft.md`](draft.md) completely before the first write. Translate the `review-protocol` result into one effective `summary` plus one `comment` per finding; LGTM is the `summary` with no finding comments. Keep `verdict: comment` for every outcome — it is the transport policy, while the review assessment lives in the bodies.
 
-Done when every finding is an action in the batch, each body ends with the provenance trailer, and `verdict` is set to `comment`.
+Revise an existing draft by reusing action ids and withdraw obsolete actions with `drop`, then pipe the batch to `wits review draft <mr> -`. Re-read both `wits review draft <mr> --json` and `wits review show <mr> --json` after ingest to verify the stored actions and their effective folded view.
+
+Done when the effective draft contains exactly one summary, one correctly anchored comment per finding, no resolution action, no duplicate live action, the required provenance trailer on every body, and `verdict: comment`; nothing has been submitted.

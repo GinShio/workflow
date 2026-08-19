@@ -1,15 +1,17 @@
 # Drafting into `local.json`
 
-The disclosed write reference for [`wits-review`](SKILL.md). `wits review draft <mr> -` reads a JSON batch on stdin and appends its actions to the MR's `local.json`. Each finding is a `comment`; the overall note is one `summary`.
+The disclosed write reference for [`wits-review`](SKILL.md). `wits review draft <mr> -` validates a JSON batch, stamps unstamped comments with the current snapshot, assigns missing action ids, and appends the actions to `local.json`. It stores body text verbatim.
+
+Represent the `review-protocol` summary with one live `summary` action and each finding with one `comment`. LGTM is the summary with no finding comments.
 
 ```json
 {
   "schema": 1,
   "verdict": "comment",
   "actions": [
-    { "action": "summary", "body": "<overall note>\n\n<trailer>" },
+    { "action": "summary", "body": "<overall note>\n\n<provenance trailer>" },
     { "action": "comment", "file": "src/lock.c", "line": 42, "side": "new",
-      "body": "<the finding, with a [[path:line]] reference where it helps>\n\n<trailer>" }
+      "body": "Unlock is skipped on this error path; take the same `goto out` as [[src/lock.c:80]].\n\n<provenance trailer>" }
   ]
 }
 ```
@@ -19,9 +21,11 @@ Always set the top-level `verdict` to `comment` — never `approve` or `request-
 ## Actions
 
 - `comment` — a finding (opens a new thread).
-- `summary` — the one overall note; the last surviving summary is the review's summary.
-- `reply` — add to an existing thread; set `thread` to its id (the bare forge id `show` prints).
+- `summary` — the overall note; keep exactly one live summary. The last surviving summary is effective if several exist.
+- `reply` — respond when the review calls for it; set `thread` to the bare forge id or the `remote:<id>` form from `show`.
 - `drop` — withdraw a live action; set `id` to the one you're removing.
+
+The implementation also accepts `resolve`, but this review workflow leaves thread state to the author and emits none.
 
 ## Where a comment anchors
 
@@ -31,9 +35,9 @@ Placement is inferred from which fields are present:
 |---|---|
 | `file` + `line` | a line comment |
 | `file` only | a file-level comment |
-| neither | an MR-level note |
+| neither | an MR-level conversation comment |
 
-`side` is `new` for an added or context line, `old` for a removed one (default `new`). For a span, add `start_line` (with `start_side`) as the start; a differing `start_side` makes a cross-side span. Take line numbers from the patch or the file in your worktree. Leave `commit` unset — `draft` stamps the current snapshot at ingest.
+Use the repo-relative post-image `files[].path`; on a rename or copy, `wits` supplies `old_path` for an old-side anchor. `side` is `new` for an added or context line, `old` for a removed one (default `new`); the line must exist on that side. For a span, add `start_line` as the start and keep `line` as the end; `start_side` defaults to `side`, and a differing value makes a cross-side span. Leave `commit` unset for a new comment so `draft` stamps the current snapshot; preserve or set it only when intentionally retaining an older snapshot anchor.
 
 ## Reference code — `[[path:line]]`
 
@@ -47,8 +51,8 @@ Every `comment`, `reply`, and `summary` body ends with exactly one trailer line:
 **Generated-by:** <tool> (<model>) <!-- this comment is submitted by wits-review -->
 ```
 
-`<tool>` and `<model>` are the coding tool and active model, filled in by the adapter; the HTML comment renders invisibly on both forges.
+Replace every angle-bracket token in the batch template before ingest, including `<provenance trailer>` with the exact line above. Fill `<tool>` and `<model>` with the identifiers exposed by the current session, using the most specific identifiers actually known without inventing a model variant. `wits` performs no provenance-placeholder substitution, so no placeholder may remain in the batch. The HTML comment renders invisibly on both forges.
 
 ## Revise or withdraw
 
-The draft is append-only, keyed by `id` (`wits:<uuid>`, assigned when you omit it): a later action with the same `id` replaces the earlier one, and a `drop` removes it. To change something on a re-review, read the live actions with `wits review draft <mr> --json`, then append by id instead of duplicating.
+The draft is append-only, keyed by `id` (`wits:<uuid>`, assigned when omitted). Append a revised action with the same id to replace it in the effective view; append `drop` with that id to withdraw it. Give genuinely new actions no id and let `draft` assign one. `wits review draft <mr> --dedup` may compact the stored stream when that is intentional.
