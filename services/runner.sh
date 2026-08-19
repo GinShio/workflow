@@ -12,8 +12,8 @@ set -u
 # 1. Initialization
 # ==============================================================================
 
-if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/workflow/.env" ]; then
-    . "${XDG_CONFIG_HOME:-$HOME/.config}/workflow/.env"
+if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/wits/.env" ]; then
+    . "${XDG_CONFIG_HOME:-$HOME/.config}/wits/.env"
 fi
 
 # Resolve the directory containing this script without relying on GNU
@@ -54,7 +54,7 @@ fi
 if [ "${1:-}" = "detect_usage_fix" ]; then return 0; fi
 
 export PROJECTS_ROOT_DIR PROJECTS_SCRIPT_DIR
-export DOTFILES_ROOT_DIR DOTFILES_CURRENT_PROFILE
+export DOTFILES_ROOT_DIR DOTFILES_OVERLAYS
 
 # Load Libraries
 # shellcheck source=../scripts/tags.sh

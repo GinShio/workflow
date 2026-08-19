@@ -1,0 +1,26 @@
+# workflow-owned privileged values
+{%@@ if workflow.root is defined @@%}
+{%@@ for key, value in workflow.root.items() @@%}
+ROOT_{{@@ key | upper @@}}={{@@ value @@}}
+{%@@ endfor @@%}
+{%@@ endif @@%}
+
+# development information
+{%@@ macro declare_projects_env(items, prefix) @@%}
+{%@@ for key, value in items.items() @@%}
+{%@@ if value is mapping @@%}
+{{@@ declare_projects_env(value, "{}_{}".format(prefix, key)) @@}}
+{%@@ else @@%}
+PROJECTS{{@@ prefix | upper | replace('-', "_") @@}}_{{@@ key | upper @@}}="{{@@ value @@}}"
+{%@@ endif @@%}
+{%@@ endfor @@%}
+{%@@ endmacro @@%}
+
+{{@@ declare_projects_env(projects, '') @@}}
+{{@@ declare_projects_env(wits.projects, '') @@}}
+
+export SUDO_ASKPASS=$PROJECTS_SCRIPT_DIR/scripts/get-root-passphrase.sh
+
+# dotfiles information
+DOTFILES_ROOT_DIR={{@@ _dotdrop_workdir @@}}
+DOTFILES_OVERLAYS={{@@ overlays | join(':') @@}}

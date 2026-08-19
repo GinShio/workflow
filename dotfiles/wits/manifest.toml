@@ -12,6 +12,13 @@ path = 'tmpfiles.d/'
 capabilities = ['develop']
 planes = ['user']
 
+[[install]]
+id = 'wits-env'
+dst = '~/.config/wits/.env'
+path = 'envs'
+capabilities = ['develop']
+planes = ['user']
+
 [variables.wits.projects.source_info]
 amdd3d         = { org = 'amd',      name = 'amdd3d' }
 amdllpc        = { org = 'amd',      name = 'amdllpc' }
