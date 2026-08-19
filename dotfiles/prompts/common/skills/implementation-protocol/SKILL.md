@@ -51,7 +51,7 @@ So narrow what you handle only on a constraint you can **pin**: an interface con
 Apply every item of `craft/QUALITY-BAR.md` to what you wrote, and pre-empt what the user would catch. Three checks deserve naming because they are the ones most easily skipped:
 
 - **Context preservation** — scan for anything that would make a reviewer ask "why is this here?". Where the answer lives outside the file, pin it per `craft/COMMENTS.md`.
-- **Complexity** — for each boundary you touched, state what the outside must know to use it and name the call sites that hold it (see `craft/SIMPLICITY.md`).
+- **Complexity** — for each boundary you touched, state what the outside must know to use it and name the call sites that hold it (see `craft/SIMPLICITY.md`). If you placed none, say so.
 - **Authority** — which gate authorized this? Either an approved design, or the *Act* exemption it qualified under. If neither holds, you have overrun the loop; stop and say so.
 
 Then verify what you can (build, test, lint where a recipe exists). Prefer checks that are cheap and side-effect-free; leave costly or stateful verification to the user.
@@ -76,7 +76,7 @@ When asked to commit, the attribution trailer to attach is in [`commit.md`](comm
 
 **Narrowed:** [any case deliberately left unhandled, and the constraint pinned for it]
 
-**Complexity:** [what the outside must know after this change, with the call sites holding it; what was absorbed inside; any boundary this froze]
+**Complexity:** [what the outside must know after this change, with the call sites holding it; what was absorbed inside; any boundary this froze — or that no boundary was placed]
 
 **What to review:**
 - [areas deserving careful attention — where bugs are most likely]
