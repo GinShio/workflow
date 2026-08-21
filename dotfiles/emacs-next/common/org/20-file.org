@@ -1,3 +1,5 @@
+#+GINSHIO_MODULE: enabled
+
 * 文件
 
 文件管理器通常是一個帶圖標的窗格：你點，它做。dired 給的是另一樣東西——一個目錄被列
@@ -54,11 +56,9 @@ Dired 與可編輯目錄的完整手冊分別是 [[info:emacs#Dired][Emacs manua
 這串開關裏有三個是 GNU coreutils 的擴展。本機沒有問題，遠程主機不一定——遠程列目錄
 用的是那台機器上的 =ls=。remote 模塊為此單獨給遠程連接換一串保守的開關。
 
-權限、屬主、大小這些列平時是噪音，需要的時候按 =(= 調出來。
-
-#+begin_src emacs-lisp :tangle "lisp/ginshio-file.el"
-(add-hook 'dired-mode-hook #'dired-hide-details-mode)
-#+end_src
+權限、屬主、大小與時間戳默認都顯示。它們正是上面那串 =ls= 開關產生的列表；自動隱藏會
+讓配置看起來像只列了文件名。窗口太窄或只想掃文件名時，仍可按 =(= 臨時隱藏，再按一次
+恢復。
 
 磁盤上變了就重新讀，但只在確實變了的時候讀——每次切回緩衝區都無條件重列，大目錄下能
 感覺得到。
