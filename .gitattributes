@@ -1,2 +1,3 @@
 # Encrypted material outside the deployment graph.
 secret/personal/**/* filter=transcrypt-personal diff=transcrypt-personal merge=transcrypt-personal
+secret/khronos3d/**/* filter=transcrypt-khronos3d diff=transcrypt-khronos3d merge=transcrypt-khronos3d
