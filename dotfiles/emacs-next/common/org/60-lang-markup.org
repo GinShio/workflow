@@ -1,3 +1,5 @@
+#+GINSHIO_MODULE: enabled
+
 * 輕量文檔標記
 
 Markdown、reStructuredText 與 AsciiDoc 解決的是同一類問題：用仍然能直接閱讀的純文本編寫
@@ -14,16 +16,9 @@ Markdown、reStructuredText 與 AsciiDoc 解決的是同一類問題：用仍然
 
 ** 共用編輯行為
 
-core 對所有散文模式開啓 ~auto-fill-mode~，到第 80 列就真的插入換行。文檔通常活在版本控制
-裏，硬換行容易讓一次改字變成整段 diff；三種格式都關掉它，改用 ~visual-line-mode~ 只在
+文檔通常活在版本控制裏，自動插入硬換行容易讓一次改字變成整段 diff；視覺折行又會讓屏
+幕上的一行不再對應文件裏的一行。三種格式都繼承 core 的長行策略：不自動填充，也不在
 窗口邊界折行。需要主動整理段落時，~M-q~ 仍然照常使用 ~fill-column~。
-
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el"
-(defun ginshio-lang-markup-soft-wrap-h ()
-  "Wrap document prose visually without rewriting source lines."
-  (auto-fill-mode -1)
-  (visual-line-mode 1))
-#+end_src
 
 三個模式都保留自己的 ~C-c~ 前綴，不再額外補按鍵。完整模式說明與當前生效的全部局部鍵位
 統一從 ~M-m h m~ 打開；它調用內建的 ~describe-mode~，所以內容會跟着實際安裝的版本更新，
@@ -40,8 +35,7 @@ Markdown 的價值在於源文件本身就能讀，所以不把編輯緩衝區�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el"
 (defun ginshio-lang-markup-markdown-setup-h ()
-  "Apply shared prose settings and select this Markdown dialect's renderer."
-  (ginshio-lang-markup-soft-wrap-h)
+  "Select this Markdown dialect's renderer."
   (setq-local markdown-command
               `("pandoc"
                 ,(if (derived-mode-p 'gfm-mode) "--from=gfm" "--from=markdown")
@@ -93,7 +87,6 @@ Docutils 編譯流程；=.rst= 和 =.rest= 都會自動進入這個模式。
   :mode ("\\.re?st\\'" . rst-mode)
   :init
   (setq rst-compile-primary-toolset 'html)
-  :hook (rst-mode . ginshio-lang-markup-soft-wrap-h)
   :config
   (setf (alist-get 'html rst-compile-toolsets)
         '("rst2html5" ".html" nil)))
@@ -126,8 +119,7 @@ xwidget 或外部瀏覽器。
   :init
   (setq adoc-display-images nil
         adoc-fontify-code-blocks-natively 5000
-        adoc-preview-backend 'eww)
-  :hook (adoc-mode . ginshio-lang-markup-soft-wrap-h))
+        adoc-preview-backend 'eww))
 
 (ginshio-doctor-executable 'lang-markup "asciidoctor"
                            :severity 'warn
