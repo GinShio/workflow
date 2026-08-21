@@ -113,11 +113,11 @@ Emacs 會生成大量運行時文件：包、備份、歷史、書籤、緩存�
 這三檔對應 XDG 規範的三個目錄，其中 =XDG_STATE_HOME= 正是為第二檔設立的。分開還有
 一個現實好處：清理緩存的自動化規則可以放心地掃 =cache=，不會誤傷你的歷史記錄。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-path.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-path.el" :comments no
 ;;; ginshio-path.el --- where things live -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-path.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-path.el"
 (defgroup ginshio nil
   "Personal Emacs configuration."
   :group 'convenience
@@ -158,7 +158,11 @@ Signal an error when it is absent or relative."
   "This configuration itself.  Under version control; treated as read-only.")
 
 (defconst ginshio-lisp-dir (expand-file-name "lisp/" ginshio-config-dir)
-  "Where the modules live.")
+  "Version-controlled and generated Emacs Lisp used by this configuration.")
+
+(defconst ginshio-generated-lisp-dir
+  (expand-file-name "ginshio/" ginshio-lisp-dir)
+  "Where literate configuration modules are tangled.")
 
 (defconst ginshio-data-dir (ginshio-path--xdg "XDG_DATA_HOME" "emacs/")
   "Information you would miss if it vanished.  Worth backing up.")
@@ -174,19 +178,19 @@ Signal an error when it is absent or relative."
     (make-directory dir t))
   (set-file-modes dir #o700))
 
-(add-to-list 'load-path ginshio-lisp-dir)
+(add-to-list 'load-path ginshio-generated-lisp-dir)
 #+end_src
 
 三個輔助函數，讓後續模塊不必反覆寫 ~expand-file-name~，也讓每個文件的歸類在調用處
 一目瞭然。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-path.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-path.el"
 (defun ginshio-data (name) (expand-file-name name ginshio-data-dir))
 (defun ginshio-state (name) (expand-file-name name ginshio-state-dir))
 (defun ginshio-cache (name) (expand-file-name name ginshio-cache-dir))
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-path.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-path.el" :comments no
 (provide 'ginshio-path)
 ;;; ginshio-path.el ends here
 #+end_src
@@ -201,13 +205,13 @@ Signal an error when it is absent or relative."
 #+end_src
 
 #+begin_src emacs-lisp :tangle "init.el"
-(add-to-list 'load-path (expand-file-name "lisp/" user-emacs-directory))
+(add-to-list 'load-path (expand-file-name "lisp/ginshio/" user-emacs-directory))
 (require 'ginshio-path)
 #+end_src
 
 *** 加載器
 
-模塊就是 =lisp/ginshio-NAME.el=，提供特性 ~ginshio-NAME~。這裏刻意不捕獲錯誤：一份配置
+模塊就是 =lisp/ginshio/ginshio-NAME.el=，提供特性 ~ginshio-NAME~。這裏刻意不捕獲錯誤：一份配置
 只有「完整成立」和「啓動失敗」兩種狀態。吞掉一個模塊的異常會留下已經執行的副作用，卻
 讓後面的模塊在半成品上繼續工作；那不是降級，而是把真正錯誤藏到更遠的地方。
 

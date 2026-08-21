@@ -13,11 +13,11 @@ Emacs 派生子進程的場合比看上去多：編譯、版本控制、語言�
 三種輸入模式與遠程用法見 [[https://codeberg.org/akib/emacs-eat][Eat manual/README]]。本配置的五個入口整理在
 [[file:../GUIDE.org::*Shell 與 Eat][GUIDE.org]]。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el" :comments no
 ;;; ginshio-shell.el --- handing work to other programs -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'ginshio-keys)
@@ -34,7 +34,7 @@ Emacs 拼命令行時假設的是 POSIX 語法——變量前綴賦值、~$(...)
 
 所以把它釘死在一個 POSIX shell 上。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el"
 (defconst ginshio-shell-posix
   (or (executable-find "bash") "/bin/sh")
   "A POSIX shell, for the command lines Emacs assembles itself.")
@@ -46,7 +46,7 @@ Emacs 拼命令行時假設的是 POSIX 語法——變量前綴賦值、~$(...)
 另一頭是你自己要用的那個。開一個終端是為了得到你平時的環境——你的別名、你的提示符、
 你的補全——所以它跟着登錄 shell 走，和上面那個互不干擾。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el"
 (setq explicit-shell-file-name (or (getenv "SHELL") ginshio-shell-posix))
 #+end_src
 
@@ -58,7 +58,7 @@ Emacs 拼命令行時假設的是 POSIX 語法——變量前綴賦值、~$(...)
 第三個是這份配置不做格式化的另一面。格式化交給外部工具，那麼把當前這段文本交出去、
 拿處理過的結果換回來，就該是一個順手的動作：加前綴參數時它原地替換選區。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el"
 (setq shell-command-prompt-show-cwd t
       async-shell-command-buffer 'new-buffer)
 #+end_src
@@ -82,7 +82,7 @@ Emacs 拼命令行時假設的是 POSIX 語法——變量前綴賦值、~$(...)
 它也能在遠程目錄下工作，這一點和 remote 模塊是配套的。代價是重輸出時比編譯出來的實
 現慢——而重輸出的活本來就該在外面那個終端裏幹。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el"
 (use-package eat
   :ensure (eat :host codeberg :repo "akib/emacs-eat"
                :files ("*.el" ("term" "term/*.el") "*.texi" "*.ti"
@@ -108,7 +108,7 @@ leader 不在此列——它住在覆蓋層裏，而覆蓋層排在所有 major 
 
 ** 鍵位
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el"
 (ginshio-leader-define
  "!"   "run"
  "! !" #'shell-command
@@ -135,7 +135,7 @@ leader 不在此列——它住在覆蓋層裏，而覆蓋層排在所有 major 
 檢查的不是「bash 裝了沒有」，而是「Emacs 將要使用的那個 shell 認不認 POSIX 語法」。
 這兩件事在多數機器上結論相同，但錯的時候，後者才是真正壞掉的東西。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el"
 (ginshio-doctor-declare 'shell "POSIX command syntax"
                         (lambda ()
                           (eq 0 (call-process shell-file-name nil nil nil
@@ -146,7 +146,7 @@ leader 不在此列——它住在覆蓋層裏，而覆蓋層排在所有 major 
                         :remedy "zypper install bash")
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-shell.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el" :comments no
 (provide 'ginshio-shell)
 ;;; ginshio-shell.el ends here
 #+end_src

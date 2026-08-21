@@ -12,11 +12,11 @@
 它只使用內建設施。這是刻意的約束：無論包管理器出什麼狀況，加載完本模塊的 Emacs 都
 應該是一個能用的編輯器。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el" :comments no
 ;;; ginshio-core.el --- how this editor behaves -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'recentf)
@@ -29,7 +29,7 @@
 提交簽名、郵件、以及需要憑證時去哪裏找。憑證文件分開兩份，是為了讓不同身份的
 forge 訪問互不干擾。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (setq user-full-name "GinShio"
       user-mail-address "ginshio78@gmail.com")
 #+end_src
@@ -43,7 +43,7 @@ forge 訪問互不干擾。
 凍結——那比頻繁的小停頓更難忍受。這裏取一個在編輯和語言服務器場景下都察覺不到、但
 單次停頓仍然很短的值。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (defconst ginshio-gc-cons-threshold (* 128 1024 1024)
   "Steady-state garbage collection threshold.")
 
@@ -58,7 +58,7 @@ forge 訪問互不干擾。
 子進程輸出緩衝區的默認大小只有幾 KiB，遠小於語言服務器單次回應的體量，會讓交互退化
 成反覆的小塊讀取。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (setq read-process-output-max (* 1024 1024)
       process-adaptive-read-buffering nil)
 #+end_src
@@ -67,7 +67,7 @@ forge 訪問互不干擾。
 
 全線 UTF-8，換行一律 LF。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (set-language-environment "UTF-8")
 (prefer-coding-system 'utf-8-unix)
 (set-default-coding-systems 'utf-8-unix)
@@ -84,7 +84,7 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
 鎖文件 (=.#file=) 同理。它的本意是讓另一個 Emacs 實例知道這個文件正在被編輯；代價是
 在監視文件變化的構建系統面前，它是一個會憑空出現的壞符號鏈接。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (defconst ginshio-backup-dir (ginshio-cache "backup/"))
 (defconst ginshio-auto-save-dir (ginshio-cache "auto-save/"))
 (defconst ginshio-auto-save-session-dir
@@ -113,14 +113,14 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
 
 刪除走回收站。誤刪是所有編輯器裏最不值得的一種損失。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (setq delete-by-moving-to-trash t)
 #+end_src
 
 磁盤上的改動自動反映到緩衝區。切分支、跑代碼生成、被格式化工具改寫之後，緩衝區與磁
 盤如果悄悄分叉，接下來的每一次保存都是一次意外覆蓋。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (setq global-auto-revert-non-file-buffers t
       auto-revert-verbose nil)
 (global-auto-revert-mode 1)
@@ -136,7 +136,7 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
 文本算法陷入停滯，表現為打開文件時 Emacs 徹底卡死。內建的 ~so-long~ 檢測到這種情況
 時自動退化為簡化顯示。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (global-so-long-mode 1)
 #+end_src
 
@@ -145,7 +145,7 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
 按「丟了損失什麼」把運行時文件分流。書籤和縮寫是你創造的內容，歸 data；歷史、光標
 位置、最近文件是連續性，歸 state；緩存和臨時憑據歸 cache。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (setq savehist-file (ginshio-state "history")
       history-length 1000
       history-delete-duplicates t
@@ -184,7 +184,7 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
 ~fill-column~ 只供 ~fill-paragraph~ 這類顯式命令使用。文本模式不自動開啓 ~auto-fill-mode~，
 所以輸入超過第 80 列不會在文件裏插入換行。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (setq-default
  window-combination-resize t            ; a new window takes space from all siblings
  truncate-lines t
@@ -220,7 +220,7 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
 終端下鼠標默認完全不工作。~xterm-mouse-mode~ 讓終端模擬器把點擊和滾輪翻譯成 Emacs 認
 得的事件，keys 模塊召回的那組鼠標鍵才有東西可接。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (xterm-mouse-mode 1)
 #+end_src
 
@@ -230,7 +230,7 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
 配平的另一半——按下閉括號時高亮它匹配的那一個——是 ~show-paren-mode~ 的事，Emacs 28 起
 默認就開着，這裏不必重複。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (electric-pair-mode 1)
 #+end_src
 
@@ -240,7 +240,7 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
 
 =.editorconfig= 是這件事的通用格式，多數編輯器都認。Emacs 30 起它是內建的，不需要包。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (editorconfig-mode 1)
 #+end_src
 
@@ -251,14 +251,14 @@ Emacs，而目錄局部變量是在主模式和它的鉤子之後才生效的。
 
 GC 時壓縮字體緩存會帶來明顯卡頓，而收回的內存微不足道。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (setq inhibit-compacting-font-caches t)
 #+end_src
 
 代碼裏行尾空白要看得見——它們是 diff 噪音的主要來源。當前所在的函數名顯示在 modeline
 上，在長函數裏比滾回去看定義快得多。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (defun ginshio-show-trailing-whitespace-h ()
   (setq-local show-trailing-whitespace t))
 
@@ -284,7 +284,7 @@ GC 時壓縮字體緩存會帶來明顯卡頓，而收回的內存微不足道�
 判斷代碼在哪裏結束用的是語法狀態，不是找註釋符號。=//= 出現在一個字符串字面量裏是
 合法的，按字符匹配會在那裏誤判成註釋，而語法狀態知道它在字符串內。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (defun ginshio-core--code-end-of-line ()
   "Return the position where the code on this line ends.
 Before a trailing comment when there is one, and before trailing
@@ -341,7 +341,7 @@ Press again to go on to the true end.  N behaves as it does for
 沒有空白可吃時退回 ~backward-delete-char-untabify~。這一句是這個命令能無條件裝在
 ~DEL~ 上的原因：任何緩衝區裏它都仍然是一個退格鍵，不需要為它記例外。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (defun ginshio/hungry-delete-backward (n)
   "Delete the whitespace before point, all of it at once.
 Deletes N characters instead when there is no whitespace to take."
@@ -360,7 +360,7 @@ Deletes N characters instead when there is no whitespace to take."
 
 ** 自檢項
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (ginshio-doctor-directory 'core ginshio-backup-dir :note "backup files")
 (ginshio-doctor-directory 'core ginshio-auto-save-dir :note "auto-save files")
 (ginshio-doctor-declare 'core "trash support"
@@ -372,7 +372,7 @@ Deletes N characters instead when there is no whitespace to take."
                         :remedy "zypper install glib2-tools")
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el" :comments no
 (provide 'ginshio-core)
 ;;; ginshio-core.el ends here
 #+end_src

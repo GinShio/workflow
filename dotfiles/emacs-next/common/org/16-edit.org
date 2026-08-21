@@ -5,11 +5,11 @@
 本模塊管三件事：改動怎麼撤銷、改完在文件裏留下什麼、以及一次要改多個地方時用什麼工
 具。前兩件對每一次編輯都成立，第三件只在遇到那種情形時才用得上。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el" :comments no
 ;;; ginshio-edit.el --- how changes are made and unmade -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'ginshio-keys)
@@ -29,7 +29,7 @@
 本身的行為，只是讓內建的那套歷史活得比緩衝區長。重做的分支也一起存——只存撤銷的話，
 ~C-?~ 回不去那些被撤銷掉的分支。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (use-package undo-fu-session
   :ensure t
   :demand t
@@ -68,7 +68,7 @@ core 讓行尾空白在代碼緩衝區裏顯示出來，因為它是 diff 噪音
 [[https://elpa.nongnu.org/nongnu/ws-butler.html][ws-butler]] 只清你這一次動過的行。於是顯示和刪除各管一段，合起來剛好完整：屏幕上看
 到的是別人留下的，保存時清掉的是你自己留下的。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (use-package ws-butler
   :ensure t
   :hook (prog-mode . ws-butler-mode))
@@ -137,7 +137,7 @@ Markdown 用兩個尾隨空格表示換行——那類文件不該被順手改�
 ~mc/list-file~ 就是那張表，默認寫在配置目錄裏，而這裏的配置目錄是版本控制的內容。它
 記的是你答過的問題——重新答一遍損失的是耐心，不是信息——所以歸 state。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (setq mc/list-file (ginshio-state "mc-lists.el"))
 #+end_src
 
@@ -146,7 +146,7 @@ Markdown 用兩個尾隨空格表示換行——那類文件不該被順手改�
 包裏每個命令都自帶自動加載入口，所以這裏不必像 dap 那樣逐個點名：綁定表本身就足夠讓
 它在第一次按下時加載。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (use-package multiple-cursors
   :ensure t
   :defer t)
@@ -161,7 +161,7 @@ Markdown 用兩個尾隨空格表示換行——那類文件不該被順手改�
 沒有一個是編輯文本的原語——它們切緩衝區、存盤、開項目、跑自檢。對二十個光標各做一次
 這些事都是錯的，其中幾件還很難撤銷。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (with-eval-after-load 'multiple-cursors-core
   ;; Reading the answer off the naming convention keeps the list from going
   ;; stale as modules add commands.
@@ -180,7 +180,7 @@ Markdown 用兩個尾隨空格表示換行——那類文件不該被順手改�
 而這份配置的 corfu 是自動彈出的。二十個光標同時打字，就是二十次補全計算，外加一個依
 附在真光標上、和另外十九個毫無關係的候選菜單。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (with-eval-after-load 'multiple-cursors-core
   (add-to-list 'mc/unsupported-minor-modes 'corfu-mode))
 #+end_src
@@ -191,7 +191,7 @@ Markdown 用兩個尾隨空格表示換行——那類文件不該被順手改�
 裏 Enter 產生的是 ~RET~，永遠到不了那個綁定。症狀不是報錯：終端裏按回車不會結束會
 話，而是在每一個光標處插入一個換行。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (with-eval-after-load 'multiple-cursors-core
   (keymap-set mc/keymap "RET" #'multiple-cursors-mode))
 #+end_src
@@ -208,13 +208,13 @@ Markdown 用兩個尾隨空格表示換行——那類文件不該被順手改�
 帶修飾鍵的點擊在終端裏一般送不出來，所以這條實際上只在圖形界面有效。終端裏用拖選再
 ~M-m e l~。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (keymap-set (current-global-map) "C-S-<mouse-1>" #'mc/toggle-cursor-on-click)
 #+end_src
 
 ** 鍵位
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (ginshio-leader-define
  "e"   "edit"
 
@@ -287,7 +287,7 @@ Markdown 用兩個尾隨空格表示換行——那類文件不該被順手改�
 換掉壓縮格式時這個檢查應該跟着消失，所以它問的是當前選的是不是 zstd，而不是無條件
 要求。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (ginshio-doctor-executable 'edit "zstd"
                            :note "compressing stored undo history"
                            :remedy "zypper install zstd"
@@ -298,7 +298,7 @@ Markdown 用兩個尾隨空格表示換行——那類文件不該被順手改�
 
 其餘沒有可查的：包在不在由 packages 模塊回答，矩形那半邊全部是內建的。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-edit.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el" :comments no
 (provide 'ginshio-edit)
 ;;; ginshio-edit.el ends here
 #+end_src

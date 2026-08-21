@@ -13,11 +13,11 @@ TRAMP 的 method、multi-hop、連接屬性與除錯方式見 [[info:tramp#Top][
 清理連接的入口整理在 [[file:../GUIDE.org::*TRAMP][GUIDE.org]]；遇到卡住的遠程操作時，先讀
 [[info:tramp#Frequently Asked Questions][TRAMP FAQ]] 再提高 verbose level。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-remote.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el" :comments no
 ;;; ginshio-remote.el --- files on other machines -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-remote.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'ginshio-keys)
@@ -42,7 +42,7 @@ TRAMP 自己不在這裏加載。它是內建包裏最大的幾個之一，而�
 出廠的囉嗦程度是為調試連接問題準備的，日常使用時它把 echo area 佔滿了握手過程。降下
 來之後真正的錯誤才看得見。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-remote.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el"
 (setq tramp-verbose 1)
 #+end_src
 
@@ -52,7 +52,7 @@ TRAMP 默認自己往 ssh 命令行上加一組連接復用選項。這在沒有
 在配置過的機器上是壞事——它用的 socket 路徑和 =~/.ssh/config= 裏那組不是同一個，於是
 你精心設置的長連接被繞開，每開一個文件重新握手一次。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-remote.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el"
 (setq tramp-use-connection-share nil)
 #+end_src
 
@@ -73,7 +73,7 @@ TRAMP 默認自己往 ssh 命令行上加一組連接復用選項。這在沒有
 放寬緩存的代價是：別人在那台機器上改了文件，你這邊要晚一點才看見。這是個真實的取捨，
 不是白撿的加速。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-remote.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el"
 (setq remote-file-name-inhibit-cache 60)
 #+end_src
 
@@ -81,13 +81,13 @@ TRAMP 默認自己往 ssh 命令行上加一組連接復用選項。這在沒有
 個按秒計的輪詢器,每一輪都是網絡往返。這裏把它明確關上，而不是依賴默認值——core 那邊
 是全局開啓，兩處放在一起看才說得通。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-remote.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el"
 (setq auto-revert-remote-files nil)
 #+end_src
 
 兩台遠程主機之間複製時，讓它們直接對接，而不是把數據拉到本地再推回去。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-remote.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el"
 (setq tramp-use-scp-direct-remote-copying t)
 #+end_src
 
@@ -102,7 +102,7 @@ TRAMP 默認自己往 ssh 命令行上加一組連接復用選項。這在沒有
 這一處要等 TRAMP 加載：它要拼進去的那個正則屬於 TRAMP 自己。等得起——在 TRAMP 加載之前，
 沒有任何遠程路徑存在，也就沒有什麼需要攔的。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-remote.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el"
 (with-eval-after-load 'tramp
   (setq vc-ignore-dir-regexp
         (format "\\(?:%s\\)\\|\\(?:%s\\)"
@@ -116,7 +116,7 @@ file 模塊給 =ls= 的那串開關用了三個 GNU 擴展。遠程列目錄執�
 
 連接局部變量正是為這種情形存在的：同一個變量，在遠程連接上取另一個值。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-remote.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el"
 (connection-local-set-profile-variables
  'ginshio-remote-listing
  '((dired-listing-switches . "-Ahl")))
@@ -133,7 +133,7 @@ file 模塊給 =ls= 的那串開關用了三個 GNU 擴展。遠程列目錄執�
 已經在遠程的文件要多想一步：提權必須發生在那台機器上，不是這台。TRAMP 的多跳語法表
 達的就是這件事——先按原來的方式連過去，再在那頭切成 root。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-remote.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el"
 (defun ginshio-remote--as-root (file)
   "Return the name under which FILE can be edited with root's permissions.
 A file that is already remote gains a second hop rather than a new
@@ -163,7 +163,7 @@ file instead of on this one."
 跟着 TRAMP 一起來，而不是自己把 TRAMP 拉起來——它本來就要求 TRAMP 在場，單獨提前加載只
 是換一個地方付同一筆錢。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-remote.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el"
 (with-eval-after-load 'tramp
   (require 'tramp-container nil t))
 #+end_src
@@ -175,7 +175,7 @@ file instead of on this one."
 連接會卡住——網絡斷了、對面重啓了、sudo 的憑據過期了。症狀是 Emacs 在某個遠程路徑上
 沒有反應。斷開那條連接是唯一的辦法，下次訪問時它會重新建立。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-remote.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el"
 (ginshio-leader-define
  "r"   "remote"
  "r s" #'ginshio/find-file-as-root
@@ -197,13 +197,13 @@ file instead of on this one."
 
 ** 自檢項
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-remote.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el"
 (ginshio-doctor-executable 'remote "ssh"
                            :note "reaching other machines"
                            :remedy "zypper install openssh-clients")
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-remote.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el" :comments no
 (provide 'ginshio-remote)
 ;;; ginshio-remote.el ends here
 #+end_src

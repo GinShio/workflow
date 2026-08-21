@@ -78,7 +78,7 @@ clean() {
     "$root/early-init.elc" \
     "$root/init.el" \
     "$root/init.elc"
-  rm -rf -- "$root/lisp" "$package_dir" "$native_cache_dir"
+  rm -rf -- "$root/lisp/ginshio" "$package_dir" "$native_cache_dir"
   printf 'Removed tangled Lisp, package tree, and native-comp cache.\n'
 }
 

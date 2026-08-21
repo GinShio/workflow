@@ -16,11 +16,11 @@ Emacs 的 parser、grammar 安裝與 tree-sitter major mode 接口見
 [[info:emacs#Outline Mode][Emacs manual: Outline Mode]]。結構移動與摺疊鍵集中在
 [[file:../GUIDE.org::*結構與摺疊][GUIDE.org]]。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el" :comments no
 ;;; ginshio-lang.el --- how this editor reads code -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'ginshio-keys)
@@ -40,7 +40,7 @@ tree-sitter 維護一棵真正的語法樹，並在你每次擊鍵時增量更�
 代價是 grammar 不隨 Emacs 分發，它是每種語言一個要現場編譯的動態庫。下面大半篇幅在
 處理「它可能不在」這件事。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el"
 (defconst ginshio-lang-treesit-available
   (and (fboundp 'treesit-available-p) (treesit-available-p))
   "Whether this Emacs can parse with tree-sitter at all.
@@ -59,7 +59,7 @@ tree-sitter 的程序共用一份。自己編譯只在系統沒有的時候才�
 
 這一點決定了搜索路徑的順序：我們自己的目錄 *追加* 在系統目錄後面，而不是插在前面。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el"
 (defconst ginshio-lang-grammar-dir
   (expand-file-name "tree-sitter/" ginshio-data-dir)
   "Grammars compiled here, for the ones the system does not provide.")
@@ -84,7 +84,7 @@ grammar 的節點名寫的，上游改了節點名之後，你得到的不是報
 註冊是冪等的：同一種語言註冊兩次是替換而不是累積，所以重新加載一個語言模塊不會留下
 重複條目。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el"
 (defvar ginshio-lang-grammars nil
   "Alist of LANGUAGE to (URL REVISION), filled in by the language modules.")
 
@@ -127,7 +127,7 @@ Emacs 30 為每種語言帶了兩套主模式：傳統的和 tree-sitter 的。�
 替換是有條件的，這是本節的重點。tree-sitter 主模式在 grammar 缺失時直接報錯，不是
 降級。無條件替換的結果是：一個沒編譯的動態庫，讓你連文件都打不開。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el"
 (defun ginshio-lang-grammar-ready-p (language)
   "Return non-nil when LANGUAGE's grammar is installed and loadable."
   (and ginshio-lang-treesit-available (treesit-ready-p language t)))
@@ -148,7 +148,7 @@ Emacs 30 為每種語言帶了兩套主模式：傳統的和 tree-sitter 的。�
 安裝是一個顯式命令，不在啓動時自動進行——拉倉庫再調用編譯器是以分鐘計的事，不該發生
 在你只想打開一個文件的時候。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el"
 (defun ginshio/lang-install-grammars (&optional reinstall)
   "Build the grammars the system does not already provide.
 With a prefix argument, REINSTALL the ones that are present -- what you
@@ -171,7 +171,7 @@ loads is otherwise left alone."
 知道一個 grammar 是從哪裏來的，在它行為異常時是第一個要問的問題——系統的那份和你編
 譯的那份版本可能差很遠。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el"
 (defun ginshio-lang-grammar-origin (language)
   "Return the directory LANGUAGE's grammar was loaded from, as a string."
   (let ((library (format "libtree-sitter-%s%s" language module-file-suffix)))
@@ -208,7 +208,7 @@ first heading」。
 改用搜索來回答同一個問題：從本行行首往下找一個標題，找到的如果就是本行，那本行就是
 標題。這比原本的判斷貴一點，但它和第一種問法用的是同一套邏輯，所以兩者不可能再打架。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el"
 (defun ginshio-lang-outline-search (&optional bound move backward looking-at)
   "Find outline headings the way `outline-search-function' expects.
 
@@ -244,7 +244,7 @@ declarations rather than indentation or brace counting."
 綴會在每一個代碼緩衝區裏復活——而 ~C-c~ 這一層是留給主模式的。摘掉它，功能改由
 leader 提供。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el"
 (with-eval-after-load 'outline
   (keymap-unset outline-minor-mode-map "C-c @" t))
 #+end_src
@@ -257,7 +257,7 @@ leader 提供。
 光標在 lambda 或嵌套類裏時跳轉停在那個 lambda 上。改成只認最外層之後，這個鍵回到它
 在肌肉記憶裏的含義——上一個/下一個函數。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el"
 (setq treesit-defun-tactic 'top-level)
 #+end_src
 
@@ -266,7 +266,7 @@ leader 提供。
 摺疊自成一支。用 =z= 是因為在 vi 傳統裏摺疊命令全部以 =z= 開頭，而這是少數幾個跨編
 輯器通用的助記符之一。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el"
 (ginshio-leader-define
  "z"   "fold"
  "z z" #'outline-cycle
@@ -302,7 +302,7 @@ leader 提供。
 ** 加一種使用 tree-sitter 的編程語言
 
 寫一個以 =#+GINSHIO_MODULE: enabled= 開頭的 =org/NN-lang-NAME.org=，生成並提供
-=lisp/ginshio-lang-NAME.el= / ~ginshio-lang-NAME~。tangle 會按文件名自動 include 並加入
+=lisp/ginshio/ginshio-lang-NAME.el= / ~ginshio-lang-NAME~。tangle 會按文件名自動 include 並加入
 ~ginshio-modules~。文件裏按需要聲明下面幾件事，缺哪件就少哪項能力：
 
 | 要什麼        | 怎麼做                                  |
@@ -321,7 +321,7 @@ grammar 缺失只是降級不是故障，所以是 warn，而且順帶報出它�
 查都使用註冊時的 ~:module~，和語言自己的其他檢查出現在同一段；只有 Emacs 本身有沒有
 tree-sitter 支持仍然屬於通用的 =lang= 段。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el"
 (defun ginshio-lang--declare-grammar-check (module language)
   "Have the doctor report on LANGUAGE's grammar for MODULE."
   (ginshio-doctor-declare module (format "%s grammar" language)
@@ -350,7 +350,7 @@ tree-sitter 支持仍然屬於通用的 =lang= 段。
                         :remedy "install libtree-sitter and rebuild Emacs against it")
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el" :comments no
 (provide 'ginshio-lang)
 ;;; ginshio-lang.el ends here
 #+end_src

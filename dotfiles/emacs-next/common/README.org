@@ -2,7 +2,8 @@
 #+author: GinShio
 
 一份以文學編程維護的 Vanilla Emacs 配置。=config.org= 與 =org/*.org= 是代碼的唯一真實
-來源；=early-init.el=、=init.el= 與 =lisp/*.el= 都由它們生成，不直接編輯。
+來源；=early-init.el=、=init.el= 與 =lisp/ginshio/*.el= 都由它們生成，不直接編輯。
+=lisp/= 的其他子目錄保存受版本控制的上游 Emacs Lisp source。
 
 * 契約
 
@@ -38,10 +39,11 @@ $XDG_DATA_HOME/emacs/elpaca/builds-<emacs-version>/
 | =bin/vanilla-emacs clean=            | 刪除 tangle 產物、Elpaca 套件樹與 native-comp cache    |
 | =bin/vanilla-emacs doctor=           | 載入完整配置並檢查外部程序、字體、grammar 與目錄          |
 
-=clean= 是 =sync= 的反操作：它刪除 =early-init.el=、=init.el=、整個 =lisp/=，以及
+=clean= 是 =sync= 的反操作：它刪除 =early-init.el=、=init.el=、=lisp/ginshio/=，以及
 =$XDG_DATA_HOME/emacs/elpaca/= 和 =$XDG_CACHE_HOME/emacs/eln-cache/=。它保留
-=config.org=、=org/*.org=、=tangle.el=、=elpaca.lock=、tree-sitter grammars 與其他使用者
-資料；auto-save 和 backup cache 也不受影響。清理後普通 Emacs 必須啓動失敗，直到再次運行
+=config.org=、=org/*.org=、=tangle.el=、=elpaca.lock=、=lisp/= 下受版本控制的 source、
+tree-sitter grammars 與其他使用者資料；auto-save 和 backup cache 也不受影響。清理後普通
+Emacs 必須啓動失敗，直到再次運行
 =bin/vanilla-emacs sync=。執行前應先由 system/service 停止所有使用這份配置的 Emacs；
 腳本不探測或管理 daemon。
 
@@ -98,8 +100,12 @@ Emacs 放在 =$XDG_RUNTIME_DIR/emacs=，配置不啓用 TCP server，也不設 =
 * 結構
 
 =tangle.el= 自動發現全部 =org/NN-name.org=，按完整文件名字典序 include。功能模塊從文件名
-得到 =name=，生成 =lisp/ginshio-name.el=，同一順序也直接生成 ~ginshio-modules~；不存在
+得到 =name=，生成 =lisp/ginshio/ginshio-name.el=，同一順序也直接生成 ~ginshio-modules~；不存在
 另一份要同步修改的 manifest。
+
+=lisp/ginshio/= 是唯一可由 tangle 與 =clean= 整體重建的 Lisp 子樹。其他 =lisp/NAME/=
+目錄是受版本控制的 source；啓用它們的配置模塊只把自己需要的精確目錄加入 ~load-path~，
+不遞迴暴露整棵 =lisp/=。
 
 每個文件第一行用 =#+GINSHIO_MODULE:= 聲明自己的狀態：
 
@@ -111,7 +117,7 @@ Emacs 放在 =$XDG_RUNTIME_DIR/emacs=，配置不啓用 TCP server，也不設 =
 | =disabled=     | 否     | 否                     |
 
 新增功能模塊只需建立 =org/NN-name.org=、寫上 =enabled=，並讓它生成及提供
-=lisp/ginshio-name.el= / ~ginshio-name~。=NN= 不必連續；它和後面的 =name= 共同決定加載
+=lisp/ginshio/ginshio-name.el= / ~ginshio-name~。=NN= 不必連續；它和後面的 =name= 共同決定加載
 順序。停用時只把該文件改為 =disabled=；成功 tangle 會刪除殘留產物，因此其他啓用模塊若
 仍 ~require~ 它，完整啓動會直接失敗而不是暗中重新啓用。
 

@@ -23,11 +23,11 @@ Elpaca 的聲明仍然先進隊列，但 =init.el= 結束前會同步等待所�
 ~:config~ 也是啓動契約的一部分：任何構建或配置錯誤都會中止啓動，而不是在稍後的 timer 裏
 變成一條容易錯過的 warning。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el" :comments no
 ;;; ginshio-packages.el --- package manager -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'cl-lib)
@@ -43,7 +43,7 @@ Elpaca 的聲明仍然先進隊列，但 =init.el= 結束前會同步等待所�
 控制腳本用 ~GINSHIO_EMACS_COMMAND~ 告訴配置這次 =sync= 是按鎖同步，還是以升級模式運行；
 內部值分別是 =sync= 與 =upgrade=。普通啓動沒有這個變量。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
 (defconst ginshio-package-command (getenv "GINSHIO_EMACS_COMMAND")
   "Package operation requested by bin/vanilla-emacs, or nil during normal startup.")
 
@@ -84,7 +84,7 @@ Elpaca 自己也必須被鎖定；它在讀取 lock file 之前就要先運行�
 按正常隊列把自己構建到 =builds-<emacs-version>/elpaca/=。維護進程也會刪除舊 installer
 可能留在 source 裏的 =*.elc=；source 只保存可跨版本共用的源碼。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
 (defvar elpaca-installer-version 0.12)
 (defconst ginshio-elpaca-ref "6530ffa73b18ccee858e7c471415ab7e0c0d8ce1")
 (defvar elpaca-order `(elpaca :repo "https://github.com/progfolio/elpaca.git"
@@ -184,7 +184,7 @@ manager、log、Info 與訪問 source 都是讀操作，仍然可用。抓取、
 全部拒絕，錯誤信息只給出外部控制腳本。=sync= / =sync --upgrade= 進程不安裝這層保護，
 所以仍走 Elpaca 自己的實現，而不是在 shell 裏複製一套包管理器。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
 (defconst ginshio-packages-mutating-commands
   '(elpaca-update-menus
     elpaca-try
@@ -224,9 +224,10 @@ manager、log、Info 與訪問 source 都是讀操作，仍然可用。抓取、
 commit 寫回鎖檔。兩者都由控制腳本調用，不在運行中的編輯器裏偷偷改變世界。
 
 =bin/vanilla-emacs clean= 是這個生命週期的逆操作。它刪除 =early-init.el=、=init.el=、
-=lisp/=、整棵 Elpaca 目錄與 =$XDG_CACHE_HOME/emacs/eln-cache/=。它不刪 lock，也不碰
-其他 data/state/cache。清理前由 system/service 停止正在使用它們的 Emacs；控制腳本不探測
-daemon。clean 後普通啓動必須失敗；再次 =sync= 才重新建立一個可消費的完整世界。
+=lisp/ginshio/=、整棵 Elpaca 目錄與 =$XDG_CACHE_HOME/emacs/eln-cache/=。它不刪 lock、
+=lisp/= 下受版本控制的 source，也不碰其他 data/state/cache。清理前由 system/service
+停止正在使用它們的 Emacs；控制腳本不探測 daemon。clean 後普通啓動必須失敗；再次
+=sync= 才重新建立一個可消費的完整世界。
 
 ** use-package
 
@@ -237,7 +238,7 @@ daemon。clean 後普通啓動必須失敗；再次 =sync= 才重新建立一個
 經停用的包管理器接手，症狀是安裝憑空失敗而原因指向別處。~:wait~ 讓隊列在這一行處截斷
 並立即處理完，此後的展開才是對的。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
 (elpaca (elpaca-use-package :wait t)
   (elpaca-use-package-mode))
 
@@ -250,7 +251,7 @@ daemon。clean 後普通啓動必須失敗；再次 =sync= 才重新建立一個
 ~:config~ 卻從未執行，因為沒有任何東西觸發它加載，而症狀只是某個功能安靜地缺席。這裏
 要求每個聲明自己說明加載時機——多寫一行 ~:hook~ 或 ~:commands~，換來的是可預測。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
 (setq use-package-always-defer nil
       use-package-expand-minimally t
       use-package-enable-imenu-support t
@@ -283,7 +284,7 @@ package maintenance 已經由 Elpaca 的獨立 Emacs subprocess 做 byte compila
 動態綁定 ~debug-on-error~ 讓 Elpaca 對 package ~:config~ 的保護層重新拋出原始錯誤。構建
 階段的錯誤會把 order 標成 =failed=，等待結束後統一轉成啓動錯誤。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
 (defun ginshio-packages--queue-elpacas (queues)
   "Return every unique package entry held by QUEUES."
   (cl-loop with seen
@@ -483,7 +484,7 @@ package maintenance 已經由 Elpaca 的獨立 Emacs subprocess 做 byte compila
 
 ** 自檢項
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
 (ginshio-doctor-directory 'packages elpaca-directory :note "installed packages")
 (ginshio-doctor-directory 'packages elpaca-builds-directory
                           :note (format "builds for Emacs %s" emacs-version))
@@ -493,7 +494,7 @@ package maintenance 已經由 Elpaca 的獨立 Emacs subprocess 做 byte compila
                         :remedy "bin/vanilla-emacs sync")
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-packages.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el" :comments no
 (provide 'ginshio-packages)
 ;;; ginshio-packages.el ends here
 #+end_src

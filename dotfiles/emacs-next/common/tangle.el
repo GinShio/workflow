@@ -25,6 +25,9 @@
 (defconst ginshio-tangle--manifest-marker-regexp
   "^[ \t]*#\\+GINSHIO_MODULES:[ \t]*$")
 
+(defconst ginshio-tangle--module-directory "lisp/ginshio/"
+  "Directory below the configuration root containing tangled modules.")
+
 (cl-defstruct
     (ginshio-tangle-source (:constructor ginshio-tangle--make-source))
   file name state)
@@ -150,17 +153,20 @@
    when (ginshio-tangle--included-p source)
    collect
    (expand-file-name
-    (if (eq (ginshio-tangle-source-state source) 'bootstrap)
-        "lisp/ginshio-path.el"
-      (format "lisp/ginshio-%s.el" (ginshio-tangle-source-name source)))
+    (concat
+     ginshio-tangle--module-directory
+     (if (eq (ginshio-tangle-source-state source) 'bootstrap)
+         "ginshio-path.el"
+       (format "ginshio-%s.el" (ginshio-tangle-source-name source))))
     directory)))
 
 (defun ginshio-tangle--prune-stale-modules (expected directory)
   "Delete generated module files below DIRECTORY that are not EXPECTED."
-  (let ((lisp-directory (expand-file-name "lisp/" directory)))
-    (when (file-directory-p lisp-directory)
+  (let ((module-directory
+         (expand-file-name ginshio-tangle--module-directory directory)))
+    (when (file-directory-p module-directory)
       (dolist (file
-               (directory-files lisp-directory t "\\`ginshio-.*\\.el\\'" t))
+               (directory-files module-directory t "\\`ginshio-.*\\.el\\'" t))
         (unless (member (expand-file-name file) expected)
           (delete-file file))))))
 

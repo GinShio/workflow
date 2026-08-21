@@ -10,11 +10,11 @@
 桌面的剪貼板之間沒有任何連接，複製出去的文本只活在 kill ring 裏。發現這件事的方式通
 常是切到瀏覽器按下粘貼，然後看着上一次在別處複製的東西冒出來。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-tty.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-tty.el" :comments no
 ;;; ginshio-tty.el --- what a terminal does not give for free -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-tty.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-tty.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 
@@ -51,7 +51,7 @@
 兩處都是為了不在不支持的終端上讓 ~C-y~ 卡住超時而做的保守選擇，方向沒錯。但我們知道自
 己在用哪些終端，不必談判：直接把那個參數打開。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-tty.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-tty.el"
 (defun ginshio-tty-enable-clipboard-h ()
   "Let this terminal be handed the clipboard escape sequence.
 `term/xterm' implements OSC 52 behind this parameter, but only sets it
@@ -110,7 +110,7 @@ set -g set-clipboard on
 
 所以在這裏直接裝一次。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-tty.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-tty.el"
 (keymap-set (current-global-map) "<xterm-paste>" #'xterm-paste)
 #+end_src
 
@@ -138,7 +138,7 @@ tmux 的剪貼板轉發默認不是打開的。沒有它，序列走到 tmux 就
 模一樣：複製沒有任何反應，也沒有任何錯誤。這種「兩邊都要對，錯一邊不出聲」的接線正是
 自檢該管的。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-tty.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-tty.el"
 (defun ginshio-tty-inside-multiplexer-p ()
   (and (getenv "TMUX") t))
 
@@ -162,7 +162,7 @@ tmux 的剪貼板轉發默認不是打開的。沒有它，序列走到 tmux 就
 批處理下跳過。那裏的「終端」是一個沒人在看的啞終端，問它有多少顏色，得到的答案為真
 卻無意義——而一條恆假的檢查會讓整份報告開始被忽略。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-tty.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-tty.el"
 (ginshio-doctor-declare 'tty "direct colour"
                         (lambda () (>= (display-color-cells) 16777216))
                         :severity 'warn
@@ -176,7 +176,7 @@ tmux 的剪貼板轉發默認不是打開的。沒有它，序列走到 tmux 就
                                 (and (not noninteractive) (not (display-graphic-p)))))
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-tty.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-tty.el" :comments no
 (provide 'ginshio-tty)
 ;;; ginshio-tty.el ends here
 #+end_src

@@ -6,11 +6,11 @@ Markdown、reStructuredText 與 AsciiDoc 解決的是同一類問題：用仍然
 文檔，再按需要渲染成 HTML、PDF 或其他格式。它們共享編輯策略、幫助入口與外部工具檢查，
 所以放在同一個序號和模塊裏；每種格式仍然使用自己的 major mode 與原生鍵位。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-markup.el" :comments no
 ;;; ginshio-lang-markup.el --- lightweight document markup -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-markup.el"
 (require 'ginshio-doctor)
 #+end_src
 
@@ -33,7 +33,7 @@ Markdown 的價值在於源文件本身就能讀，所以不把編輯緩衝區�
 普通擴展名進 ~markdown-mode~；=README.md= 通常發佈在 GitHub，單獨交給 ~gfm-mode~，讓表格、
 刪除線、任務列表等語法按 GitHub 方言解讀。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-markup.el"
 (defun ginshio-lang-markup-markdown-setup-h ()
   "Select this Markdown dialect's renderer."
   (setq-local markdown-command
@@ -62,7 +62,7 @@ Markdown 的價值在於源文件本身就能讀，所以不把編輯緩衝區�
 ~markdown-mode~ 能把渲染結果送到另一個窗口、瀏覽器或內建 EWW。普通 Markdown 與 GFM
 共用 pandoc，只在輸入方言上不同；輸出都是 HTML5 fragment，外層文檔由模式補齊。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-markup.el"
 (ginshio-doctor-executable 'lang-markup "pandoc"
                            :severity 'warn
                            :note "Markdown HTML preview and export"
@@ -81,7 +81,7 @@ Docutils 編譯流程；=.rst= 和 =.rest= 都會自動進入這個模式。
 內建配置默認調用舊式的 ~rst2html~。這台機器同時提供現代的 ~rst2html5~，所以保留原本的
 ~html~ toolset 名稱，只替換它實際執行的命令；~rst-compile~ 及其所有原生鍵位無需改變。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-markup.el"
 (use-package rst
   :ensure nil
   :mode ("\\.re?st\\'" . rst-mode)
@@ -112,7 +112,7 @@ Docutils 編譯流程；=.rst= 和 =.rest= 都會自動進入這個模式。
 major mode 着色，避免一個很大的 listing 拖慢整個文檔。預覽固定使用內建 EWW，不依賴
 xwidget 或外部瀏覽器。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el"
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-markup.el"
 (use-package adoc-mode
   :ensure t
   :mode ("\\.a\\(?:scii\\)?doc\\'" . adoc-mode)
@@ -131,7 +131,7 @@ xwidget 或外部瀏覽器。
 ~TAB~ / ~S-TAB~ 摺疊。完整模式說明從 ~M-m h m~ 查看；功能與命令細節見
 [[https://github.com/bbatsov/adoc-mode#usage][adoc-mode Usage 文檔]]。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-markup.el" :comments no
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-markup.el" :comments no
 (provide 'ginshio-lang-markup)
 ;;; ginshio-lang-markup.el ends here
 #+end_src
