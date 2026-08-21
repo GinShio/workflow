@@ -1,3 +1,5 @@
+#+GINSHIO_MODULE: enabled
+
 * 終端裏的 Emacs
 
 這裏只補終端協議與圖形 frame 的差異，不建立另一套配置。按鍵譯碼與終端輸入的背景見

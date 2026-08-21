@@ -1,3 +1,5 @@
+#+GINSHIO_MODULE: enabled
+
 * LaTeX
 
 本模塊只處理獨立的 =.tex= 文件：AUCTeX 負責結構、編譯、錯誤定位與 PDF 同步，CDLaTeX

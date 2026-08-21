@@ -97,29 +97,26 @@ Emacs 放在 =$XDG_RUNTIME_DIR/emacs=，配置不啓用 TCP server，也不設 =
 
 * 結構
 
-| 源文件                 | 產物                                        |
-|------------------------+---------------------------------------------|
-| =org/00-bootstrap.org=   | =early-init.el=、=init.el=、=ginshio-path.el= |
-| =org/01-doctor.org=      | =lisp/ginshio-doctor.el=                     |
-| =org/02-core.org=        | =lisp/ginshio-core.el=                       |
-| =org/03-keys.org=        | =lisp/ginshio-keys.el=                       |
-| =org/05-packages.org=    | =lisp/ginshio-packages.el=                   |
-| =org/06-theme.org=       | =lisp/ginshio-theme.el=                      |
-| =org/10-minibuffer.org=  | =lisp/ginshio-minibuffer.el=                 |
-| =org/10-window.org=      | =lisp/ginshio-window.el=                     |
-| =org/16-edit.org=        | =lisp/ginshio-edit.el=                       |
-| =org/20-file.org=        | =lisp/ginshio-file.el=                       |
-| =org/25-tty.org=         | =lisp/ginshio-tty.el=                        |
-| =org/25-shell.org=       | =lisp/ginshio-shell.el=                      |
-| =org/25-remote.org=      | =lisp/ginshio-remote.el=                     |
-| =org/45-vc.org=          | =lisp/ginshio-vc.el=                         |
-| =org/50-lang.org=        | =lisp/ginshio-lang.el=                       |
-| =org/55-lsp.org=         | =lisp/ginshio-lsp.el=                        |
-| =org/55-dap.org=         | =lisp/ginshio-dap.el=                        |
-| =org/60-lang-markup.org= | =lisp/ginshio-lang-markup.el=                |
-| =org/65-lang-c.org=      | =lisp/ginshio-lang-c.el=                     |
+=tangle.el= 自動發現全部 =org/NN-name.org=，按完整文件名字典序 include。功能模塊從文件名
+得到 =name=，生成 =lisp/ginshio-name.el=，同一順序也直接生成 ~ginshio-modules~；不存在
+另一份要同步修改的 manifest。
 
-新增模塊時，在 =org/NN-name.org= 生成 =lisp/ginshio-name.el=；=NN= 選擇相近主題的現有分組，
-不必保持連續或預留固定間隔。將源文件加入 =config.org= 的 =#+include=，再把模塊加入
-=org/00-bootstrap.org= 的 ~ginshio-modules~。任何錯誤都應在 tangle、smoke test 或完整啓動
-中直接暴露。
+每個文件第一行用 =#+GINSHIO_MODULE:= 聲明自己的狀態：
+
+| 值           | tangle | 加入 ~ginshio-modules~ |
+|--------------+--------+------------------------|
+| =bootstrap=    | 是     | 否                     |
+| =support=      | 是     | 否                     |
+| =enabled=      | 是     | 是                     |
+| =disabled=     | 否     | 否                     |
+
+新增功能模塊只需建立 =org/NN-name.org=、寫上 =enabled=，並讓它生成及提供
+=lisp/ginshio-name.el= / ~ginshio-name~。=NN= 不必連續；它和後面的 =name= 共同決定加載
+順序。停用時只把該文件改為 =disabled=；成功 tangle 會刪除殘留產物，因此其他啓用模塊若
+仍 ~require~ 它，完整啓動會直接失敗而不是暗中重新啓用。
+
+metadata、排序、生成清單與 hard-off 的 batch 測試：
+
+#+begin_src shell
+emacs -Q --batch -l test/tangle-tests.el -f ert-run-tests-batch-and-exit
+#+end_src

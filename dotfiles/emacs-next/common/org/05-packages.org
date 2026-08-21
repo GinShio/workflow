@@ -1,3 +1,5 @@
+#+GINSHIO_MODULE: enabled
+
 * 包管理
 
 Emacs 自帶的包管理器只認發布到 ELPA 的版本，而 Emacs 生態裏大量有價值的東西直接活

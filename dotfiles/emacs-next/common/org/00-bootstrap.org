@@ -1,3 +1,5 @@
+#+GINSHIO_MODULE: bootstrap
+
 * 引導
 
 Emacs 的啓動次序、early init 與 init file 契約見 [[info:emacs#Init File][Emacs manual: The Emacs Initialization File]]；
@@ -213,32 +215,12 @@ Signal an error when it is absent or relative."
 
 *** 啓用的模塊
 
-這份列表是整個配置的總開關。註釋掉一行，對應模塊連同它安裝的包一起消失。
+模塊清單由 tangle 根據文件名與各文件的 metadata 生成。文件名是加載順序；=packages=
+仍是分水嶺，排在它前面的模塊不得使用第三方包。
 
-順序即依賴順序，其中 =packages= 是分水嶺：排在它前面的模塊不得使用第三方包，排在後
-面的才可以。
-
-#+begin_src emacs-lisp :tangle "init.el"
+#+begin_src emacs-lisp :tangle "init.el" :noweb yes
 (defvar ginshio-modules
-  '(core        ; editing behaviour, files, built-in defaults
-    keys        ; global keymap reset and leader
-    packages    ; package manager -- modules below may use third-party packages
-    theme       ; fonts, colours, modeline, startup screen
-    minibuffer  ; completion, search, jumping: choosing anything
-    window      ; window movement, buffer display rules, workspaces
-    edit        ; changing several places at once
-    file        ; directories as buffers
-    tty         ; what a terminal does not give for free
-    shell       ; handing work to other programs
-    remote      ; files on other machines
-    lang        ; syntax trees, major modes, indentation, folding
-    lsp         ; language servers: documentation, diagnostics, navigation
-    dap         ; debugging
-    vc          ; the parts of version control the terminal cannot do
-    lang-c      ; C and C++ register themselves with the three above
-    lang-latex  ; LaTeX editing, builds and PDF source correlation
-    lang-markup ; Markdown, reStructuredText and AsciiDoc
-    )
+  '<<ginshio-generated-modules>>
   "Modules to load, in order.")
 
 (dolist (module ginshio-modules)
@@ -246,7 +228,8 @@ Signal an error when it is absent or relative."
 
 ;; Every package declaration has been seen.  Activate the installed package
 ;; graph now, and fail startup if any part of it is unavailable or broken.
-(ginshio-packages-finalize)
+(when (memq 'packages ginshio-modules)
+  (ginshio-packages-finalize))
 #+end_src
 
 *** 自定義文件

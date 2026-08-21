@@ -1,3 +1,5 @@
+#+GINSHIO_MODULE: enabled
+
 * 選擇
 
 Emacs 裏幾乎每個「選一個」都走 ~completing-read~：切緩衝區、找文件、跳定義、~M-x~ 自

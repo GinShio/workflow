@@ -1,3 +1,5 @@
+#+GINSHIO_MODULE: enabled
+
 * 遠程
 
 TRAMP 的想法很簡單：文件名前面加一段前綴，這個文件就在別的機器上。=/ssh:box:/etc/
