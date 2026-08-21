@@ -78,38 +78,72 @@ compiler 則由本模塊的 ~:compilers~ 分開聲明。
           ":[ \t]*\\([^ \t\n]+\\)")
   "The clang-format settings worth mirroring, as they appear in its output.")
 
-(defvar ginshio-lang-c--format-cache (make-hash-table :test #'equal)
-  "Resolved clang-format settings, keyed by directory.")
+(defvar ginshio-lang-c--style-cache (make-hash-table :test #'equal)
+  "Nearest clang-format style file, keyed by source directory.")
 
-(defun ginshio-lang-c--dump-format-config (directory)
-  "Return what clang-format would do in DIRECTORY, as an alist of strings."
+(defvar ginshio-lang-c--format-cache (make-hash-table :test #'equal)
+  "Resolved settings, keyed by style file and language.")
+
+(defun ginshio-lang-c--style-file (directory)
+  "Return the nearest clang-format style governing DIRECTORY."
+  (let* ((directory (file-name-as-directory (expand-file-name directory)))
+         (cached (gethash directory ginshio-lang-c--style-cache 'missing)))
+    (when (eq cached 'missing)
+      (setq cached
+            (if-let* ((root
+                       (locate-dominating-file
+                        directory
+                        (lambda (candidate)
+                          (or (file-exists-p
+                               (expand-file-name ".clang-format" candidate))
+                              (file-exists-p
+                               (expand-file-name "_clang-format" candidate)))))))
+                (or (let ((file (expand-file-name ".clang-format" root)))
+                      (and (file-exists-p file) file))
+                    (expand-file-name "_clang-format" root))
+              'none))
+      (puthash directory cached ginshio-lang-c--style-cache))
+    (unless (eq cached 'none) cached)))
+
+(defun ginshio-lang-c--dump-format-config (style file)
+  "Return clang-format settings for FILE governed by STYLE."
   (with-temp-buffer
-    (let ((default-directory directory))
-      (when (zerop (call-process "clang-format" nil t nil "--dump-config"))
+    (let ((default-directory (file-name-directory style)))
+      (when
+          (zerop
+           (process-file
+            "clang-format" nil t nil "--dump-config" "--style=file"
+            (concat "--assume-filename=" (file-local-name file))))
         (goto-char (point-min))
         (let (settings)
           (while (re-search-forward ginshio-lang-c-format-settings-regexp nil t)
             (push (cons (match-string 1) (match-string 2)) settings))
           settings)))))
 
-(defun ginshio-lang-c-format-settings (directory)
-  "Return the clang-format settings governing DIRECTORY, or nil.
+(defun ginshio-lang-c-format-settings (file)
+  "Return the clang-format settings governing FILE, or nil.
 
 Nil when no `.clang-format' applies: without one, clang-format still
 answers, but with its own defaults, and adopting those would quietly
 re-indent every C file on the machine that belongs to no project."
-  (when (and (executable-find "clang-format")
-             (locate-dominating-file directory ".clang-format"))
-    (let* ((key (expand-file-name directory))
+  (when-let* (((executable-find "clang-format" (file-remote-p file)))
+              (style
+               (ginshio-lang-c--style-file (file-name-directory file))))
+    (let* ((language
+            (if (derived-mode-p 'c++-mode 'c++-ts-mode) 'cpp 'c))
+           (key (cons style language))
            (cached (gethash key ginshio-lang-c--format-cache)))
       (unless cached
-        (setq cached (or (ginshio-lang-c--dump-format-config key) 'unavailable))
+        (setq cached
+              (or (ginshio-lang-c--dump-format-config style file)
+                  'unavailable))
         (puthash key cached ginshio-lang-c--format-cache))
       (unless (eq cached 'unavailable) cached))))
 
 (defun ginshio/lang-c-forget-format-settings ()
   "Ask clang-format again, after a `.clang-format' has changed."
   (interactive)
+  (clrhash ginshio-lang-c--style-cache)
   (clrhash ginshio-lang-c--format-cache)
   (message "clang-format settings will be re-read"))
 #+end_src
@@ -123,7 +157,7 @@ re-indent every C file on the machine that belongs to no project."
 (defun ginshio-lang-c-adopt-format-settings-h ()
   "Indent the way this directory's clang-format would."
   (when-let* ((file buffer-file-name)
-              (settings (ginshio-lang-c-format-settings (file-name-directory file))))
+              (settings (ginshio-lang-c-format-settings file)))
     (when-let* ((width (alist-get "IndentWidth" settings nil nil #'equal)))
       (setq-local c-ts-mode-indent-offset (string-to-number width)
                   c-basic-offset (string-to-number width)))
@@ -154,9 +188,11 @@ re-indent every C file on the machine that belongs to no project."
   "Return the command line for clangd in the current buffer."
   (list "clangd"
         (format "-j=%d" (max 2 (/ (num-processors) 2)))
+        "--background-index-priority=background"
         "--clang-tidy"
         "--header-insertion=iwyu"
         "--completion-style=detailed"
+        "--malloc-trim"
         "--pch-storage=memory"))
 
 (ginshio-lsp-register-server

@@ -217,7 +217,6 @@ dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從�
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
 (use-package hl-todo
   :ensure t
-  :demand t
   :init
   (setq hl-todo-keyword-faces
         '(("TODO"       . error)
@@ -228,8 +227,7 @@ dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從�
           ("REVIEW"     . warning)
           ("DEPRECATED" . warning)
           ("NOTE"       . success)))
-  :config
-  (global-hl-todo-mode 1))
+  :hook ((prog-mode conf-mode) . hl-todo-mode))
 #+end_src
 
 ** 狀態欄
@@ -241,7 +239,7 @@ dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從�
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
 (use-package nerd-icons
   :ensure t
-  :demand t)
+  :commands nerd-icons-install-fonts)
 
 (use-package doom-modeline
   :ensure t
@@ -261,6 +259,7 @@ dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從�
 (use-package nyan-mode
   :ensure (:host github :repo "TeMPOraL/nyan-mode")
   :after doom-modeline
+  :demand t
   :init
   (setq nyan-animate-nyancat t
         nyan-wavy-trail t
@@ -269,6 +268,33 @@ dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從�
         nyan-minimum-window-width 64)
   :config
   (nyan-mode 1))
+#+end_src
+
+動畫只在看得見而且有焦點的 GUI frame 上傳遞信息。daemon 尚未有圖形客戶端、全部 frame
+都失焦、或只剩終端時暫停 timer；回來時從當前 frame 繼續，不在背景以 5Hz 強制重畫
+modeline。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+(defun ginshio-theme-nyan-visible-p ()
+  "Return non-nil when a focused graphical frame can display Nyan."
+  (seq-some (lambda (frame)
+              (and (display-graphic-p frame)
+                   (frame-visible-p frame)
+                   (frame-focus-state frame)))
+            (frame-list)))
+
+(defun ginshio-theme-update-nyan-animation-h (&rest _)
+  "Run Nyan's animation only while a graphical frame is being watched."
+  (when (and (featurep 'nyan-mode) (bound-and-true-p nyan-mode))
+    (if (ginshio-theme-nyan-visible-p)
+        (nyan-start-animation)
+      (nyan-stop-animation))))
+
+(add-function :after after-focus-change-function
+              #'ginshio-theme-update-nyan-animation-h)
+(add-hook 'window-setup-hook #'ginshio-theme-update-nyan-animation-h)
+(add-hook 'server-after-make-frame-hook
+          #'ginshio-theme-update-nyan-animation-h)
 #+end_src
 
 ** 啓動畫面
@@ -316,6 +342,7 @@ back to its own."
 
 (defun ginshio-theme-dashboard-buffer ()
   "Return the dashboard, built and current."
+  (require 'dashboard)
   (ginshio-theme-show-dashboard-h)
   (get-buffer dashboard-buffer-name))
 #+end_src
@@ -355,8 +382,7 @@ file has already been visited by the time this runs."
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
 (use-package dashboard
   :ensure t
-  :demand t
-  :after nerd-icons
+  :commands dashboard-refresh-buffer
   :init
   (setq dashboard-items '((recents . 8)
                           (projects . 5)
@@ -378,10 +404,10 @@ file has already been visited by the time this runs."
                                     dashboard-insert-banner-title
                                     dashboard-insert-newline
                                     dashboard-insert-init-info
-                                    dashboard-insert-items))
+                                    dashboard-insert-items)
+        initial-buffer-choice #'ginshio-theme-initial-buffer)
   :config
-  (ginshio-theme-show-dashboard-h)
-  (setq initial-buffer-choice #'ginshio-theme-initial-buffer)
+  (require 'nerd-icons)
   (add-hook 'window-size-change-functions #'dashboard-resize-on-hook 100))
 #+end_src
 

@@ -27,6 +27,7 @@
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'ginshio-keys)
+(require 'cl-lib)
 (require 'seq)
 (require 'vc)
 (require 'vc-git)
@@ -200,11 +201,9 @@ diff 是參照物，要和正在寫的那段話並排纔讀得下去——上下
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
 (defun ginshio-vc-show-what-is-being-committed ()
-  "Put the changes about to be committed beside the message being written.
-Only when nothing else will: with a client waiting, Magit brings the diff
-up from `server-switch-hook' a moment after this runs."
-  (when (and (bound-and-true-p git-commit-mode)
-             (not server-buffer-clients))
+  "Put the changes about to be committed beside the message being written."
+  (when (bound-and-true-p git-commit-mode)
+    (require 'magit-commit)
     (magit-commit-diff)))
 #+end_src
 
@@ -322,16 +321,14 @@ Magit 的界面框架 =transient= 要單獨聲明一行，否則整個包裝不�
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
 (use-package transient
   :ensure t
-  :demand t)
+  :defer t)
 
 (use-package magit
   :ensure t
-  :demand t
+  :defer t
   :init
   (setq magit-define-global-key-bindings nil
-        git-commit-summary-max-length 50)
-  :config
-  (ginshio-vc-adopt-waiting-buffers))
+        git-commit-summary-max-length 50))
 #+end_src
 
 #+begin_quote
@@ -386,17 +383,26 @@ diff，~window-setup-hook~ 上那個佔滿 frame 的函數也什麼都找不到�
 息的那幾個文件名；它沒認的（rebase 清單）交給 ~auto-mode-alist~。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+(defun ginshio-vc-setup-waiting-buffer-h ()
+  "Load only the Git editing mode needed by this waiting buffer."
+  (when (and buffer-file-name
+             (string-match-p ginshio-vc-waiting-file-regexp buffer-file-name)
+             (not (bound-and-true-p with-editor-mode)))
+    (if (string-suffix-p "/git-rebase-todo" buffer-file-name)
+        (progn
+          (require 'git-rebase)
+          (git-rebase-mode))
+      (require 'git-commit)
+      (git-commit-setup-check-buffer))))
+
 (defun ginshio-vc-adopt-waiting-buffers ()
-  "Set up the buffers Git is waiting on that were opened before Magit arrived."
+  "Set up any Git editor buffers which predate this module."
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
-      (when (and buffer-file-name
-                 (string-match-p ginshio-vc-waiting-file-regexp buffer-file-name)
-                 (not (bound-and-true-p with-editor-mode)))
-        (git-commit-setup-check-buffer)
-        (unless (bound-and-true-p with-editor-mode)
-          (normal-mode)))))
-  (ginshio-vc-own-the-frame))
+      (ginshio-vc-setup-waiting-buffer-h))))
+
+(add-hook 'find-file-hook #'ginshio-vc-setup-waiting-buffer-h 90)
+(ginshio-vc-adopt-waiting-buffers)
 #+end_src
 
 *** 順帶得到的
@@ -530,12 +536,15 @@ ediff 默認把控制面板放進一個獨立的 frame。在平鋪的窗口管�
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
 (use-package diff-hl
   :ensure t
-  :demand t
+  :commands (diff-hl-next-hunk diff-hl-previous-hunk diff-hl-show-hunk
+             diff-hl-stage-dwim diff-hl-revert-hunk diff-hl-update)
   :init
   (setq diff-hl-draw-borders nil
         diff-hl-show-staged-changes nil)
+  :hook ((find-file . diff-hl-mode)
+         (dired-mode . diff-hl-dired-mode))
   :config
-  (global-diff-hl-mode 1)
+  (require 'diff-hl-flydiff)
   (diff-hl-flydiff-mode 1)
   ;; This mode installs a `C-x v' prefix of its own.  A minor mode map is
   ;; consulted independently of the global map, so that prefix would come
@@ -580,22 +589,80 @@ porcelain 要求你先離開文件。
 個動作的自然邊界，也讓開銷與打開了多少文件無關。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+(defvar ginshio-vc--repository-signatures (make-hash-table :test #'equal)
+  "Last Git status signature observed for each visible repository.")
+
+(defvar ginshio-vc--focus-refresh-timer nil)
+
+(defun ginshio-vc--visible-file-buffers ()
+  "Return unique local file buffers visible in the selected frame."
+  (delete-dups
+   (cl-loop for window in (window-list nil 'never)
+            for buffer = (window-buffer window)
+            for file = (buffer-local-value 'buffer-file-name buffer)
+            when (and file (not (file-remote-p file)))
+            collect buffer)))
+
+(defun ginshio-vc--repository-signature (root)
+  "Return a cheap signature of tracked worktree and branch state at ROOT."
+  (with-temp-buffer
+    (let ((default-directory root))
+      (when (zerop
+             (process-file
+              "git" nil t nil "status" "--porcelain=v2" "--branch"
+              "--untracked-files=no"))
+        (buffer-string)))))
+
+(defun ginshio-vc--refresh-buffer (buffer)
+  "Refresh VC and diff-hl state for BUFFER."
+  (with-current-buffer buffer
+    (vc-refresh-state)
+    (when (bound-and-true-p diff-hl-mode)
+      (diff-hl-update))))
+
 (defun ginshio/vc-refresh ()
-  "Ask Git again about the buffers currently on screen."
+  "Ask Git again about the unique file buffers currently on screen."
   (interactive)
-  (dolist (window (window-list nil 'never))
-    (let ((buffer (window-buffer window)))
-      (when-let* ((file (buffer-local-value 'buffer-file-name buffer))
-                  ((not (file-remote-p file))))
-        (with-current-buffer buffer
-          (vc-refresh-state)
-          (when (bound-and-true-p diff-hl-mode)
-            (diff-hl-update)))))))
+  (dolist (buffer (ginshio-vc--visible-file-buffers))
+    (ginshio-vc--refresh-buffer buffer))
+  (dolist (root
+           (delete-dups
+            (delq nil
+                  (mapcar
+                   (lambda (buffer)
+                     (with-current-buffer buffer
+                       (vc-git-root buffer-file-name)))
+                   (ginshio-vc--visible-file-buffers)))))
+    (puthash root (ginshio-vc--repository-signature root)
+             ginshio-vc--repository-signatures)))
+
+(defun ginshio-vc-refresh-changed-repositories-h ()
+  "Refresh visible buffers only where Git reports externally changed state."
+  (setq ginshio-vc--focus-refresh-timer nil)
+  (let ((buffers (ginshio-vc--visible-file-buffers))
+        repositories)
+    (dolist (buffer buffers)
+      (when-let* ((root
+                   (with-current-buffer buffer
+                     (vc-git-root buffer-file-name))))
+        (push (cons root buffer) repositories)))
+    (dolist (root (delete-dups (mapcar #'car repositories)))
+      (let ((signature (ginshio-vc--repository-signature root)))
+        (unless (equal signature
+                       (gethash root ginshio-vc--repository-signatures))
+          (puthash root signature ginshio-vc--repository-signatures)
+          (dolist (entry repositories)
+            (when (equal root (car entry))
+              (ginshio-vc--refresh-buffer (cdr entry)))))))))
 
 (defun ginshio-vc-refresh-on-focus-h ()
-  "Refresh when this frame is being returned to, not when it is left."
+  "Debounce repository refresh after this frame regains focus."
   (when (frame-focus-state)
-    (ginshio/vc-refresh)))
+    (when (timerp ginshio-vc--focus-refresh-timer)
+      (cancel-timer ginshio-vc--focus-refresh-timer))
+    (setq ginshio-vc--focus-refresh-timer
+          (run-with-idle-timer
+           0.15 nil #'ginshio-vc-refresh-changed-repositories-h))))
 
 (add-function :after after-focus-change-function #'ginshio-vc-refresh-on-focus-h)
 #+end_src

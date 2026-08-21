@@ -111,12 +111,18 @@ orderless 會讓 =~/= 展開和遠程主機名補全失靈，而症狀看起來�
 的當前值。這些信息本來就在 Emacs 裏，只是從不出現在你需要它的那一刻。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+(defun ginshio-minibuffer-enable-marginalia-h ()
+  "Load Marginalia for the first minibuffer which needs annotations."
+  (remove-hook 'minibuffer-setup-hook
+               #'ginshio-minibuffer-enable-marginalia-h)
+  (marginalia-mode 1))
+
 (use-package marginalia
   :ensure t
-  :demand t
-  :after vertico
-  :config
-  (marginalia-mode 1))
+  :commands marginalia-mode
+  :init
+  (add-hook 'minibuffer-setup-hook
+            #'ginshio-minibuffer-enable-marginalia-h))
 #+end_src
 
 ** 來源
@@ -133,14 +139,17 @@ vertico 改候選項怎麼顯示，[[https://github.com/minad/consult][consult]]
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
 (use-package consult
   :ensure t
-  :demand t
+  :commands (consult-history consult-xref consult-project-buffer consult-buffer
+             consult-recent-file consult-line consult-line-multi
+             consult-goto-line consult-imenu consult-imenu-multi consult-mark
+             consult-ripgrep consult-git-grep consult-fd consult-yank-pop
+             consult-register consult-register-store consult-register-format)
   :init
   (setq consult-narrow-key "<"
         register-preview-delay 0.3
         register-preview-function #'consult-register-format
         xref-show-xrefs-function #'consult-xref
         xref-show-definitions-function #'consult-xref)
-  :config
   (keymap-set minibuffer-local-map "M-r" #'consult-history))
 #+end_src
 
@@ -195,17 +204,22 @@ URL 或符號。它認類型的依據正是 marginalia 提供的那些元數據�
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
 (use-package embark
   :ensure t
-  :demand t)
+  :commands (embark-act embark-dwim embark-bindings
+             embark-export embark-collect))
+
+(defun ginshio-minibuffer-enable-embark-consult-h ()
+  "Load Consult integration when an Embark collection is displayed."
+  (require 'embark-consult)
+  (consult-preview-at-point-mode 1))
 
 (use-package embark-consult
   :ensure t
-  :demand t
-  :after (embark consult)
-  :hook (embark-collect-mode . consult-preview-at-point-mode))
+  :hook (embark-collect-mode . ginshio-minibuffer-enable-embark-consult-h))
 
 (use-package wgrep
   :ensure t
-  :demand t)
+  :commands (wgrep-change-to-wgrep-mode
+             wgrep-finish-edit wgrep-abort-changes))
 #+end_src
 
 ** 緩衝區內補全
@@ -287,6 +301,7 @@ corfu 的彈出框是 child frame，終端下根本不存在——不裝下面�
 (use-package corfu-terminal
   :ensure (corfu-terminal :host codeberg :repo "akib/emacs-corfu-terminal")
   :after corfu
+  :demand t
   :config
   (corfu-terminal-mode 1))
 #+end_src
@@ -302,16 +317,21 @@ corfu 的彈出框是 child frame，終端下根本不存在——不裝下面�
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
 (use-package nerd-icons-corfu
   :ensure t
-  :after corfu
-  :config
+  :commands nerd-icons-corfu-formatter
+  :init
   (add-to-list 'corfu-margin-formatters #'nerd-icons-corfu-formatter))
+
+(defun ginshio-minibuffer-setup-completion-icons-h ()
+  "Load completion icons when Marginalia itself becomes active."
+  (require 'nerd-icons-completion)
+  (nerd-icons-completion-mode 1)
+  (nerd-icons-completion-marginalia-setup))
 
 (use-package nerd-icons-completion
   :ensure t
-  :after marginalia
-  :config
-  (nerd-icons-completion-mode 1)
-  (add-hook 'marginalia-mode-hook #'nerd-icons-completion-marginalia-setup))
+  :commands (nerd-icons-completion-mode
+             nerd-icons-completion-marginalia-setup)
+  :hook (marginalia-mode . ginshio-minibuffer-setup-completion-icons-h))
 #+end_src
 
 字體由 theme 模塊的自檢負責：缺 Symbols Nerd Font Mono 時圖標會顯示成方框，
@@ -339,8 +359,9 @@ minibuffer 裏是干擾；elisp 代碼塊只在 org 和 markdown 裏存在。二
 
 (use-package cape
   :ensure t
-  :demand t
-  :config
+  :commands (cape-file cape-dabbrev cape-elisp-block
+             cape-wrap-nonexclusive)
+  :init
   (add-hook 'prog-mode-hook #'ginshio-minibuffer-add-file-capf-h)
   (add-hook 'conf-mode-hook #'ginshio-minibuffer-add-file-capf-h)
   (dolist (hook '(prog-mode-hook text-mode-hook conf-mode-hook))

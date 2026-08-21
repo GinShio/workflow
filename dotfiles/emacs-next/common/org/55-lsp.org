@@ -24,6 +24,7 @@
 (require 'seq)
 
 (defvar eglot-server-programs)
+(defvar eglot-lsp-context)
 (declare-function eglot-managed-p "eglot")
 (declare-function eglot-completion-at-point "eglot")
 #+end_src
@@ -83,7 +84,7 @@ flymake，補全交給 capf，符號列表交給 imenu。你已經會用的鍵�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el"
 (setq eglot-autoshutdown t
-      eglot-sync-connect 1
+      eglot-sync-connect 0
       eglot-connect-timeout 60
       eglot-send-changes-idle-time 0.3
       eglot-extend-to-xref t)
@@ -231,8 +232,6 @@ PROPERTIES is a plist:
                 (seq-remove (lambda (other)
                               (equal (plist-get other :modes) modes))
                             ginshio-lsp-servers)))
-    (dolist (mode modes)
-      (add-hook (intern (format "%s-hook" mode)) #'ginshio-lsp-start-h))
     (ginshio-lsp--declare-server-check properties)
     (when (featurep 'eglot)
       (ginshio-lsp--teach-eglot properties))))
@@ -283,13 +282,36 @@ contact 有問題時，直接 ~M-x eglot~ 手動啓動，那條路徑會如實�
 這三種都不是異常，是日常。所以先問清楚，能成再啓動。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el"
+(defvar ginshio-lsp--executable-cache (make-hash-table :test #'equal)
+  "Executable lookup results keyed by program, host, and exec-path.")
+
+(defun ginshio-lsp-executable-ready-p (program)
+  "Return non-nil when PROGRAM is executable in this buffer's environment."
+  (let* ((remote (file-remote-p default-directory))
+         (key (list program remote exec-path))
+         (cached (gethash key ginshio-lsp--executable-cache 'missing)))
+    (when (eq cached 'missing)
+      (setq cached (and (executable-find program remote) t))
+      (puthash key cached ginshio-lsp--executable-cache))
+    cached))
+
+(defun ginshio/lsp-forget-executables ()
+  "Recheck language-server executables on their next buffer visit."
+  (interactive)
+  (clrhash ginshio-lsp--executable-cache)
+  (message "Language-server executables will be checked again"))
+
 (defun ginshio-lsp-start-h ()
   "Attach a language server to this buffer when doing so can succeed."
   (when-let* ((server (ginshio-lsp-server-for-mode major-mode))
               ((buffer-file-name))
-              ((project-current nil))
-              ((executable-find (plist-get server :program))))
+              ((let ((eglot-lsp-context t))
+                 (project-current nil)))
+              ((ginshio-lsp-executable-ready-p
+                (plist-get server :program))))
     (eglot-ensure)))
+
+(add-hook 'hack-local-variables-hook #'ginshio-lsp-start-h)
 #+end_src
 
 沒自動起來的時候 ~M-m c e~ 手動啓動，那條路徑會照常報告失敗的原因。

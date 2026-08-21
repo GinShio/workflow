@@ -123,6 +123,7 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-core.el"
 (setq global-auto-revert-non-file-buffers t
+      auto-revert-avoid-polling t
       auto-revert-verbose nil)
 (global-auto-revert-mode 1)
 #+end_src
@@ -163,7 +164,7 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
 (setq recentf-save-file (ginshio-state "recentf")
       recentf-max-saved-items 300
       recentf-exclude (list "\\.gz\\'" "\\.xz\\'" "\\.zip\\'"
-                            "^/tmp/" "^/ssh:" "^/sudo:"
+                            "^/tmp/" #'file-remote-p
                             (regexp-quote ginshio-data-dir)
                             (regexp-quote ginshio-state-dir)
                             (regexp-quote ginshio-cache-dir)))
@@ -173,8 +174,17 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
       bookmark-default-file (ginshio-data "bookmarks")
       abbrev-file-name (ginshio-data "abbrev.el")
       tramp-persistency-file-name (ginshio-cache "tramp")
-      transient-history-file (ginshio-cache "transient/history.el")
+      transient-levels-file (ginshio-data "transient/levels.el")
+      transient-values-file (ginshio-state "transient/values.el")
+      transient-history-file (ginshio-state "transient/history.el")
       url-cache-directory (ginshio-cache "url/"))
+
+(dolist (directory
+         (list (file-name-directory transient-levels-file)
+               (file-name-directory transient-values-file)))
+  (unless (file-directory-p directory)
+    (make-directory directory t))
+  (set-file-modes directory #o700))
 #+end_src
 
 ** 編輯
@@ -196,6 +206,8 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
  sentence-end-double-space nil)
 
 (setq undo-limit (* 100 1024 1024)
+      undo-strong-limit (* 150 1024 1024)
+      undo-outer-limit (* 1024 1024 1024)
       truncate-string-ellipsis "…"      ; narrower than three periods
       password-cache-expiry nil
       scroll-margin 2

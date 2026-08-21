@@ -149,7 +149,15 @@ Markdown 用兩個尾隨空格表示換行——那類文件不該被順手改�
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (use-package multiple-cursors
   :ensure t
-  :defer t)
+  :commands (mc/toggle-cursor-on-click
+             mc/edit-lines mc/edit-beginnings-of-lines mc/edit-ends-of-lines
+             mc/mark-next-lines mc/mark-previous-lines
+             mc/mark-next-like-this mc/mark-previous-like-this
+             mc/skip-to-next-like-this mc/skip-to-previous-like-this
+             mc/unmark-next-like-this mc/unmark-previous-like-this
+             mc/mark-more-like-this-extended
+             mc/mark-all-dwim mc/mark-all-like-this
+             mc/insert-numbers mc/sort-regions mc/reverse-regions))
 #+end_src
 
 *** 本配置自己的命令只跑一次

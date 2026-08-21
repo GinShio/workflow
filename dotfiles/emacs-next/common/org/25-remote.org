@@ -99,14 +99,17 @@ TRAMP 默認自己往 ssh 命令行上加一組連接復用選項。這在沒有
 這份配置裏版本控制的分工本來就偏向終端——遠程倉庫的操作在那台機器上用 git 做，比隔着
 網絡驅動一個 Emacs 前端合理。
 
-這一處要等 TRAMP 加載：它要拼進去的那個正則屬於 TRAMP 自己。等得起——在 TRAMP 加載之前，
-沒有任何遠程路徑存在，也就沒有什麼需要攔的。
+不能把 TRAMP regexp 塞進 ~vc-ignore-dir-regexp~：~project.el~ 也把那個變量當成向上尋找
+project root 的停止條件，結果是爲了關掉 VC status，連遠程 project、compile 與 Eglot
+一起關掉。攔截只放在 VC 刷新邊界，project discovery 仍可使用遠端 Git root。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-remote.el"
-(with-eval-after-load 'tramp
-  (setq vc-ignore-dir-regexp
-        (format "\\(?:%s\\)\\|\\(?:%s\\)"
-                vc-ignore-dir-regexp tramp-file-name-regexp)))
+(defun ginshio-remote-skip-vc-refresh-a (refresh &rest arguments)
+  "Skip automatic VC status work for remote buffers."
+  (unless (file-remote-p default-directory)
+    (apply refresh arguments)))
+
+(advice-add 'vc-refresh-state :around #'ginshio-remote-skip-vc-refresh-a)
 #+end_src
 
 ** 遠程的目錄列表
