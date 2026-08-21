@@ -66,7 +66,7 @@ Emacs：普通啓動會按契約失敗，下一步應是
 拒絕。需要改動套件樹時退出編輯流程，使用 =bin/vanilla-emacs sync=；要接受上游新 revision 時加
 =--upgrade=。
 
-手冊：[[info:elpaca#Top][Elpaca manual]]、[[file:org/08-packages.org][本配置的 package lifecycle]]。
+手冊：[[info:elpaca#Top][Elpaca manual]]、[[file:org/05-packages.org][本配置的 package lifecycle]]。
 
 ** XDG 目錄
 
@@ -148,7 +148,7 @@ dashboard 的 =r=、=p=、=m= 分別進入最近文件、項目、書籤；在 d
 大寫通常是同一動作的較大範圍：~b s~ / ~b S~ 是保存一個 / 所有緩衝區，~s s~ / ~s S~ 是
 搜索一個 / 多個緩衝區，~g d~ / ~g D~ 是文件 / 倉庫 diff。
 
-完整聲明在 [[file:org/06-keys.org][keys 模塊]]，各分支在自己的模塊中。
+完整聲明在 [[file:org/03-keys.org][keys 模塊]]，各分支在自己的模塊中。
 
 * 選擇、搜索與補全
 
@@ -274,7 +274,7 @@ Help、Info、Eldoc 等短讀緩衝區去右側 side window；compile、grep、x
 
 手冊：[[info:emacs#Windows][Emacs: Windows]]、[[info:emacs#Projects][Emacs: Projects]]、
 [[info:emacs#Tab Bars][Emacs: Tab Bars]]、[[https://github.com/deb0ch/emacs-winum][winum]]；配置細節見
-[[file:org/22-window.org][window 模塊]]。
+[[file:org/10-window.org][window 模塊]]。
 
 * 文件與 Dired
 
@@ -304,7 +304,7 @@ Dired 是文件管理器，也是批處理界面：
 兩個 Dired 窗口時，複製與移動默認把另一個窗口的目錄當目的地。刪除使用桌面回收站。
 
 手冊：[[info:emacs#Dired][Emacs: Dired]]、[[info:emacs#Wdired][Emacs: Wdired]]、
-[[info:ediff#Top][Ediff]]；配置細節見 [[file:org/40-file.org][file 模塊]]。
+[[info:ediff#Top][Ediff]]；配置細節見 [[file:org/20-file.org][file 模塊]]。
 
 * 編輯、撤銷與多光標
 
@@ -331,7 +331,7 @@ Dired 是文件管理器，也是批處理界面：
 詢問是否對所有光標執行，答案持久化在 =mc-lists.el=。
 
 文檔：[[https://github.com/magnars/multiple-cursors.el][multiple-cursors README]]、
-[[file:org/24-edit.org][edit 模塊]]。
+[[file:org/16-edit.org][edit 模塊]]。
 
 * 外部命令、終端與遠程
 
@@ -371,7 +371,7 @@ Emacs 自己拼出的命令固定交給 POSIX shell；Eat 使用 =$SHELL= 作為
 主機名從 SSH config 補全。遠程 Dired、Eat、編譯與普通文件使用同一套 =default-directory=；
 版本控制刻意不在遠程自動探測。
 
-手冊：[[info:tramp#Top][TRAMP]]、[[file:org/46-remote.org][remote 模塊]]。
+手冊：[[info:tramp#Top][TRAMP]]、[[file:org/25-remote.org][remote 模塊]]。
 
 * 代碼結構、語義與調試
 
@@ -390,7 +390,7 @@ Emacs 自己拼出的命令固定交給 POSIX shell；Eat 使用 =$SHELL= 作為
 | ~M-m z n~ / ~z p~ / ~z u~ | 下一個 / 上一個 / 上層 heading  |
 
 Tree-sitter grammar 缺失時保留可用的傳統 major mode，doctor 以 warn 報告。手冊：
-[[info:elisp#Parsing Program Source][Elisp: Parsing Program Source]]、[[file:org/60-lang.org][lang 模塊]]。
+[[info:elisp#Parsing Program Source][Elisp: Parsing Program Source]]、[[file:org/50-lang.org][lang 模塊]]。
 
 ** Eglot、xref、Eldoc 與 Flymake
 
@@ -412,7 +412,7 @@ Tree-sitter grammar 缺失時保留可用的傳統 major mode，doctor 以 warn 
 到路徑或 dabbrev。
 
 手冊：[[info:eglot#Top][Eglot]]、[[info:flymake#Top][Flymake]]、[[info:emacs#Xref][Xref]]、
-[[file:org/62-lsp.org][lsp 模塊]]。
+[[file:org/55-lsp.org][lsp 模塊]]。
 
 ** Dape
 
@@ -435,7 +435,7 @@ Tree-sitter grammar 缺失時保留可用的傳統 major mode，doctor 以 warn 
 | ~M-m d s~ / ~d t~           | 選 stack frame / thread            |
 
 固定配置寫進項目 =.dir-locals.el= 的 ~dape-command~；配置例與完整流程在
-[[file:org/64-dap.org][dap 模塊]]。上游文檔：[[https://elpa.gnu.org/packages/dape.html][GNU ELPA: Dape]]。
+[[file:org/55-dap.org][dap 模塊]]。上游文檔：[[https://elpa.gnu.org/packages/dape.html][GNU ELPA: Dape]]。
 
 * 版本控制
 
@@ -469,7 +469,7 @@ Git 叫出的編輯器與衝突解決。
 
 Git 用 emacsclient 打開提交信息或 rebase todo 時，緩衝區獨佔 frame；完成後 with-editor 還原
 原 layout。提交信息用 ~C-c C-c~ 完成、~C-c C-k~ 取消。rebase todo 的單鍵表與 mergetool
-流程在 [[file:org/66-vc.org][vc 模塊]] 有完整表格。
+流程在 [[file:org/45-vc.org][vc 模塊]] 有完整表格。
 
 手冊：[[info:emacs#Version Control][Emacs VC]]、[[info:magit#Top][Magit]]、
 [[info:ediff#Top][Ediff]]、[[https://github.com/dgutov/diff-hl][diff-hl]]。
@@ -485,7 +485,7 @@ Git 用 emacsclient 打開提交信息或 rebase todo 時，緩衝區獨佔 fram
 | AsciiDoc | ~C-c C-s~ 插入、~C-c C-o~ 跟鏈接、~C-c C-c~ 預覽/導出 | [[https://github.com/bbatsov/adoc-mode#usage][adoc-mode Usage]] |
 
 三者都開 visual-line、保留源標記可見，~TAB~ / ~S-TAB~ 處理結構摺疊。詳細設定見
-[[file:org/82-lang-markup.org][lang-markup 模塊]]。
+[[file:org/60-lang-markup.org][lang-markup 模塊]]。
 
 * 上游手冊索引
 
@@ -511,7 +511,7 @@ Git 用 emacsclient 打開提交信息或 rebase todo 時，緩衝區獨佔 fram
 | VC / Magit / Ediff     | [[info:emacs#Version Control][VC]] / [[info:magit#Top][Magit]] / [[info:ediff#Top][Ediff]] |
 | Eat                    | [[https://codeberg.org/akib/emacs-eat][Eat manual and README]] |
 | multiple-cursors       | [[https://github.com/magnars/multiple-cursors.el][multiple-cursors README]] |
-| Markdown / reST / AsciiDoc | [[file:org/82-lang-markup.org][本配置的入口與上游鏈接]] |
+| Markdown / reST / AsciiDoc | [[file:org/60-lang-markup.org][本配置的入口與上游鏈接]] |
 
 遇到「知道包名，但不知道它能做什麼」時，按這個順序：~M-m h m~ → ~M-m h a~ 搜包名前綴 →
 ~M-m h f~ 看命令 → Info/README。不要從配置裏的一個 ~use-package~ form 推測那就是包的全部。

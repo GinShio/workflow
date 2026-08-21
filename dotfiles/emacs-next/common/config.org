@@ -58,6 +58,7 @@
 | =dap=          | 調試                                 | 是           |
 | =vc=           | 版本控制裏終端做不到的那部分         | 是           |
 | =lang-c=       | C/C++：向上面三個框架註冊自己        | 否           |
+| =lang-latex=   | LaTeX：編輯、構建、PDF 同步          | 是           |
 | =lang-markup=   | Markdown、reST 與 AsciiDoc           | 是           |
 
 =path= 與 =doctor= 是基礎設施，由需要它們的模塊直接 ~require~；其餘按 =init.el= 中
@@ -71,8 +72,10 @@
 =file= 是唯一的例外：它往 =keys= 已有的 =f= 上補兩個鍵，而不是另開一支。它做的正是
 「文件」，分家只會讓同一類事住在兩個前綴底下。
 
-編號分五段，段界落在 =00= =20= =40= =60= =80=：地基與外觀、交互、與外部世界打交道、
-開發框架、語言。段內步進 2，於是任何兩個模塊之間都還留着一個空位。
+文件名前的數字只做粗粒度分組：=00–06= 是地基與外觀，=10–16= 是交互，=20–25= 是文件
+與外部環境，=45–55= 是開發工具，=60= 是語言支持。同一組可以共用編號，組間按需要留白，
+不要求連續或固定步進。數字不決定運行時的加載順序；功能模塊的順序由 =init.el= 裏的
+~ginshio-modules~ 明確列出。
 
 最後一段每個文件是一種語言，或一組共享同一用途的格式。編程語言只向框架註冊，框架不認
 識任何語言；Markdown、reST 與 AsciiDoc 這類文檔標記則共用一個模塊。兩者都保持同一條
@@ -89,21 +92,21 @@
 | =ginshio-foo.el=   | 模塊，提供 ~ginshio-foo~ | =ginshio-keys.el=           |
 
 #+include: org/00-bootstrap.org
-#+include: org/02-doctor.org
-#+include: org/04-core.org
-#+include: org/06-keys.org
-#+include: org/08-packages.org
-#+include: org/10-theme.org
-#+include: org/20-minibuffer.org
-#+include: org/22-window.org
-#+include: org/24-edit.org
-#+include: org/40-file.org
-#+include: org/42-tty.org
-#+include: org/44-shell.org
-#+include: org/46-remote.org
-#+include: org/60-lang.org
-#+include: org/62-lsp.org
-#+include: org/64-dap.org
-#+include: org/66-vc.org
-#+include: org/80-lang-c.org
-#+include: org/82-lang-markup.org
+#+include: org/01-doctor.org
+#+include: org/02-core.org
+#+include: org/03-keys.org
+#+include: org/05-packages.org
+#+include: org/06-theme.org
+#+include: org/10-minibuffer.org
+#+include: org/10-window.org
+#+include: org/16-edit.org
+#+include: org/20-file.org
+#+include: org/25-tty.org
+#+include: org/25-shell.org
+#+include: org/25-remote.org
+#+include: org/45-vc.org
+#+include: org/50-lang.org
+#+include: org/55-lsp.org
+#+include: org/55-dap.org
+#+include: org/60-lang-markup.org
+#+include: org/65-lang-c.org

@@ -100,25 +100,26 @@ Emacs 放在 =$XDG_RUNTIME_DIR/emacs=，配置不啓用 TCP server，也不設 =
 | 源文件                 | 產物                                        |
 |------------------------+---------------------------------------------|
 | =org/00-bootstrap.org=   | =early-init.el=、=init.el=、=ginshio-path.el= |
-| =org/02-doctor.org=      | =lisp/ginshio-doctor.el=                     |
-| =org/04-core.org=        | =lisp/ginshio-core.el=                       |
-| =org/06-keys.org=        | =lisp/ginshio-keys.el=                       |
-| =org/08-packages.org=    | =lisp/ginshio-packages.el=                   |
-| =org/10-theme.org=       | =lisp/ginshio-theme.el=                      |
-| =org/20-minibuffer.org=  | =lisp/ginshio-minibuffer.el=                 |
-| =org/22-window.org=      | =lisp/ginshio-window.el=                     |
-| =org/24-edit.org=        | =lisp/ginshio-edit.el=                       |
-| =org/40-file.org=        | =lisp/ginshio-file.el=                       |
-| =org/42-tty.org=         | =lisp/ginshio-tty.el=                        |
-| =org/44-shell.org=       | =lisp/ginshio-shell.el=                      |
-| =org/46-remote.org=      | =lisp/ginshio-remote.el=                     |
-| =org/60-lang.org=        | =lisp/ginshio-lang.el=                       |
-| =org/62-lsp.org=         | =lisp/ginshio-lsp.el=                        |
-| =org/64-dap.org=         | =lisp/ginshio-dap.el=                        |
-| =org/66-vc.org=          | =lisp/ginshio-vc.el=                         |
-| =org/80-lang-c.org=      | =lisp/ginshio-lang-c.el=                     |
-| =org/82-lang-markup.org= | =lisp/ginshio-lang-markup.el=                |
+| =org/01-doctor.org=      | =lisp/ginshio-doctor.el=                     |
+| =org/02-core.org=        | =lisp/ginshio-core.el=                       |
+| =org/03-keys.org=        | =lisp/ginshio-keys.el=                       |
+| =org/05-packages.org=    | =lisp/ginshio-packages.el=                   |
+| =org/06-theme.org=       | =lisp/ginshio-theme.el=                      |
+| =org/10-minibuffer.org=  | =lisp/ginshio-minibuffer.el=                 |
+| =org/10-window.org=      | =lisp/ginshio-window.el=                     |
+| =org/16-edit.org=        | =lisp/ginshio-edit.el=                       |
+| =org/20-file.org=        | =lisp/ginshio-file.el=                       |
+| =org/25-tty.org=         | =lisp/ginshio-tty.el=                        |
+| =org/25-shell.org=       | =lisp/ginshio-shell.el=                      |
+| =org/25-remote.org=      | =lisp/ginshio-remote.el=                     |
+| =org/45-vc.org=          | =lisp/ginshio-vc.el=                         |
+| =org/50-lang.org=        | =lisp/ginshio-lang.el=                       |
+| =org/55-lsp.org=         | =lisp/ginshio-lsp.el=                        |
+| =org/55-dap.org=         | =lisp/ginshio-dap.el=                        |
+| =org/60-lang-markup.org= | =lisp/ginshio-lang-markup.el=                |
+| =org/65-lang-c.org=      | =lisp/ginshio-lang-c.el=                     |
 
-新增模塊時，在 =org/NN-name.org= 生成 =lisp/ginshio-name.el=，將它加入 =config.org= 的
-=#+include=，再加入 =org/00-bootstrap.org= 的 ~ginshio-modules~。任何錯誤都應在 tangle、
-smoke test 或完整啓動中直接暴露。
+新增模塊時，在 =org/NN-name.org= 生成 =lisp/ginshio-name.el=；=NN= 選擇相近主題的現有分組，
+不必保持連續或預留固定間隔。將源文件加入 =config.org= 的 =#+include=，再把模塊加入
+=org/00-bootstrap.org= 的 ~ginshio-modules~。任何錯誤都應在 tangle、smoke test 或完整啓動
+中直接暴露。

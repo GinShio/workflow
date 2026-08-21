@@ -4,9 +4,10 @@
 字符串、按下 Tab 該縮進幾格、按下摺疊該收起哪一段。至於「這個符號指向哪裏」屬於語
 義，歸 lsp；「這一行此刻的值是什麼」屬於運行時，歸 dap。
 
-它不認識任何具體語言。每種語言在自己的文件裏（=80-lang-*.org=）向這裏註冊它的
-grammar 和主模式，向 lsp 註冊它的語言服務器。這樣一種語言的所有事情在一個文件裏，
-停用它就是註釋掉 =init.el= 裏的一行。
+它不認識任何具體編程語言。需要這層的語言在自己的 =60-lang-*.org= 裏註冊 grammar 和
+主模式，向 lsp 註冊語言服務器。這樣一種語言的所有事情在一個文件裏，停用它就是註釋掉
+=init.el= 裏的一行。LaTeX 與輕量標記不解析程序結構，各自直接配置自己的 major mode，
+不向這個框架註冊。
 
 Emacs 的 parser、grammar 安裝與 tree-sitter major mode 接口見
 [[info:elisp#Parsing Program Source][Elisp manual: Parsing Program Source]]；outline 的摺疊模型見
@@ -286,11 +287,11 @@ leader 提供。
 | ~TAB~ ~S-TAB~  | 在大綱標題行上循環摺疊        | outline 自帶，僅標題行生效 |
 
 ~C-M-h~（選中整個函數）不在 =motion= 組裏，所以目前沒有綁定。要的話把它加進
-=06-keys.org=。
+=03-keys.org=。
 
-** 加一種語言
+** 加一種使用 tree-sitter 的編程語言
 
-寫一個 =org/80-lang-NAME.org=，生成 =lisp/ginshio-lang-NAME.el=，在 =config.org= 加
+寫一個 =org/60-lang-NAME.org=，生成 =lisp/ginshio-lang-NAME.el=，在 =config.org= 加
 一行 =#+include=，在 =init.el= 的 ~ginshio-modules~ 裏加 ~lang-NAME~。文件裏做四件
 事，缺哪件就少哪項能力：
 
