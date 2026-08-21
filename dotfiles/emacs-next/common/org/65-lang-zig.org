@@ -55,7 +55,7 @@ autoload association 是它自己加入的。
 
 (use-package zig-ts-mode
   :ensure (zig-ts-mode :host github :repo "emacsmirror/zig-ts-mode")
-  :demand t
+  :commands zig-ts-mode
   :init
   (setq zig-ts-indent-offset 4)
   :config

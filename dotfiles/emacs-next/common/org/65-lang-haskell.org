@@ -33,7 +33,7 @@ TS dispatcher 一併吞掉。
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el"
 (use-package haskell-mode
   :ensure t
-  :mode (("\\.\\(?:hs-boot\\|hsig\\|hsc\\|gs\\)\\'" . haskell-mode)
+  :mode (("\\.\\(?:hs\\|hs-boot\\|hsig\\|hsc\\|gs\\)\\'" . haskell-mode)
          ("\\.\\(?:lhs\\|lgs\\)\\'" . haskell-literate-mode))
   :init
   (setq haskell-indentation-layout-offset 2
@@ -43,22 +43,23 @@ TS dispatcher 一併吞掉。
         haskell-indentation-where-post-offset 2))
 #+end_src
 
-** Tree-sitter 的明確限制
+** 手動 Tree-sitter mode
 
 =haskell-ts-mode= 上游目前刻意把縮進關掉：既有規則仍在重寫，而且修一種 layout 會破壞
-另一種。這裏接受這個限制，不把一套已知不可靠的規則強制打開。上游在關閉規則時仍留下
-一個「新行複製上一行整個寬度」的 electric hook；那仍然是在改縮進，所以也一併摘掉。
+另一種。因此普通 =.hs= 固定使用可靠的 classic mode；需要 tree-sitter 的 font-lock、
+outline 與結構導航時，顯式調用 ~ginshio/haskell-ts-mode~。上游留下的 electric newline
+hook 仍會修改縮進，手動 TS mode 中也一併摘掉。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el"
-(defconst ginshio-lang-haskell-source-mode-entry
-  '("\\.hs\\'" . ginshio-lang-haskell-mode)
-  "Auto-mode entry which owns the classic/tree-sitter decision.")
+(defconst ginshio-lang-haskell-classic-entry
+  '("\\.hs\\'" . haskell-mode)
+  "Auto-mode entry which keeps ordinary Haskell editing reliable.")
 
-(defun ginshio-lang-haskell-prefer-dispatch-h ()
-  "Put the conditional Haskell source dispatcher before package autoloads."
+(defun ginshio-lang-haskell-prefer-classic-h ()
+  "Keep classic Haskell ahead of the TS package's file association."
   (setq auto-mode-alist
-        (cons ginshio-lang-haskell-source-mode-entry
-              (delete ginshio-lang-haskell-source-mode-entry
+        (cons ginshio-lang-haskell-classic-entry
+              (delete ginshio-lang-haskell-classic-entry
                       auto-mode-alist))))
 
 (use-package haskell-ts-mode
@@ -69,7 +70,7 @@ TS dispatcher 一併吞掉。
         haskell-ts-font-lock-level 4
         haskell-ts-ghci "ghci")
   :config
-  (ginshio-lang-haskell-prefer-dispatch-h))
+  (ginshio-lang-haskell-prefer-classic-h))
 
 (defun ginshio-lang-haskell-disable-ts-indent-h ()
   "Keep the intentionally disabled Haskell TS indentation fully disabled."
@@ -87,21 +88,19 @@ TS dispatcher 一併吞掉。
  :compilers '(("ghc" ("ghc")
                :remedy "ghcup install ghc")))
 
-(defun ginshio-lang-haskell-mode ()
-  "Select structural Haskell editing only when its grammar is usable."
+(defun ginshio/haskell-ts-mode ()
+  "Enter structural Haskell mode when its grammar is usable."
   (interactive)
-  (if (and (fboundp 'haskell-ts-mode)
-           (ginshio-lang-grammar-ready-p 'haskell))
-      (haskell-ts-mode)
-    (haskell-mode)))
+  (unless (ginshio-lang-grammar-ready-p 'haskell)
+    (user-error "The Haskell tree-sitter grammar is unavailable"))
+  (haskell-ts-mode))
 
-(ginshio-lang-haskell-prefer-dispatch-h)
-(add-hook 'after-init-hook #'ginshio-lang-haskell-prefer-dispatch-h)
+(ginshio-lang-haskell-prefer-classic-h)
 #+end_src
 
 TS mode 在這個狀態下提供高亮、imenu、結構導航與摺疊，但 =TAB= 沒有一套可承諾正確的
-Haskell layout 規則。需要可靠互動縮進時，暫時用 ~M-x haskell-mode~ 回到 classic mode；
-等上游完成重寫後再單獨審查並打開。
+Haskell layout 規則。回到可靠編輯用 ~M-x haskell-mode~；等上游完成重寫後再審查是否
+恢復自動 remap。
 
 ** HLS
 

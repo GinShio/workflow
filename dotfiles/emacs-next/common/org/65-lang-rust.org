@@ -14,8 +14,6 @@ lang/lsp/dap 邊界，不讓 =cargo= 或 rustfmt 在保存時暗中改寫文件�
 (require 'ginshio-doctor)
 (require 'ginshio-lang)
 (require 'ginshio-lsp)
-
-(declare-function rust-ts-flymake "rust-ts-mode" (report-fn &rest args))
 #+end_src
 
 ** 主模式與 grammar
@@ -49,19 +47,11 @@ mode hook 之後覆蓋這裏的默認值。
 =v0.23.2= 是 Emacs 30 可使用的 ABI 14 grammar；這份配置支持的 tree-sitter runtime
 仍能向後載入它。系統打包的 grammar 照既有策略優先，本地 revision 只在系統沒有時使用。
 
-** 診斷只有一個來源
+** 診斷
 
 =rust-ts-mode= 會自行加入一個每次把整份 buffer 喂給 =clippy-driver= 的 Flymake backend。
-Eglot 接管後 rust-analyzer 也會送同一批編譯診斷，兩份結果不只重複，還可能來自不同
-feature set。這裏選項已經是 rust-analyzer，所以拿掉 mode 自帶的那份。
-
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el"
-(defun ginshio-lang-rust-use-eglot-diagnostics-h ()
-  "Leave Rust diagnostics to the registered language server."
-  (remove-hook 'flymake-diagnostic-functions #'rust-ts-flymake t))
-
-(add-hook 'rust-ts-mode-hook #'ginshio-lang-rust-use-eglot-diagnostics-h)
-#+end_src
+Eglot 接管時會保存並暫時替換它，避免和 rust-analyzer 重複；關閉 Eglot、server 缺失或
+文件不屬於 project 時，原本的 backend 仍然可用。
 
 ** rust-analyzer
 

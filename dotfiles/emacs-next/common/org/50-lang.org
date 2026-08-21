@@ -228,7 +228,8 @@ Delete this once the two agree upstream."
       (let ((origin (pos-bol)))
         (save-excursion
           (goto-char origin)
-          (and (treesit-outline-search bound nil nil nil)
+          (and (treesit-outline-search (min (or bound (point-max)) (pos-eol))
+                                       t nil nil)
                (= (pos-bol) origin))))
     (treesit-outline-search bound move backward looking-at)))
 
@@ -270,7 +271,17 @@ leader 提供。
 摺疊自成一支。用 =z= 是因為在 vi 傳統裏摺疊命令全部以 =z= 開頭，而這是少數幾個跨編
 輯器通用的助記符之一。
 
+編譯、grep、xref 與其他產生 error location 的緩衝區共用 Emacs 的 ~next-error~ 協議。
+恢復 stock 的 ~M-g n~ / ~M-g p~，從 source buffer 直接走訪最近一次結果，不必先切到底部
+輸出窗口。
+
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el"
+(ginshio-keys-define
+ (current-global-map)
+ '("M-g"   "error"
+   "M-g n" next-error
+   "M-g p" previous-error))
+
 (ginshio-leader-define
  "z"   "fold"
  "z z" #'outline-cycle

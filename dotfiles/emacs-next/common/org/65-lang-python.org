@@ -16,7 +16,6 @@ Emacs 的 mode 與 LSP language id 都叫 Python；只有實際執行程序明�
 (require 'ginshio-lsp)
 
 (defvar dape-configs)
-(declare-function python-flymake "python" (report-fn &rest args))
 #+end_src
 
 ** 主模式、grammar 與縮進
@@ -40,20 +39,13 @@ EditorConfig 的明確聲明最後生效。
 =v0.23.6= 使用 ABI 14，能在 Emacs 30 支持的 runtime 範圍內工作。=.py=、=.pyi=、=.pyw=
 與 Python shebang 仍先由內建 classic mode 識別；grammar ready 時 lang 框架才 remap。
 
-** 診斷只有 Pyright
+** 診斷
 
-Python 基礎 mode 會自行掛一個 =pyflakes= Flymake backend。Eglot 接管後 Pyright 已提供
-語法、類型與 import 診斷；同時跑兩個 checker 會產生重複結果，而且兩者未必使用同一個
-虛擬環境。拿掉內建 backend，讓 lsp 模塊保持一個語義來源。
+Python 基礎 mode 自帶 Flymake backend。Eglot 接管時會保存並暫時替換它，shutdown 後再
+恢復；因此 standalone file、缺 server 或連接失敗時仍有 native 診斷，而 managed buffer
+只保留 Pyright 一個來源。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el"
-(defun ginshio-lang-python-use-eglot-diagnostics-h ()
-  "Leave Python diagnostics to the registered language server."
-  (remove-hook 'flymake-diagnostic-functions #'python-flymake t))
-
-(add-hook 'python-base-mode-hook
-          #'ginshio-lang-python-use-eglot-diagnostics-h)
-
 (ginshio-lsp-register-server
  :modes '(python-mode python-ts-mode)
  :program "pyright-langserver"

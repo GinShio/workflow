@@ -95,16 +95,21 @@ dape 自己編排那一組窗口。要精細控制哪個面板去哪裏，popup 
 掉，症狀是會話開始時信息窗口不再自動出現，而看起來和鉤子毫無關係。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-dap.el"
-(defun ginshio-dap-save-project-buffers-h ()
-  "Save this project's modified files before the adapter reads them."
-  (when-let* ((project (project-current nil))
-              (root (project-root project)))
-    (save-some-buffers
-     t (lambda ()
-         (and buffer-file-name (file-in-directory-p buffer-file-name root))))))
+(defun ginshio-dap-save-project-buffers (config)
+  "Save relevant source buffers before CONFIG's compile step."
+  (if-let* ((project (project-current nil))
+            (root (project-root project)))
+      (save-some-buffers
+       t (lambda ()
+           (and buffer-file-name
+                (file-in-directory-p buffer-file-name root))))
+    (when (and buffer-file-name (buffer-modified-p))
+      (save-buffer)))
+  config)
 
 (with-eval-after-load 'dape
-  (add-hook 'dape-start-hook #'ginshio-dap-save-project-buffers-h))
+  (add-to-list 'dape-default-config-functions
+               #'ginshio-dap-save-project-buffers))
 #+end_src
 
 *** 斷點活過重啓
