@@ -1,3 +1,5 @@
+#+GINSHIO_MODULE: enabled
+
 * 基礎
 
 本模塊集中修改 Emacs 自身的持久化與編輯默認值。備份、自動保存與跨會話狀態的上游說明
@@ -176,9 +178,16 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
 
 ** 編輯
 
+長行保持一條顯示行，超出窗口後水平滾動；窗口寬度不應改變文件在屏幕上的行結構。
+~truncate-lines~ 設成緩衝區默認值，讓確實需要折行的主模式仍能明確地局部覆蓋。
+
+~fill-column~ 只供 ~fill-paragraph~ 這類顯式命令使用。文本模式不自動開啓 ~auto-fill-mode~，
+所以輸入超過第 80 列不會在文件裏插入換行。
+
 #+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
 (setq-default
  window-combination-resize t            ; a new window takes space from all siblings
+ truncate-lines t
  indent-tabs-mode nil
  tab-width 4
  fill-column 80
@@ -244,13 +253,6 @@ GC 時壓縮字體緩存會帶來明顯卡頓，而收回的內存微不足道�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
 (setq inhibit-compacting-font-caches t)
-#+end_src
-
-文本模式下用硬換行。視覺換行只是把長行顯示成多行，文件裏仍是一整行；提交 diff、郵件
-引用、以及任何按行工作的工具都會因此變得難讀。
-
-#+begin_src emacs-lisp :tangle "lisp/ginshio-core.el"
-(add-hook 'text-mode-hook #'auto-fill-mode)
 #+end_src
 
 代碼裏行尾空白要看得見——它們是 diff 噪音的主要來源。當前所在的函數名顯示在 modeline

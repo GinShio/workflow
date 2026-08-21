@@ -297,6 +297,7 @@ Dired 是文件管理器，也是批處理界面：
 | ~r~              | 進入 wdired，直接編輯文件名後 ~C-c C-c~  |
 | ~=~              | 用 Ediff 比較標記的兩個文件              |
 | ~E~              | 交給桌面默認程序                         |
+| ~(~              | 隱藏或顯示權限、大小、時間等詳細欄位     |
 | ~i~              | 就地插入子目錄                           |
 | ~$~              | 隱藏或顯示插入的子目錄                   |
 | ~g~              | 重新讀目錄                               |
@@ -532,7 +533,8 @@ Emacs client。本模塊不配置 Org 公式預覽或 Org → LaTeX 導出。詳
 | reST | ~C-c C-a C-a~ 標題、~C-c C-t C-t~ 目錄、~C-c C-c C-c~ 編譯 | [[https://docutils.sourceforge.io/docs/user/emacs.html][Docutils Emacs support]] |
 | AsciiDoc | ~C-c C-s~ 插入、~C-c C-o~ 跟鏈接、~C-c C-c~ 預覽/導出 | [[https://github.com/bbatsov/adoc-mode#usage][adoc-mode Usage]] |
 
-三者都開 visual-line、保留源標記可見，~TAB~ / ~S-TAB~ 處理結構摺疊。詳細設定見
+三者都保留長行為單一顯示行、保留源標記可見；需要整理段落時手動按 ~M-q~。~TAB~ / ~S-TAB~
+處理結構摺疊。詳細設定見
 [[file:org/60-lang-markup.org][lang-markup 模塊]]。
 
 * 上游手冊索引
