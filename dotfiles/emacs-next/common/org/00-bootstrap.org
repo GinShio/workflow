@@ -236,6 +236,7 @@ Signal an error when it is absent or relative."
     dap         ; debugging
     vc          ; the parts of version control the terminal cannot do
     lang-c      ; C and C++ register themselves with the three above
+    lang-latex  ; LaTeX editing, builds and PDF source correlation
     lang-markup ; Markdown, reStructuredText and AsciiDoc
     )
   "Modules to load, in order.")

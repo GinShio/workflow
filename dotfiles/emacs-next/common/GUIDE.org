@@ -474,6 +474,54 @@ Git 用 emacsclient 打開提交信息或 rebase todo 時，緩衝區獨佔 fram
 手冊：[[info:emacs#Version Control][Emacs VC]]、[[info:magit#Top][Magit]]、
 [[info:ediff#Top][Ediff]]、[[https://github.com/dgutov/diff-hl][diff-hl]]。
 
+* LaTeX
+
+=.tex= 文件由 AUCTeX 打開，CDLaTeX 疊在上面提供快速環境與數學輸入。默認引擎是
+LuaLaTeX，構建命令是 AUCTeX 內建的 LaTeXMk；文檔或目錄局部變量可以覆蓋兩者。
+
+| 鍵            | 用途                                                |
+|---------------+-----------------------------------------------------|
+| ~C-c C-c~       | 構建文檔；默認選 LaTeXMk                           |
+| ~C-c C-l~       | 顯示編譯輸出                                        |
+| ~C-c `~         | 下一個編譯錯誤                                      |
+| ~C-c C-v~       | Okular 打開 PDF，SyncTeX 跳到當前源碼位置           |
+| ~C-c {~         | CDLaTeX 插入環境                                    |
+| ~`~ 再按符號鍵 | CDLaTeX 插入數學符號                                |
+| ~'~             | CDLaTeX 修改前一個數學符號                          |
+| ~C-<return>~    | 插入當前環境的下一個 item                           |
+
+~TeX-master~ 以 ~dwim~ 管理多文件文檔：先推斷同目錄的根文件，不能確定時詢問，並把答案
+記成 file-local variable。RefTeX 使用這個範圍建立跨文件索引：
+
+| 鍵      | 用途                       |
+|---------+----------------------------|
+| ~C-c =~   | 文檔目錄                   |
+| ~C-c (~   | 建立 label                 |
+| ~C-c )~   | 插入 reference             |
+| ~C-c [~   | 插入 citation              |
+| ~C-c &~   | 查看交叉引用的另一端       |
+
+公式渲染由 preview-latex 明確觸發，不在輸入時持續運行；預覽使用 LuaLaTeX 的 DVI 輸出
+與 dvipng，不等待完整的 PDF 構建：
+
+| 鍵                    | 用途                         |
+|-----------------------+------------------------------|
+| ~C-c C-p C-p~           | 預覽或顯示光標處源碼         |
+| ~C-c C-p C-r~           | 預覽選區                     |
+| ~C-c C-p C-b~           | 預覽當前 buffer              |
+| ~C-c C-p C-c C-p~       | 清除光標處預覽               |
+
+~TeX-fold-mode~ 沒有開啓；它只用 overlay 把宏顯示成 Unicode 或縮寫，不是渲染後的數學
+公式。
+
+AUCTeX 按每份文檔的 =biblatex= 設置選擇 bibliography 後端，LaTeXMk 會在需要時調用
+Biber。全局構建選項保持 =shell-escape= 關閉；minted 等功能只在可信項目的
+=.dir-locals.el= 裏設 ~TeX-command-extra-options~。
+
+Okular 的 forward search 已由 AUCTeX 配好；inverse search 需要在 Okular 的 Editor 設置選
+Emacs client。本模塊不配置 Org 公式預覽或 Org → LaTeX 導出。詳細理由與 raw LaTeX
+模板見 [[file:org/60-lang-latex.org][lang-latex 模塊]]；完整模式命令仍從 ~M-m h m~ 查看。
+
 * 文檔標記模式
 
 這些模式的 =C-c= 鍵保留原樣；進入文件後先用 ~M-m h m~ 查看完整 mode help。
@@ -511,6 +559,7 @@ Git 用 emacsclient 打開提交信息或 rebase todo 時，緩衝區獨佔 fram
 | VC / Magit / Ediff     | [[info:emacs#Version Control][VC]] / [[info:magit#Top][Magit]] / [[info:ediff#Top][Ediff]] |
 | Eat                    | [[https://codeberg.org/akib/emacs-eat][Eat manual and README]] |
 | multiple-cursors       | [[https://github.com/magnars/multiple-cursors.el][multiple-cursors README]] |
+| AUCTeX / CDLaTeX       | [[info:auctex#Top][AUCTeX manual]] / [[https://github.com/cdominik/cdlatex][CDLaTeX README]] |
 | Markdown / reST / AsciiDoc | [[file:org/60-lang-markup.org][本配置的入口與上游鏈接]] |
 
 遇到「知道包名，但不知道它能做什麼」時，按這個順序：~M-m h m~ → ~M-m h a~ 搜包名前綴 →

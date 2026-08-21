@@ -1,0 +1,183 @@
+* LaTeX
+
+本模塊只處理獨立的 =.tex= 文件：AUCTeX 負責結構、編譯、錯誤定位與 PDF 同步，CDLaTeX
+負責快速輸入。Org 裏的公式預覽與 Org → LaTeX 導出不屬於這條路徑，避免一個導出器的
+私有 API 進入日常 LaTeX 編輯。
+
+上游入口是 [[info:auctex#Top][AUCTeX manual]] 與 [[https://github.com/cdominik/cdlatex][CDLaTeX README]]。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-latex.el" :comments no
+;;; ginshio-lang-latex.el --- LaTeX editing -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-latex.el"
+(require 'ginshio-doctor)
+#+end_src
+
+** AUCTeX
+
+Emacs 內建的 ~latex-mode~ 只做基本着色與縮進。AUCTeX 會解析 document class、宏、環境、標籤
+與 master document，並把編譯輸出接進 ~next-error~。=:mode= 明確把 =.tex= 交給 AUCTeX 的
+~LaTeX-mode~，不依賴安裝過程是否改寫了 autoload。
+
+AUCTeX 內建 =LaTeXMk= 命令，也會按 ~TeX-engine~ 為 LuaLaTeX 選擇 =-pdflua=。每個緩衝區
+以 LuaLaTeX、PDF 和 LaTeXMk 起步，文件或目錄局部變量仍可在 mode hook 之後覆蓋它們。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-latex.el"
+(defun ginshio-lang-latex-setup-h ()
+  "Select the default engine and build command for an AUCTeX buffer."
+  (TeX-engine-set 'luatex)
+  (setq-local TeX-command-default "LaTeXMk"))
+
+(use-package tex
+  :ensure auctex
+  :mode ("\\.tex\\'" . LaTeX-mode)
+  :init
+  (setq TeX-auto-save t
+        TeX-parse-self t
+        TeX-save-query nil
+        TeX-show-compilation t
+        reftex-plug-into-AUCTeX t)
+  (setq-default TeX-master 'dwim)
+  :hook ((LaTeX-mode . ginshio-lang-latex-setup-h)
+         (LaTeX-mode . turn-on-reftex))
+  :config
+  (TeX-source-correlate-mode 1)
+  (add-to-list 'TeX-view-program-selection '(output-pdf "Okular"))
+  (with-eval-after-load 'latex
+    (keymap-set LaTeX-mode-map "C-<return>" #'LaTeX-insert-item)))
+#+end_src
+
+~TeX-auto-save~ 把解析結果放在文檔旁的 =auto/=，再次打開大型文檔時不用從頭掃描。
+~TeX-parse-self~ 也讓 AUCTeX 從 =biblatex= 的 =backend= 選項判斷 BibTeX 或 Biber，保留
+每份文檔自己的後端聲明。
+
+~shell-escape~ 允許 LaTeX 執行任意命令，因此不作為全局選項。需要 minted 等功能的可信
+項目，在自己的 =.dir-locals.el= 設
+~TeX-command-extra-options~，或在文件末尾加局部變量；風險留在需要它的文檔，不擴散到所有
+LaTeX 文件。
+
+** 多文件與 RefTeX
+
+~TeX-master~ 使用 ~dwim~：首次需要 master 時，AUCTeX 先從同目錄已打開的文檔推斷根文件，
+不能確定才詢問。答案會寫成安全的 file-local variable，後續解析、構建與 SyncTeX 都回到
+同一個根文件。
+
+RefTeX 與 AUCTeX 共用解析結果，負責跨文件的目錄、標籤、引用與 bibliography。它不需要
+語言服務器；索引來自當前文檔及其 master 所包含的文件。
+
+| 鍵      | 動作                         |
+|---------+------------------------------|
+| ~C-c =~   | 打開整份文檔的 RefTeX 目錄   |
+| ~C-c (~   | 建立 label                   |
+| ~C-c )~   | 插入 reference               |
+| ~C-c [~   | 插入 citation                |
+| ~C-c &~   | 查看光標處交叉引用的另一端   |
+
+** CDLaTeX
+
+CDLaTeX 疊在 AUCTeX 上，用短命令插入環境與數學符號。自定義環境本身就是 LaTeX，不放進
+Elisp 字符串：下面兩塊保持單個反斜線，能直接複製到 =.tex=、單獨用 LaTeX mode 編輯，也不
+需要人腦追蹤兩層轉義。
+
+#+name: ginshio-latex-bmatrix-template
+#+begin_src latex
+\begin{bmatrix}
+?
+\end{bmatrix}
+#+end_src
+
+#+name: ginshio-latex-equation-star-template
+#+begin_src latex
+\begin{equation*}
+?
+\end{equation*}
+#+end_src
+
+~ginshio-source-string~ 在 tangle 時才把它們轉成合法字符串。這個 block 必須關掉 noweb 的
+逐行前綴；規則與原因統一寫在 =config.org= 的「原樣文本」一節。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-latex.el" :noweb yes :noweb-prefix no
+(use-package cdlatex
+  :ensure t
+  :init
+  (setq cdlatex-env-alist
+        '(("bmatrix" <<ginshio-source-string("ginshio-latex-bmatrix-template")>> nil)
+          ("equation*" <<ginshio-source-string("ginshio-latex-equation-star-template")>> nil)))
+  :hook (LaTeX-mode . turn-on-cdlatex))
+#+end_src
+
+CDLaTeX 保留自己的默認符號表：反引號後接字母插入數學符號，單引號修改前一個符號，
+~C-c {~ 插入環境，~C-c -~ 插入 item。上面的 =bmatrix= 與 =equation*= 會加入內建環境，
+不是取代它們。
+
+** 編譯、錯誤與 SyncTeX
+
+| 鍵          | 動作                                                    |
+|-------------+---------------------------------------------------------|
+| ~C-c C-c~     | 默認運行 LaTeXMk；再次執行時按文檔狀態建議下一條命令   |
+| ~C-c C-l~     | 顯示編譯輸出                                            |
+| ~C-c `~       | 跳到下一個編譯錯誤                                      |
+| ~C-c C-v~     | 用 Okular 打開 PDF，並通過 SyncTeX 跳到當前源碼位置     |
+| ~C-<return>~  | 插入當前環境的下一個 item                               |
+
+AUCTeX 的 Okular 定義已帶 =#src:= forward-search 參數，不另存一份容易過期的 command
+template。反向搜索在 Okular 的 Editor 設置選 Emacs client；這份配置啓動的 server 讓
+~emacsclient~ 回到同一會話。
+
+** 快速預覽
+
+preview-latex 按需把公式或環境編譯成圖片 overlay，不在輸入時持續渲染。預覽固定走
+LuaLaTeX 的 DVI 輸出和 dvipng，與完整文檔的 PDF 構建分開；再次預覽同一位置會切回源碼，
+清除命令只移除 overlay，不修改 LaTeX。
+
+preview-latex 的 PDF 路徑依賴 =pdf2dsc=，而當前系統的 Ghostscript 不提供它。AUCTeX 也有
+完整的 DVI 路徑，所以只替換 preview launcher 裏的引擎佔位符，保留其餘上游命令結構。若
+AUCTeX 改掉該結構，載入 preview-latex 時會直接報錯，而不是悄悄退回不可用的 PDF 路徑。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-latex.el"
+(with-eval-after-load 'preview
+  (setq preview-image-type 'dvi*)
+  (let ((launcher (car preview-LaTeX-command)))
+    (cond
+     ((string-match-p (regexp-quote "lualatex --output-format=dvi") launcher))
+     ((string-match-p "%l" launcher)
+      (setq preview-LaTeX-command
+            (cons (string-replace "%l" "lualatex --output-format=dvi" launcher)
+                  (cdr preview-LaTeX-command))))
+     (t
+      (error "Cannot select the preview-latex DVI engine from %S" launcher)))))
+#+end_src
+
+| 鍵                    | 動作                         |
+|-----------------------+------------------------------|
+| ~C-c C-p C-p~           | 預覽或顯示光標處的源碼       |
+| ~C-c C-p C-r~           | 預覽選區                     |
+| ~C-c C-p C-b~           | 預覽當前 buffer              |
+| ~C-c C-p C-c C-p~       | 清除光標處預覽               |
+| ~C-c C-p C-c C-b~       | 清除當前 buffer 的全部預覽   |
+
+** 自檢項
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-latex.el"
+(ginshio-doctor-executable 'lang-latex "latexmk"
+                           :note "repeatable LaTeX builds"
+                           :remedy "zypper install texlive-latexmk-bin")
+(ginshio-doctor-executable 'lang-latex "lualatex"
+                           :note "default TeX engine"
+                           :remedy "zypper install texlive-latex-bin-bin")
+(ginshio-doctor-executable 'lang-latex "biber"
+                           :note "biblatex bibliography processing"
+                           :remedy "zypper install texlive-biber-bin")
+(ginshio-doctor-executable 'lang-latex "okular"
+                           :note "SyncTeX PDF viewing"
+                           :remedy "zypper install okular")
+(ginshio-doctor-executable 'lang-latex "dvipng"
+                           :note "preview-latex image rendering"
+                           :remedy "zypper install texlive-dvipng-bin")
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio-lang-latex.el" :comments no
+(provide 'ginshio-lang-latex)
+;;; ginshio-lang-latex.el ends here
+#+end_src
