@@ -1,3 +1,5 @@
+#+GINSHIO_MODULE: enabled
+
 * C 與 C++
 
 傳統模式的完整命令見 [[info:ccmode#Top][CC Mode manual]]；格式化選項與樣式文件見
@@ -25,15 +27,20 @@
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio-lang-c.el"
 (ginshio-lang-register
+ :module 'lang-c
  :grammars '((c   "https://github.com/tree-sitter/tree-sitter-c"   "v0.23.6")
              (cpp "https://github.com/tree-sitter/tree-sitter-cpp" "v0.23.4"))
+ :compilers '(("C compiler" ("cc" "gcc")
+               :remedy "zypper install gcc gcc-c++"))
  :modes '((c-mode        c-ts-mode        c)
           (c++-mode      c++-ts-mode      cpp)
           (c-or-c++-mode c-or-c++-ts-mode c cpp)))
 #+end_src
 
-多數發行版已經打包了這兩個 grammar，那樣上面的 URL 和版本號永遠用不上；它們是系統
-沒有時的退路。~M-x ginshio/doctor~ 會告訴你當前用的是哪一份。
+多數發行版已經打包了這兩個 grammar，那樣上面的 URL、版本號和編譯器永遠用不上；它們
+是系統沒有時的退路。~cc~ 與 ~gcc~ 是同一項檢查的替代程序，找到任一個即可。
+~M-x ginshio/doctor~ 會把 grammar 與編譯器都列在 =lang-c= 段，並告訴你 grammar 當前用的
+是哪一份。
 
 ** 縮進
 

@@ -1,13 +1,15 @@
+#+GINSHIO_MODULE: enabled
+
 * 語言框架
 
 本模塊只回答一個問題：*Emacs 怎麼理解一段代碼的結構*。哪裏是一個函數、哪裏是一個
 字符串、按下 Tab 該縮進幾格、按下摺疊該收起哪一段。至於「這個符號指向哪裏」屬於語
 義，歸 lsp；「這一行此刻的值是什麼」屬於運行時，歸 dap。
 
-它不認識任何具體編程語言。需要這層的語言在自己的 =60-lang-*.org= 裏註冊 grammar 和
-主模式，向 lsp 註冊語言服務器。這樣一種語言的所有事情在一個文件裏，停用它就是註釋掉
-=init.el= 裏的一行。LaTeX 與輕量標記不解析程序結構，各自直接配置自己的 major mode，
-不向這個框架註冊。
+它不認識任何具體編程語言。需要這層的語言在自己的 =NN-lang-*.org= 裏註冊 grammar、編
+譯器和主模式，向 lsp 註冊語言服務器。這樣一種語言的所有事情在一個文件裏，停用它就是
+把文件自己的 =#+GINSHIO_MODULE:= 改成 =disabled=。LaTeX 與輕量標記不解析程序結構，
+各自直接配置自己的 major mode，不向這個框架註冊。
 
 Emacs 的 parser、grammar 安裝與 tree-sitter major mode 接口見
 [[info:elisp#Parsing Program Source][Elisp manual: Parsing Program Source]]；outline 的摺疊模型見
@@ -94,18 +96,26 @@ grammar 的節點名寫的，上游改了節點名之後，你得到的不是報
 
 PROPERTIES is a plist:
 
-  :grammars  list of (LANGUAGE URL REVISION), pinned to a known-good tag
-  :modes     list of (CLASSIC-MODE TREE-SITTER-MODE . LANGUAGES), naming
-             the grammars each mode cannot work without"
-  (dolist (grammar (plist-get properties :grammars))
-    (setf (alist-get (car grammar) ginshio-lang-grammars) (cdr grammar))
-    (when ginshio-lang-treesit-available
-      (setf (alist-get (car grammar) treesit-language-source-alist)
-            (cdr grammar)))
-    (ginshio-lang--declare-grammar-check (car grammar)))
-  (dolist (row (plist-get properties :modes))
-    (setf (alist-get (car row) ginshio-lang-modes) (cdr row)))
-  (ginshio-lang-apply-mode-remap))
+  :module     required symbol naming the language module and doctor section
+  :grammars   list of (LANGUAGE URL REVISION), pinned to a known-good tag
+  :compilers  list of (LABEL PROGRAMS . PROPS); finding any executable in
+              PROGRAMS satisfies the check; PROPS are doctor properties,
+              with warning severity and the grammar-build note as defaults
+  :modes      list of (CLASSIC-MODE TREE-SITTER-MODE . LANGUAGES), naming
+              the grammars each mode cannot work without"
+  (let ((module (or (plist-get properties :module)
+                    (error "Language registration requires :module"))))
+    (dolist (grammar (plist-get properties :grammars))
+      (setf (alist-get (car grammar) ginshio-lang-grammars) (cdr grammar))
+      (when ginshio-lang-treesit-available
+        (setf (alist-get (car grammar) treesit-language-source-alist)
+              (cdr grammar)))
+      (ginshio-lang--declare-grammar-check module (car grammar)))
+    (dolist (compiler (plist-get properties :compilers))
+      (ginshio-lang--declare-compiler-check module compiler))
+    (dolist (row (plist-get properties :modes))
+      (setf (alist-get (car row) ginshio-lang-modes) (cdr row)))
+    (ginshio-lang-apply-mode-remap)))
 #+end_src
 
 ** 主模式
@@ -291,13 +301,15 @@ leader 提供。
 
 ** 加一種使用 tree-sitter 的編程語言
 
-寫一個 =org/60-lang-NAME.org=，生成 =lisp/ginshio-lang-NAME.el=，在 =config.org= 加
-一行 =#+include=，在 =init.el= 的 ~ginshio-modules~ 裏加 ~lang-NAME~。文件裏做四件
-事，缺哪件就少哪項能力：
+寫一個以 =#+GINSHIO_MODULE: enabled= 開頭的 =org/NN-lang-NAME.org=，生成並提供
+=lisp/ginshio-lang-NAME.el= / ~ginshio-lang-NAME~。tangle 會按文件名自動 include 並加入
+~ginshio-modules~。文件裏按需要聲明下面幾件事，缺哪件就少哪項能力：
 
 | 要什麼        | 怎麼做                                  |
 |---------------+-----------------------------------------|
+| 自檢歸到語言模塊 | ~ginshio-lang-register~ 的 ~:module~      |
 | 語法高亮、摺疊 | ~ginshio-lang-register~ 的 ~:grammars~ 與 ~:modes~ |
+| 補建 grammar 的編譯器 | ~ginshio-lang-register~ 的 ~:compilers~ |
 | 縮進風格       | 該主模式自己的變量，就地 ~setq~           |
 | 跳轉、診斷、補全 | ~ginshio-lsp-register-server~             |
 | 調試           | 多半不用做，見 dap 模塊                  |
@@ -305,12 +317,14 @@ leader 提供。
 ** 自檢項
 
 grammar 缺失只是降級不是故障，所以是 warn，而且順帶報出它實際來自哪裏。編譯器缺失
-要單獨報——沒有它，那條補救命令會失敗，而失敗信息埋在編譯輸出裏，離原因很遠。
+要單獨報——沒有它，那條補救命令會失敗，而失敗信息埋在編譯輸出裏，離原因很遠。兩類檢
+查都使用註冊時的 ~:module~，和語言自己的其他檢查出現在同一段；只有 Emacs 本身有沒有
+tree-sitter 支持仍然屬於通用的 =lang= 段。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el"
-(defun ginshio-lang--declare-grammar-check (language)
-  "Have the doctor report on LANGUAGE's grammar."
-  (ginshio-doctor-declare 'lang (format "%s grammar" language)
+(defun ginshio-lang--declare-grammar-check (module language)
+  "Have the doctor report on LANGUAGE's grammar for MODULE."
+  (ginshio-doctor-declare module (format "%s grammar" language)
                           (lambda () (ginshio-lang-grammar-ready-p language))
                           :severity 'warn
                           :note "without it this language falls back to the classic mode"
@@ -320,16 +334,20 @@ grammar 缺失只是降級不是故障，所以是 warn，而且順帶報出它�
                           :remedy "install it from the distribution, or M-x ginshio/lang-install-grammars"
                           :when (lambda () ginshio-lang-treesit-available)))
 
+(defun ginshio-lang--declare-compiler-check (module compiler)
+  "Have the doctor report on COMPILER for MODULE."
+  (let ((label (car compiler))
+        (programs (cadr compiler)))
+    (apply #'ginshio-doctor-declare module label
+           (lambda () (seq-some #'executable-find programs))
+           (append (cddr compiler)
+                   '(:severity warn
+                     :note "only needed for grammars the system does not package")))))
+
 (ginshio-doctor-declare 'lang "tree-sitter support"
                         (lambda () ginshio-lang-treesit-available)
                         :note "structural parsing for code buffers"
                         :remedy "install libtree-sitter and rebuild Emacs against it")
-
-(ginshio-doctor-declare 'lang "C compiler"
-                        (lambda () (or (executable-find "cc") (executable-find "gcc")))
-                        :severity 'warn
-                        :note "only needed for grammars the system does not package"
-                        :remedy "zypper install gcc gcc-c++")
 #+end_src
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio-lang.el" :comments no
