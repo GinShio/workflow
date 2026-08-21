@@ -59,9 +59,15 @@ source，不在清理邊界內。其餘運行時狀態按性質分流到 XDG 目
 | =dap=          | 調試                                 | 是           |
 | =vc=           | 版本控制裏終端做不到的那部分         | 是           |
 | =lang-c=       | C/C++：向上面三個框架註冊自己        | 否           |
+| =lang-haskell= | Haskell：classic/TS、HLS 與 hdb       | 是           |
 | =lang-latex=   | LaTeX：編輯、引用、構建、PDF 同步    | 是           |
 | =lang-markup=   | Markdown、reST 與 AsciiDoc           | 是           |
 | =lang-llvm=     | LLVM IR、MIR、MLIR 與 TableGen modes | vendored Lisp |
+| =lang-python=  | Python 3：classic/TS、Pyright、debugpy | 否          |
+| =lang-rust=    | Rust：classic/TS、rust-analyzer、LLDB | 是           |
+| =lang-zig=     | Zig：classic/TS、zls、LLDB            | 是           |
+| =cmake=        | CMake 構建文件：classic/TS 與 help    | 是           |
+| =meson=        | Meson 構建文件：編輯、補全、Eldoc    | 是           |
 
 =path= 由 =bootstrap= 生成，=doctor= 是只供其他模塊 ~require~ 的 =support=；兩者都不進
 ~ginshio-modules~。其餘模塊由 tangle 按文件名生成清單。
@@ -92,6 +98,8 @@ include、tangle 並加入 ~ginshio-modules~，=disabled= 三者都不做，舊�
 向框架註冊，框架不認識任何具體語言；llvm-project 自帶的純 Lisp modes 則由 =lang-llvm=
 從受版本控制的 snapshot 接入。Markdown、reST 與 AsciiDoc 這類文檔標記共用一個模塊。
 三者都保持同一條邊界：增加一類支持只新增一個配置文件，停用時只改自己的 metadata。
+CMake 與 Meson 文件排在語言之後，只負責描述構建的文本；真正的項目、branch 與 backend
+仍由 Wits 決定。
 
 * 命名約定
 

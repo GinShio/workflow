@@ -1,0 +1,140 @@
+#+GINSHIO_MODULE: enabled
+
+* Zig
+
+Zig 的 classic mode 來自官方 [[https://github.com/ziglang/zig-mode][zig-mode]]，tree-sitter mode 來自
+[[https://codeberg.org/meow_king/zig-ts-mode][zig-ts-mode]]；語義服務器是 [[https://github.com/zigtools/zls][zls]]。兩個 mode 都保留自己的
+=C-c= 命令，跨語言的結構、語義與調試操作仍走既有 leader 分支。
+
+classic mode 直接取官方 GitHub；TS mode 的 canonical repository 在 Codeberg，套件則從
+[[https://github.com/emacsmirror/zig-ts-mode][Emacsmirror]] 的逐 commit 鏡像取得。lock file 仍釘住確切 commit，不把 mirror 的 HEAD
+當版本。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-zig.el" :comments no
+;;; ginshio-lang-zig.el --- Zig -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-zig.el"
+(require 'ginshio-doctor)
+(require 'ginshio-lang)
+(require 'ginshio-lsp)
+
+(defvar dape-configs)
+(defvar editorconfig-indentation-alist)
+#+end_src
+
+** 主模式與 grammar
+
+=zig-ts-mode= 的 upstream autoload 會把 =.zig= 與 =.zon= 無條件直接指向自己；grammar 缺
+失時甚至會在打開文件的路徑上詢問是否下載。這和本配置「普通會話不下載，缺 grammar 就
+退回 classic mode」的契約相反。
+
+因此先讓文件落到 =zig-mode=，再由 lang 框架只在 grammar 可用時 remap。tree-sitter package
+加載後把 classic association 放回最前面，同時重跑 remap；這一步不能刪，因為 package 的
+autoload association 是它自己加入的。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-zig.el"
+(defconst ginshio-lang-zig-source-mode-entry
+  '("\\.\\(zig\\|zon\\)\\'" . zig-mode)
+  "Auto-mode entry which keeps grammar absence on the classic mode.")
+
+(defun ginshio-lang-zig-prefer-fallback-h ()
+  "Put the Zig fallback before the TS package's unconditional autoload."
+  (setq auto-mode-alist
+        (cons ginshio-lang-zig-source-mode-entry
+              (delete ginshio-lang-zig-source-mode-entry
+                      auto-mode-alist))))
+
+(use-package zig-mode
+  :ensure (zig-mode :host github :repo "ziglang/zig-mode")
+  :mode (("\\.zig\\'" . zig-mode)
+         ("\\.zon\\'" . zig-mode))
+  :init
+  (setq zig-indent-offset 4
+        zig-format-on-save nil))
+
+(use-package zig-ts-mode
+  :ensure (zig-ts-mode :host github :repo "emacsmirror/zig-ts-mode")
+  :demand t
+  :init
+  (setq zig-ts-indent-offset 4)
+  :config
+  (ginshio-lang-zig-prefer-fallback-h)
+  (ginshio-lang-apply-mode-remap))
+
+(add-to-list 'editorconfig-indentation-alist
+             '(zig-ts-mode zig-ts-indent-offset))
+
+(ginshio-lang-register
+ :module 'lang-zig
+ :grammars '((zig "https://github.com/tree-sitter-grammars/tree-sitter-zig"
+                  "v1.1.2"))
+ :compilers '(("zig" ("zig")
+               :remedy "zypper install zig"))
+ :modes '((zig-mode zig-ts-mode zig)))
+
+(ginshio-lang-zig-prefer-fallback-h)
+(add-hook 'after-init-hook #'ginshio-lang-zig-prefer-fallback-h)
+#+end_src
+
+兩個 mode 都用四格作兜底；EditorConfig 原本只認 classic mode，上面的新增條目讓 TS mode
+遵循同一份項目聲明。grammar 固定在已和這個 TS mode 驗證過的 =v1.1.2=。
+
+** 項目構建與 zls
+
+兩個上游 mode 都有自己的 =zig build= 命令，TS mode 還把它寫成 buffer-local
+~compile-command~。那些 mode-local =C-c= 命令照常保留；~M-m p c~ 是跨語言的項目構建，
+仍應回到 shell 模塊的 =wits build=。mode hook 發生在 directory locals 之前，所以項目仍可
+覆蓋它。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-zig.el"
+(defun ginshio-lang-zig-project-compile-h ()
+  "Use the cross-language project build default in Zig buffers."
+  (setq-local compile-command (default-value 'compile-command)))
+
+(add-hook 'zig-mode-hook #'ginshio-lang-zig-project-compile-h)
+(add-hook 'zig-ts-mode-hook #'ginshio-lang-zig-project-compile-h)
+
+(ginshio-lsp-register-server
+ :modes '(zig-mode zig-ts-mode)
+ :program "zls"
+ :contact '("zls"))
+#+end_src
+
+** 調試
+
+Zig 產生的是原生可執行文件，lldb-dap 能調試它；Dape 的既有配置只漏了 mode filter。把
+兩個 mode 加進同一條配置，不複製 adapter 的 command、protocol 或 launch defaults。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-zig.el"
+(defun ginshio-lang-zig-enable-lldb-dap ()
+  "Let Dape offer its existing lldb-dap configuration for Zig."
+  (when-let* ((config (alist-get 'lldb-dap dape-configs)))
+    (setf (alist-get 'lldb-dap dape-configs)
+          (plist-put
+           config 'modes
+           (delete-dups
+            (append '(zig-mode zig-ts-mode) (plist-get config 'modes)))))))
+
+(with-eval-after-load 'dape
+  (ginshio-lang-zig-enable-lldb-dap))
+#+end_src
+
+啓動時在可編輯配置裏把 ~:program~ 指向 =zig-out/bin/= 或項目自己的輸出；Wits 決定怎麼
+構建，Dape 只消費最後的 executable。
+
+** 自檢項
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-zig.el"
+(ginshio-doctor-executable 'lang-zig "lldb-dap"
+                           :severity 'warn
+                           :note "debug adapter"
+                           :remedy "zypper install lldb")
+#+end_src
+
+zig compiler 與 grammar 檢查由 lang 註冊產生；zls 的必要檢查由 lsp 註冊產生。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-zig.el" :comments no
+(provide 'ginshio-lang-zig)
+;;; ginshio-lang-zig.el ends here
+#+end_src

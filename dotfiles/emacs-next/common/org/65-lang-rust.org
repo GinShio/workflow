@@ -1,0 +1,96 @@
+#+GINSHIO_MODULE: enabled
+
+* Rust
+
+Rust 的結構由內建 [[info:emacs#Parsing Program Source][tree-sitter]] mode 讀，語義交給
+[[https://rust-analyzer.github.io/][rust-analyzer]]，調試交給 Dape 已有的 =lldb-dap= 配置。這個模塊只把三者接到既有
+lang/lsp/dap 邊界，不讓 =cargo= 或 rustfmt 在保存時暗中改寫文件。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el" :comments no
+;;; ginshio-lang-rust.el --- Rust -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el"
+(require 'ginshio-doctor)
+(require 'ginshio-lang)
+(require 'ginshio-lsp)
+
+(declare-function rust-ts-flymake "rust-ts-mode" (report-fn &rest args))
+#+end_src
+
+** 主模式與 grammar
+
+Emacs 30 自帶 =rust-ts-mode=，卻沒有不依賴 grammar 的 =rust-mode=。後者由 NonGNU ELPA
+補上，並且刻意不讓它自己轉成 tree-sitter 派生模式：grammar 壞掉時 fallback 必須真的
+不再依賴 grammar。
+
+兩套 mode 都保持 Rust 慣例的四格空白。EditorConfig 已認識兩個變量，項目聲明仍會在
+mode hook 之後覆蓋這裏的默認值。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el"
+(use-package rust-mode
+  :ensure t
+  :mode ("\\.rs\\'" . rust-mode)
+  :init
+  (setq rust-mode-treesitter-derive nil
+        rust-indent-offset 4
+        rust-format-on-save nil))
+
+(setq rust-ts-mode-indent-offset 4)
+
+(ginshio-lang-register
+ :module 'lang-rust
+ :grammars '((rust "https://github.com/tree-sitter/tree-sitter-rust" "v0.23.2"))
+ :compilers '(("rustc" ("rustc")
+               :remedy "rustup toolchain install stable"))
+ :modes '((rust-mode rust-ts-mode rust)))
+#+end_src
+
+=v0.23.2= 是 Emacs 30 可使用的 ABI 14 grammar；這份配置支持的 tree-sitter runtime
+仍能向後載入它。系統打包的 grammar 照既有策略優先，本地 revision 只在系統沒有時使用。
+
+** 診斷只有一個來源
+
+=rust-ts-mode= 會自行加入一個每次把整份 buffer 喂給 =clippy-driver= 的 Flymake backend。
+Eglot 接管後 rust-analyzer 也會送同一批編譯診斷，兩份結果不只重複，還可能來自不同
+feature set。這裏選項已經是 rust-analyzer，所以拿掉 mode 自帶的那份。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el"
+(defun ginshio-lang-rust-use-eglot-diagnostics-h ()
+  "Leave Rust diagnostics to the registered language server."
+  (remove-hook 'flymake-diagnostic-functions #'rust-ts-flymake t))
+
+(add-hook 'rust-ts-mode-hook #'ginshio-lang-rust-use-eglot-diagnostics-h)
+#+end_src
+
+** rust-analyzer
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el"
+(ginshio-lsp-register-server
+ :modes '(rust-mode rust-ts-mode)
+ :program "rust-analyzer"
+ :contact '("rust-analyzer"))
+#+end_src
+
+沒有項目或 executable 時，lsp 框架不自動啓動；~M-m c e~ 仍可手動要求並看到原始錯誤。
+格式化能力則沿用 lsp 模塊的全局決定，不由 rust-analyzer 改寫 buffer。
+
+** 調試與自檢
+
+Dape 0.27 的 =lldb-dap= 配置已列出兩個 Rust mode，不需要複製 adapter。選配置後只需把
+~:program~ 改成 Cargo 產生的可執行文件，例如 =target/debug/demo=；固定值仍應寫在項目的
+=.dir-locals.el=。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el"
+(ginshio-doctor-executable 'lang-rust "lldb-dap"
+                           :severity 'warn
+                           :note "debug adapter"
+                           :remedy "zypper install lldb")
+#+end_src
+
+rustc 與 grammar 檢查由 lang 註冊產生；rust-analyzer 的必要檢查由 lsp 註冊自動產生。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el" :comments no
+(provide 'ginshio-lang-rust)
+;;; ginshio-lang-rust.el ends here
+#+end_src

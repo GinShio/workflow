@@ -1,0 +1,67 @@
+#+GINSHIO_MODULE: enabled
+
+* CMake 構建文件
+
+本模塊只處理 =CMakeLists.txt= 與 =*.cmake= 的編輯：classic fallback、tree-sitter 結構、
+縮進和 CMake 內建 help。真正的 configure/build 由 shell 模塊的 =wits build= 進入 Wits，
+不在 major mode 裏維護另一套 preset 或 build-directory 狀態。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-cmake.el" :comments no
+;;; ginshio-cmake.el --- CMake build files -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-cmake.el"
+(require 'ginshio-doctor)
+(require 'ginshio-lang)
+#+end_src
+
+** 主模式與 grammar
+
+Emacs 30.2 自帶 =cmake-ts-mode=，但 grammar 缺失時不會為 CMake 文件註冊任何 mode。
+Kitware 隨 CMake 維護的 =cmake-mode= 補上可用的 fallback；lang 框架只在 grammar ready
+時 remap 到 TS mode。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-cmake.el"
+(use-package cmake-mode
+  :ensure t
+  :mode (("CMakeLists\\.txt\\'" . cmake-mode)
+         ("\\.cmake\\'" . cmake-mode))
+  :init
+  (setq cmake-tab-width 2))
+
+(setq cmake-ts-mode-indent-offset 2)
+
+(ginshio-lang-register
+ :module 'cmake
+ :grammars '((cmake "https://github.com/uyha/tree-sitter-cmake"
+                    "e409ae33f00e04cde30f2bcffb979caf1a33562a"))
+ :modes '((cmake-mode cmake-ts-mode cmake)))
+#+end_src
+
+這個 revision 是 Emacs 30.2 的 mode 明確驗證過的 =v0.5.0-5-ge409ae3=，不是任意取最新
+grammar。兩套 mode 都以二格為兜底；內建 EditorConfig 已同時認識
+~cmake-tab-width~ 與 ~cmake-ts-mode-indent-offset~。
+
+=CMakePresets.json= 是 JSON，不強行交給 CMake mode。它繼續由 JSON mode 和 schema-aware
+工具處理。
+
+** Help 與自檢
+
+Classic mode 的 =cmake-help=、=cmake-help-command=、=cmake-help-variable= 等命令會調用
+外部 =cmake= 讀取當前版本的文檔；TS mode 則只負責結構。打開文件後用 ~M-m h m~ 看實際
+mode 提供的命令。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-cmake.el"
+(ginshio-doctor-executable 'cmake "cmake"
+                           :severity 'warn
+                           :note "build system and mode-local help"
+                           :remedy "zypper install cmake")
+#+end_src
+
+grammar 檢查由 lang 註冊產生；補建 grammar 的 C compiler 由通用 lang 段檢查。generator
+由 Wits 項目選擇，所以這裏不把 Ninja 寫成全局依賴。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-cmake.el" :comments no
+(provide 'ginshio-cmake)
+;;; ginshio-cmake.el ends here
+#+end_src

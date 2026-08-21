@@ -6,8 +6,8 @@
 字符串、按下 Tab 該縮進幾格、按下摺疊該收起哪一段。至於「這個符號指向哪裏」屬於語
 義，歸 lsp；「這一行此刻的值是什麼」屬於運行時，歸 dap。
 
-它不認識任何具體編程語言。需要這層的語言在自己的 =NN-lang-*.org= 裏註冊 grammar、編
-譯器和主模式，向 lsp 註冊語言服務器。這樣一種語言的所有事情在一個文件裏，停用它就是
+它不認識任何具體編程語言。需要這層的語言在自己的 =NN-lang-*.org= 裏註冊 grammar、
+語言 compiler 和主模式，向 lsp 註冊語言服務器。這樣一種語言的所有事情在一個文件裏，停用它就是
 把文件自己的 =#+GINSHIO_MODULE:= 改成 =disabled=。LaTeX 與輕量標記不解析程序結構，
 各自直接配置自己的 major mode，不向這個框架註冊。
 
@@ -69,8 +69,12 @@ tree-sitter 的程序共用一份。自己編譯只在系統沒有的時候才�
 #+end_src
 
 按「丟了損失什麼」的標準，編譯好的 grammar 接近緩存——刪掉重編即可。但重編需要網絡
-和一個編譯器，和包樹是同一類情況：自動清理緩存的規則不該有能力讓你的編輯器在下次啓
-動時失去語法高亮。所以歸 data。
+和 C compiler，和包樹是同一類情況：自動清理緩存的規則不該有能力讓你的編輯器在下次
+啓動時失去語法高亮。所以歸 data。
+
+這個 C compiler 編的是 tree-sitter 生成的 parser，不是被編輯的語言。它是 grammar
+框架的一項共享依賴，只在 =lang= 段檢查一次；~rustc~、~zig~、~ghc~ 之類語言自己的工具
+由各語言模塊的 ~:compilers~ 聲明，不能和 grammar compiler 混為一談。
 
 ** 註冊
 
@@ -98,9 +102,9 @@ PROPERTIES is a plist:
 
   :module     required symbol naming the language module and doctor section
   :grammars   list of (LANGUAGE URL REVISION), pinned to a known-good tag
-  :compilers  list of (LABEL PROGRAMS . PROPS); finding any executable in
-              PROGRAMS satisfies the check; PROPS are doctor properties,
-              with warning severity and the grammar-build note as defaults
+  :compilers  list of (LABEL PROGRAMS . PROPS) for this language's own
+              compilers; finding any executable in PROGRAMS satisfies one
+              check, and PROPS are passed to doctor
   :modes      list of (CLASSIC-MODE TREE-SITTER-MODE . LANGUAGES), naming
               the grammars each mode cannot work without"
   (let ((module (or (plist-get properties :module)
@@ -309,17 +313,18 @@ leader 提供。
 |---------------+-----------------------------------------|
 | 自檢歸到語言模塊 | ~ginshio-lang-register~ 的 ~:module~      |
 | 語法高亮、摺疊 | ~ginshio-lang-register~ 的 ~:grammars~ 與 ~:modes~ |
-| 補建 grammar 的編譯器 | ~ginshio-lang-register~ 的 ~:compilers~ |
+| 語言 compiler  | ~ginshio-lang-register~ 的 ~:compilers~   |
 | 縮進風格       | 該主模式自己的變量，就地 ~setq~           |
 | 跳轉、診斷、補全 | ~ginshio-lsp-register-server~             |
 | 調試           | 多半不用做，見 dap 模塊                  |
+| 非 compiler runtime | 在語言模塊直接向 doctor 聲明       |
 
 ** 自檢項
 
-grammar 缺失只是降級不是故障，所以是 warn，而且順帶報出它實際來自哪裏。編譯器缺失
-要單獨報——沒有它，那條補救命令會失敗，而失敗信息埋在編譯輸出裏，離原因很遠。兩類檢
-查都使用註冊時的 ~:module~，和語言自己的其他檢查出現在同一段；只有 Emacs 本身有沒有
-tree-sitter 支持仍然屬於通用的 =lang= 段。
+grammar 缺失只是降級不是故障，所以是 warn，而且順帶報出它實際來自哪裏。grammar
+與語言 compiler 檢查都使用註冊時的 ~:module~，出現在該語言自己的段落。Emacs 有沒有
+tree-sitter、以及能不能編譯缺失 grammar，是所有語言共享的條件，屬於通用 =lang= 段。
+Python interpreter 這類不是 compiler 的 runtime 仍由語言模塊直接聲明。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el"
 (defun ginshio-lang--declare-grammar-check (module language)
@@ -335,19 +340,29 @@ tree-sitter 支持仍然屬於通用的 =lang= 段。
                           :when (lambda () ginshio-lang-treesit-available)))
 
 (defun ginshio-lang--declare-compiler-check (module compiler)
-  "Have the doctor report on COMPILER for MODULE."
+  "Have doctor check one of MODULE's language COMPILER executables."
   (let ((label (car compiler))
         (programs (cadr compiler)))
     (apply #'ginshio-doctor-declare module label
            (lambda () (seq-some #'executable-find programs))
-           (append (cddr compiler)
-                   '(:severity warn
-                     :note "only needed for grammars the system does not package")))))
+           (append (cddr compiler) '(:note "language compiler")))))
 
 (ginshio-doctor-declare 'lang "tree-sitter support"
                         (lambda () ginshio-lang-treesit-available)
                         :note "structural parsing for code buffers"
                         :remedy "install libtree-sitter and rebuild Emacs against it")
+
+(ginshio-doctor-declare
+ 'lang "grammar C compiler"
+ (lambda () (seq-some #'executable-find '("cc" "gcc" "clang")))
+ :severity 'warn
+ :note "building grammars the system does not supply"
+ :remedy "zypper install gcc"
+ :when (lambda ()
+         (and ginshio-lang-treesit-available
+              (seq-some (lambda (grammar)
+                          (not (ginshio-lang-grammar-ready-p (car grammar))))
+                        ginshio-lang-grammars))))
 #+end_src
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang.el" :comments no

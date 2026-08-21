@@ -1,0 +1,143 @@
+#+GINSHIO_MODULE: enabled
+
+* Haskell
+
+Classic 編輯使用成熟的 [[https://github.com/haskell/haskell-mode][haskell-mode]]；普通 =.hs= 在 grammar 可用時改用
+[[https://codeberg.org/pranshu/haskell-ts-mode][haskell-ts-mode]]。語義由
+[[https://haskell-language-server.readthedocs.io/][Haskell Language Server]] 提供，調試則沿用 Dape 的 =hdb= 配置。
+
+TS mode 的 canonical repository 在 Codeberg；Elpaca 從
+[[https://github.com/emacsmirror/haskell-ts-mode][Emacsmirror]] 的逐 commit 鏡像取得，最後仍由 lock file 固定 revision。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el" :comments no
+;;; ginshio-lang-haskell.el --- Haskell -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el"
+(require 'ginshio-doctor)
+(require 'ginshio-lang)
+(require 'ginshio-lsp)
+
+(declare-function haskell-ts-indent-after-newline
+                  "haskell-ts-mode" (character))
+#+end_src
+
+** Classic mode
+
+Haskell layout 是語法的一部分，fallback 使用 haskell-mode 經過多年使用的互動縮進器。
+五個 offset 都設成二，只是沒有項目聲明時的起點；Emacs 30 的 EditorConfig 已認識它們。
+
+Literate Haskell 與預處理過的 source 不是普通 =.hs=：它們保留專門的 classic mode，不被
+TS dispatcher 一併吞掉。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el"
+(use-package haskell-mode
+  :ensure t
+  :mode (("\\.\\(?:hs-boot\\|hsig\\|hsc\\|gs\\)\\'" . haskell-mode)
+         ("\\.\\(?:lhs\\|lgs\\)\\'" . haskell-literate-mode))
+  :init
+  (setq haskell-indentation-layout-offset 2
+        haskell-indentation-starter-offset 2
+        haskell-indentation-left-offset 2
+        haskell-indentation-where-pre-offset 2
+        haskell-indentation-where-post-offset 2))
+#+end_src
+
+** Tree-sitter 的明確限制
+
+=haskell-ts-mode= 上游目前刻意把縮進關掉：既有規則仍在重寫，而且修一種 layout 會破壞
+另一種。這裏接受這個限制，不把一套已知不可靠的規則強制打開。上游在關閉規則時仍留下
+一個「新行複製上一行整個寬度」的 electric hook；那仍然是在改縮進，所以也一併摘掉。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el"
+(defconst ginshio-lang-haskell-source-mode-entry
+  '("\\.hs\\'" . ginshio-lang-haskell-mode)
+  "Auto-mode entry which owns the classic/tree-sitter decision.")
+
+(defun ginshio-lang-haskell-prefer-dispatch-h ()
+  "Put the conditional Haskell source dispatcher before package autoloads."
+  (setq auto-mode-alist
+        (cons ginshio-lang-haskell-source-mode-entry
+              (delete ginshio-lang-haskell-source-mode-entry
+                      auto-mode-alist))))
+
+(use-package haskell-ts-mode
+  :ensure (haskell-ts-mode :host github :repo "emacsmirror/haskell-ts-mode")
+  :commands haskell-ts-mode
+  :init
+  (setq haskell-ts-use-indent nil
+        haskell-ts-font-lock-level 4
+        haskell-ts-ghci "ghci")
+  :config
+  (ginshio-lang-haskell-prefer-dispatch-h))
+
+(defun ginshio-lang-haskell-disable-ts-indent-h ()
+  "Keep the intentionally disabled Haskell TS indentation fully disabled."
+  (setq-local electric-indent-functions
+              (delq #'haskell-ts-indent-after-newline
+                    electric-indent-functions)))
+
+(add-hook 'haskell-ts-mode-hook
+          #'ginshio-lang-haskell-disable-ts-indent-h)
+
+(ginshio-lang-register
+ :module 'lang-haskell
+ :grammars '((haskell "https://github.com/tree-sitter/tree-sitter-haskell"
+                      "v0.23.1"))
+ :compilers '(("ghc" ("ghc")
+               :remedy "ghcup install ghc")))
+
+(defun ginshio-lang-haskell-mode ()
+  "Select structural Haskell editing only when its grammar is usable."
+  (interactive)
+  (if (and (fboundp 'haskell-ts-mode)
+           (ginshio-lang-grammar-ready-p 'haskell))
+      (haskell-ts-mode)
+    (haskell-mode)))
+
+(ginshio-lang-haskell-prefer-dispatch-h)
+(add-hook 'after-init-hook #'ginshio-lang-haskell-prefer-dispatch-h)
+#+end_src
+
+TS mode 在這個狀態下提供高亮、imenu、結構導航與摺疊，但 =TAB= 沒有一套可承諾正確的
+Haskell layout 規則。需要可靠互動縮進時，暫時用 ~M-x haskell-mode~ 回到 classic mode；
+等上游完成重寫後再單獨審查並打開。
+
+** HLS
+
+Eglot 從 mode 名推導 language id；=haskell-literate-mode= 會被誤推成
+=haskell-literate=。HLS 要的仍是 =haskell=，所以在 Eglot 建立 server 表之前把這個穩定
+外部名稱放到 mode symbol 上。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el"
+(put 'haskell-literate-mode 'eglot-language-id "haskell")
+
+(ginshio-lsp-register-server
+ :modes '(haskell-mode haskell-ts-mode haskell-literate-mode)
+ :program "haskell-language-server-wrapper"
+ :contact '("haskell-language-server-wrapper" "--lsp"))
+#+end_src
+
+** 調試與自檢
+
+Dape 0.27 的 =hdb= 已經覆蓋 classic、TS 與 literate modes，因此不複製配置。它需要
+well-typed 的 =hdb= adapter；項目入口和參數仍在啓動時編輯，或寫入 =.dir-locals.el=。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el"
+(ginshio-doctor-executable 'lang-haskell "ghci"
+                           :severity 'warn
+                           :note "interactive Haskell"
+                           :remedy "ghcup install ghc")
+
+(ginshio-doctor-executable 'lang-haskell "hdb"
+                           :severity 'warn
+                           :note "Haskell debug adapter"
+                           :remedy "install haskell-debugger and put hdb on PATH")
+#+end_src
+
+ghc 與 grammar 檢查由 lang 註冊產生；HLS 的必要檢查由 lsp 註冊產生。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el" :comments no
+(provide 'ginshio-lang-haskell)
+;;; ginshio-lang-haskell.el ends here
+#+end_src

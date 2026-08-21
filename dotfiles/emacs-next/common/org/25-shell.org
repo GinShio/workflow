@@ -106,6 +106,23 @@ leader 不在此列——它住在覆蓋層裏，而覆蓋層排在所有 major 
 反過來說，~M-m~ 也就送不進終端裏的程序了。真要把它交出去的那天，關掉
 ~ginshio-override-mode~ 就行——這是它作為一個 minor mode 而不是一段硬編碼的原因。
 
+** 項目構建
+
+~project-compile~ 已經把命令放到項目根目錄執行；缺的是一個比 =make -k= 更符合這台機器
+工作流的默認值。Wits 自己從當前目錄反查註冊的項目，再從 focus/anchor checkout 取得當
+前 branch，並按項目聲明選 CMake、Meson 或 Cargo backend。這些規則不能在 Emacs 裏再猜
+一遍——多倉庫項目的構建 branch 未必屬於光標所在的 Git checkout。
+
+所以只交給它一條沒有重複 identity 的命令：
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el"
+(setq compile-command "wits build")
+#+end_src
+
+這仍然只是 ~compile~ 提示裏可編輯的默認值，不是硬編碼的 dispatch。buffer-local、
+=.dir-locals.el= 或 file-local 的 ~compile-command~ 都會照常覆蓋它；detached HEAD、未註冊
+目錄與 worktree 缺失也由 Wits 報出原本的精確錯誤，不在這裏猜 fallback。
+
 ** 鍵位
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el"
@@ -125,10 +142,10 @@ leader 不在此列——它住在覆蓋層裏，而覆蓋層排在所有 major 
 | ~M-m ! |~    | 把選區喂給一條命令；帶前綴參數則原地替換 |
 | ~M-m ! t~    | 在當前目錄開一個終端                     |
 | ~M-m ! p~    | 在項目根目錄開一個終端                   |
+| ~M-m p c~    | 在項目根編譯；默認是 =wits build=          |
 
-編譯和錯誤跳轉也屬於這個模塊管的事——把源碼交給外部工具，再把它的輸出變回可跳轉的位
-置。目前只有 window 模塊的 ~M-m p c~ 觸發項目編譯，跳到下一個錯誤還沒有鍵。要補的話
-這裏是它的位置。
+鍵位仍由 window 模塊放在項目分支；本模塊只擁有它執行的默認命令。跳到下一個編譯錯誤
+還沒有鍵，要補的話這裏是它的位置。
 
 ** 自檢項
 
@@ -144,6 +161,11 @@ leader 不在此列——它住在覆蓋層裏，而覆蓋層排在所有 major 
                         :note "the shell Emacs builds command lines for"
                         :detail (lambda () (format "using %s" shell-file-name))
                         :remedy "zypper install bash")
+
+(ginshio-doctor-executable 'shell "wits"
+                           :severity 'warn
+                           :note "default project build command"
+                           :remedy "install wits and put it on PATH")
 #+end_src
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el" :comments no

@@ -1,0 +1,111 @@
+#+GINSHIO_MODULE: enabled
+
+* Python 3
+
+Emacs 的 mode 與 LSP language id 都叫 Python；只有實際執行程序明確叫 =python3=。本模塊
+使用內建 classic/tree-sitter modes、[[https://github.com/microsoft/pyright][Pyright]] 與 Dape 已有的
+[[https://github.com/microsoft/debugpy][debugpy]] 配置，不再安裝另一套 Python major mode。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el" :comments no
+;;; ginshio-lang-python.el --- Python 3 -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el"
+(require 'ginshio-doctor)
+(require 'ginshio-lang)
+(require 'ginshio-lsp)
+
+(defvar dape-configs)
+(declare-function python-flymake "python" (report-fn &rest args))
+#+end_src
+
+** 主模式、grammar 與縮進
+
+=python-mode= 和 =python-ts-mode= 共用同一個 =python-indent-offset=。四格只是新文件的
+fallback；~python-indent-guess-indent-offset~ 保持開啓，已有文件會從內容推斷，而
+EditorConfig 的明確聲明最後生效。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el"
+(setq python-indent-offset 4
+      python-indent-guess-indent-offset t
+      python-shell-interpreter "python3")
+
+(ginshio-lang-register
+ :module 'lang-python
+ :grammars '((python "https://github.com/tree-sitter/tree-sitter-python"
+                    "v0.23.6"))
+ :modes '((python-mode python-ts-mode python)))
+#+end_src
+
+=v0.23.6= 使用 ABI 14，能在 Emacs 30 支持的 runtime 範圍內工作。=.py=、=.pyi=、=.pyw=
+與 Python shebang 仍先由內建 classic mode 識別；grammar ready 時 lang 框架才 remap。
+
+** 診斷只有 Pyright
+
+Python 基礎 mode 會自行掛一個 =pyflakes= Flymake backend。Eglot 接管後 Pyright 已提供
+語法、類型與 import 診斷；同時跑兩個 checker 會產生重複結果，而且兩者未必使用同一個
+虛擬環境。拿掉內建 backend，讓 lsp 模塊保持一個語義來源。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el"
+(defun ginshio-lang-python-use-eglot-diagnostics-h ()
+  "Leave Python diagnostics to the registered language server."
+  (remove-hook 'flymake-diagnostic-functions #'python-flymake t))
+
+(add-hook 'python-base-mode-hook
+          #'ginshio-lang-python-use-eglot-diagnostics-h)
+
+(ginshio-lsp-register-server
+ :modes '(python-mode python-ts-mode)
+ :program "pyright-langserver"
+ :contact '("pyright-langserver" "--stdio"))
+#+end_src
+
+Pyright 的 interpreter、venv 與分析範圍由項目配置決定；本文件只選 server，不在全局猜
+一個虛擬環境。
+
+** debugpy 使用 python3
+
+Dape 的兩條 Python 配置默認執行名是 =python=，而這台系統只保證 =python3=。等 Dape
+真正加載後修改既有 plist；adapter 的其他字段仍由 Dape 上游維護。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el"
+(defun ginshio-lang-python-use-python3-for-dape ()
+  "Run Dape's debugpy adapter with the configured Python 3 executable."
+  (dolist (name '(debugpy debugpy-module))
+    (when-let* ((config (alist-get name dape-configs)))
+      (setf (alist-get name dape-configs)
+            (plist-put config 'command python-shell-interpreter)))))
+
+(with-eval-after-load 'dape
+  (ginshio-lang-python-use-python3-for-dape))
+#+end_src
+
+debugpy 屬於 interpreter 環境，不只是一個 PATH executable，所以 doctor 直接要求
+=python3= 匯入 adapter module。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el"
+(defun ginshio-lang-python-debugpy-available-p ()
+  "Return non-nil when Python 3 can import the debugpy adapter."
+  (and (executable-find python-shell-interpreter)
+       (eq 0 (call-process python-shell-interpreter nil nil nil
+                           "-c" "import debugpy.adapter"))))
+
+(ginshio-doctor-executable 'lang-python "python3"
+                           :severity 'warn
+                           :note "REPL and debug adapter runtime"
+                           :remedy "zypper install python313")
+
+(ginshio-doctor-declare 'lang-python "debugpy"
+                        #'ginshio-lang-python-debugpy-available-p
+                        :severity 'warn
+                        :note "Python debug adapter module"
+                        :remedy "python3 -m pip install --user debugpy")
+#+end_src
+
+grammar 檢查由 lang 註冊產生；Python 沒有語言 compiler，=python3= runtime 在本模塊
+直接檢查；Pyright 的必要檢查由 lsp 註冊產生。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el" :comments no
+(provide 'ginshio-lang-python)
+;;; ginshio-lang-python.el ends here
+#+end_src

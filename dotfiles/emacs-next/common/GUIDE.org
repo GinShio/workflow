@@ -263,7 +263,7 @@ Corfu 自動在輸入兩個字符後彈出，候選項由 Eglot、major mode 與
 | ~M-m p p~                    | 選項目；通常切到它自己的 tab          |
 | ~M-m p P~                    | 在當前 tab 臨時切項目                 |
 | ~M-m p d~                    | 項目根 Dired                          |
-| ~M-m p c~                    | 項目編譯                              |
+| ~M-m p c~                    | 項目編譯；默認 =wits build=             |
 | ~M-m p r~                    | 項目範圍正則替換                      |
 | ~M-m p k~                    | 關閉項目及其緩衝區                    |
 | ~M-m p ]~ / ~p [~            | 下一個 / 上一個項目 tab               |
@@ -271,6 +271,11 @@ Corfu 自動在輸入兩個字符後彈出，候選項由 Eglot、major mode 與
 
 Help、Info、Eldoc 等短讀緩衝區去右側 side window；compile、grep、xref、Flymake、Messages
 等持續觀察的輸出去底部且不搶焦點。~M-m w z~ 可以暫時收起全部 side windows。
+
+~M-m p c~ 在項目根執行可編輯的 ~compile-command~。默認只寫 =wits build=：項目、focus、
+branch、worktree 與 CMake/Meson/Cargo backend 都由 Wits 從當前根目錄解析，Emacs 不另存
+一份容易過期的 identity。未註冊目錄或 detached HEAD 會顯示 Wits 的原始錯誤；項目的
+=.dir-locals.el= 可以覆蓋命令。
 
 手冊：[[info:emacs#Windows][Emacs: Windows]]、[[info:emacs#Projects][Emacs: Projects]]、
 [[info:emacs#Tab Bars][Emacs: Tab Bars]]、[[https://github.com/deb0ch/emacs-winum][winum]]；配置細節見

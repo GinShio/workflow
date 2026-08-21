@@ -1,0 +1,54 @@
+#+GINSHIO_MODULE: enabled
+
+* Meson 構建文件
+
+[[https://mesonbuild.com/][Meson]] 的構建描述不是 Python；它有自己的語法、內建函數和 keyword arguments。
+[[https://github.com/wentasah/meson-mode][meson-mode]] 提供對應的 font-lock、SMIE 縮進、Eldoc 與 completion-at-point。本模塊
+只配置這個編輯面；configure/compile/test 仍由 =wits build= 選 Meson backend。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-meson.el" :comments no
+;;; ginshio-meson.el --- Meson build files -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-meson.el"
+(require 'ginshio-doctor)
+#+end_src
+
+** 文件與縮進
+
+Emacs 30.2 沒有 =meson-ts-mode=，現有 Meson grammar 也沒有一個可接入的 Emacs major
+mode。只有 parser 沒有 mode，不能帶來高亮、縮進或導航；所以這裏不註冊一份用不到的
+grammar，直接使用成熟的 classic mode。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-meson.el"
+(use-package meson-mode
+  :ensure t
+  :mode (("/meson\\.build\\'" . meson-mode)
+         ("/meson_options\\.txt\\'" . meson-mode)
+         ("/meson\\.options\\'" . meson-mode))
+  :init
+  (setq meson-indent-basic 2))
+#+end_src
+
+=meson.options= 是新名字，=meson_options.txt= 是仍然存在於舊項目的名字，兩者都保留。
+二格只是 fallback；Emacs 的 EditorConfig 已把 ~meson-indent-basic~ 映射為項目縮進寬度。
+
+mode 自帶的 completion 走標準 CAPF，因此現有 Corfu 會直接呈現，不需要 company 或另一個
+completion frontend。全部 mode-local 命令仍從 ~M-m h m~ 發現。
+
+** 自檢項
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-meson.el"
+(ginshio-doctor-executable 'meson "meson"
+                           :severity 'warn
+                           :note "build system"
+                           :remedy "zypper install meson")
+#+end_src
+
+Wits 的項目配置決定 generator、build directory 與 backend arguments；這裏不把 Ninja 或
+任何固定目錄提升成全局契約。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-meson.el" :comments no
+(provide 'ginshio-meson)
+;;; ginshio-meson.el ends here
+#+end_src
