@@ -1,9 +1,9 @@
 #+title: GNU Emacs Configuration
 #+author: GinShio
 
-一份以文學編程維護的 Vanilla Emacs 配置。=config.org= 與 =org/*.org= 是代碼的唯一真實
-來源；=early-init.el=、=init.el= 與 =lisp/ginshio/*.el= 都由它們生成，不直接編輯。
-=lisp/= 的其他子目錄保存受版本控制的上游 Emacs Lisp source。
+一份以文學編程維護的 Vanilla Emacs 配置。=config.org= 與 =org/*.org= 是 Ginshio 配置
+模塊的唯一真實來源；=early-init.el=、=init.el= 與 =lisp/ginshio/*.el= 都由它們生成，不
+直接編輯。=lisp/= 的其他子目錄保存受版本控制的上游 Emacs Lisp source。
 
 * 契約
 

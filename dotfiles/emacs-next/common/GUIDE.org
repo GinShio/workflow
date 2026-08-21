@@ -49,9 +49,8 @@
 =clean= 只刪除可由 =sync= 重建的內容：=early-init.el=、=init.el=、=lisp/ginshio/= 與
 =$XDG_DATA_HOME/emacs/elpaca/，以及 =$XDG_CACHE_HOME/emacs/eln-cache/=。文學源碼、
 =elpaca.lock=、=lisp/= 下受版本控制的上游 modes、書籤、歷史、grammar、auto-save 與
-backup 等都保留。先由 system/service
-停止所有使用這份配置的 Emacs 再清理；腳本不探測或管理 daemon。執行後不要直接啓動
-Emacs：普通啓動會按契約失敗，下一步應是
+backup 等都保留。先由 system/service 停止所有使用這份配置的 Emacs 再清理；腳本不探測
+或管理 daemon。執行後不要直接啓動 Emacs：普通啓動會按契約失敗，下一步應是
 =bin/vanilla-emacs sync=。
 
 套件查看入口：
