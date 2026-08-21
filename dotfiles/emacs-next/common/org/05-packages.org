@@ -45,26 +45,146 @@ Elpaca 的聲明仍然先進隊列，但 =init.el= 結束前會同步等待所�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
 (defconst ginshio-package-command (getenv "GINSHIO_EMACS_COMMAND")
-  "Package operation requested by bin/vanilla-emacs, or nil during normal startup.")
+  "Package operation requested by bin/vanilla-emacs.
+Nil denotes an ordinary interactive consumer; `validate' is a read-only
+consumer which eagerly loads every declared feature.")
 
 (defconst ginshio-package-managing-p
   (member ginshio-package-command '("sync" "upgrade"))
   "Non-nil only while the external package control command is running.")
 
+(defconst ginshio-package-validating-p
+  (equal ginshio-package-command "validate")
+  "Non-nil while an offline process validates every deferred package.")
+
 (when ginshio-package-managing-p
   (setq native-comp-jit-compilation nil))
 
 (defvar elpaca-directory (expand-file-name "elpaca/" ginshio-data-dir))
-(defvar elpaca-builds-directory
-  (expand-file-name (format "builds-%s/" emacs-version) elpaca-directory))
 (defvar elpaca-sources-directory (expand-file-name "sources/" elpaca-directory))
 
-(defconst ginshio-elpaca-lock-file
+(defconst ginshio-elpaca-authoritative-lock-file
   (expand-file-name "elpaca.lock" ginshio-config-dir))
+
+(defconst ginshio-elpaca-lock-file
+  (or (getenv "GINSHIO_EMACS_LOCK_FILE")
+      ginshio-elpaca-authoritative-lock-file)
+  "Lock consumed by this process.
+Validation may point this at an unpublished candidate.")
+
+(defconst ginshio-package-candidate-lock-file
+  (or (getenv "GINSHIO_EMACS_CANDIDATE_LOCK")
+      (expand-file-name "candidate.lock" elpaca-directory))
+  "Lock written by a maintenance process before external validation.")
+
+(defconst ginshio-package-generation-root
+  (expand-file-name (format "generations/%s/" emacs-version) elpaca-directory)
+  "Immutable package generations for this Emacs version.")
+
+(defvar ginshio-package-staging-directory
+  (when ginshio-package-managing-p
+    (make-directory elpaca-directory t)
+    (make-temp-file (expand-file-name "staging-" elpaca-directory) t))
+  "Private build generation used by the current maintenance process.")
+
+(defvar elpaca-builds-directory
+  (if ginshio-package-managing-p
+      (expand-file-name "builds/" ginshio-package-staging-directory)
+    (expand-file-name "inactive-builds/" elpaca-directory)))
 
 (defconst ginshio-package-script
   (expand-file-name "bin/vanilla-emacs" ginshio-config-dir)
   "External command which owns package installation and maintenance.")
+
+(defvar ginshio-package-declarations nil
+  "Canonical use-package declarations encountered in this process.")
+
+(defvar ginshio-package-manifest-declarations nil
+  "Declarations recorded by the activation manifest.")
+
+(defvar ginshio-package-manifest-packages nil
+  "Package ids recorded by the activation manifest.")
+
+(defvar ginshio-package-manifest-lock-hash nil
+  "Lock digest recorded by the activation manifest.")
+#+end_src
+
+** 運行時激活
+
+普通會話不需要知道 Elpaca 怎麼解析或構建套件。=sync= 已把當前 lock 對應的 build path
+與 autoload forms 合成一個 activation file；啓動只驗證 digest 並載入它。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
+(defun ginshio-packages--lock-hash (file)
+  "Return FILE's SHA-256 digest."
+  (unless (file-readable-p file)
+    (error "Package lock is missing; run %s sync" ginshio-package-script))
+  (secure-hash 'sha256 file))
+
+(defun ginshio-packages--generation-directory (hash)
+  "Return the immutable package generation for lock HASH."
+  (expand-file-name (file-name-as-directory hash)
+                    ginshio-package-generation-root))
+
+(defun ginshio-packages--activation-file (hash)
+  "Return the compiled activation file belonging to lock HASH."
+  (expand-file-name "activation.elc"
+                    (ginshio-packages--generation-directory hash)))
+
+(defun ginshio-packages--load-activation ()
+  "Activate the immutable generation selected by the current lock."
+  (let* ((hash (ginshio-packages--lock-hash ginshio-elpaca-lock-file))
+         (activation (ginshio-packages--activation-file hash)))
+    (unless (file-readable-p activation)
+      (error "Package activation for lock %s is missing; run %s sync"
+             (substring hash 0 12) ginshio-package-script))
+    (load activation nil 'nomessage t)
+    (unless (equal hash ginshio-package-manifest-lock-hash)
+      (error "Package activation does not match %s; run %s sync"
+             ginshio-elpaca-lock-file ginshio-package-script))))
+
+(defun ginshio-packages--record-declaration (name arguments)
+  "Record use-package NAME and its :ensure ARGUMENTS in source order."
+  (let ((entry (list name arguments)))
+    (unless (member entry ginshio-package-declarations)
+      (setq ginshio-package-declarations
+            (append ginshio-package-declarations (list entry))))))
+
+(defun ginshio-packages--ensure-id (name arguments)
+  "Return the managed package id for NAME and :ensure ARGUMENTS."
+  (let ((specification (car arguments)))
+    (cond
+     ((null specification) nil)
+     ((eq specification t) name)
+     ((symbolp specification) specification)
+     ((and (consp specification)
+           (symbolp (car specification)))
+      (car specification))
+     (t
+      (error "Unsupported :ensure declaration for %s: %S"
+             name arguments)))))
+
+(defun ginshio-packages-runtime-ensure (name arguments _state)
+  "Validate NAME and ARGUMENTS against the activated package generation."
+  (ginshio-packages--record-declaration name arguments)
+  (when-let* ((id (ginshio-packages--ensure-id name arguments)))
+    (unless (memq id ginshio-package-manifest-packages)
+      (error "Package `%s' is not in the active lock; run %s sync"
+             id ginshio-package-script)))
+  t)
+
+(defvar ginshio-packages--maintenance-ensure-function nil)
+
+(defun ginshio-packages-maintenance-ensure (name arguments state)
+  "Record a declaration, then delegate it to Elpaca during maintenance."
+  (ginshio-packages--record-declaration name arguments)
+  (funcall ginshio-packages--maintenance-ensure-function
+           name arguments state))
+
+(unless ginshio-package-managing-p
+  (ginshio-packages--load-activation)
+  (require 'use-package-ensure)
+  (setq use-package-ensure-function #'ginshio-packages-runtime-ensure))
 #+end_src
 
 ** 引導
@@ -85,7 +205,8 @@ Elpaca 自己也必須被鎖定；它在讀取 lock file 之前就要先運行�
 可能留在 source 裏的 =*.elc=；source 只保存可跨版本共用的源碼。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
-(defvar elpaca-installer-version 0.12)
+(when ginshio-package-managing-p
+  (defvar elpaca-installer-version 0.12)
 (defconst ginshio-elpaca-ref "6530ffa73b18ccee858e7c471415ab7e0c0d8ce1")
 (defvar elpaca-order `(elpaca :repo "https://github.com/progfolio/elpaca.git"
                               :ref ,ginshio-elpaca-ref :depth 1 :inherit ignore
@@ -166,12 +287,12 @@ Elpaca 自己也必須被鎖定；它在讀取 lock file 之前就要先運行�
 
 (when ginshio-package-managing-p
   (require 'elpaca)
+  (elpaca-no-symlink-mode 1)
   (ginshio-packages--configure-maintenance-runtime)
   (elpaca-subscribe 'finished #'ginshio-packages-report-progress)
   (elpaca-subscribe 'failed #'ginshio-packages-report-progress))
 
-(add-hook 'after-init-hook #'elpaca-process-queues)
-(elpaca `(,@elpaca-order))
+(elpaca `(,@elpaca-order)))
 #+end_src
 
 ** 維護邊界
@@ -239,20 +360,23 @@ commit 寫回鎖檔。兩者都由控制腳本調用，不在運行中的編輯�
 並立即處理完，此後的展開才是對的。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
-(elpaca (elpaca-use-package :wait t)
-  (elpaca-use-package-mode))
-
-(unless (bound-and-true-p elpaca-use-package-mode)
-  (error "Elpaca use-package integration is unavailable; run %s sync"
-         ginshio-package-script))
+(when ginshio-package-managing-p
+  (elpaca (elpaca-use-package :wait t)
+    (elpaca-use-package-mode))
+  (unless (bound-and-true-p elpaca-use-package-mode)
+    (error "Elpaca use-package integration is unavailable; run %s sync"
+           ginshio-package-script))
+  (setq ginshio-packages--maintenance-ensure-function
+        use-package-ensure-function
+        use-package-ensure-function #'ginshio-packages-maintenance-ensure))
 #+end_src
 
-不啓用全局延遲加載。統一延遲聽起來總是划算，實際上會製造一類很難查的故障：包裝好了、
-~:config~ 卻從未執行，因為沒有任何東西觸發它加載，而症狀只是某個功能安靜地缺席。這裏
-要求每個聲明自己說明加載時機——多寫一行 ~:hook~ 或 ~:commands~，換來的是可預測。
+普通會話默認延遲 package body；每個聲明仍須用 ~:hook~、~:commands~、~:mode~ 或
+~:demand~ 明確說明觸發點。完整 ~:config~ 由 =sync= / =doctor= 的驗證進程逐一 require，
+因此 lazy loading 不再以漏掉配置錯誤為代價。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
-(setq use-package-always-defer nil
+(setq use-package-always-defer t
       use-package-expand-minimally t
       use-package-enable-imenu-support t
       use-package-compute-statistics init-file-debug
@@ -459,8 +583,139 @@ package maintenance 已經由 Elpaca 的獨立 Emacs subprocess 做 byte compila
                           (elpaca<-status (cdr entry)))))
             failed "\n"))))
 
-(defun ginshio-packages-finalize ()
-  "Activate the package graph, optionally update it, and enforce success."
+(defun ginshio-packages--write-candidate-lock (elpacas)
+  "Write ELPACAS atomically to the unpublished candidate lock."
+  (make-directory (file-name-directory ginshio-package-candidate-lock-file) t)
+  (let ((temporary
+         (make-temp-file
+          (concat ginshio-package-candidate-lock-file ".") nil ".tmp")))
+    (unwind-protect
+        (let ((elpaca-lock-file-functions (list (lambda (_) t))))
+          (elpaca-write-lock-file temporary elpacas)
+          (rename-file temporary ginshio-package-candidate-lock-file t))
+      (when (file-exists-p temporary)
+        (delete-file temporary)))))
+
+(defun ginshio-packages--final-build-directory (elpaca generation)
+  "Return ELPACA's build directory below GENERATION."
+  (expand-file-name
+   (file-name-as-directory (elpaca<-package elpaca))
+   (expand-file-name "builds/" generation)))
+
+(defun ginshio-packages--publish-generation (hash)
+  "Publish the current staging generation under HASH and return its path."
+  (let ((generation (ginshio-packages--generation-directory hash)))
+    (make-directory ginshio-package-generation-root t)
+    (if (file-directory-p generation)
+        (delete-directory ginshio-package-staging-directory t)
+      (rename-file ginshio-package-staging-directory generation))
+    (setq ginshio-package-staging-directory nil)
+    generation))
+
+(defun ginshio-packages--read-forms (file)
+  "Return all Lisp forms read from FILE."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (goto-char (point-min))
+    (let (forms)
+      (condition-case nil
+          (while t (push (read (current-buffer)) forms))
+        (end-of-file (nreverse forms))))))
+
+(defun ginshio-packages--autoload-file (elpaca generation)
+  "Return ELPACA's autoload file below GENERATION, or nil."
+  (let* ((recipe (elpaca<-recipe elpaca))
+         (member (plist-member recipe :autoloads))
+         (setting (if member (cadr member) t))
+         (name (or (and (stringp setting) setting)
+                   (concat (elpaca<-package elpaca) "-autoloads.el")))
+         (file (expand-file-name
+                name (ginshio-packages--final-build-directory
+                      elpaca generation))))
+    (when (and setting (file-readable-p file)) file)))
+
+(defun ginshio-packages--activation-builds (elpacas generation)
+  "Return final build paths for ELPACAS in effective load-path order."
+  (let ((paths (make-hash-table :test #'equal))
+        ordered)
+    (dolist (entry elpacas)
+      (let* ((elpaca (cdr entry))
+             (staging (file-name-as-directory (elpaca<-build-dir elpaca)))
+             (final (file-name-as-directory
+                     (ginshio-packages--final-build-directory
+                      elpaca generation))))
+        (puthash staging final paths)))
+    (dolist (path load-path)
+      (when-let* ((final
+                   (gethash (file-name-as-directory
+                             (expand-file-name path))
+                            paths)))
+        (unless (member final ordered)
+          (setq ordered (append ordered (list final))))))
+    (dolist (entry elpacas)
+      (let ((final
+             (file-name-as-directory
+              (ginshio-packages--final-build-directory
+               (cdr entry) generation))))
+        (unless (member final ordered)
+          (setq ordered (append ordered (list final))))))
+    ordered))
+
+(defun ginshio-packages--write-activation (hash elpacas generation)
+  "Write and compile activation metadata for HASH and ELPACAS."
+  (let ((source (expand-file-name "activation.el" generation))
+        (compiled (expand-file-name "activation.elc" generation))
+        (builds (ginshio-packages--activation-builds elpacas generation))
+        (packages (mapcar #'car elpacas)))
+    (with-temp-file source
+      (insert ";;; activation.el --- generated package activation -*- lexical-binding: t; -*-\n\n")
+      (prin1 `(setq ginshio-package-manifest-lock-hash ,hash) (current-buffer))
+      (insert "\n")
+      (prin1 `(setq ginshio-package-manifest-packages ',packages) (current-buffer))
+      (insert "\n")
+      (prin1
+       `(setq ginshio-package-manifest-declarations
+              ',ginshio-package-declarations)
+       (current-buffer))
+      (insert "\n")
+      (prin1 `(setq load-path (append ',builds load-path)) (current-buffer))
+      (insert "\n")
+      (dolist (entry elpacas)
+        (when-let* ((autoloads
+                     (ginshio-packages--autoload-file
+                      (cdr entry) generation)))
+          (prin1
+           `(let ((load-file-name ,autoloads)
+                  (load-in-progress t)
+                  (current-load-list nil))
+              ,@(ginshio-packages--read-forms autoloads))
+           (current-buffer))
+          (insert "\n")))
+      (insert "\n(provide 'ginshio-package-activation)\n")
+      (insert ";;; activation.el ends here\n"))
+    (when (file-exists-p compiled)
+      (delete-file compiled))
+    (let ((byte-compile-warnings nil))
+      (byte-compile-file source))
+    (unless (file-readable-p compiled)
+      (error "Failed to compile package activation %s" source))))
+
+(defun ginshio-packages--validate-declarations ()
+  "Require the active manifest to describe exactly this configuration."
+  (unless (equal ginshio-package-declarations
+                 ginshio-package-manifest-declarations)
+    (error "Package declarations changed; run %s sync"
+           ginshio-package-script)))
+
+(defun ginshio-packages--validate-features ()
+  "Load every declared feature so deferred configuration is exercised."
+  (dolist (declaration ginshio-package-declarations)
+    (let ((feature (car declaration)))
+      (unless (require feature nil t)
+        (error "Validation could not load feature `%s'" feature)))))
+
+(defun ginshio-packages--finalize-maintenance ()
+  "Build, reconcile, and stage a complete immutable package generation."
   (let ((queues elpaca--queues))
     (let ((debug-on-error t))
       (elpaca-wait))
@@ -475,19 +730,29 @@ package maintenance 已經由 Elpaca 的獨立 Emacs subprocess 做 byte compila
                   (list #'elpaca--announce-pin)))
           (elpaca-wait))
         (ginshio-packages--assert-finished elpacas))
-      (when (and ginshio-package-managing-p
-                 (or (equal ginshio-package-command "upgrade")
-                     (not (file-exists-p ginshio-elpaca-lock-file))))
-        (let ((elpaca-lock-file-functions (list (lambda (_) t))))
-          (elpaca-write-lock-file ginshio-elpaca-lock-file elpacas))))))
+      (ginshio-packages--write-candidate-lock elpacas)
+      (let* ((hash
+              (ginshio-packages--lock-hash
+               ginshio-package-candidate-lock-file))
+             (generation (ginshio-packages--publish-generation hash)))
+        (ginshio-packages--write-activation hash elpacas generation)))))
+
+(defun ginshio-packages-finalize ()
+  "Finalize maintenance, or validate the read-only runtime activation."
+  (if ginshio-package-managing-p
+      (ginshio-packages--finalize-maintenance)
+    (ginshio-packages--validate-declarations)
+    (when ginshio-package-validating-p
+      (ginshio-packages--validate-features))))
 #+end_src
 
 ** 自檢項
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
 (ginshio-doctor-directory 'packages elpaca-directory :note "installed packages")
-(ginshio-doctor-directory 'packages elpaca-builds-directory
-                          :note (format "builds for Emacs %s" emacs-version))
+(ginshio-doctor-directory 'packages ginshio-package-generation-root
+                          :note (format "immutable builds for Emacs %s"
+                                        emacs-version))
 (ginshio-doctor-declare 'packages "lock file"
                         (lambda () (file-readable-p ginshio-elpaca-lock-file))
                         :note "pinned revisions for reproducible installs"

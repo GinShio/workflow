@@ -48,24 +48,51 @@ batch_config() {
 }
 
 manage_packages() {
-  local command=$1
+  local candidate_lock command temporary_lock
+  command=$1
   require_command "$emacs_bin"
   require_command git
   require_xdg
   tangle
+  candidate_lock="${XDG_DATA_HOME%/}/emacs/elpaca/candidate.lock"
+  rm -f -- "$candidate_lock"
   env GINSHIO_EMACS_COMMAND="$command" \
+    GINSHIO_EMACS_CANDIDATE_LOCK="$candidate_lock" \
     "$emacs_bin" -Q --batch \
     --init-directory="$root" \
     -l "$root/early-init.el" \
     -l "$root/init.el" \
-    --eval '(princ "Package graph is synchronized.\n")'
+    --eval '(princ "Candidate package generation built.\n")'
+  [[ -r $candidate_lock ]] ||
+    die "package maintenance did not produce $candidate_lock"
+  env GINSHIO_EMACS_COMMAND=validate \
+    GINSHIO_EMACS_LOCK_FILE="$candidate_lock" \
+    "$emacs_bin" -Q --batch \
+    --init-directory="$root" \
+    -l "$root/early-init.el" \
+    -l "$root/init.el" \
+    --eval '(princ "Candidate package generation validated.\n")'
+  temporary_lock=$(mktemp "$root/.elpaca.lock.XXXXXX")
+  trap 'rm -f -- "${temporary_lock:-}"' RETURN
+  cp -- "$candidate_lock" "$temporary_lock"
+  chmod --reference="$root/elpaca.lock" "$temporary_lock" 2>/dev/null || chmod 600 "$temporary_lock"
+  mv -f -- "$temporary_lock" "$root/elpaca.lock"
+  temporary_lock=
+  rm -f -- "$candidate_lock"
+  trap - RETURN
+  printf 'Package graph is synchronized.\n'
 }
 
 doctor() {
   require_command "$emacs_bin"
   require_xdg
   tangle
-  batch_config -f ginshio-doctor-batch
+  env GINSHIO_EMACS_COMMAND=validate \
+    "$emacs_bin" -Q --batch \
+    --init-directory="$root" \
+    -l "$root/early-init.el" \
+    -l "$root/init.el" \
+    -f ginshio-doctor-batch
 }
 
 clean() {
@@ -73,11 +100,6 @@ clean() {
   require_xdg
   package_dir="${XDG_DATA_HOME%/}/emacs/elpaca"
   native_cache_dir="${XDG_CACHE_HOME%/}/emacs/eln-cache"
-  rm -f -- \
-    "$root/early-init.el" \
-    "$root/early-init.elc" \
-    "$root/init.el" \
-    "$root/init.elc"
   rm -rf -- "$root/lisp/ginshio" "$package_dir" "$native_cache_dir"
   printf 'Removed tangled Lisp, package tree, and native-comp cache.\n'
 }

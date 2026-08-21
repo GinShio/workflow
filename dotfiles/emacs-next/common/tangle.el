@@ -28,6 +28,11 @@
 (defconst ginshio-tangle--module-directory "lisp/ginshio/"
   "Directory below the configuration root containing tangled modules.")
 
+(defconst ginshio-tangle--payload-targets
+  '("lisp/ginshio/ginshio-early-init.el"
+    "lisp/ginshio/ginshio-init.el")
+  "Generated payloads loaded by the tracked root bootstrap files.")
+
 (cl-defstruct
     (ginshio-tangle-source (:constructor ginshio-tangle--make-source))
   file name state)
@@ -146,29 +151,74 @@
     (goto-char beginning)
     (insert (ginshio-tangle--render-manifest sources directory))))
 
-(defun ginshio-tangle--expected-module-targets (sources directory)
-  "Return module files expected from included SOURCES below DIRECTORY."
-  (cl-loop
-   for source in sources
-   when (ginshio-tangle--included-p source)
-   collect
-   (expand-file-name
-    (concat
-     ginshio-tangle--module-directory
-     (if (eq (ginshio-tangle-source-state source) 'bootstrap)
-         "ginshio-path.el"
-       (format "ginshio-%s.el" (ginshio-tangle-source-name source))))
-    directory)))
+(defun ginshio-tangle--expected-targets (sources directory)
+  "Return every file the tangle must produce below DIRECTORY."
+  (append
+   (mapcar (lambda (target) (expand-file-name target directory))
+           ginshio-tangle--payload-targets)
+   (cl-loop
+    for source in sources
+    when (ginshio-tangle--included-p source)
+    collect
+    (expand-file-name
+     (concat
+      ginshio-tangle--module-directory
+      (if (eq (ginshio-tangle-source-state source) 'bootstrap)
+          "ginshio-path.el"
+        (format "ginshio-%s.el" (ginshio-tangle-source-name source))))
+     directory))))
 
-(defun ginshio-tangle--prune-stale-modules (expected directory)
-  "Delete generated module files below DIRECTORY that are not EXPECTED."
-  (let ((module-directory
-         (expand-file-name ginshio-tangle--module-directory directory)))
-    (when (file-directory-p module-directory)
-      (dolist (file
-               (directory-files module-directory t "\\`ginshio-.*\\.el\\'" t))
-        (unless (member (expand-file-name file) expected)
-          (delete-file file))))))
+(defun ginshio-tangle--validate-elisp (file)
+  "Read every form in FILE, signalling on malformed generated Lisp."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (emacs-lisp-mode)
+    (check-parens)
+    (goto-char (point-min))
+    (condition-case err
+        (while t (read (current-buffer)))
+      (end-of-file t)
+      (error
+       (error "Generated Lisp is invalid in %s: %s"
+              file (error-message-string err))))))
+
+(defun ginshio-tangle--redirect-targets (directory)
+  "Rewrite relative :tangle targets in this buffer below DIRECTORY."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((case-fold-search t))
+      (while
+          (re-search-forward
+           "\\(:tangle[ \t]+\\)\"?\\([^ \t\"\n]+\\)\"?" nil t)
+        (let ((target (match-string 2)))
+          (unless (member target '("no" "yes"))
+            (replace-match
+             (concat (match-string 1)
+                     (prin1-to-string (expand-file-name target directory)))
+             t t)))))))
+
+(defun ginshio-tangle--promote (staging directory)
+  "Atomically replace the generated subtree in DIRECTORY from STAGING."
+  (let* ((relative (directory-file-name ginshio-tangle--module-directory))
+         (candidate (expand-file-name relative staging))
+         (target (expand-file-name relative directory))
+         (backup (concat target ".previous")))
+    (unless (file-directory-p candidate)
+      (error "Tangle staging subtree is missing: %s" candidate))
+    (when (file-exists-p backup)
+      (delete-directory backup t))
+    (when (file-exists-p target)
+      (rename-file target backup))
+    (condition-case err
+        (progn
+          (rename-file candidate target)
+          (when (file-exists-p backup)
+            (delete-directory backup t)))
+      (error
+       (when (and (not (file-exists-p target))
+                  (file-exists-p backup))
+         (rename-file backup target))
+       (signal (car err) (cdr err))))))
 
 (defun ginshio-tangle--ensure-target-directories ()
   "Create directories named by :tangle headers that do not exist yet.
@@ -198,8 +248,11 @@ than creating intermediate directories."
          (sources
           (ginshio-tangle--validate-sources
            (ginshio-tangle--discover-sources directory)))
+         (staging
+          (make-temp-file
+           (expand-file-name ".ginshio-tangle-" directory) t))
          (expected-targets
-          (ginshio-tangle--expected-module-targets sources directory))
+          (ginshio-tangle--expected-targets sources staging))
          tangled-targets
          (org-confirm-babel-evaluate nil)
          (temp-file (make-temp-file "ginshio-tangle-" nil ".org")))
@@ -212,7 +265,7 @@ than creating intermediate directories."
             (setq default-directory directory)
             (ginshio-tangle--inject-manifest sources directory)
             (org-export-expand-include-keyword)
-            (ginshio-tangle--ensure-target-directories)
+            (ginshio-tangle--redirect-targets staging)
             (write-region (point-min) (point-max) temp-file nil 'silent))
           (let ((tangle-buffer (find-file-noselect temp-file)))
             (unwind-protect
@@ -226,15 +279,16 @@ than creating intermediate directories."
                   ;; Leave either stale and Org either re-reads config.org with its
                   ;; includes unexpanded, or stops to ask whether it should, which
                   ;; in batch is an end-of-file error on stdin.
-                  (setq default-directory directory
+                  (setq default-directory staging
                         buffer-file-name file
                         buffer-file-truename (file-truename file))
                   (set-visited-file-modtime)
                   (org-mode-restart)
+                  (ginshio-tangle--ensure-target-directories)
                   (setq tangled-targets
                         (mapcar
                          (lambda (target)
-                           (expand-file-name target directory))
+                           (expand-file-name target staging))
                          (org-babel-tangle))))
               (when (buffer-live-p tangle-buffer)
                 (with-current-buffer tangle-buffer
@@ -243,11 +297,14 @@ than creating intermediate directories."
           (dolist (target expected-targets)
             (unless (and (member target tangled-targets)
                          (file-exists-p target))
-              (error "Tangle did not produce expected target %s" target)))
-          (ginshio-tangle--prune-stale-modules expected-targets directory)
+              (error "Tangle did not produce expected target %s" target))
+            (ginshio-tangle--validate-elisp target))
+          (ginshio-tangle--promote staging directory)
           (message "Tangling complete, %s" file))
       (when (file-exists-p temp-file)
-        (delete-file temp-file)))))
+        (delete-file temp-file))
+      (when (file-directory-p staging)
+        (delete-directory staging t)))))
 
 (when (and noninteractive ginshio-tangle-auto-run)
   (ginshio-tangle-config))

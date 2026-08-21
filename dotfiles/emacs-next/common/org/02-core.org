@@ -52,6 +52,7 @@ forge 訪問互不干擾。
   (setq gc-cons-threshold ginshio-gc-cons-threshold
         gc-cons-percentage 0.1))
 
+(ginshio-restore-gc-h)
 (add-hook 'emacs-startup-hook #'ginshio-restore-gc-h)
 #+end_src
 
