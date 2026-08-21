@@ -1,0 +1,14 @@
+MLIR Emacs mode
+===============
+
+`mlir-mode.el` is copied unchanged from llvm-project tag `llvmorg-22.1.8`:
+
+- `mlir/utils/emacs/mlir-mode.el`
+
+Upstream: https://github.com/llvm/llvm-project
+License: Apache-2.0; the notice is retained in `mlir-mode.el`.
+Imported: 2026-08-22
+Local modifications: none
+
+Configuration and local policy belong in `org/68-lang-llvm.org`, not in this
+snapshot.

@@ -1,0 +1,70 @@
+#+GINSHIO_MODULE: enabled
+
+* LLVM 語言家族
+
+LLVM IR、Machine IR、MLIR 與 TableGen 的 major modes 都由 llvm-project 自己維護。
+它們不是四個獨立演進的套件，所以這裏從同一個 release tag 保存一份原樣 snapshot：
+=lisp/llvm/= 放 LLVM IR、MIR 與 TableGen，=lisp/mlir/= 放 MLIR。來源、授權與更新規則見
+各目錄的 =README=；本文件只負責把那些 Lisp library 接進配置。
+
+第一版只提供文本編輯：文件識別、語法着色、註釋語法與上游模式自己的命令。不啓用 LSP、
+tree-sitter grammar、格式化或 =opt=/=llc=/=mlir-opt=/TableGen 工具。等其中一條工作流真的
+需要外部程序時，再在相應責任下設計，不讓 mode support 預先長成 toolchain framework。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-llvm.el" :comments no
+;;; ginshio-lang-llvm.el --- LLVM project language modes -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-llvm.el"
+(require 'ginshio-path)
+
+(dolist (library '("llvm/llvm-mode.el"
+                   "llvm/llvm-mir-mode.el"
+                   "llvm/tablegen-mode.el"
+                   "mlir/mlir-mode.el"))
+  (unless (file-readable-p (expand-file-name library ginshio-lisp-dir))
+    (error "Vendored language mode is missing: %s" library)))
+
+(add-to-list 'load-path (expand-file-name "llvm/" ginshio-lisp-dir))
+(add-to-list 'load-path (expand-file-name "mlir/" ginshio-lisp-dir))
+#+end_src
+
+** 文件識別
+
+~use-package~ 在這裏只建立 autoload 和文件關聯；=:ensure nil~ 明確表示 library 已經在配置
+樹裏，不交給 Elpaca。精確子目錄由本模塊加入 ~load-path~，所以停用 =lang-llvm= 之後，
+snapshot 仍在版本控制中，卻不會偷偷成為可見的運行時依賴。
+
+啓動時只驗證四個 source 可讀，不提早 ~require~：缺 source 是配置不完整，必須 fail-fast；
+真正加載 ~mlir-mode~ 則會啓用它上游自帶的 bytecode compression 行為，應等到第一次打開
+MLIR 文件，而不是讓所有 Emacs 會話為沒用到的模式承擔副作用。
+
+=.lgc= 是 LLPC/LGC 使用的 LLVM IR 文本，沿用 ~llvm-mode~。其餘擴展名與 upstream mode
+一致，但仍在這裏顯式聲明，讓第一次打開文件時可以在 library 尚未加載前正確 autoload。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-llvm.el"
+(use-package llvm-mode
+  :ensure nil
+  :mode (("\\.ll\\'" . llvm-mode)
+         ("\\.lgc\\'" . llvm-mode)))
+
+(use-package llvm-mir-mode
+  :ensure nil
+  :mode ("\\.mir\\'" . llvm-mir-mode))
+
+(use-package mlir-mode
+  :ensure nil
+  :mode ("\\.mlir\\'" . mlir-mode))
+
+(use-package tablegen-mode
+  :ensure nil
+  :mode ("\\.td\\'" . tablegen-mode))
+#+end_src
+
+四個模式都保留自己的 mode-local map；本模塊不另設全域或 leader 鍵位。打開文件後用
+~M-m h m~ 查看當前模式實際提供的接口。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-llvm.el" :comments no
+(provide 'ginshio-lang-llvm)
+;;; ginshio-lang-llvm.el ends here
+#+end_src

@@ -34,7 +34,8 @@
 
 *生成物不進版本控制，而且有明確的銷毀邊界。* tangle 產物與套件樹都可由
 =bin/vanilla-emacs clean= 整體刪除，再由 =sync= 重建；文學源碼、lock 與使用者資料不在
-這條邊界內。其餘運行時狀態按性質分流到 XDG 目錄。
+這條邊界內。tangle 模塊只住在 =lisp/ginshio/=；其他 =lisp/= 子目錄是受版本控制的上游
+source，不在清理邊界內。其餘運行時狀態按性質分流到 XDG 目錄。
 
 * 模塊
 
@@ -60,6 +61,7 @@
 | =lang-c=       | C/C++：向上面三個框架註冊自己        | 否           |
 | =lang-latex=   | LaTeX：編輯、引用、構建、PDF 同步    | 是           |
 | =lang-markup=   | Markdown、reST 與 AsciiDoc           | 是           |
+| =lang-llvm=     | LLVM IR、MIR、MLIR 與 TableGen modes | vendored Lisp |
 
 =path= 由 =bootstrap= 生成，=doctor= 是只供其他模塊 ~require~ 的 =support=；兩者都不進
 ~ginshio-modules~。其餘模塊由 tangle 按文件名生成清單。
@@ -86,9 +88,10 @@ include、tangle 並加入 ~ginshio-modules~，=disabled= 三者都不做，舊�
 所以文件名就是加載順序。數字仍可留白或共用；共用編號時由 =name= 的字典序決定。排序必須
 讓 =packages= 位於所有第三方包模塊之前，也必須讓被直接 ~require~ 的模塊排在使用者之前。
 
-最後一段每個文件是一種語言，或一組共享同一用途的格式。編程語言只向框架註冊，框架不認
-識任何語言；Markdown、reST 與 AsciiDoc 這類文檔標記則共用一個模塊。兩者都保持同一條
-邊界：增加一類支持只新增一個文件，停用時只改文件自己的 metadata。
+最後一段每個文件是一種語言，或一組共享同一用途的格式。有 tree-sitter/LSP 能力的語言只
+向框架註冊，框架不認識任何具體語言；llvm-project 自帶的純 Lisp modes 則由 =lang-llvm=
+從受版本控制的 snapshot 接入。Markdown、reST 與 AsciiDoc 這類文檔標記共用一個模塊。
+三者都保持同一條邊界：增加一類支持只新增一個配置文件，停用時只改自己的 metadata。
 
 * 命名約定
 

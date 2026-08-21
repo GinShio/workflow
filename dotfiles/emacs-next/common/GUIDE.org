@@ -46,9 +46,10 @@
 | =bin/vanilla-emacs clean=              | 丟棄 tangle、套件與 native-comp 產物，回到未同步狀態  |
 | =bin/vanilla-emacs doctor=             | 配置能啓動，但某個外部功能不工作時                    |
 
-=clean= 只刪除可由 =sync= 重建的內容：=early-init.el=、=init.el=、=lisp/= 與
+=clean= 只刪除可由 =sync= 重建的內容：=early-init.el=、=init.el=、=lisp/ginshio/= 與
 =$XDG_DATA_HOME/emacs/elpaca/，以及 =$XDG_CACHE_HOME/emacs/eln-cache/=。文學源碼、
-=elpaca.lock=、書籤、歷史、grammar、auto-save 與 backup 等都保留。先由 system/service
+=elpaca.lock=、=lisp/= 下受版本控制的上游 modes、書籤、歷史、grammar、auto-save 與
+backup 等都保留。先由 system/service
 停止所有使用這份配置的 Emacs 再清理；腳本不探測或管理 daemon。執行後不要直接啓動
 Emacs：普通啓動會按契約失敗，下一步應是
 =bin/vanilla-emacs sync=。
@@ -438,6 +439,22 @@ Tree-sitter grammar 缺失時保留可用的傳統 major mode，doctor 以 warn 
 固定配置寫進項目 =.dir-locals.el= 的 ~dape-command~；配置例與完整流程在
 [[file:org/55-dap.org][dap 模塊]]。上游文檔：[[https://elpa.gnu.org/packages/dape.html][GNU ELPA: Dape]]。
 
+* LLVM IR、MIR、MLIR 與 TableGen
+
+這四類文件使用 llvm-project 隨上游維護的 major modes；它們以同一個固定 release tag
+保存在 =lisp/llvm/= 與 =lisp/mlir/=，不經 Elpaca 另取互相漂移的版本。
+
+| 文件                         | major mode        |
+|------------------------------+-------------------|
+| =.ll=、=.lgc=                  | ~llvm-mode~         |
+| =.mir=                         | ~llvm-mir-mode~     |
+| =.mlir=                        | ~mlir-mode~         |
+| =.td=                          | ~tablegen-mode~     |
+
+第一版只提供文件識別與上游模式的文本編輯能力，不自動啓動 LSP，也不配置 LLVM/MLIR
+命令行工具。進入文件後用 ~M-m h m~ 查看模式說明與局部鍵位；來源、固定版本與引入理由見
+[[file:org/68-lang-llvm.org][lang-llvm 模塊]]。
+
 * 版本控制
 
 日常提交、分支與 rebase 仍以終端 Git 為主；Emacs 負責文件旁的差異、歷史追蹤、選行暫存、
@@ -563,6 +580,7 @@ Emacs client。本模塊不配置 Org 公式預覽或 Org → LaTeX 導出。詳
 | multiple-cursors       | [[https://github.com/magnars/multiple-cursors.el][multiple-cursors README]] |
 | AUCTeX / CDLaTeX       | [[info:auctex#Top][AUCTeX manual]] / [[https://github.com/cdominik/cdlatex][CDLaTeX README]] |
 | Markdown / reST / AsciiDoc | [[file:org/60-lang-markup.org][本配置的入口與上游鏈接]] |
+| LLVM IR / MIR / MLIR / TableGen | [[file:org/68-lang-llvm.org][本配置的 upstream mode snapshot]] |
 
 遇到「知道包名，但不知道它能做什麼」時，按這個順序：~M-m h m~ → ~M-m h a~ 搜包名前綴 →
 ~M-m h f~ 看命令 → Info/README。不要從配置裏的一個 ~use-package~ form 推測那就是包的全部。

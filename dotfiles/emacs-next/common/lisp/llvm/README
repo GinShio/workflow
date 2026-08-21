@@ -1,0 +1,17 @@
+LLVM Emacs modes
+================
+
+These files are copied unchanged from llvm-project tag `llvmorg-22.1.8`:
+
+- `llvm/utils/emacs/llvm-mode.el`
+- `llvm/utils/emacs/llvm-mir-mode.el`
+- `llvm/utils/emacs/tablegen-mode.el`
+
+Upstream: https://github.com/llvm/llvm-project
+License: Apache-2.0 WITH LLVM-exception; see `LICENSE.TXT`.
+Imported: 2026-08-22
+Local modifications: none
+
+Update all three files from the same llvm-project revision.  Configuration,
+file associations beyond upstream defaults, and local policy belong in
+`org/68-lang-llvm.org`, not in these snapshots.
