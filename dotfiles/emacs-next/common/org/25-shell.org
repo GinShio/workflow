@@ -123,6 +123,34 @@ leader 不在此列——它住在覆蓋層裏，而覆蓋層排在所有 major 
 =.dir-locals.el= 或 file-local 的 ~compile-command~ 都會照常覆蓋它；detached HEAD、未註冊
 目錄與 worktree 缺失也由 Wits 報出原本的精確錯誤，不在這裏猜 fallback。
 
+** 編譯輸出的顏色
+
+編譯工具在交互終端裏會用 ANSI 轉義序列給輸出上色:警告是黃、錯誤是紅、成功是綠。這
+些序列被 Emacs 當成普通字符收進 =*compilation*= 緩衝區,於是你看到的是滿屏花花的
+~ESC[31m~。上色這一步得有個人來做,而 [[info:elisp#ansi-color][ansi-color]] 就是做這個的內建庫。
+
+它掛在 ~compilation-filter-hook~ 上:每當新一批輸出進入緩衝區,對那一段即時上色。只渲
+染 *新進來的* 那一段,而不是每次清理整個緩衝區——編譯輸出可以很大,而浮現 text property
+的開銷和要處理的文本長度成正比。
+
+緩衝區裏放的仍是同一批字符, ANSI 序列只是被換成了個 face 屬性。所以這一切不影響
+window 模塊那張表(把 =*compilation*= 放進底部側窗),也不影響把編譯錯誤當文本搜索、標
+記、跳轉。
+
+只有視訊端沒有 ANSI 終端的那部分強項要留心:著色是純顯示,編譯工具如果被 ~--no-color~
+關掉了顏色,這一段就沒有可做的事——那不是本模塊該猜的。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el"
+(require 'ansi-color)
+
+(defun ginshio-shell-colorize-compilation ()
+  "Colour the ANSI escapes in the compile output just appended."
+  (let ((inhibit-read-only t))
+    (ansi-color-apply-on-region compilation-filter-start (point))))
+
+(add-hook 'compilation-filter-hook #'ginshio-shell-colorize-compilation)
+#+end_src
+
 ** 鍵位
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el"
