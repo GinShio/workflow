@@ -25,6 +25,7 @@ esac
 # Watched lockfiles, matched by basename anywhere in the tree.
 lockfiles="
 package-lock.json
+deno.lock
 yarn.lock
 pnpm-lock.yaml
 bun.lockb

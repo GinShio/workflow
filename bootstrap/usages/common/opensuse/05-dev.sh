@@ -85,7 +85,7 @@ sudo zypper in -y \
 
 # Node.js
 sudo zypper in -y \
-    nodejs-common pnpm typescript yarn
+    nodejs-common pnpm typescript deno
 
 # Functional (Erlang/Elixir/Haskell)
 sudo zypper in -y \

@@ -8,3 +8,6 @@ fi
 if command -v yarn >/dev/null 2>&1; then
     yarn cache clean >/dev/null 2>&1 || true
 fi
+if command -v deno >/dev/null 2>&1; then
+    deno clean >/dev/null 2>&1 || true
+fi

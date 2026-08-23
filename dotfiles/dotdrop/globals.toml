@@ -28,6 +28,7 @@ python_history = "{{@@ sysenv.xdg_cache_home @@}}/history_python"
 cargo_home = "{{@@ sysenv.xdg_data_home @@}}/cargo"
 zig_global_cache_dir = "{{@@ sysenv.xdg_cache_home @@}}/zig"
 sqlite_history = "{{@@ sysenv.xdg_cache_home @@}}/history_sqlite"
+deno_install_root = "{{@@ sysenv.xdg_bin_home @@}}"
 
 [variables.testing]
 runner_dir = "{{@@ testing_runner_dir @@}}"
