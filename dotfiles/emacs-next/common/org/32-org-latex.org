@@ -1,0 +1,220 @@
+#+GINSHIO_MODULE: enabled
+
+* LaTeX 導出
+
+Org → LaTeX 是從想法到 PDF 的通道。本文把導出調校成可直接交出去的文件：用以
+Emacs 當前主題著色的 =engraved= 前後端渲染代碼塊、用 =latexmk= 搭配 =lualatex=
+與 =biber= 一鍵編譯、並讓交叉引用排版成「圖 3／表 2」的形式。
+
+與 =org= 模組的關係：=org= 管編輯、agenda、capture 這些「用 Org 思考」的事；這裡
+只管「把 Org 變成 PDF」，是同一棵樹的另一個後端（=org-latex=）。=ox-latex= 是 Org
+內建後端，不需第三方包；引擎由導出動作延遲載入，不拖慢啟動。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el" :comments no
+;;; ginshio-org-latex.el --- Org LaTeX export, engraved -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el"
+(require 'cl-lib)
+(require 'subr-x)
+(require 'ginshio-doctor)
+#+end_src
+
+本文只列 ~with-eval-after-load 'ox-latex~ 內的變數設定。導出功能由 ~C-c C-e~
+（=org-export-dispatch~）進入，後端在首次導出時自動載入。
+
+** 工具鏈：latexmk / lualatex / biber
+
+Org 的默認 =org-latex-pdf-process= 在系統有 =latexmk= 時已是一行的
+~latexmk -f -pdf -%latex -interaction=nonstopmode -output-directory=%o %f~，狀態正好。
+這裡只把 TeX 引擎與文獻後端固定下來：整個配置（=60-lang-latex= 那套）以
+~luatex~ 引擎編排，Org 導出跟著走，避免同一台機器 pdflatex/lualatex 混用造成目錄
+與 log 汙染。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el"
+(with-eval-after-load 'ox-latex
+  (setq org-latex-compiler "lualatex"
+        org-latex-bib-compiler "biber"))
+#+end_src
+
+~org-latex-pdf-process~ 與 ~org-latex-logfiles-extensions~ 都維持上游默認。前者在有
+=latexmk= 的機器上已是單行且多趟的編譯，後者的默認已含 ~bcf~/~blg~（=biber= 的附
+屬檔）與 latexmk 追蹤檔；導出後 ~org-latex-remove-logfiles~（默認開）即一併清理。
+
+** 代碼高亮：engraved
+
+=engraved= 前後端讓代碼塊使用 *Emacs 當前主題*（=engrave-faces= 包）著色，而非
+=minted= 外部 Python / Pygments 那套主體。這樣導出 PDF 的配色與 Editor 同步，主題換
+了導出也換，而且 **不需要 =--shell-escape=**——見 =60-lang-latex= 的註明，
+~shell-escape~ 允許 LaTeX 執行任意 shell 命令，只該在受信任項目上按需開啟。
+
+=engraved= 需要：
+- =engrave-faces=（GNU ELPA 包，straight 安裝）
+- LaTeX 側 ~fvextra~、~tcolorbox~、~xcolor~（TeX Live 均含）
+
+~engrave-faces~ 是第三方包，照例以 ~use-package :straight~ 宣告。導出時 ~ox-latex~
+用 ~require 'engrave-faces-latex~ 拉起，啟動時不載入。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el"
+(use-package engrave-faces
+  :straight t)
+#+end_src
+
+設定前後端與主題色表。=engraved= 前後端把每個區塊逐字以 ~engrave-faces-latex-buffer~
+產出 LaTeX 著色，其色來自 ~engrave-faces-current-preset-style~：序言用它生成
+~\engravedtheme~ 的色定義，塊用它把 faces 對成色值。只有序言與塊共用同一份色表，
+PDF 的格子才與 Editor 一致，所以這裡把它钉到當下主題，而不留給 ~engrave-faces~
+內建默認（~engrave-faces.el~ 把 ~engrave-faces-current-preset-style~ 設為內建預置，
+與主題不同步，塊的 token 會對不上序言定義的色——這正是把主題設為 ~t~ 時塊發灰的
+主因）。設定要等 ~engrave-faces~ 載入後才執行：導出時才會 ~require 'engrave-faces-latex~，
+而 ~engrave-faces-get-theme~ 沒有 autoload，頂層直接呼叫會 void-function：
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el"
+(with-eval-after-load 'ox-latex
+  (setq org-latex-src-block-backend 'engraved
+        org-latex-engraved-theme t)  ; 用當前 Emacs theme 的高亮
+  ;; get-theme 無 autoload，直到導出才 load engrave-faces，故綁在 after-load 內。
+  (with-eval-after-load 'engrave-faces
+    (let ((current (car custom-enabled-themes)))
+      (when current
+        ;; `engrave-faces-generate-preset' 把每個非 # 開頭的 face 顏色餵給
+        ;; `color-values' 再 format 成 #RRGGBB。batch 或無 frame 的 session 裏
+        ;; `default' face 保持 "unspecified-fg"/"unspecified-bg" sentinel，
+        ;; `color-values' 解析失敗（回 nil），`format "#%02x%02x%02x"' 就爆
+        ;; "Not enough arguments for format string"。先給 default face 一個
+        ;; 可解析的顏色（優先取當前 doom 主題的 fg/bg，回退硬編碼），preset
+        ;; 生成才不會崩；互動式 session 主題已設好真實顏色，此處是 no-op。
+        (let ((fg (face-attribute 'default :foreground nil t))
+              (bg (face-attribute 'default :background nil t)))
+          (when (or (not (stringp fg)) (not (color-values fg)))
+            (set-face-attribute 'default nil :foreground
+                                (or (cadr (assq 'fg doom-themes--colors))
+                                    "#bbc2cf")))
+          (when (or (not (stringp bg)) (not (color-values bg)))
+            (set-face-attribute 'default nil :background
+                                (or (cadr (assq 'bg doom-themes--colors))
+                                    "#242730"))))
+        (setq engrave-faces-current-preset-style
+              (engrave-faces-get-theme current))))))
+#+end_src
+
+~org-latex-engraved-theme~ 設為 ~t~ 讓序言以當下載入的主題構成，塊的 preset 也取自那
+同一主題，兩邊一致。亦可固定主題名（如 ~'doom-one~），使 PDF 與畫布獨立。
+
+** 代碼框樣式
+
+默認 ~org-latex-engraved-preamble~ 的代碼框很樸素：~footnotesize~ 的字與細框。
+這裡覆寫成更有論文感的排法：小一級字（~\small~ 而非 ~\footnotesize~）、實色淺底框、
+保留 ~breakable~（可跨頁）。序言務必保留 Org 要求的兩個佔位符：[FVEXTRA-SETUP]
+（生成 ~\fvset{...}~ 的 fvextra 默認）與 [LISTINGS-SETUP]（生成 listing float 與
+~\listoflistings~），不可刪。
+
+LaTeX 序言以 ~ginshio-source-string~（見 =config.org=「原樣文本」小節）在 tangle 時
+轉成合法的 Elisp 字符串字面量，避免在 Elisp 裏手寫雙反斜線的逃逸。block 需關掉
+noweb 的逐行前綴（~:noweb-prefix no~）。
+
+#+name: ginshio-org-latex-engraved-preamble
+#+begin_src latex
+\usepackage{fvextra}
+
+[FVEXTRA-SETUP]
+
+% Make line numbers smaller and grey.
+\renewcommand\theFancyVerbLine{\footnotesize\color{black!40!white}\arabic{FancyVerbLine}}
+
+\usepackage{xcolor}
+
+% In case engrave-faces-latex-gen-preamble has not been run.
+\providecolor{EfD}{HTML}{f7f7f7}
+\providecolor{EFD}{HTML}{28292e}
+
+% Define a Code environment to prettily wrap the fontified code.
+\usepackage[breakable,xparse]{tcolorbox}
+\DeclareTColorBox[]{Code}{o}%
+{colback=EfD!98!EFD, colframe=EfD!95!EFD,
+  fontupper=\small\setlength{\fboxsep}{0pt},
+  colupper=EFD,
+  IfNoValueTF={#1}%
+  {boxsep=3pt, arc=2.5pt, outer arc=2.5pt,
+    boxrule=0.5pt, left=2pt}%
+  {boxsep=3.5pt, arc=0pt, outer arc=0pt,
+    boxrule=0pt, leftrule=1.5pt, left=0.5pt},
+  right=2pt, top=1pt, bottom=0.5pt,
+  breakable}
+
+[LISTINGS-SETUP]
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el" :noweb yes :noweb-prefix no
+(with-eval-after-load 'ox-latex
+  (setq org-latex-engraved-preamble
+        <<ginshio-source-string("ginshio-org-latex-engraved-preamble")>>))
+#+end_src
+
+~org-latex-engraved-options~ 維持默認（~breaklines~ 與灰色的破斷符號）。要逐塊微調
+仍可用 ~#+ATTR_LATEX: :options ~ 覆寫。
+
+** 表格與圖片
+
+=booktabs= 是 LaTeX 高質表格的標準宏包；打開 ~org-latex-tables-booktabs~ 後，每張表
+格都會用它的水平線（table 有 ~#+ATTR_LATEX: :booktabs nil~ 能逐張關）。圖片維持默認
+居中、caption 在下方；表格 caption 預設在表上方（Org 內建即如此），不調整。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el"
+(with-eval-after-load 'ox-latex
+  (setq org-latex-tables-booktabs t))
+#+end_src
+
+** 宏包：org-latex-packages-alist
+
+非默認需要的 LaTeX 包集中放在 ~org-latex-packages-alist~。它支援編譯器門控：每條四元
+組的第四元是允許的 ~org-latex-compilers~；不在其列的會在導出時被 ~org-latex--remove-packages~
+自動剔除，因此可以放心寫入「大部分場合都該有」的包，編譯器不同自然收斂。
+
+| 宏包        | 用途                     | 依賴              |
+|-------------+--------------------------+-------------------|
+| ~booktabs~ | 表格水平線（上面已開啟）         | ~org-latex-tables-booktabs~           |
+| ~microtype~ | 微距微調，長文更耐讀            | 通用                                 |
+| ~caption~   | caption 樣式統一                   | 通用                                |
+| ~cleveref~  | 交叉引用排版成「圖 3」            | ~org-latex-reference-command~         |
+
+~hyperref~ 已在 Org 內建默認包（~org-latex-default-packages-alist~）裡，不需重寫。
+~caption~ 不在默認列，需加上才讓表格 caption 以統一格式排版（與 ~\cref~ 一致）。
+~cleveref~ 必須在 ~hyperref~ 之後載入，splice 順序（默認包先、~org-latex-packages-alist~
+後）保證這點。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el"
+(with-eval-after-load 'ox-latex
+  (setq org-latex-packages-alist
+        '(("" "booktabs" nil)
+          ("" "microtype" nil)
+          ("" "caption" nil)
+          ("" "cleveref" nil))))
+#+end_src
+
+** 交叉引用：cleveref
+
+默認的交叉引用是 ~\ref{%s}~，裸號碼。~cleveref~ 把它排版成「圖 3」「表 2」這種帶類
+型前綴的形式，長文更可讀。改 ~org-latex-reference-command~ 即切換輸出，而宏包已在上
+節列入，並保證在 ~hyperref~ 之後 load。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el"
+(with-eval-after-load 'ox-latex
+  (setq org-latex-reference-command "\\cref{%s}"))
+#+end_src
+
+** 與舊配置的差別
+
+舊 doom 配置 =27-org-latex.org= 移植了 tecosaur 的「條件特性引擎」~org-latex-conditional-features~
+/ ~org-latex-feature-implementations~，掃描 buffer 的內容才決定序言塞哪些特性。這個
+機制自 2023 年提出（[[https://list.orgmode.org/87ilfwnsf4.fsf@tec.tecosaur.net/]["Introduce Export Features"]）便持續未進入官方
+~ox-latex~；本模組因此不引入，改以上述按編譯器門控的
+~org-latex-packages-alist~「總是在適合的編譯器下包含」，行為可預測、無自維護的
+掃描邏輯。需要時仍可用 ~#+LATEX_HEADER:~ 按文檔補專屬序言。
+
+** 收束
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el" :comments no
+(provide 'ginshio-org-latex)
+;;; ginshio-org-latex.el ends here
+#+end_src

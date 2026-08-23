@@ -1,0 +1,188 @@
+#+GINSHIO_MODULE: enabled
+
+* Hugo 導出
+
+Org → Hugo 是這份配置把部落文章發佈到 Hugo 靜態站的導出後端。以 [[https://github.com/kaushalmodi/ox-hugo][ox-hugo]] 當作
+導出器，Org 源料維持不變，導出時自動產出 Hugo 讀得懂的 Markdown 與 front matter。
+本模組移植自部落建置腳本 =blog/scripts/blog-export-hugo.el=：環境變數改成由
+~ginshio-org-root~ 推導的固定路徑；特殊區塊轉 shortcode 的邏輯與 ~hugo/export-one~ /
+~hugo/export-all~ 兩支導出函式則原樣保留。
+
+ox-hugo 是 autoload，平常不會載入，開啟時不拖時間。因此導出設定都包在
+~with-eval-after-load 'ox-hugo~ 裏，真正要導出時才被套用。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el" :comments no
+;;; ginshio-org-hugo.el --- Org to Hugo export, ox-hugo -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el"
+(require 'cl-lib)
+(require 'subr-x)
+(require 'ginshio-org)
+#+end_src
+
+** 套件
+
+ox-hugo 是 Org 生態裏最完整的 Hugo 導出後端，直接自 GitHub 上游安裝，與其他
+:straight recipe 一致。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el"
+(use-package ox-hugo
+  :straight (ox-hugo :host github :repo "kaushalmodi/ox-hugo"))
+#+end_src
+
+** 資料位置
+
+Hugo 站台的來源與 Org 源料分開：=publisher/hugo/= 是站台根，=content/posts/= 放產出
+的文章，=static/images/= 放外連圖片。三條路徑與 =hugo.make= 的 =HUGOBASEDIR=、
+=HUGOPOSTDIR=、=HUGOIMAGEDIR= 對應，只是由 ~ginshio-org-root~ 推導而非環境變數。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el"
+(defconst ginshio-org-hugo-publisher-dir
+  (expand-file-name "publisher/hugo" ginshio-org-root)
+  "Root directory of the Hugo site.")
+
+(defconst ginshio-org-hugo-posts-dir
+  (expand-file-name "content/posts" ginshio-org-hugo-publisher-dir)
+  "Directory where exported posts are written.")
+
+(defconst ginshio-org-hugo-images-dir
+  (expand-file-name "static/images" ginshio-org-hugo-publisher-dir)
+  "Directory under the Hugo site for external images.")
+
+(defun ginshio-org-hugo-dir-name (dir)
+  "Return the last directory component of DIR."
+  (file-name-nondirectory
+   (directory-file-name
+    (expand-file-name
+     (if (file-directory-p dir) dir (file-name-directory dir))))))
+#+end_src
+
+** 導出設定
+
+沿用 =blog-export-hugo.el= 對 ox-hugo 的變數設定。section 與 static 子目錄各取
+posts/images 目錄的名字（等同原腳本用 ~get-dir-name~）；日期格式帶時區；front matter
+用 TOML；Hugo ≥ 0.60 的 Goldmark 渲染器在此開啟。再把 LaTeX 特殊區塊註記成 :raw，
+導出時保留原始文本，交給下一節的 shortcode 包裝。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el"
+(defvar org-file-dir ginshio-org-root
+  "Directory of the Org sources, mirroring the blog build's ORGMODE_FILEDIR.")
+
+(with-eval-after-load 'ox-hugo
+  (setq org-hugo-base-dir ginshio-org-hugo-publisher-dir
+        org-hugo-section
+        (ginshio-org-hugo-dir-name ginshio-org-hugo-posts-dir)
+        org-hugo-default-static-subdirectory-for-externals
+        (ginshio-org-hugo-dir-name ginshio-org-hugo-images-dir)
+        org-hugo-date-format "%Y-%m-%dT%T%:z"
+        org-hugo-goldmark t
+        org-hugo-front-matter-format "toml"
+        org-file-dir ginshio-org-root)
+  (add-to-list 'org-hugo-special-block-type-properties
+               '("LaTeX" . (:raw t))))
+#+end_src
+
+** 特殊區塊轉 shortcode
+
+Hugo 的 shortcode 直接由 Org special block 承接：LaTeX 區塊包成
+~{{< math >}}…{{< /math >}}~，admonition 類的 success/info/warning/error 包成
+~{{< admonition type="TYPE" >}}…{{< /admonition >}}~。原腳本以 ~:before-until~
+攔截 ~org-hugo-special-block~：命中就回傳轉好的 Hugo shortcode、原函式直接停手；
+沒命中回 nil、落回原本的處理。這支函式先看 special block 屬性裡 ~:raw t~ 帶不帶：
+帶的話用 ~org-element-interpret-data~ 把元素還原成原始源料，不帶就以傳入的
+contents 為準。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el"
+(defun hugo/special-block/before-until (special-block contents _info)
+  "Advice the function before until the org-hugo-special-block.
+Args SPECIAL-BLOCK, CONTENTS, and _INFO, see `org-hugo-special-block'."
+  (let* ((block-type (org-element-property :type special-block))
+         (plist (cdr (assoc block-type org-hugo-special-block-type-properties)))
+         (natural (when (stringp contents)
+                    (org-trim
+                     (if (plist-get plist :raw)
+                         ;; https://lists.gnu.org/r/emacs-orgmode/2022-01/msg00132.html
+                         (org-element-interpret-data (org-element-contents special-block))
+                       contents)))))
+    (when natural
+      (cond
+       ((string= block-type "LaTeX")
+        (format "{{< math >}}\x5C\x5B\xA%s\x5C\x5D\xA{{< /math >}}"
+                natural))
+       ((member block-type '("success" "info" "warning" "error"))
+        (format "{{< admonition type=\"%s\" >}}\xA%s\xA{{< /admonition >}}"
+                block-type natural))
+       (t nil)))))
+
+(with-eval-after-load 'ox-hugo
+  (advice-add 'org-hugo-special-block :before-until
+              #'hugo/special-block/before-until))
+#+end_src
+
+** 導出函式
+
+與 =~/cyber/blog/scripts/= 的 make 管線對接方式：make 是「全量」入口
+（=scripts/Makefile= 的 =posthugo= 目標把 =blog/= 下每個 .org 傳給
+=scripts/blog-export-hugo.el=，後者對每個檔做 ~hugo/export-one~），本站的
+=sitehugo= 再以 =HUGOBASEDIR= 為來源 `hugo --destination`。本模組補的是「編輯器
+內單篇觸發」的互動入口：~hugo/export-one~ — 把「目標 .md 檔」算在
+=content/posts= 下，比 mtime 與源檔，比源檔舊或不存在才導出——與 make 共用同一份
+=ginshio-org-hugo-updated-p~ 判定，產物落在同一個 =publisher/hugo/= 站台，因此
+emacs 導過之後直接 `make sitehugo` 就能收進站（或整條 `make` 全量重建）。
+
+~hugo/export-all~ 是給 `make` batch 或「整棵 blog/ 對齊一次」用的，走
+~org-hugo-export-wim-to-md~（WIM：一個 Org 檔可含多篇拆成多個 md）。
+
+原腳本那段「比新」靠 ~file-updatedp~ 完成，這裡保留同名思想、實作成自己的
+~ginshio-org-hugo-updated-p~，並加上 buffer 管理：批次導出幾十個檔時用
+~find-file-noselect~ 開檔，導完的當該檔原先不在編輯器就 kill-buffer 回收，不讓
+`hugo/export-all` 留下一堆殘留緩衝。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el"
+(defun ginshio-org-hugo-updated-p (file1 file2)
+  "Return non-nil if FILE1 is older than FILE2."
+  (time-less-p (file-attribute-modification-time (file-attributes file1))
+               (file-attribute-modification-time (file-attributes file2))))
+
+(defun ginshio-org-hugo-with-file (file fn)
+  "Visit FILE, call FN in its buffer, then leave it if we opened it.
+A buffer that was already being visited before this call survives an export
+run; every buffer this function opens itself is killed afterwards, so a bulk
+`hugo/export-all' does not leak one buffer per file."
+  (let* ((file (expand-file-name file))
+         (already-open (get-file-buffer file)))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect file)
+          (funcall fn))
+      ;; Only kill buffers this function opened; a buffer the user is
+      ;; already editing must survive an export run.
+      (unless already-open
+        (kill-buffer (get-file-buffer file))))))
+
+(defun hugo/export-one (file)
+  "Export FILE to markdown when its generated .md is missing or stale."
+  (ginshio-org-hugo-with-file
+   file
+   (lambda ()
+     (let* ((file (buffer-file-name))
+            (mdfile (org-export-output-file-name
+                     ".md" nil (expand-file-name ginshio-org-hugo-posts-dir))))
+       (when (or (not (file-exists-p mdfile))
+                 (ginshio-org-hugo-updated-p mdfile file))
+         (org-hugo-export-to-md))))))
+
+(defun hugo/export-all (dir)
+  "Export all org files (recursively) under DIR, WIM, one buffer per file."
+  (let ((files (directory-files-recursively dir "\\`[^.#].*\\.org\\'")))
+    (dolist (file files)
+      (ginshio-org-hugo-with-file
+       file (lambda () (org-hugo-export-wim-to-md t))))))
+#+end_src
+
+** 收束
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el" :comments no
+(provide 'ginshio-org-hugo)
+;;; ginshio-org-hugo.el ends here
+#+end_src
