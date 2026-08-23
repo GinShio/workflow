@@ -22,8 +22,8 @@ bin/vanilla-emacs sync
 #+end_src
 
 =sync= 會 tangle 配置，載入 straight，依據 =straight.lock= 記錄的 commit 安裝、構建並
-生成 activation 快照，最後 freeze 更新 lock file。首次沒有 lock file 時會從當前
-recipes 建立第一份。
+生成 activation 快照，最後把新增宣告的包追加進 lock file（既有 pin 不動）。首次沒有
+lock file 時會從當前 recipes 建立第一份；只有 =sync --upgrade= 才全量重寫 lock。
 
 套件 source 與 build 都在：
 
@@ -37,7 +37,7 @@ $XDG_DATA_HOME/emacs/straight/
 
 | 命令                               | 用途                                                   |
 |------------------------------------+--------------------------------------------------------|
-| =bin/vanilla-emacs sync=             | 嚴格按 lock 安裝、切換 revision、構建並重寫 lock         |
+| =bin/vanilla-emacs sync=             | 嚴格按 lock 安裝、切換 revision、構建並追加新增包的 lock   |
 | =bin/vanilla-emacs sync --upgrade=   | 忽略舊 lock，更新上游、重建並寫入新的 revision           |
 | =bin/vanilla-emacs clean=            | 刪除 tangle 產物、straight 套件樹與 native-comp cache    |
 | =bin/vanilla-emacs doctor=           | 載入完整配置並檢查外部程序、字體、grammar 與目錄          |

@@ -11,8 +11,9 @@ Emacs 自帶的包管理器只認發布到 ELPA 的版本,而 Emacs 生態裏大
 
 包管理分成兩個明確階段:
 
-- =bin/vanilla-emacs sync= 按 =straight.lock= 安裝、構建、驗證並重寫鎖;加 =--upgrade=
-  時忽略舊鎖、更新上游、重建構再寫入新的 revision。
+- =bin/vanilla-emacs sync= 按 =straight.lock= 安裝、構建、驗證;既有 pin 不動,只把
+  新宣告的包追加進鎖。加 =--upgrade= 時忽略舊鎖、更新上游、重建構並全量重寫
+  新的 revision。
 - =bin/vanilla-emacs clean= 刪除 tangle 產物、=$XDG_DATA_HOME/emacs/straight/= 與
   native-comp cache,但保留文學源碼與 =straight.lock=。
 - 普通 Emacs 啓動只消費 =sync= 留下的 activation 快照。缺一個包、鎖檔或快照都立即
@@ -333,6 +334,40 @@ captured."
   "Return the package names named by DECLARATIONS, in order."
   (mapcar #'car declarations))
 
+(defun ginshio-packages--write-lock (versions-alist)
+  "Write VERSIONS-ALIST to the profile version lockfile.
+Keeps the format produced by `straight-freeze-versions': each
+\(local-repo . commit) cell printed by `%S', sorted by repository."
+  (let ((lockfile (cdr (assq nil straight-profiles))))
+    (when lockfile
+      (let ((path (straight--versions-file lockfile)))
+        (with-temp-file path
+          (insert
+           (format "(%s)\n:epsilon\n"
+                   (mapconcat (apply-partially #'format "%S")
+                              versions-alist "\n "))))
+        (straight--output "Wrote %s" path)))))
+
+(defun ginshio-packages--merge-lock ()
+  "Add lock entries for installed packages missing from the lock.
+Existing pinned revisions are preserved verbatim; only packages
+installed during this maintenance run but absent from the lock are
+appended, pinned at their current checkout commit.  The profile
+filter matches `straight-freeze-versions', so repos not assigned
+to the nil profile are left alone."
+  (let ((versions-alist (or (straight--lockfile-read-all) '())))
+    (straight--map-repos
+     (lambda (recipe)
+       (straight--with-plist recipe
+           (package local-repo type)
+         (when (and local-repo
+                    (memq nil (gethash package straight--profile-cache))
+                    (not (assoc local-repo versions-alist)))
+           (when-let ((commit (straight-vc-get-commit type local-repo)))
+             (push (cons local-repo commit) versions-alist))))))
+    (ginshio-packages--write-lock
+     (cl-sort versions-alist #'string-lessp :key #'car))))
+
 (defun ginshio-packages-finalize ()
   "Finalize maintenance, or validate the read-only runtime activation."
   (if ginshio-package-managing-p
@@ -344,6 +379,11 @@ captured."
         (when (or (equal ginshio-package-command "upgrade")
                   (not (file-exists-p ginshio-package-lock-file)))
           (straight-freeze-versions t))
+        ;; A plain sync against an existing lock must not disturb any
+        ;; pinned revision; it only appends packages newly declared since
+        ;; the last sync/upgrade.  An upgrade already rewrote everything.
+        (when (equal ginshio-package-command "sync")
+          (ginshio-packages--merge-lock))
         (ginshio-packages--write-activation)
         ;; Reload the fresh activation so a drift from the new lock fails
         ;; maintenance in the same run.
