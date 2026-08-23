@@ -1,0 +1,479 @@
+#+GINSHIO_MODULE: enabled
+
+* Org
+
+Org 是這份配置裏的知識與行動中樞：純文本的結構化筆記、可排程的待辦、以及一段遞進的
+巴別塔式代碼塊。前面 =lang-*= 模組解決「寫程式」的事，這裡解決「組織想法」的事——
+兩者都會用到 Org，但關心的面不同。
+
+因為 Org 佔了編輯器很大一塊，這裡分成四節：先定好資料放在哪、再調教編輯行為、然後是
+「看得順眼」的視覺層、最後是每天會用的 capture 與 agenda。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el" :comments no
+;;; ginshio-org.el --- org, the knowledge & action hub -*- lexical-binding: t; -*-
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(require 'cl-lib)
+(require 'subr-x)
+(require 'ginshio-doctor)
+(require 'ginshio-keys)
+#+end_src
+
+Emacs 30 的 org 主體本身就是 autoload：開啟 ~.org~ 檔、呼叫 ~org-agenda~ 或
+~org-capture~ 才會真正把 org 載入。這裡**不**在啟動時 ~require~ org——org 是整份配置最
+重的模組（單獨載入約 0.2s），讓它延到真的用到時才進記憶體。下面的設定只 `setq` 變數，
+不載入 org；需要 org 已載入才能執行的部分（~org-crypt~、~org-tempo~、~org-id~、
+~org-super-agenda~、citar 的 org 整合）都各自包在 ~with-eval-after-load~ 裏。
+
+** 資料位置
+
+Org 的檔案散在 =~/cyber/blog/= 下。筆記與行動檔都放同一棵樹，capture 與 agenda 各自
+佔一個子目錄，讓「正在想」與「排好了」的資料分開。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(defgroup ginshio-org nil
+  "Org configuration."
+  :group 'ginshio)
+
+(defcustom ginshio-org-root (expand-file-name "~/cyber/blog")
+  "Root directory holding all Org data."
+  :type 'directory
+  :group 'ginshio-org)
+
+(defcustom ginshio-org-bibliography '("~/cyber/blog/library/catalog.bib")
+  "Bibliography files consulted by citar for Org citations."
+  :type '(repeat file)
+  :group 'ginshio-org)
+
+(defconst ginshio-org-agenda-dir
+  (expand-file-name "agenda" ginshio-org-root))
+(defconst ginshio-org-capture-dir
+  (expand-file-name "capture" ginshio-org-root))
+(defconst ginshio-org-todo-file
+  (expand-file-name "todo.org" ginshio-org-agenda-dir))
+(defconst ginshio-org-project-file
+  (expand-file-name "project.org" ginshio-org-agenda-dir))
+(defconst ginshio-org-snippet-file
+  (expand-file-name "snippets.org" ginshio-org-capture-dir))
+(defconst ginshio-org-comment-file
+  (expand-file-name "comments.org" ginshio-org-capture-dir))
+(defconst ginshio-org-note-file
+  (expand-file-name "notes.org" ginshio-org-capture-dir))
+(defconst ginshio-org-blog-file
+  (expand-file-name "blogs.org" ginshio-org-capture-dir))
+
+(dolist (dir (list ginshio-org-root
+                   ginshio-org-agenda-dir
+                   ginshio-org-capture-dir
+                   (file-name-directory (car ginshio-org-bibliography))))
+  (make-directory dir t))
+
+(setq org-directory ginshio-org-root)
+#+end_src
+
+** 編輯行為
+
+Org 首先是一個編輯器。這些設定讓它對「結構化純文本」這個事實更友善：屬性繼承、完成
+記錄時間、字母序列表、以及避免在不該動的地方誤動。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(setq org-use-property-inheritance t     ; 屬性能被子標題繼承，方便
+      org-log-done 'time                 ; 記下從事項完成的那一刻
+      org-list-allow-alphabetical t      ; 允許 a. A. a) A) 這種列表
+      org-catch-invisible-edits 'smart   ; 別在看不見的地方手滑
+      org-export-with-sub-superscripts '{} ; 只有明確的 _{}/^{} 才當作上下標
+      org-return-follows-link t          ; RET 直接跟進光標下的鏈接
+      org-special-ctrl-a/e t             ; C-a/C-e 先到本行邏輯邊界
+      org-image-actual-width '(0.9))
+#+end_src
+
+我偏好 ~:comments~ 作為 babel 的預設 header，這樣 tangle 出來的文件會帶回指向來源
+的位置註記，方便逆查。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(setq org-babel-default-header-args
+      '((:session . "none")
+        (:results . "replace")
+        (:exports . "code")
+        (:cache . "no")
+        (:noweb . "no")
+        (:hlines . "no")
+        (:tangle . "no")
+        (:comments . "link")))
+#+end_src
+
+todo 關鍵字與優先級是這套 GTD 的骨架。優先級從 ~A~ 到 ~E~，顔色對應到 leader 生態裏的
+nerd-icons 配色，讓「哪件事最急」一眼可見。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(setq org-todo-keywords
+      '((sequence "TODO(t)" "NEXT(n)" "STRT(s!)" "|" "DONE(d!)" "KILL(k@)")
+        (sequence "WAIT(w@/!)" "HOLD(h@/!)" "|" "PROJ(p)@/!"))
+      org-priority-highest ?A
+      org-priority-lowest ?E
+      org-priority-faces
+      '((?A . error)
+        (?B . warning)
+        (?C . org-warning)
+        (?D . success)
+        (?E . org-tag)))
+#+end_src
+
+*** 零寬空格
+
+偶爾需要把兩個看似相鄰、其實分屬不同結構的片段「接」在一起——加粗一個詞的一部分、
+或在內聯代碼塊前面補個符號。用零寬空格拆開它們即可。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(defun ginshio-org-insert-zero-width-space ()
+  "Insert a zero width space (U+200B) at point."
+  (interactive)
+  (insert "​"))
+
+(ginshio-leader-define
+ "o" "org"
+ "o z" #'ginshio-org-insert-zero-width-space)
+#+end_src
+
+*** eglot 認得的 src 塊
+
+LSP 預設不進入 ~src_*~ 編輯窗。讓 eglot 在 =C-c '= 打開的 org-babel 編輯緩衝區裏自
+動啓動，這樣在 Org 裏寫程式一樣有診斷與補全。需要在 header 裏給 ~:file test.xx~ 指定
+真實檔名，eglot 才知道語言。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(defun ginshio-org-babel-edit-prep:with-eglot (info)
+  "Set up eglot in the org-babel edit buffer for INFO.
+The src block should carry a `:file' header argument so eglot knows the
+language; otherwise a temp file is used."
+  (when-let* ((file-name (or (alist-get :file (caddr info))
+                             (make-temp-file "babel-eglot-"))))
+    (setq buffer-file-name file-name)
+    (when (fboundp 'eglot-ensure)
+      (eglot-ensure))))
+
+(defvar ginshio-org-babel-eglot-lang-list '("python" "C" "cpp" "rust")
+  "Languages that get eglot in org-babel edit buffers.")
+
+(dolist (lang ginshio-org-babel-eglot-lang-list)
+  (let ((fn-name (intern (format "org-babel-edit-prep:%s" lang))))
+    (unless (fboundp fn-name)
+      (defalias fn-name #'ginshio-org-babel-edit-prep:with-eglot))))
+#+end_src
+
+*** 快速插入：org-tempo
+
+在空行敲 `<s`、`<n`、`<e` 再按 ~TAB~，org-tempo 就展開成完整的 ~#+begin_src~ /
+~#+begin_example~ 等模板。要寫程式塊時不必再一個字一個字敲外框。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(with-eval-after-load 'org
+  (require 'org-tempo))
+#+end_src
+
+常用縮寫（在行首輸入、~TAB~ 展開）：
+
+| 縮寫    | 展開                                         |
+|---------+----------------------------------------------|
+| ~<s~      | ~#+begin_src ...  #+end_src~                   |
+| ~<e~      | ~#+begin_example ...  #+end_example~           |
+| ~<q~      | ~#+begin_quote ...  #+end_quote~               |
+| ~<c~      | ~#+begin_center ...  #+end_center~             |
+| ~<l~      | ~#+begin_comment ...  #+end_comment~           |
+| ~<el~     | ~#+begin_src emacs-lisp ...  #+end_src~        |
+
+*** 加密塊：org-crypt
+
+不是所有標題都該躺在硬盤上。掛上 ~crypt~ 標籤的標題用 GPG 加密，寫回時自動處理，避免
+把機密資料洩漏成明文的同級標題。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(ginshio-leader-define
+ "o e" "encrypt"
+ "o e e" #'org-encrypt-entry
+ "o e E" #'org-encrypt-entries
+ "o e d" #'org-decrypt-entry
+ "o e D" #'org-decrypt-entries)
+#+end_src
+
+需要另一把鑰匙時，在標題的 ~cryptkey~ 屬性裏寫下指紋即可。
+
+** 視覺
+
+編輯器可以影響心情。這幾層只是「換皮」,不改變 Org 的語義：用 org-modern 把符號變
+漂亮、用 org-appear 在游標靠近時才補回隱藏的標記、用 fancy-priorities 與自訂摺疊符
+號讓結構更容易讀。
+
+*** org-modern
+
+[[https://github.com/minad/org-modern][org-modern]] 把標題星號、列表符號、關鍵字、todo 與表格變成接近排版成品的外觀。
+星號換成行星符號、列表換成 ➤/–/•、todo 配上底色。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(use-package org-modern
+  :straight t
+  :hook ((org-mode . org-modern-mode)
+         (org-agenda-finalize . org-modern-agenda))
+  :config
+  (setq org-modern-star 'replace
+        org-modern-replace-stars "♇♆♅♄♃♂♀☿"
+        org-modern-table-vertical 1
+        org-modern-table-horizontal 0.2
+        org-modern-list '((43 . "➤") (45 . "–") (42 . "•"))
+        org-modern-todo-faces
+        '(("TODO" . (:inherit org-verbatim :weight semi-bold :foreground "white" :background "goldenrod"))
+          ("NEXT" . (:inherit org-verbatim :weight semi-bold :foreground "white" :background "IndianRed1"))
+          ("STRT" . (:inherit org-verbatim :weight semi-bold :foreground "white" :background "OrangeRed"))
+          ("WAIT" . (:inherit org-verbatim :weight semi-bold :foreground "white" :background "coral"))
+          ("KILL" . (:inherit org-verbatim :weight semi-bold :foreground "white" :background "DarkGreen"))
+          ("PROJ" . (:inherit org-verbatim :weight semi-bold :foreground "white" :background "LimeGreen"))
+          ("HOLD" . (:inherit org-verbatim :weight semi-bold :foreground "white" :background "orange"))
+          ("DONE" . (:inherit org-verbatim :weight semi-bold :foreground "black" :background "LightGray")))
+        org-modern-block-fringe nil
+        org-modern-progress nil
+        org-modern-priority nil
+        org-modern-horizontal-rule (make-string 36 ?─)
+        org-auto-align-tags nil
+        org-tags-column 0
+        org-hide-emphasis-markers t
+        org-ellipsis " ▾ "
+        org-hide-leading-stars t
+        org-agenda-tags-column 0
+        org-agenda-block-separator ?─))
+#+end_src
+
+*** org-appear
+
+~org-hide-emphasis-markers~ 讓畫面乾淨，代價是在邊緣編輯時眼睛要猜哪裏是標記。
+[[https://github.com/awth13/org-appear][org-appear]] 在游標靠近時臨時把標記補回來，兩種好處都要。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(use-package org-appear
+  :straight (org-appear :host github :repo "awth13/org-appear")
+  :hook (org-mode . org-appear-mode)
+  :config
+  (setq org-appear-autoemphasis t
+        org-appear-autosubmarkers t
+        org-appear-autolinks nil)
+  ;; first-time setup needs to run after other hooks have acted
+  (run-at-time nil nil #'org-appear--set-elements))
+#+end_src
+
+*** 優先級與摺疊符號
+
+優先級符號用彩色圖標代替單調的 ~[#A]~。摺疊的省略號則改成一個明顯的 ▾。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(use-package org-fancy-priorities
+  :straight (org-fancy-priorities :host github :repo "harrybournis/org-fancy-priorities")
+  :hook (org-mode . org-fancy-priorities-mode)
+  :config
+  (setq org-fancy-priorities-list '("⚡" "↑" "↓" "☕" "❓")))
+#+end_src
+
+*** LaTeX 片段預覽
+
+公式預設不渲染，只在需要時手動切換：~C-c C-x C-l~（~org-latex-preview~）把光標所在
+的公式渲染成圖片，再按一次切回文本。要用時再渲染，避免編輯緩衝區被一堆圖片拖慢。
+
+用 ~dvisvgm~ 渲染成 SVG，清晰度比 png 高、縮放不糊。需要 ~lualatex~ 與 ~dvisvgm~ 在
+PATH 上；缺了也只是回到純文本顯示。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(setq org-preview-latex-default-process 'dvisvgm
+      org-preview-latex-process-alist
+      '((dvisvgm :programs ("latex" "dvisvgm")
+                 :description "dvi --> svg"
+                 :message "you need to install the programs: latex and dvisvgm."
+                 :use-xcolor t
+                 :image-input-type "dvi"
+                 :image-output-type "svg"
+                 :image-size-adjust (1.7 . 1.5)
+                 :latex-compiler ("lualatex --shell-escape --output-format=dvi --interaction=nonstopmode --output-directory=%o %f")
+                 :image-converter ("dvisvgm %f --no-specials=bgcolor -n -b min -c %S -o %O"))))
+
+(ginshio-doctor-executable 'org "lualatex"
+                           :severity 'warn
+                           :note "Org LaTeX fragment preview"
+                           :remedy "install texlive-latex")
+(ginshio-doctor-executable 'org "dvisvgm"
+                           :severity 'warn
+                           :note "Org LaTeX fragment rendering to SVG"
+                           :remedy "install the dvisvgm command")
+#+end_src
+
+** Agenda
+
+Agenda 把 todo 與 project 兩份檔案的排程疊在一起，做成一份同時看得到期限與排期的視
+圖。做完的項目不再佔位置。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(setq org-agenda-files (list ginshio-org-todo-file ginshio-org-project-file)
+      org-agenda-skip-scheduled-if-done t
+      org-agenda-skip-deadline-if-done t
+      org-agenda-include-deadlines t
+      org-agenda-block-separator nil
+      org-agenda-tags-column 100
+      org-agenda-compact-blocks t
+      org-agenda-current-time-string "⭠ now ─────────────────────────────────")
+#+end_src
+
+*** 分組視圖：org-super-agenda
+
+一長串待辦混在一起難讀。[[https://github.com/alphapapa/org-super-agenda][org-super-agenda]] 把同一份 agenda 依規則分成幾個區塊——例如按剩餘日數
+排的 deadline 緊急區、以及已經排定的項目——讓「今天到底要顧什麼」一眼分明。它攔截
+~org-agenda-finalize-entries~ 的結果，只改顯示、不改資料。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+;; org-super-agenda pulls in org + org-agenda, so enable it only once org
+;; itself is loaded, not at startup.
+(with-eval-after-load 'org
+  (use-package org-super-agenda
+    :straight t
+    :config
+    (org-super-agenda-mode t)
+    (setq org-super-agenda-groups
+          '((:name "Today" :time-grid t)
+            (:name "Scheduled earlier" :scheduled past)
+            (:name "Due soon" :deadline (before today) :order 1)
+            (:name "Overdue" :deadline (before today) :scheduled (before today) :order 1)
+            (:name "Other deadlines" :deadline (after today) :order 2)
+            (:auto-todo t)))))
+#+end_src
+
+這組規則把「今天」「已排過期」「即將到期」「逾期」「其他截止」分開，並按 todo 狀態補
+一組自動分組。規則可以按你的習慣調整，規則說明見
+[[https://github.com/alphapapa/org-super-agenda#usage][org-super-agenda usage]]。
+
+** Capture
+
+快速記錄是 Org 的殺手級用法。一份方便的 capture 模板決定你願不願意當下把想法寫下來，
+而不是等「有空的時間」。模板按用途分組：寫作、評論、GTD 待辦、筆記、與代碼片段。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(setq org-capture-templates
+      `(("B" "Blog TODO List" entry (file ,ginshio-org-blog-file)
+         "* TODO [#%^{priority|D|A|B|C|E}] %^{blog_title}\n:properties:\n:categories: %^{categories}\n:tags: %^{tags}\n:title: %\\1\n:file_name: %^{file_name}\n:end:\n%?"
+         :empty-lines 1)
+        ("c" "Comment")
+        ("cb" "Book" entry (file+weektree ,ginshio-org-comment-file)
+         "* %^{book} :book:%\\1:\n%?" :empty-lines 1)
+        ("cm" "Movie" entry (file+weektree ,ginshio-org-comment-file)
+         "* %^{movie} :movie:%\\1:\n%?" :empty-lines 1)
+        ("g" "GTD")
+        ("gt" "Todo" entry (file+headline ginshio-org-todo-file "Personal")
+         "* TODO [#%^{priority|A|B|C|D|E}] %^{task}\n  SCHEDULED: %^T DEADLINE: %^T\n:properties:\n:end:\n%?"
+         :empty-lines 1)
+        ("gi" "Interview" entry (file+headline ginshio-org-todo-file "Interview")
+         "* WAIT [#%^{priority|B|A|C|D}] %^{company} - %^{position}\t:%\\2:\nSCHEDULED: %^T DEADLINE: %^T\n:properties:\n:url: %^{link}\n:end:\n%?"
+         :prepend t :empty-lines 1)
+        ("gd" "Daily" entry (file+headline ginshio-org-todo-file "Daily")
+         "* TODO [#%^{priority|C|A|B|D|E}] %^{task}\n SCHEDULED:  %<<%Y-%m-%d %a %H:%M ++1d>>\n:properties:\n:end:\n%?"
+         :empty-lines 1)
+        ("gw" "Weekly" entry (file+headline ginshio-org-todo-file "Weekly")
+         "* TODO [#%^{priority|B|A|C|D|E}] %^{task}\n SCHEDULED: %<<%Y-%m-%d %a %H:%M ++1w>>\n:properties:\n:end:\n%?"
+         :empty-lines 1)
+        ("gm" "Monthly" entry (file+headline ginshio-org-todo-file "Monthly")
+         "* TODO [#%^{priority|C|A|B|D|E}] %^{task}\n SCHEDULED: %<<%Y-%m-%d %a %H:%M ++1m>>\n:properties:\n:end:\n%?"
+         :empty-lines 1)
+        ("n" "Note")
+        ("nc" "Computer" entry (file+headline ginshio-org-note-file "Computer")
+         "* %^{heading} %^g\n%?\n" :empty-lines 1)
+        ("ne" "Emacs" entry (file+headline ginshio-org-note-file "Emacs")
+         "* %^{heading} %^g\n%?\n" :empty-lines 1)
+        ("ng" "Game" entry (file+headline ginshio-org-note-file "Game")
+         "* %^{heading} %^g\n%?\n" :empty-lines 1)
+        ("s" "Code Snippet" entry (file ,ginshio-org-snippet-file)
+         "* %^{heading} :code:%\\2:\n:properties:\n:language: %^{language}\n:end:\n\n#+begin_src %\\2\n%?\n#+end_src"
+         :empty-lines 1)))
+#+end_src
+
+快速記錄的入口都歸在 leader 的 =o= 分支下：=o c= 開啟 capture 選單、=o a= 開 agenda、
+=o h= 搜尋標題。要用時一下就到，不用記一串 ~M-x~ 名字。
+
+~consult-org-heading~ 用 minibuffer 那套模糊搜索逐一找遍所有 org 檔的標題，跳轉到任何
+一地；~consult-org-agenda~ 則在單一搜尋窗裏整合 search/todo/agenda 三種視圖。兩者都來自
+已裝的 consult，不需新套件。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(autoload 'consult-org-heading "consult-org")
+(autoload 'consult-org-agenda "consult-org")
+
+(ginshio-leader-define
+ "o a" #'org-agenda
+ "o c" #'org-capture
+ "o h" #'consult-org-heading
+ "o H" #'consult-org-agenda)
+#+end_src
+
+** 歸檔：refile 與 archive
+
+capture 只管「快速記下」，記完的下一步是讓它去到該去的地方。refile 把一個標題搬到
+另一個檔案的標題之下（跨檔案拖動），archive 則把失去行動價值的標題移出主線，免得
+todo 檔越來越臃腫。兩者配合，capture 才能「進得來、出得去」。
+
+refile 的候選目標掃的是 agenda 檔，並顯示完整路徑（~outline-path~），一次一步到位，
+不需要逐步展開目錄。移到不存在的標題時會先確認再幫你建。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(setq org-refile-use-outline-path t
+      org-outline-path-complete-in-steps nil
+      org-refile-allow-creating-parent-nodes 'confirm
+      org-refile-targets '((org-agenda-files . (:maxlevel . 3)))
+      org-archive-location
+      (expand-file-name "archive/%s_archive::datetree/"))
+#+end_src
+
+~org-archive-location~ 用 ~%s~ 代入原檔名，把歸檔內容集中到 =archive/= 子目錄，並按
+完成日期分層（datetree），方便日後回查。refile 與 archive 的入口一起掛在 =o r= 下。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(ginshio-leader-define
+ "o r" "refile"
+ "o r r" #'org-refile
+ "o r a" #'org-archive-subtree-default)
+#+end_src
+
+跨檔案拖動與 ~[[id:...]]~ 鏈接要可靠，標題需要永久的 ID。org-id 在 refile 時「記住」
+每個標題的唯一識別碼，鏈接就不會因為標題改名或位置移動而斷掉。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(with-eval-after-load 'org
+  (require 'org-id)
+  (setq org-id-link-to-org-use-id t))
+#+end_src
+
+** 引用：citar / org-cite
+
+寫作常常需要引用文獻。[[https://github.com/emacs-citar/citar][citar]] 是目前維護最積極的 Org 引用方案，資料面用 BibTeX、
+插入用 =org-cite=、挑選用 minibuffer 那套 vertico/embark。設定三個 org-cite processor
+後，~[[cite:key]]~ 就能在插入、跟隨與顯示三個層面都走 citar。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(use-package citar
+  :straight t
+  :config
+  (setq citar-bibliography ginshio-org-bibliography
+        citar-symbol-separator "  ")
+  ;; citar-org and the org-cite processors need org itself loaded, so wire
+  ;; them up lazily rather than pulling org in at startup.
+  (with-eval-after-load 'org
+    (require 'citar-org)
+    (setq org-cite-insert-processor 'citar
+          org-cite-follow-processor 'citar
+          org-cite-activate-processor 'citar)))
+
+(ginshio-doctor-directory 'org
+                          (file-name-directory (car ginshio-org-bibliography))
+                          :severity 'warn
+                          :note "bibliography for Org citations"
+                          :remedy "add a .bib catalog under the configured path")
+#+end_src
+
+** 收束
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el" :comments no
+(provide 'ginshio-org)
+;;; ginshio-org.el ends here
+#+end_src
