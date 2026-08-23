@@ -23,7 +23,7 @@ Kitware 隨 CMake 維護的 =cmake-mode= 補上可用的 fallback；lang 框架�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-cmake.el"
 (use-package cmake-mode
-  :ensure t
+  :straight t
   :mode (("CMakeLists\\.txt\\'" . cmake-mode)
          ("\\.cmake\\'" . cmake-mode))
   :init

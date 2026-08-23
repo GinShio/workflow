@@ -191,7 +191,7 @@ dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從�
     (message "%s" theme)))
 
 (use-package doom-themes
-  :ensure t
+  :straight t
   :demand t
   :config
   (setq doom-themes-enable-bold t
@@ -216,7 +216,7 @@ dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
 (use-package hl-todo
-  :ensure t
+  :straight t
   :init
   (setq hl-todo-keyword-faces
         '(("TODO"       . error)
@@ -238,11 +238,11 @@ dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
 (use-package nerd-icons
-  :ensure t
+  :straight t
   :commands nerd-icons-install-fonts)
 
 (use-package doom-modeline
-  :ensure t
+  :straight t
   :demand t
   :init
   (setq doom-modeline-buffer-file-name-style 'relative-to-project
@@ -257,7 +257,7 @@ dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
 (use-package nyan-mode
-  :ensure (:host github :repo "TeMPOraL/nyan-mode")
+  :straight (:host github :repo "TeMPOraL/nyan-mode")
   :after doom-modeline
   :demand t
   :init
@@ -381,7 +381,7 @@ file has already been visited by the time this runs."
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
 (use-package dashboard
-  :ensure t
+  :straight t
   :commands dashboard-refresh-buffer
   :init
   (setq dashboard-items '((recents . 8)

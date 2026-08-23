@@ -36,8 +36,8 @@
 
 * 安裝、同步、清理與診斷
 
-普通 Emacs 是套件 *消費者*。它只讀 =elpaca.lock=、source 與當前 Emacs 版本的 build；缺
-任何一項就中止，不嘗試聯網修復。
+普通 Emacs 是套件 *消費者*。它只讀 =straight.lock= 與 =sync= 留下的 activation 快照；
+缺任何一項就中止，不嘗試聯網修復。
 
 | shell 命令                           | 何時使用                                             |
 |--------------------------------------+------------------------------------------------------|
@@ -46,27 +46,25 @@
 | =bin/vanilla-emacs clean=              | 丟棄 tangle、套件與 native-comp 產物，回到未同步狀態  |
 | =bin/vanilla-emacs doctor=             | 配置能啓動，但某個外部功能不工作時                    |
 
-=clean= 只刪除可由 =sync= 重建的內容：=early-init.el=、=init.el=、=lisp/ginshio/= 與
-=$XDG_DATA_HOME/emacs/elpaca/，以及 =$XDG_CACHE_HOME/emacs/eln-cache/=。文學源碼、
-=elpaca.lock=、=lisp/= 下受版本控制的上游 modes、書籤、歷史、grammar、auto-save 與
+=clean= 只刪除可由 =sync= 重建 的內容：=early-init.el=、=init.el=、=lisp/ginshio/= 與
+=$XDG_DATA_HOME/emacs/straight/，以及 =$XDG_CACHE_HOME/emacs/eln-cache/=。文學源碼、
+=straight.lock=、=lisp/= 下受版本控制的上游 modes、書籤、歷史、grammar、auto-save 與
 backup 等都保留。先由 system/service 停止所有使用這份配置的 Emacs 再清理；腳本不探測
-或管理 daemon。執行後不要直接啓動 Emacs：普通啓動會按契約失敗，下一步應是
+或管理 daemon。執行後不要直接開始 Emacs：普通啟動會按契約失敗，下一步應是
 =bin/vanilla-emacs sync=。
 
-套件查看入口：
+套件狀態在維護進程查看,例如
 
-| 命令                 | 用途                                             |
-|----------------------+--------------------------------------------------|
-| ~M-x elpaca-manager~   | 查看已排入配置的套件、狀態與 recipe              |
-| ~M-x elpaca-log~       | 查看本輪構建與激活事件                           |
-| ~M-x elpaca-info~      | 查看一個套件的 recipe、source 與依賴             |
-| ~M-x elpaca-visit~     | 打開套件 source；帶前綴參數則打開 build          |
+#+begin_src shell
+emacs -Q --batch -l lisp/ginshio/ginshio-packages.el \
+  --eval '(progn (require (quote straight)) (straight-check-all))'
+#+end_src
 
-上述查看命令可用；fetch、update、merge、rebuild、delete、write-lock 一律在正常會話中被
-拒絕。需要改動套件樹時退出編輯流程，使用 =bin/vanilla-emacs sync=；要接受上游新 revision 時加
-=--upgrade=。
+普通會話不載入 straight 於正當考慮(見 =05-packages.org=),因此它的管理命令只存在
+於 =bin/vanilla-emacs= 的批次進程裏。fetch、update、merge、rebuild、delete、
+write-lock 一律在維護進程執行,不會在運行中的編輯器裏偷偷改套件樹。
 
-手冊：[[info:elpaca#Top][Elpaca manual]]、[[file:org/05-packages.org][本配置的 package lifecycle]]。
+手冊：[[info:straight#Top][straight manual]]、[[file:org/05-packages.org][本配置的 package lifecycle]]。
 
 ** XDG 目錄
 
@@ -565,7 +563,7 @@ Emacs client。本模塊不配置 Org 公式預覽或 Org → LaTeX 導出。詳
 | GNU Emacs              | [[info:emacs#Top][Emacs manual]]                           |
 | Emacs Lisp             | [[info:elisp#Top][Elisp manual]]                           |
 | Keymaps                | [[info:elisp#Keymaps][Elisp: Keymaps]]                     |
-| Elpaca                 | [[info:elpaca#Top][Elpaca manual]]                         |
+| straight               | [[http:straight#Top][straight README]]                       |
 | Vertico                | [[https://github.com/minad/vertico][Vertico README]]       |
 | Orderless              | [[info:orderless#Top][Orderless manual]]                   |
 | Marginalia             | [[https://github.com/minad/marginalia][Marginalia README]]   |

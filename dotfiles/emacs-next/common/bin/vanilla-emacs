@@ -38,70 +38,52 @@ tangle() {
   "$emacs_bin" -Q --batch -l "$root/tangle.el"
 }
 
+# Load the full configuration in a single batch process.  A command is
+# injected through GINSHIO_EMACS_COMMAND so the package module knows
+# whether to maintain (`sync' / `upgrade'), to validate every declared
+# feature (`validate'), or to act as an ordinary consumer (no variable).
+#
+# Package installs are deterministic batch work; they must not trip over
+# interactive or machine-specific git hooks.  `core.hooksPath=/dev/null'
+# disables every hook (including reference-transaction) for the commands
+# straight runs, while keeping the rest of the user's git environment.
 batch_config() {
-  env -u GINSHIO_EMACS_COMMAND \
+  GIT_CONFIG_COUNT=1 \
+  GIT_CONFIG_KEY_0=core.hooksPath \
+  GIT_CONFIG_VALUE_0=/dev/null \
+  env GINSHIO_EMACS_COMMAND="$1" \
     "$emacs_bin" -Q --batch \
     --init-directory="$root" \
     -l "$root/early-init.el" \
     -l "$root/init.el" \
-    "$@"
+    "${@:2}"
 }
 
 manage_packages() {
-  local candidate_lock command temporary_lock
-  command=$1
+  local command=$1
   require_command "$emacs_bin"
   require_command git
   require_xdg
   tangle
-  candidate_lock="${XDG_DATA_HOME%/}/emacs/elpaca/candidate.lock"
-  rm -f -- "$candidate_lock"
-  env GINSHIO_EMACS_COMMAND="$command" \
-    GINSHIO_EMACS_CANDIDATE_LOCK="$candidate_lock" \
-    "$emacs_bin" -Q --batch \
-    --init-directory="$root" \
-    -l "$root/early-init.el" \
-    -l "$root/init.el" \
-    --eval '(princ "Candidate package generation built.\n")'
-  [[ -r $candidate_lock ]] ||
-    die "package maintenance did not produce $candidate_lock"
-  env GINSHIO_EMACS_COMMAND=validate \
-    GINSHIO_EMACS_LOCK_FILE="$candidate_lock" \
-    "$emacs_bin" -Q --batch \
-    --init-directory="$root" \
-    -l "$root/early-init.el" \
-    -l "$root/init.el" \
-    --eval '(princ "Candidate package generation validated.\n")'
-  temporary_lock=$(mktemp "$root/.elpaca.lock.XXXXXX")
-  trap 'rm -f -- "${temporary_lock:-}"' RETURN
-  cp -- "$candidate_lock" "$temporary_lock"
-  chmod --reference="$root/elpaca.lock" "$temporary_lock" 2>/dev/null || chmod 600 "$temporary_lock"
-  mv -f -- "$temporary_lock" "$root/elpaca.lock"
-  temporary_lock=
-  rm -f -- "$candidate_lock"
-  trap - RETURN
-  printf 'Package graph is synchronized.\n'
+  batch_config "$command" --eval '(princ "Package graph synchronized.\n")'
+  batch_config validate --eval '(princ "Package graph validated.\n")'
 }
 
 doctor() {
   require_command "$emacs_bin"
   require_xdg
   tangle
-  env GINSHIO_EMACS_COMMAND=validate \
-    "$emacs_bin" -Q --batch \
-    --init-directory="$root" \
-    -l "$root/early-init.el" \
-    -l "$root/init.el" \
-    -f ginshio-doctor-batch
+  batch_config validate -f ginshio-doctor-batch
 }
 
 clean() {
-  local native_cache_dir package_dir
+  local tree_dir activation_dir native_cache_dir
   require_xdg
-  package_dir="${XDG_DATA_HOME%/}/emacs/elpaca"
+  tree_dir="${XDG_DATA_HOME%/}/emacs/straight"
+  activation_dir="${XDG_DATA_HOME%/}/emacs/ginshio-activation"
   native_cache_dir="${XDG_CACHE_HOME%/}/emacs/eln-cache"
-  rm -rf -- "$root/lisp/ginshio" "$package_dir" "$native_cache_dir"
-  printf 'Removed tangled Lisp, package tree, and native-comp cache.\n'
+  rm -rf -- "$root/lisp/ginshio" "$tree_dir" "$activation_dir" "$native_cache_dir"
+  printf 'Removed tangled Lisp, package tree, activation, and native-comp cache.\n'
 }
 
 usage() {
@@ -112,12 +94,14 @@ Usage:
   bin/vanilla-emacs doctor
 
 Commands:
-  sync [--upgrade]   Reproduce the package graph recorded in elpaca.lock
-  clean              Remove tangled Lisp, packages, and native-comp cache
+  sync [--upgrade]   Install the packages declared by the configuration and
+                     regenerate the activation file (upgrade: also fetch
+                     upstream changes and rewrite the version lockfile)
+  clean              Remove tangled Lisp, packages, activation, and cache
   doctor             Check the loaded configuration and external dependencies
 
 Sync option:
-  --upgrade          Fetch upstream updates, rebuild, and rewrite elpaca.lock
+  --upgrade          Fetch upstream updates, rebuild, and rewrite the lock
 
 Environment:
   EMACS               Override the Emacs executable

@@ -52,7 +52,7 @@ Emacs 內直接閱讀的 [[info:orderless#Top][Orderless manual]] 和 [[info:emb
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
 (use-package vertico
-  :ensure (vertico :files (:defaults "extensions/*"))
+  :straight (vertico :files (:defaults "extensions/*"))
   :demand t
   :init
   (setq vertico-count 15
@@ -86,7 +86,7 @@ orderless 會讓 =~/= 展開和遠程主機名補全失靈，而症狀看起來�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
 (use-package orderless
-  :ensure t
+  :straight t
   :demand t
   :init
   (setq orderless-matching-styles '(orderless-literal orderless-regexp)))
@@ -118,7 +118,7 @@ orderless 會讓 =~/= 展開和遠程主機名補全失靈，而症狀看起來�
   (marginalia-mode 1))
 
 (use-package marginalia
-  :ensure t
+  :straight t
   :commands marginalia-mode
   :init
   (add-hook 'minibuffer-setup-hook
@@ -138,7 +138,7 @@ vertico 改候選項怎麼顯示，[[https://github.com/minad/consult][consult]]
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
 (use-package consult
-  :ensure t
+  :straight t
   :commands (consult-history consult-xref consult-project-buffer consult-buffer
              consult-recent-file consult-line consult-line-multi
              consult-goto-line consult-imenu consult-imenu-multi consult-mark
@@ -203,7 +203,7 @@ URL 或符號。它認類型的依據正是 marginalia 提供的那些元數據�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
 (use-package embark
-  :ensure t
+  :straight t
   :commands (embark-act embark-dwim embark-bindings
              embark-export embark-collect))
 
@@ -213,11 +213,11 @@ URL 或符號。它認類型的依據正是 marginalia 提供的那些元數據�
   (consult-preview-at-point-mode 1))
 
 (use-package embark-consult
-  :ensure t
+  :straight t
   :hook (embark-collect-mode . ginshio-minibuffer-enable-embark-consult-h))
 
 (use-package wgrep
-  :ensure t
+  :straight t
   :commands (wgrep-change-to-wgrep-mode
              wgrep-finish-edit wgrep-abort-changes))
 #+end_src
@@ -236,7 +236,7 @@ URL 或符號。它認類型的依據正是 marginalia 提供的那些元數據�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
 (use-package corfu
-  :ensure t
+  :straight t
   :demand t
   :init
   (setq corfu-auto t
@@ -299,7 +299,7 @@ corfu 的彈出框是 child frame，終端下根本不存在——不裝下面�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
 (use-package corfu-terminal
-  :ensure (corfu-terminal :host codeberg :repo "akib/emacs-corfu-terminal")
+  :straight (corfu-terminal :host codeberg :repo "akib/emacs-corfu-terminal")
   :after corfu
   :demand t
   :config
@@ -316,7 +316,7 @@ corfu 的彈出框是 child frame，終端下根本不存在——不裝下面�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
 (use-package nerd-icons-corfu
-  :ensure t
+  :straight t
   :commands nerd-icons-corfu-formatter
   :init
   (add-to-list 'corfu-margin-formatters #'nerd-icons-corfu-formatter))
@@ -328,7 +328,7 @@ corfu 的彈出框是 child frame，終端下根本不存在——不裝下面�
   (nerd-icons-completion-marginalia-setup))
 
 (use-package nerd-icons-completion
-  :ensure t
+  :straight t
   :commands (nerd-icons-completion-mode
              nerd-icons-completion-marginalia-setup)
   :hook (marginalia-mode . ginshio-minibuffer-setup-completion-icons-h))
@@ -358,7 +358,7 @@ minibuffer 裏是干擾；elisp 代碼塊只在 org 和 markdown 裏存在。二
   (add-hook 'completion-at-point-functions #'cape-elisp-block 0 t))
 
 (use-package cape
-  :ensure t
+  :straight t
   :commands (cape-file cape-dabbrev cape-elisp-block
              cape-wrap-nonexclusive)
   :init

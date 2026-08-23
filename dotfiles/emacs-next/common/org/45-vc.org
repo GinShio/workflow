@@ -320,11 +320,11 @@ Magit 的界面框架 =transient= 要單獨聲明一行，否則整個包裝不�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
 (use-package transient
-  :ensure t
+  :straight t
   :defer t)
 
 (use-package magit
-  :ensure t
+  :straight t
   :defer t
   :init
   (setq magit-define-global-key-bindings nil
@@ -535,7 +535,7 @@ ediff 默認把控制面板放進一個獨立的 frame。在平鋪的窗口管�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
 (use-package diff-hl
-  :ensure t
+  :straight t
   :commands (diff-hl-next-hunk diff-hl-previous-hunk diff-hl-show-hunk
              diff-hl-stage-dwim diff-hl-revert-hunk diff-hl-update)
   :init

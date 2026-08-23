@@ -32,7 +32,7 @@ AUCTeX 內建 =LaTeXMk= 命令，也會按 ~TeX-engine~ 為 LuaLaTeX 選擇 =-pd
   (setq-local TeX-command-default "LaTeXMk"))
 
 (use-package tex
-  :ensure auctex
+  :straight auctex
   :mode ("\\.tex\\'" . LaTeX-mode)
   :init
   (setq TeX-auto-save t
@@ -101,7 +101,7 @@ Elisp 字符串：下面兩塊保持單個反斜線，能直接複製到 =.tex=�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-latex.el" :noweb yes :noweb-prefix no
 (use-package cdlatex
-  :ensure t
+  :straight t
   :init
   (setq cdlatex-env-alist
         '(("bmatrix" <<ginshio-source-string("ginshio-latex-bmatrix-template")>> nil)

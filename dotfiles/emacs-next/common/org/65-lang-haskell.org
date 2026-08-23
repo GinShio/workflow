@@ -32,7 +32,7 @@ TS dispatcher 一併吞掉。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el"
 (use-package haskell-mode
-  :ensure t
+  :straight t
   :mode (("\\.\\(?:hs\\|hs-boot\\|hsig\\|hsc\\|gs\\)\\'" . haskell-mode)
          ("\\.\\(?:lhs\\|lgs\\)\\'" . haskell-literate-mode))
   :init
@@ -63,7 +63,7 @@ hook 仍會修改縮進，手動 TS mode 中也一併摘掉。
                       auto-mode-alist))))
 
 (use-package haskell-ts-mode
-  :ensure (haskell-ts-mode :host github :repo "emacsmirror/haskell-ts-mode")
+  :straight (haskell-ts-mode :host github :repo "emacsmirror/haskell-ts-mode")
   :commands haskell-ts-mode
   :init
   (setq haskell-ts-use-indent nil

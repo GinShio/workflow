@@ -21,14 +21,17 @@
 bin/vanilla-emacs sync
 #+end_src
 
-=sync= 會 tangle 配置，安裝 =elpaca.lock= 記錄的 revision，為當前 Emacs 版本建立獨立
-build，最後重寫 lock file。首次沒有 lock file 時會從當前 recipes 建立第一份。
+=sync= 會 tangle 配置，載入 straight，依據 =straight.lock= 記錄的 commit 安裝、構建並
+生成 activation 快照，最後 freeze 更新 lock file。首次沒有 lock file 時會從當前
+recipes 建立第一份。
 
-套件 source 共用於所有版本；build 位於：
+套件 source 與 build 都在：
 
 #+begin_example
-$XDG_DATA_HOME/emacs/elpaca/builds-<emacs-version>/
+$XDG_DATA_HOME/emacs/straight/
 #+end_example
+
+由 straight 管理；build cache 依 Emacs 版本自動分離。
 
 * 控制命令
 
@@ -36,20 +39,19 @@ $XDG_DATA_HOME/emacs/elpaca/builds-<emacs-version>/
 |------------------------------------+--------------------------------------------------------|
 | =bin/vanilla-emacs sync=             | 嚴格按 lock 安裝、切換 revision、構建並重寫 lock         |
 | =bin/vanilla-emacs sync --upgrade=   | 忽略舊 lock，更新上游、重建並寫入新的 revision           |
-| =bin/vanilla-emacs clean=            | 刪除 tangle 產物、Elpaca 套件樹與 native-comp cache    |
+| =bin/vanilla-emacs clean=            | 刪除 tangle 產物、straight 套件樹與 native-comp cache    |
 | =bin/vanilla-emacs doctor=           | 載入完整配置並檢查外部程序、字體、grammar 與目錄          |
 
-=clean= 是 =sync= 的反操作：它刪除 =early-init.el=、=init.el=、=lisp/ginshio/=，以及
-=$XDG_DATA_HOME/emacs/elpaca/= 和 =$XDG_CACHE_HOME/emacs/eln-cache/=。它保留
-=config.org=、=org/*.org=、=tangle.el=、=elpaca.lock=、=lisp/= 下受版本控制的 source、
+=clean= 是 =sync= 的反應：它刪除 =early-init.el=、=init.el=、=lisp/ginshio/=，以及
+=$XDG_DATA_HOME/emacs/straight/= 和 =$XDG_CACHE_HOME/emacs/eln-cache/=。它保留
+=config.org=、=org/*.org=、=tangle.el=、=straight.lock=、=lisp/= 下受版本控制的 source、
 tree-sitter grammars 與其他使用者資料；auto-save 和 backup cache 也不受影響。清理後普通
 Emacs 必須啓動失敗，直到再次運行
 =bin/vanilla-emacs sync=。執行前應先由 system/service 停止所有使用這份配置的 Emacs；
 腳本不探測或管理 daemon。
 
-正常會話裏可以查看 =M-x elpaca-manager=、=M-x elpaca-log=、=M-x elpaca-info= 與套件
-source；Elpaca 的 fetch、update、rebuild、delete、write-lock 等變更命令會直接拒絕，並提示
-使用控制腳本。
+普通會話不載入 straight；套件管理命令只存在於 =bin/vanilla-emacs= 的維護進程裏。
+需要查看或改動套件樹時退出編輯流程，用 =sync= / =sync --upgrade= / =clean= 處理。
 
 * Server
 

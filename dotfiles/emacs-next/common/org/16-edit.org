@@ -31,7 +31,7 @@
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (use-package undo-fu-session
-  :ensure t
+  :straight t
   :demand t
   :init
   (setq undo-fu-session-directory (ginshio-state "undo/")
@@ -70,7 +70,7 @@ core 讓行尾空白在代碼緩衝區裏顯示出來，因為它是 diff 噪音
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (use-package ws-butler
-  :ensure t
+  :straight t
   :hook (prog-mode . ws-butler-mode))
 #+end_src
 
@@ -148,7 +148,7 @@ Markdown 用兩個尾隨空格表示換行——那類文件不該被順手改�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-edit.el"
 (use-package multiple-cursors
-  :ensure t
+  :straight t
   :commands (mc/toggle-cursor-on-click
              mc/edit-lines mc/edit-beginnings-of-lines mc/edit-ends-of-lines
              mc/mark-next-lines mc/mark-previous-lines

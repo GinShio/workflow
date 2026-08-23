@@ -64,7 +64,7 @@ window-number 分區顯示。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
 (use-package winum
-  :ensure t
+  :straight t
   :demand t
   :init
   (setq winum-keymap (make-sparse-keymap)   ; the leader owns window selection

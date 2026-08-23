@@ -27,7 +27,7 @@ mode hook 之後覆蓋這裏的默認值。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el"
 (use-package rust-mode
-  :ensure t
+  :straight t
   :mode ("\\.rs\\'" . rust-mode)
   :init
   (setq rust-mode-treesitter-derive nil

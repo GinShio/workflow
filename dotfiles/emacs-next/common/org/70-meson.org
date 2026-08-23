@@ -22,7 +22,7 @@ grammar，直接使用成熟的 classic mode。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-meson.el"
 (use-package meson-mode
-  :ensure t
+  :straight t
   :mode (("/meson\\.build\\'" . meson-mode)
          ("/meson_options\\.txt\\'" . meson-mode)
          ("/meson\\.options\\'" . meson-mode))

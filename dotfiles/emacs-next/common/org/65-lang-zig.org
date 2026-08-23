@@ -46,7 +46,7 @@ autoload association 是它自己加入的。
                       auto-mode-alist))))
 
 (use-package zig-mode
-  :ensure (zig-mode :host github :repo "ziglang/zig-mode")
+  :straight (zig-mode :host github :repo "ziglang/zig-mode")
   :mode (("\\.zig\\'" . zig-mode)
          ("\\.zon\\'" . zig-mode))
   :init
@@ -54,7 +54,7 @@ autoload association 是它自己加入的。
         zig-format-on-save nil))
 
 (use-package zig-ts-mode
-  :ensure (zig-ts-mode :host github :repo "emacsmirror/zig-ts-mode")
+  :straight (zig-ts-mode :host github :repo "emacsmirror/zig-ts-mode")
   :commands zig-ts-mode
   :init
   (setq zig-ts-indent-offset 4)

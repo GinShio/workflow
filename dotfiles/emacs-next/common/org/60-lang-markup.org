@@ -42,7 +42,7 @@ Markdown 的價值在於源文件本身就能讀，所以不把編輯緩衝區�
                 "--to=html5")))
 
 (use-package markdown-mode
-  :ensure t
+  :straight t
   :mode (("\\.\\(?:md\\|markdown\\|mkd\\|mdown\\|mkdn\\|mdwn\\)\\'" . markdown-mode)
          ("README\\.md\\'" . gfm-mode))
   :init
@@ -83,7 +83,7 @@ Docutils 編譯流程；=.rst= 和 =.rest= 都會自動進入這個模式。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-markup.el"
 (use-package rst
-  :ensure nil
+  :straight nil
   :mode ("\\.re?st\\'" . rst-mode)
   :init
   (setq rst-compile-primary-toolset 'html)
@@ -114,7 +114,7 @@ xwidget 或外部瀏覽器。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-markup.el"
 (use-package adoc-mode
-  :ensure t
+  :straight t
   :mode ("\\.a\\(?:scii\\)?doc\\'" . adoc-mode)
   :init
   (setq adoc-display-images nil

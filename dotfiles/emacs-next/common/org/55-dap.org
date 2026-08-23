@@ -71,7 +71,7 @@ dape 自己編排那一組窗口。要精細控制哪個面板去哪裏，popup 
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-dap.el"
 (use-package dape
-  :ensure (:host github :repo "svaante/dape")
+  :straight (:host github :repo "svaante/dape")
   :commands (dape
              dape-continue dape-next dape-step-in dape-step-out dape-until
              dape-pause dape-restart dape-quit dape-kill

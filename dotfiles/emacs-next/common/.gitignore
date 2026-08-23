@@ -4,11 +4,10 @@
 /lisp/ginshio/
 /.ginshio-tangle-*/
 
-# Package manager and generated state.  These are redirected to XDG data/cache
-# directories, so anything appearing here means a redirect failed.  eln-cache is
-# not anchored: native compilation puts it beside whatever it took for the
-# configuration directory, which is not always the top of this tree.
-/elpaca/
+# Package manager and generated state.  The straight data tree and activations
+# live under $XDG_DATA_HOME/emacs/, so anything appearing here means a redirect
+# failed.  eln-cache is not anchored: native compilation puts it beside whatever
+# root it took for the configuration directory.
 eln-cache/
 /var/
 /.custom.el

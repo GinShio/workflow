@@ -31,7 +31,7 @@ tree-sitter grammar、格式化或 =opt=/=llc=/=mlir-opt=/TableGen 工具。等�
 
 ** 文件識別
 
-~use-package~ 在這裏只建立 autoload 和文件關聯；=:ensure nil~ 明確表示 library 已經在配置
+~use-package~ 在這裏只建立 autoload 和文件關聯；=:straight nil~ 明確表示 library 已經在配置
 樹裏，不交給 Elpaca。精確子目錄由本模塊加入 ~load-path~，所以停用 =lang-llvm= 之後，
 snapshot 仍在版本控制中，卻不會偷偷成為可見的運行時依賴。
 
@@ -44,20 +44,20 @@ MLIR 文件，而不是讓所有 Emacs 會話為沒用到的模式承擔副作�
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-llvm.el"
 (use-package llvm-mode
-  :ensure nil
+  :straight nil
   :mode (("\\.ll\\'" . llvm-mode)
          ("\\.lgc\\'" . llvm-mode)))
 
 (use-package llvm-mir-mode
-  :ensure nil
+  :straight nil
   :mode ("\\.mir\\'" . llvm-mir-mode))
 
 (use-package mlir-mode
-  :ensure nil
+  :straight nil
   :mode ("\\.mlir\\'" . mlir-mode))
 
 (use-package tablegen-mode
-  :ensure nil
+  :straight nil
   :mode ("\\.td\\'" . tablegen-mode))
 #+end_src
 

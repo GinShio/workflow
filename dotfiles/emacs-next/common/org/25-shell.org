@@ -84,7 +84,7 @@ Emacs 拼命令行時假設的是 POSIX 語法——變量前綴賦值、~$(...)
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el"
 (use-package eat
-  :ensure (eat :host codeberg :repo "akib/emacs-eat"
+  :straight (eat :host codeberg :repo "akib/emacs-eat"
                :files ("*.el" ("term" "term/*.el") "*.texi" "*.ti"
                        ("terminfo/e" "terminfo/e/*")
                        ("terminfo/65" "terminfo/65/*")
