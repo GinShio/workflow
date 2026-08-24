@@ -68,14 +68,13 @@ Set once ox-html is loaded; see `with-eval-after-load' below.")
 
 *** 合成 fancy 樣式
 
-導出的 ~<head>~ 內嵌三樣資產：=modules/org-export-header.html=（字體 preload）、
-=modules/org-css/main.js=、=modules/org-css/main.min.css=。CSS/JS 直接塞進導出的 HTML，
+導出的 ~<head>~ 內嵌三樣資產：=modules/org-export-header.html=、
+=modules/org-css/main.js=、=modules/org-css/main.css=。CSS/JS 直接塞進導出的 HTML，
 自包含、不依賴外部請求。
 
-字體 preload 的 head 片段 =modules/org-export-header.html= 作為資產放在 modules/ 樹下；它
-引用與 =main.min.css= 裏 ~@font-face~ 相同的 woff2 檔名（=etbookot-*= 與
-=Merriweather-*=）。把導出的 HTML 與 =modules/org-css/=.woff2 放在同一資料夾即可生效，
-不需外部 CDN 或手動下載。下列 emacs-lisp 在導出時把它拼進 ~<head>~。
+字體 preload 的 head 片段 =modules/org-export-header.html= 引用與 =main.css= 裏
+~@font-face~ 相同、受版本控制的 woff2 資產。發佈時把導出的 HTML 與這些字體放在同一
+目錄即可；下列 emacs-lisp 在導出時把 head、CSS 與 JS 拼在一起。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (with-eval-after-load 'ox-html
@@ -94,7 +93,7 @@ Set once ox-html is loaded; see `with-eval-after-load' below.")
           (insert-file-contents (ginshio-org-html-asset "org-css/main.js"))
           (goto-char (point-max))
           (insert "</script>\n<style>\n")
-          (insert-file-contents (ginshio-org-html-asset "org-css/main.min.css"))
+          (insert-file-contents (ginshio-org-html-asset "org-css/main.css"))
           (goto-char (point-max))
           (insert "</style>")
           (buffer-string)))

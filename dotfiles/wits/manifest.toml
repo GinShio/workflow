@@ -18,6 +18,15 @@ dst = '~/.config/wits/.env'
 path = 'envs'
 capabilities = ['develop']
 planes = ['user']
+chmod = '600'
+
+[[install]]
+id = 'wits-root-passphrase'
+dst = '~/.config/wits/root-passphrase'
+path = 'root-passphrase'
+capabilities = ['develop']
+planes = ['user']
+chmod = '600'
 
 [variables.wits.projects.source_info]
 amdd3d         = { org = 'amd',      name = 'amdd3d' }

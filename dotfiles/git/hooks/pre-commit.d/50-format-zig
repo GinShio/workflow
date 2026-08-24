@@ -4,8 +4,16 @@
 # Format staged Zig with `zig fmt`. A missing tool is a silent skip.
 command -v zig >/dev/null 2>&1 || exit 0
 
-staged_lang_files .zig .zon | while IFS= read -r f; do
-    apply_to_staged "$f" zig fmt --stdin
+files=$(staged_lang_files .zig .zon)
+oldifs=$IFS
+IFS='
+'
+set -f
+rc=0
+for f in $files; do
+    apply_to_staged "$f" zig fmt --stdin || rc=1
 done
+IFS=$oldifs
+set +f
 
-exit 0
+exit "$rc"

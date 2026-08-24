@@ -17,8 +17,10 @@ if [ -d "/usr/local/aegis" ] || [ -d "/usr/local/cloudmonitor" ]; then
     fi
 
     # Cloud Monitor uninstall
-    [ -f /usr/local/cloudmonitor/CmsGoAgent.linux-amd64 stop ] && /usr/local/cloudmonitor/CmsGoAgent.linux-amd64 stop 2>/dev/null || true
-    [ -f /usr/local/cloudmonitor/CmsGoAgent.linux-amd64 uninstall ] && /usr/local/cloudmonitor/CmsGoAgent.linux-amd64 uninstall 2>/dev/null || true
+    if [ -f /usr/local/cloudmonitor/CmsGoAgent.linux-amd64 ]; then
+        /usr/local/cloudmonitor/CmsGoAgent.linux-amd64 stop 2>/dev/null || true
+        /usr/local/cloudmonitor/CmsGoAgent.linux-amd64 uninstall 2>/dev/null || true
+    fi
 
     rm -rf /usr/local/aegis
     rm -rf /usr/local/cloudmonitor

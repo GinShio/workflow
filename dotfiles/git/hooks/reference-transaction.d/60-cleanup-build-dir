@@ -8,8 +8,6 @@ cfg_bool wits.hooks.reference-transaction.cleanup-build-dir-enable || exit 0
 # Only act once the refs are actually written (see cleanup-machete for details).
 [ "$1" = "committed" ] || exit 0
 
-repo_name=$(basename "$GIT_TOPLEVEL")
-
 # stdin: <old-sha> <new-sha> <ref-name>. A new-sha of all-zero means deletion.
 while read -r old_sha new_sha ref_name; do
     [ "$new_sha" = "$NULL_SHA" ] || continue
@@ -18,7 +16,18 @@ while read -r old_sha new_sha ref_name; do
         *) continue ;;
     esac
 
-    resolve_build_dirs "$branch" | while read -r build_dir; do
-        rm -rf "$build_dir"
+    build_dirs=$(resolve_build_dirs "$branch" || true)
+    oldifs=$IFS
+    IFS='
+'
+    set -f
+    for build_dir in $build_dirs; do
+        if rm -rf -- "$build_dir"; then
+            log_info "cleanup-build-dir: removed $build_dir"
+        else
+            log_warn "cleanup-build-dir: failed to remove $build_dir"
+        fi
     done
+    IFS=$oldifs
+    set +f
 done

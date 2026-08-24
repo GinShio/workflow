@@ -63,8 +63,12 @@ _env_is_set() {
 #   cfg_bool  <config-key> [default]   -> exit status (0 = true)
 #   cfg_value <config-key> [default]   -> echoes the resolved string
 cfg_bool() {
-    _val=$(_env_get "$(_cfg_env_name "$1")")
-    [ -n "$_val" ] && { is_truthy "$_val"; return; }
+    _env_name=$(_cfg_env_name "$1")
+    if _env_is_set "$_env_name"; then
+        _val=$(_env_get "$_env_name")
+        is_truthy "$_val"
+        return
+    fi
     if [ -z "${_WITS_CONFIG_WARMED:-}" ]; then
         _val=$(git config --bool "$1" 2>/dev/null)
         [ -n "$_val" ] && { is_truthy "$_val"; return; }
@@ -72,8 +76,12 @@ cfg_bool() {
     is_truthy "${2:-false}"
 }
 cfg_value() {
-    _val=$(_env_get "$(_cfg_env_name "$1")")
-    [ -n "$_val" ] && { printf '%s\n' "$_val"; return; }
+    _env_name=$(_cfg_env_name "$1")
+    if _env_is_set "$_env_name"; then
+        _env_get "$_env_name"
+        printf '\n'
+        return
+    fi
     if [ -z "${_WITS_CONFIG_WARMED:-}" ]; then
         _val=$(git config "$1" 2>/dev/null)
         [ -n "$_val" ] && { printf '%s\n' "$_val"; return; }
@@ -160,25 +168,72 @@ resolve_build_dirs() {
     _repo="$GIT_TOPLEVEL"
     _bd=""
 
-    # The wits project registry is the source of truth: it resolves the one build
-    # dir for this checkout's branch directly, from the current directory.
-    if command -v wits >/dev/null 2>&1; then
-        _bd=$(wits project build-dir "$_repo" --branch "$_branch" 2>/dev/null)
-    fi
+    command -v wits >/dev/null 2>&1 || {
+        log_warn "cleanup-build-dir: wits is unavailable; no build directory will be deleted."
+        return 1
+    }
+    _bd=$(wits project build-dir "$_repo" --branch "$_branch" 2>/dev/null) || {
+        log_warn "cleanup-build-dir: cannot resolve build directory for $_branch."
+        return 1
+    }
+    [ -n "$_bd" ] || return 1
 
-    # Fallback
-    if [ -z "$_bd" ]; then
-        _bd="$_repo/_build"
-    fi
+    _main_branch=$(wits project main-branch "$_repo" 2>/dev/null) || return 1
+    _main_bd=$(wits project build-dir "$_repo" --branch "$_main_branch" 2>/dev/null) ||
+        return 1
 
-    # the base dir may has a "-debug"/"-release" variant; normalize to the base and remove every known variant.
+    # A branch cleanup may remove variants of that branch's base, but never a
+    # build root shared with the main branch.
     _bd_base=${_bd%-debug}
     _bd_base=${_bd_base%-release}
+    _main_base=${_main_bd%-debug}
+    _main_base=${_main_base%-release}
+    if [ "$_bd_base" = "$_main_base" ]; then
+        log_warn "cleanup-build-dir: $_branch shares $_bd_base with $_main_branch; keeping it."
+        return 1
+    fi
+    _build_parent=$(dirname "$_main_base")
+    _build_root=$(CDPATH= cd -P "$_build_parent" 2>/dev/null && pwd) || {
+        log_warn "cleanup-build-dir: cannot prove build root $_build_parent."
+        return 1
+    }
+    [ "$_build_root" != / ] || {
+        log_warn "cleanup-build-dir: refusing filesystem root as a build root."
+        return 1
+    }
+
     for suffix in "" "-debug" "-release"; do
         _bd_target="${_bd_base}${suffix}"
-        if [ -n "$_bd_target" ] && [ -d "$_bd_target" ]; then
-            echo "$_bd_target"
+        [ -d "$_bd_target" ] || continue
+        if [ -L "$_bd_target" ]; then
+            log_warn "cleanup-build-dir: refusing symlink $_bd_target."
+            continue
         fi
+        _bd_safe=$(CDPATH= cd -P "$_bd_target" 2>/dev/null && pwd) || continue
+        case "$_bd_safe" in
+            /|"$HOME"|"$GIT_TOPLEVEL")
+                log_warn "cleanup-build-dir: refusing unsafe path $_bd_safe."
+                continue
+                ;;
+        esac
+        if [ "$_bd_safe" = "$_build_root" ]; then
+            log_warn "cleanup-build-dir: refusing build root $_bd_safe."
+            continue
+        fi
+        case "$_bd_safe/" in
+            "$_build_root/"*) ;;
+            *)
+                log_warn "cleanup-build-dir: $_bd_safe is outside $_build_root."
+                continue
+                ;;
+        esac
+        case "$GIT_TOPLEVEL/" in
+            "$_bd_safe/"*)
+                log_warn "cleanup-build-dir: refusing repository ancestor $_bd_safe."
+                continue
+                ;;
+        esac
+        printf '%s\n' "$_bd_safe"
     done
 }
 
@@ -247,11 +302,26 @@ staged_size() {
     git cat-file -s ":$1" 2>/dev/null
 }
 
+is_staged_regular() {
+    if [ -n "${_WITS_STAGED_CACHED:-}" ]; then
+        case "$LF$STAGED_REGULAR_FILES$LF" in
+            *"$LF$1$LF"*) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+    _regular_mode=$(git ls-files --stage -- "$1" | cut -d' ' -f1)
+    case "$_regular_mode" in
+        100???) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # True when the staged blob is text (git's own heuristic: a diff against a
 # binary blob reports '-' additions instead of a line count). When the
 # pre-commit cache is populated this is a membership test against the precomputed
 # text set (no fork); otherwise it falls back to a live per-file query.
 is_staged_text() {
+    is_staged_regular "$1" || return 1
     if [ -n "${_WITS_STAGED_CACHED:-}" ]; then
         case "$LF$STAGED_TEXT_FILES$LF" in
             *"$LF$1$LF"*) return 0 ;;
@@ -265,8 +335,10 @@ is_staged_text() {
 # git-crypt): its staged blob is ciphertext, not content we should format or
 # inspect, so content hooks skip it.
 is_encrypted() {
-    case "$(git check-attr filter -- "$1" 2>/dev/null)" in
-        *": filter: transcrypt"|*": filter: git-crypt"|*": filter: crypt") return 0 ;;
+    _encrypted_attr=$(git check-attr filter -- "$1" 2>/dev/null)
+    _encrypted_filter=${_encrypted_attr##*: filter: }
+    case "$_encrypted_filter" in
+        transcrypt|transcrypt-*|git-crypt|git-crypt-*|crypt|crypt-*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -303,24 +375,52 @@ apply_to_staged() {
     shift
     _in=$(mktemp) || return 1
     _out=$(mktemp) || { rm -f "$_in"; return 1; }
+    _err=$(mktemp) || { rm -f "$_in" "$_out"; return 1; }
+    _apply_status=0
 
-    staged_blob "$_f" > "$_in"
-    if "$@" < "$_in" > "$_out" 2>/dev/null && ! cmp -s "$_in" "$_out"; then
-        # Decide whether to sync the working tree *before* rewriting the index —
-        # afterwards the (still-unformatted) working copy would always look like
-        # it differs from the freshly-updated index.
-        _sync_worktree=1
-        has_unstaged_changes "$_f" && _sync_worktree=0
+    if ! staged_blob "$_f" > "$_in"; then
+        log_error "Could not read staged content for $_f"
+        _apply_status=1
+    elif ! "$@" < "$_in" > "$_out" 2>"$_err"; then
+        log_error "Formatter failed for staged file $_f"
+        # A non-zero return here aborts the whole hook, and so the commit; the
+        # tool's own diagnostic is the only thing that says why. Warnings from
+        # a run that succeeded stay hidden.
+        if [ -s "$_err" ]; then
+            cat "$_err" >&2
+        fi
+        _apply_status=1
+    else
+        cmp -s "$_in" "$_out"
+        _cmp_status=$?
+        case "$_cmp_status" in
+            0) ;;
+            1)
+                # Decide before rewriting the index: afterwards the old working
+                # copy would always differ from the freshly formatted index.
+                _sync_worktree=1
+                has_unstaged_changes "$_f" && _sync_worktree=0
 
-        _mode=$(git ls-files --stage -- "$_f" | cut -d' ' -f1)
-        _sha=$(git hash-object -w "$_out")
-        git update-index --cacheinfo "$_mode" "$_sha" "$_f"
-
-        # Update the working copy only when it held nothing we'd overwrite;
-        # otherwise the index is fixed and the working copy is left for the next
-        # `git add` to pick up, so unstaged edits survive untouched.
-        [ "$_sync_worktree" -eq 1 ] && git checkout-index -f -- "$_f"
+                _mode=$(git ls-files --stage -- "$_f" | cut -d' ' -f1) ||
+                    _apply_status=1
+                if [ "$_apply_status" -eq 0 ]; then
+                    _sha=$(git hash-object -w "$_out") || _apply_status=1
+                fi
+                if [ "$_apply_status" -eq 0 ]; then
+                    git update-index --cacheinfo "$_mode" "$_sha" "$_f" ||
+                        _apply_status=1
+                fi
+                if [ "$_apply_status" -eq 0 ] && [ "$_sync_worktree" -eq 1 ]; then
+                    git checkout-index -f -- "$_f" || _apply_status=1
+                fi
+                ;;
+            *)
+                log_error "Could not compare formatter output for $_f"
+                _apply_status=1
+                ;;
+        esac
     fi
 
-    rm -f "$_in" "$_out"
+    rm -f "$_in" "$_out" "$_err"
+    return "$_apply_status"
 }

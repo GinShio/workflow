@@ -53,13 +53,13 @@ and Husky all *append to or overwrite* hook files as a matter of course. A
 symlink would be followed and the shared runner clobbered; inlined logic would
 be corrupted by an appended block.
 
-A minimal stub that immediately hands off to the runner — which does the whole
-job and then exits — makes the framework robust to that tampering. Whatever a
-tool appends after the hand-off is inert: the runner has already run and exited
-by the time control would reach it. So `git branchless init` re-appending its
-block to `post-commit` is harmless noise, and the branchless integration is
-instead wired the *supported* way, as a `post-commit.d/00-git-branchless` script
-under our own control. The stub is a firebreak, and the cost of it is two lines.
+A minimal stub that immediately hands off to the runner makes an appended block
+inert, but cannot survive a tool replacing the whole file. Automatic
+`git branchless init` therefore overrides `core.hooksPath` to a dedicated,
+inactive generated-hooks directory; the shared `.d` scripts remain the only active
+branchless integration. `scripts/check.sh` also verifies every shared entrypoint,
+so a manual installer that ignores this boundary fails the local check instead
+of silently disabling the pipeline.
 
 ## 4. The `.d` execution contract
 

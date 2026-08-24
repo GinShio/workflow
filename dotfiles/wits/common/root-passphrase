@@ -1,0 +1,1 @@
+{%@@ if workflow.root.passphrase is defined @@%}{{@@ workflow.root.passphrase @@}}{%@@ endif @@%}

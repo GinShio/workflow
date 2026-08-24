@@ -5,6 +5,3 @@ DNS_API_TOKEN: (Optional) API token/credentials for the specified DNS_PROVIDER.
     - For Aliyun: "AccessKeyID:AccessKeySecret"
     - For DNSPod/Tencent: "API_ID,API_Token"
     - For Cloudflare: "API_Token"
-LOGIN_USERNAME: (Optional) The username to create for login. Default: ginshio.
-LOGIN_PUBKEY: (Optional) The public SSH key to be added to the user's authorized_keys. If set, strict SSH configuration (disabling password auth) will be enforced.
-SSH_PORT: (Optional) The port number for the SSH daemon. Default: 2222.

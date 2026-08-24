@@ -13,4 +13,4 @@ capabilities = ['develop']
 planes = ['user']
 
 [dynvariables]
-gputest_max_jobs = """lscpu | grep -E 'Core\\(s\\) per socket|Socket\\(s\\)' | awk '{sum+=$NF} END{print sum}'"""
+gputest_max_jobs = """n=$(lscpu -p=CORE,SOCKET 2>/dev/null | awk -F, '!/^#/ { seen[$1 FS $2] = 1 } END { print length(seen) }'); if [ "${n:-0}" -gt 0 ]; then printf '%s\\n' "$n"; else getconf _NPROCESSORS_ONLN; fi"""

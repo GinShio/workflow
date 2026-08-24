@@ -2,9 +2,13 @@
 #@tags: usage:dev, scope:apps, dep:python3, dep:pipx
 # Apps: Pipx
 
+set -eu
+export PATH="$HOME/.local/bin:$PATH"
+
 echo "Installing Pipx packages..."
 # Ensure pipx path is fine
 pipx ensurepath || true
+
 packages="
     dotdrop
     iree-base-compiler[onnx]

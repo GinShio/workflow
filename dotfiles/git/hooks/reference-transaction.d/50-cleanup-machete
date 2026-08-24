@@ -33,13 +33,13 @@ while read -r old_val new_val ref_name; do
 done
 [ -n "$deleted_branches" ] || exit 0
 
-# Preferred path: let the native tool own the tree edit. `wf stack tree rm`
+# Preferred path: let the native tool own the tree edit. `wits stack tree rm`
 # removes each branch and splices its children up to the parent (identical
 # semantics to the awk fallback), and stays the single source of truth for the
 # machete format. Word-splitting is intentional to pass one arg per branch.
-if command -v wf >/dev/null 2>&1; then
+if command -v wits >/dev/null 2>&1; then
     # shellcheck disable=SC2086
-    wf stack tree rm $deleted_branches
+    wits stack tree rm $deleted_branches
     exit 0
 fi
 

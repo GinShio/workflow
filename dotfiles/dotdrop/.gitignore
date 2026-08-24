@@ -1,3 +1,4 @@
+# Private, ephemeral output rebuilt by bootstrap/usages/dev/user/10-dotdrop.sh.
 /bundle/
 /*.toml
 /*.yaml

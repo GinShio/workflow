@@ -271,6 +271,8 @@ Nothing to configure.
 Sets up `git-branchless` for a repo the first time you check out a branch there —
 typically right after cloning — when branchless is installed and not already
 initialized, so a fresh clone is ready without a manual `git branchless init`.
+Its generated stubs go to a dedicated inactive directory; the shared
+`core.hooksPath` entrypoints remain the only active dispatch path.
 
 ## `reference-transaction`
 

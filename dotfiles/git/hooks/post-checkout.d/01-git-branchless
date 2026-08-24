@@ -1,5 +1,6 @@
 #!/bin/sh
 . "$HOOKS_DIR/core/lib.sh"
 
+[ -f "$GIT_COMMON_DIR/branchless/config" ] || exit 0
 git branchless hook post-checkout "$@" ||
     log_warn "git-branchless post-checkout hook returned non-zero."

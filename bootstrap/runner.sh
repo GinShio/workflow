@@ -19,7 +19,7 @@ set -u
 SETUP_FAILURES=$(mktemp)
 cleanup() {
     rm -f "$SETUP_FAILURES"
-    if command -v sudo >/dev/null 2>&1; then
+    if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
         sudo -k
     fi
 }
@@ -31,13 +31,30 @@ trap cleanup EXIT
 
 # Resolve Script Directory
 resolve_script_dir() {
-    _source="$0"
-    [ -h "$0" ] && _source="$(readlink "$0")"
-    cd -P "$(dirname "$_source")" && pwd
+    _source=$0
+    case "$_source" in
+        */*) ;;
+        *)
+            _resolved=$(command -v "$_source" 2>/dev/null || true)
+            [ -n "$_resolved" ] && _source=$_resolved
+            ;;
+    esac
+    while [ -h "$_source" ]; do
+        _source_dir=$(CDPATH= cd -P "$(dirname "$_source")" 2>/dev/null && pwd) ||
+            return 1
+        _source=$(readlink "$_source") || return 1
+        case "$_source" in
+            /*) ;;
+            *) _source="$_source_dir/$_source" ;;
+        esac
+    done
+    CDPATH= cd -P "$(dirname "$_source")" 2>/dev/null && pwd
 }
 
-SCRIPT_DIR=$(resolve_script_dir)
-# Assuming SCRIPT_DIR is .../setup, PROJECT_ROOT is .../scripts
+SCRIPT_DIR=$(resolve_script_dir) || {
+    echo "Error: unable to resolve bootstrap runner directory" >&2
+    exit 1
+}
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Load Libraries
@@ -45,6 +62,8 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 . "$PROJECT_ROOT/scripts/tags.sh"
 # shellcheck source=../scripts/detect.sh
 . "$PROJECT_ROOT/scripts/detect.sh"
+# shellcheck source=../scripts/constraints.sh
+. "$PROJECT_ROOT/scripts/constraints.sh"
 
 # Default Context
 SETUP_PROFILE="personal"
@@ -57,25 +76,21 @@ SETUP_HOSTNAME=""
 
 show_help() {
     cat <<EOF
-Usage: $(basename "$0") [OPTIONS]
+Usage: bootstrap/$(basename "$0") [OPTIONS]
 
 Options:
   --profile <name>      Overlay / transcrypt context (default: personal)
-  --usage <type>        Set usage type (e.g., dev, server) (default: dev)
+  --usage <type>        Set usage type: dev or vps (default: dev)
   --hostname <name>     System hostname and Dotdrop host
   -h, --help            Show this help
 
 Environment Variables:
-  Required (Non-interactive):
+  Required for non-root dev setup:
     ROOT_PASSPHRASE     Root/Sudo password for unattended installation.
-                        If not set in interactive mode, script will ask.
 EOF
-    # Dynamic Help Registration: Scan usages for help files or hooks
-    # Convention: setup/usages/<usage>/HELP.md or similar
-    # For now, we look for a common help text if available.
-    if [ -d "$PROJECT_ROOT/setup/usages" ]; then
+    if [ -d "$SCRIPT_DIR/usages" ]; then
         printf "\nRegistered Usage Modules:\n"
-        for usage_dir in "$PROJECT_ROOT/setup/usages"/*; do
+        for usage_dir in "$SCRIPT_DIR/usages"/*; do
             [ -d "$usage_dir" ] || continue
             usage_name=$(basename "$usage_dir")
             echo "  * $usage_name"
@@ -91,22 +106,34 @@ EOF
     cat <<EOF
 
 Examples:
-  ./setup.sh --profile work --usage server --hostname build-node-01
-  ROOT_PASSPHRASE="secret" ./setup.sh
+  ROOT_PASSPHRASE="secret" ./bootstrap/runner.sh --usage dev
+  ./bootstrap/runner.sh --profile personal --usage vps --hostname edge-01
 EOF
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --profile)
+            [ "$#" -ge 2 ] || {
+                echo "Error: --profile requires a value" >&2
+                exit 1
+            }
             SETUP_PROFILE="$2"
             shift 2
             ;;
         --usage)
+            [ "$#" -ge 2 ] || {
+                echo "Error: --usage requires a value" >&2
+                exit 1
+            }
             SETUP_USAGE="$2"
             shift 2
             ;;
         --hostname)
+            [ "$#" -ge 2 ] || {
+                echo "Error: --hostname requires a value" >&2
+                exit 1
+            }
             SETUP_HOSTNAME="$2"
             shift 2
             ;;
@@ -122,6 +149,14 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+case "$SETUP_USAGE" in
+    dev|vps) ;;
+    *)
+        echo "Error: unsupported usage '$SETUP_USAGE' (expected dev or vps)" >&2
+        exit 1
+        ;;
+esac
+
 # ==============================================================================
 # 2. Environment Detection
 # ==============================================================================
@@ -134,24 +169,13 @@ fi
 CURRENT_DE=$(detect_desktop)
 GPU_VENDORS=$(detect_gpu_vendor)
 CPU_VENDOR=$(detect_cpu_vendor)
+CURRENT_USER=$(id -un)
 IS_LAPTOP=0
 if is_laptop; then IS_LAPTOP=1; fi
 
 echo "[Setup] Context: OS=$CURRENT_OS Distro=$CURRENT_DISTRO Usage=$SETUP_USAGE Profile=$SETUP_PROFILE"
 
 ASKPASS_SCRIPT="$PROJECT_ROOT/scripts/get-root-passphrase.sh"
-
-if [ -z "${ROOT_PASSPHRASE:-}" ] && [ "$USER" != "root" ]; then
-    echo "Error: ROOT_PASSPHRASE not set and running non-interactively."
-    exit 1
-fi
-
-if [ -f "$ASKPASS_SCRIPT" ]; then
-    export SUDO_ASKPASS="$ASKPASS_SCRIPT"
-else
-    echo "Error: Missing SUDO_ASKPASS script at ${ASKPASS_SCRIPT}"
-    exit 1
-fi
 
 # Calculate Hostname
 if [ -z "$SETUP_HOSTNAME" ]; then
@@ -164,14 +188,32 @@ if [ -z "$SETUP_HOSTNAME" ]; then
     else
         SUFFIX="$CURRENT_DISTRO"
     fi
-    SETUP_HOSTNAME="${PREFIX}${USER}-${SUFFIX}"
+    SETUP_HOSTNAME="${PREFIX}${CURRENT_USER}-${SUFFIX}"
 fi
 
-# Verify sudo access early
-if ! sudo -A true; then
-    echo "Error: Incorrect Password or 'sudo -A' failure."
-    echo "Ensure SUDO_ASKPASS script is working correctly."
-    exit 1
+if [ "$SETUP_USAGE" = vps ]; then
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "Error: VPS bootstrap changes the base system and must run as root." >&2
+        exit 1
+    fi
+elif [ "$(id -u)" -ne 0 ]; then
+    command -v sudo >/dev/null 2>&1 || {
+        echo "Error: sudo is required for dev bootstrap." >&2
+        exit 1
+    }
+    [ -n "${ROOT_PASSPHRASE:-}" ] || {
+        echo "Error: ROOT_PASSPHRASE is required for unattended dev bootstrap." >&2
+        exit 1
+    }
+    [ -x "$ASKPASS_SCRIPT" ] || {
+        echo "Error: Missing executable SUDO_ASKPASS script at ${ASKPASS_SCRIPT}" >&2
+        exit 1
+    }
+    export SUDO_ASKPASS="$ASKPASS_SCRIPT"
+    if ! sudo -A true; then
+        echo "Error: sudo askpass authentication failed." >&2
+        exit 1
+    fi
 fi
 
 export SETUP_PROFILE
@@ -183,97 +225,37 @@ export PROJECTS_SCRIPT_DIR="$PROJECT_ROOT"
 # 3. Constraint Logic
 # ==============================================================================
 
-check_tag_constraint() {
-    _tag="$1"
+bootstrap_constraint() {
+    _bc_tag=$1
 
-    # -- Usage Constraint --
-    case "$_tag" in
+    case "$_bc_tag" in
         usage:*)
-            _req_usage="${_tag#usage:}"
-            # Pass if it's the requested usage OR 'common'
-            if [ "$_req_usage" = "$SETUP_USAGE" ] || [ "$_req_usage" = "common" ]; then
-                return 0
+            _bc_usage=${_bc_tag#usage:}
+            # The historical "common" tree is the workstation baseline shared
+            # by supported desktop OSes. VPS has its own complete, root-only
+            # baseline and must not inherit workstation packages.
+            if [ "$_bc_usage" = common ]; then
+                [ "$SETUP_USAGE" = dev ]
+            else
+                [ "$_bc_usage" = "$SETUP_USAGE" ]
             fi
-            return 1
             ;;
-    esac
-
-    # -- System Constraints --
-    case "$_tag" in
-        os:*)
-            _req_os="${_tag#os:}"
-            if [ "$_req_os" = "$CURRENT_OS" ]; then return 0; fi
-            if [ "$CURRENT_OS" = "linux" ] && [ "$_req_os" = "$CURRENT_DISTRO" ]; then return 0; fi
-            return 1 ;;
-        gpu:any)
-            [ -n "$GPU_VENDORS" ] && return 0
-            return 1 ;;
-        gpu:*)
-            _req_gpu="${_tag#gpu:}"
-            case "$GPU_VENDORS" in *"$_req_gpu"*) return 0 ;; esac
-            return 1 ;;
-        cpu:*)
-            _req_cpu="${_tag#cpu:}"
-            if [ "$_req_cpu" = "$CPU_VENDOR" ]; then return 0; fi
-            return 1 ;;
-        de:any)
-            if is_desktop; then return 0; fi
-            return 1 ;;
-        de:*)
-            _req_de="${_tag#de:}"
-            if [ "$_req_de" = "$CURRENT_DE" ]; then return 0; fi
-            return 1 ;;
-        hw:laptop)
-            [ "$IS_LAPTOP" -eq 1 ] && return 0
-            return 1 ;;
         vps:*)
-            _req_vps="${_tag#vps:}"
             if [ -z "${CURRENT_VPS:-}" ]; then
+                # shellcheck source=../scripts/detect_vps.sh
                 . "$PROJECT_ROOT/scripts/detect_vps.sh"
                 CURRENT_VPS=$(detect_vps)
             fi
-            if [ "$_req_vps" = "$CURRENT_VPS" ]; then return 0; fi
-            return 1 ;;
+            [ "${_bc_tag#vps:}" = "$CURRENT_VPS" ]
+            ;;
+        *)
+            return 2
+            ;;
     esac
-
-    # -- Dependency Constraint --
-    case "$_tag" in
-        dep:*)
-            _cmd="${_tag#dep:}"
-            if command -v "$_cmd" >/dev/null 2>&1; then return 0; fi
-            return 1 ;;
-    esac
-
-    return 0
 }
 
 should_run_script() {
-    _file="$1"
-    _file_tags=$(tags_get "$_file")
-    _os_constraint_seen=0
-    _os_constraint_matched=0
-
-    for _t in $_file_tags; do
-        case "$_t" in
-            os:*)
-                _os_constraint_seen=1
-                if check_tag_constraint "$_t"; then
-                    _os_constraint_matched=1
-                fi
-                ;;
-            usage:*|gpu:*|cpu:*|de:*|hw:*|dep:*|vps:*)
-                if ! check_tag_constraint "$_t"; then
-                    return 1
-                fi
-                ;;
-        esac
-    done
-
-    if [ "$_os_constraint_seen" -eq 1 ] && [ "$_os_constraint_matched" -eq 0 ]; then
-        return 1
-    fi
-
-    return 0
+    constraints_match_file "$1" bootstrap_constraint
 }
 
 # ==============================================================================
@@ -282,6 +264,11 @@ should_run_script() {
 
 SEARCH_ROOT="$SCRIPT_DIR/usages"
 PHASES="system apps user services"
+
+# A malformed tag is not a skippable module: an unknown `hw:`/`gpu:` value
+# reads as an unmet constraint further down, so a typo would silently drop the
+# module instead of failing here.
+constraints_validate_tree "$SEARCH_ROOT" || exit 1
 
 for PHASE in $PHASES; do
     echo "----------------------------------------------------------------"
@@ -298,21 +285,26 @@ for PHASE in $PHASES; do
     while read -r script; do
         script_name=$(basename "$script")
 
-        if should_run_script "$script"; then
-            echo "[Running] $script"
-
-            # Execute
-            if [ -x "$script" ]; then
-                "$script"
-            else
-                sh "$script"
-            fi
-            _status=$?
-            if [ $_status -ne 0 ]; then
-                echo "[Error] $script_name failed (Exit $_status)"
-                printf '%s\n' "$script_name" >> "$SETUP_FAILURES"
-            fi
-        fi
+        should_run_script "$script"
+        _match_status=$?
+        case "$_match_status" in
+            0)
+                echo "[Running] $script"
+                # Tagged modules are a POSIX-shell contract. Enforce fail-fast
+                # semantics even when an older module lacks its own `set -eu`.
+                sh -eu "$script"
+                _status=$?
+                if [ "$_status" -ne 0 ]; then
+                    echo "[Error] $script_name failed (Exit $_status)"
+                    printf '%s\n' "$script_name" >> "$SETUP_FAILURES"
+                fi
+                ;;
+            1) ;;
+            *)
+                echo "[Error] Could not evaluate constraints for $script_name" >&2
+                printf '%s\n' "$script_name (constraints)" >> "$SETUP_FAILURES"
+                ;;
+        esac
     done
 done
 

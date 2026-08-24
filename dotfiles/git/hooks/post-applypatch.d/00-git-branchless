@@ -1,2 +1,6 @@
 #!/bin/sh
+command -v git-branchless >/dev/null 2>&1 || exit 0
+common_dir=${GIT_COMMON_DIR:-$(git rev-parse --git-common-dir 2>/dev/null)}
+[ -f "$common_dir/branchless/config" ] || exit 0
+
 git branchless hook post-applypatch "$@"

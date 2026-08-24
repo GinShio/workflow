@@ -26,8 +26,14 @@ sudo zypper in -y \
 
 # Font
 sudo zypper in -y \
-    adobe-source{serif4,sans3,codepro}-fonts adobe-sourcehan{serif,sans}-{cn,hk,jp,kr,tw}-fonts fontawesome-fonts \
-    symbols-only-nerd-fonts wqy-{bitmap,microhei,zenhei}-fonts
+    adobe-sourceserif4-fonts adobe-sourcesans3-fonts adobe-sourcecodepro-fonts \
+    adobe-sourcehanserif-cn-fonts adobe-sourcehanserif-hk-fonts \
+    adobe-sourcehanserif-jp-fonts adobe-sourcehanserif-kr-fonts \
+    adobe-sourcehanserif-tw-fonts adobe-sourcehansans-cn-fonts \
+    adobe-sourcehansans-hk-fonts adobe-sourcehansans-jp-fonts \
+    adobe-sourcehansans-kr-fonts adobe-sourcehansans-tw-fonts \
+    fontawesome-fonts symbols-only-nerd-fonts \
+    wqy-bitmap-fonts wqy-microhei-fonts wqy-zenhei-fonts
 
 # Markup
 sudo zypper in -y tree-sitter-markdown tree-sitter-rst

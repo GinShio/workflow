@@ -39,13 +39,13 @@ planes = ['system']
 id = 'systemd-system'
 dst = '/etc/systemd/system/'
 path = 'system'
-capabilities = ['develop']
+capabilities = ['desktop']
 planes = ['system']
 actions = ['systemd-sys-reload']
 
 [actions]
-systemd-sys-reload = 'systemctl daemon-reload || true'
-systemd-user-reload = 'systemctl daemon-reload --user || true'
+systemd-sys-reload = 'systemctl daemon-reload'
+systemd-user-reload = 'systemctl --user daemon-reload'
 
 [variables.lsp]
 runtime_dir = "{{@@ env['XDG_RUNTIME_DIR'] @@}}/lsp"

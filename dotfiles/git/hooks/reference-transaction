@@ -3,13 +3,3 @@
 # distinct file to prevent cross-pollution by third-party tools
 # source the central logic; 'exit' in runner will stop execution here
 . "$(dirname "$0")/core/runner"
-## START BRANCHLESS CONFIG
-
-# Avoid canceling the reference transaction in the case that `branchless` fails
-# for whatever reason.
-git branchless hook reference-transaction "$@" || (
-echo 'branchless: Failed to process reference transaction!'
-echo 'branchless: Some events (e.g. branch updates) may have been lost.'
-echo 'branchless: This is a bug. Please report it.'
-)
-## END BRANCHLESS CONFIG

@@ -7,6 +7,7 @@
 # post-checkout args: <prev_head> <new_head> <branch_flag>
 # Only act on branch checkouts (flag == 1), never on file checkouts.
 [ "$3" = "1" ] || exit 0
+command -v git-branchless >/dev/null 2>&1 || exit 0
 
 # `git branchless init` writes <common-git-dir>/branchless/config and adds an
 # [include] entry to the repo config. Its presence means we are already set up.
@@ -15,7 +16,13 @@
 
 main_branch=$(get_main_branch origin)
 log_info "Initializing git-branchless (main branch: $main_branch)..."
-if git branchless init --main-branch "$main_branch"; then
+# branchless installs its own top-level hook stubs. Point that installation at
+# a dedicated inactive directory; the shared hooksPath already calls branchless
+# from post-checkout.d/01 and the other ordered .d scripts.
+generated_hooks="$GIT_COMMON_DIR/branchless/generated-hooks"
+mkdir -p "$generated_hooks"
+if git -c core.hooksPath="$generated_hooks" \
+       branchless init --main-branch "$main_branch"; then
     log_info "git-branchless initialized."
 else
     log_error "git-branchless init failed."

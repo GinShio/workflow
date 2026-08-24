@@ -1,5 +1,5 @@
 #!/bin/sh
-#@tags: usage:common, scope:system, os:debian
+#@tags: usage:dev, scope:system, os:debian
 # System: Debian Virtualization & Cross Compilation
 
 # Virtualization & Containerization

@@ -1,5 +1,5 @@
 #!/bin/sh
-#@tags: usage:common, scope:system, os:opensuse
+#@tags: usage:dev, scope:system, os:opensuse
 
 # Cross compilation
 # -----------------------------------------------------------------------------

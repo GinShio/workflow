@@ -213,6 +213,13 @@ run_local_hook() {
     local_hook_script="$GIT_DIR/hooks/$hook_name"
 
     if [ -f "$local_hook_script" ] && [ -x "$local_hook_script" ]; then
+        # Branchless is already dispatched from the shared ordered .d layer.
+        # Older initializations may have left its generated stub in .git/hooks;
+        # running that stub again processes every event twice.
+        if grep -Fq "START BRANCHLESS CONFIG" "$local_hook_script"; then
+            log_debug "Skipping duplicate branchless local hook: $local_hook_script"
+            return 0
+        fi
         if is_enabled "$hook_name" "local"; then
             run_script "Local hook '$hook_name'" "$local_hook_script" "$stdin_source" "$@"
         fi

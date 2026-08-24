@@ -24,15 +24,5 @@ port = 16001
 
 [dynvariables]
 qbittorrent_bin = 'command -v qbittorrent-nox 2>/dev/null || echo /usr/bin/qbittorrent-nox'
-qbittorrent_secret_key = """f="{{@@ env['HOME'] @@}}/.local/state/dotfiles/qbittorrent_secret_key"; mkdir -p "$(dirname "$f")"; [ -f "$f" ] && cat "$f" || openssl rand -hex 12 | tee "$f""""
-qbittorrent_secret_key_encode = """f="{{@@ env['HOME'] @@}}/.local/state/dotfiles/qbittorrent_secret_key_encode"
-mkdir -p "$(dirname "$f")"
-[ -f "$f" ] && cat "$f" && exit 0
-pwd=$(cat {{@@ env['HOME'] @@}}/.local/state/dotfiles/qbittorrent_secret_key)
-python3 -c "
-import base64, hashlib, os
-pwd = '$pwd'.encode()
-salt = os.urandom(16)
-dk = hashlib.pbkdf2_hmac('sha512', pwd, salt, 100000)
-print(f'@ByteArray({base64.b64encode(salt).decode()}:{base64.b64encode(dk).decode()})')
-" | tee "$f""""
+qbittorrent_secret_key = """python3 "{{@@ projects.script_dir @@}}/scripts/credential-state.py" secret "{{@@ env['HOME'] @@}}/.local/state/dotfiles/qbittorrent_secret_key""""
+qbittorrent_secret_key_encode = """python3 "{{@@ projects.script_dir @@}}/scripts/credential-state.py" qbittorrent-hash "{{@@ env['HOME'] @@}}/.local/state/dotfiles/qbittorrent_secret_key" "{{@@ env['HOME'] @@}}/.local/state/dotfiles/qbittorrent_secret_key_encode""""

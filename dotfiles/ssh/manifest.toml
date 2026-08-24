@@ -1,6 +1,3 @@
-# ssh-key-install still points at {{@@ _dotdrop_workdir @@}}/scripts/ssh-key.sh,
-# a path removed when the scripts tree moved to ~/cyber/scripts.
-
 [[install]]
 id = 'ssh'
 dst = '~/.ssh/'

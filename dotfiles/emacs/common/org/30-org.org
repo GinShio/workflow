@@ -387,20 +387,18 @@ Agenda 把 todo 與 project 兩份檔案的排程疊在一起，做成一份同�
 ~org-agenda-finalize-entries~ 的結果，只改顯示、不改資料。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
-;; org-super-agenda pulls in org + org-agenda, so enable it only once org
-;; itself is loaded, not at startup.
-(with-eval-after-load 'org
-  (use-package org-super-agenda
-    :straight t
-    :config
-    (org-super-agenda-mode t)
-    (setq org-super-agenda-groups
-          '((:name "Today" :time-grid t)
-            (:name "Scheduled earlier" :scheduled past)
-            (:name "Due soon" :deadline (before today) :order 1)
-            (:name "Overdue" :deadline (before today) :scheduled (before today) :order 1)
-            (:name "Other deadlines" :deadline (after today) :order 2)
-            (:auto-todo t)))))
+(use-package org-super-agenda
+  :straight t
+  :after org
+  :config
+  (org-super-agenda-mode t)
+  (setq org-super-agenda-groups
+        '((:name "Today" :time-grid t)
+          (:name "Scheduled earlier" :scheduled past)
+          (:name "Due soon" :deadline (before today) :order 1)
+          (:name "Overdue" :deadline (before today) :scheduled (before today) :order 1)
+          (:name "Other deadlines" :deadline (after today) :order 2)
+          (:auto-todo t))))
 #+end_src
 
 這組規則把「今天」「已排過期」「即將到期」「逾期」「其他截止」分開，並按 todo 狀態補

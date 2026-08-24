@@ -244,8 +244,8 @@ Signal an error when it is absent or relative."
 
 *** 自定義文件
 
-~customize~ 界面默認把它的結果寫進 =init.el=。這裏的 =init.el= 是生成的，被改寫就
-會在下次生成時憑空產生衝突，所以指到別處去。
+~customize~ 界面默認把結果寫進受版本控制的 loader =init.el=。loader 只負責載入生成
+payload，不應混入互動設定，所以把 customize 輸出指到資料目錄。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-init.el"
 (setq custom-file (ginshio-data "custom.el"))

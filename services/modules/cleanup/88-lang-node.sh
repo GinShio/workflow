@@ -1,13 +1,8 @@
 #!/bin/sh
-#@tags: domain:cleanup, type:nightly, dep:node
+#@tags: domain:cleanup, type:nightly, dep:npm
 set -u
 
-if command -v npm >/dev/null 2>&1; then
-    npm cache clean --force >/dev/null 2>&1 || true
-fi
-if command -v yarn >/dev/null 2>&1; then
-    yarn cache clean >/dev/null 2>&1 || true
-fi
-if command -v deno >/dev/null 2>&1; then
-    deno clean >/dev/null 2>&1 || true
-fi
+# `npm cache verify` only garbage-collects entries the index no longer
+# references, which on a content-addressed store reclaims almost nothing. This
+# module exists to return disk, so it empties the cache; npm refetches.
+npm cache clean --force >/dev/null 2>&1 || true

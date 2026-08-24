@@ -4,7 +4,7 @@
 
 set -eu
 
-WITS_SOURCE_DIR="${WITS_SOURCE_DIR:-$PROJECTS_SCRIPT_DIR/workflow-rs}"
+WITS_SOURCE_DIR="${WITS_SOURCE_DIR:-$PROJECTS_SCRIPT_DIR/wits}"
 
 if [ ! -f "$WITS_SOURCE_DIR/meson.build" ]; then
     echo "Error: Missing Wits source directory at ${WITS_SOURCE_DIR}"

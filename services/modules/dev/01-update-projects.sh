@@ -1,5 +1,5 @@
 #!/bin/sh
-#@tags: domain:dev, type:nightly, dep:git, power:ac
+#@tags: domain:dev, type:nightly, dep:git, dep:wits, power:ac
 set -eu
 
 cleanup() {
@@ -19,16 +19,17 @@ build_projects() {
 
         echo "=> Updating $proj..."
         if wits update "$proj" --with-borrowed; then
+            _main_branch=$(wits project main-branch "$proj")
             # Release build (word splitting on _extra_args is intended here)
-            wits build "$proj" --build-type release $_extra_args -b$(wits project main-branch $proj)
+            wits build "$proj" --build-type release $_extra_args "-b$_main_branch"
 
             # Debug build
-            wits build "$proj" --build-type debug -b$(wits project main-branch $proj)
+            wits build "$proj" --build-type debug "-b$_main_branch"
         fi
     done
 }
 
-case ":${DOTFILES_OVERLAYS}:" in
+case ":${DOTFILES_OVERLAYS:-}:" in
     *":khronos3d:"*)
         build_projects "--install" "amdvlk"
         ;;

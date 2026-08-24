@@ -27,7 +27,23 @@ notrim="$notrim $(cfg_value wits.hooks.pre-commit.format-generic-notrim)"
 # Extensions left completely untouched (content is byte-significant).
 skip=".patch .diff"
 
-staged_files | while IFS= read -r f; do
+oldifs=$IFS
+set -f
+
+# The file loop below splits on a newline, the one byte a path may not
+# contain. Re-split the extension lists to that separator now, while $IFS is
+# still the default — inside the loop a space no longer separates words, and
+# each list would match as one literal string that no filename ever ends with.
+# shellcheck disable=SC2086
+notrim=$(printf '%s\n' $notrim)
+# shellcheck disable=SC2086
+skip=$(printf '%s\n' $skip)
+
+files=$(staged_files)
+IFS='
+'
+rc=0
+for f in $files; do
     is_staged_text "$f" || continue
     is_encrypted "$f" && continue
 
@@ -44,11 +60,13 @@ staged_files | while IFS= read -r f; do
 
     if [ "$_trim" = 1 ]; then
         # Trim trailing whitespace and guarantee a final newline.
-        apply_to_staged "$f" awk '{ sub(/[ \t]+$/, ""); print }'
+        apply_to_staged "$f" awk '{ sub(/[ \t]+$/, ""); print }' || rc=1
     else
         # Guarantee a final newline only; leave trailing whitespace intact.
-        apply_to_staged "$f" awk '{ print }'
+        apply_to_staged "$f" awk '{ print }' || rc=1
     fi
 done
+IFS=$oldifs
+set +f
 
-exit 0
+exit "$rc"

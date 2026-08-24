@@ -4,9 +4,13 @@ dst = '~/Public/'
 path = '.'
 capabilities = ['develop']
 planes = ['user']
-actions = ['samba-mkdir']
+actions = ['samba-chmod', 'samba-mkdir']
 
 [actions]
+# Rooted at the install's own destination, and named after the files this
+# module owns: an overlay that ships none of them leaves find with nothing to
+# do rather than failing the install on an unmatched glob.
+samba-chmod = """find {{@@ _dotfile_abs_dst @@}} -maxdepth 2 -type f \\( -name '.config' -o -name '*.fstab' \\) -exec chmod 600 {} +"""
 samba-mkdir = """cat {{@@ env['HOME'] @@}}/Public/.config.d/*.fstab 2>/dev/null |tr -s ' ' |cut -d' ' -f2 |sort |uniq |xargs -I@ bash -c 'mkdir -p $(eval echo @)'"""
 
 [dynvariables]

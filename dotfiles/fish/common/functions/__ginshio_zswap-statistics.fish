@@ -4,7 +4,10 @@
 function zswap-statistics
     # Copy from https://unix.stackexchange.com/questions/406936/get-current-zswap-memory-usage-and-statistics.
     # Authored-by: Вадим Илларионов
-    source-posix $XDG_CONFIG_HOME/workflow/.env
+    # SUDO_ASKPASS, for the `sudo -A` calls below. dotfiles/wits deploys this
+    # file; the ~/.config/workflow/.env this used to read is deployed by nothing.
+    set -f _wits_env $XDG_CONFIG_HOME/wits/.env
+    test -r $_wits_env; and source-posix $_wits_env
     set -f MDL /sys/module/zswap
     set -f EN (sudo -A -- cat $MDL/parameters/enabled)
     function Show

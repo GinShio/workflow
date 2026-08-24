@@ -1,5 +1,5 @@
-DOTFILES_ROOT_PATH: (Optional) Path to the dotfiles repository. (default: ../dotfiles)
-WITS_SOURCE_DIR: (Optional) Path to the Wits source repository. (default: workflow-rs)
+DOTFILES_ROOT_PATH: (Optional) Repository root containing dotfiles.toml. (default: current workflow repository)
+WITS_SOURCE_DIR: (Optional) Path to the Wits source directory. (default: <repository>/wits)
 --hostname / SETUP_HOSTNAME: System hostname and the Dotdrop host declared in
     hosts.toml. Matched case-insensitively; if it is not a declared host, the
     unique machine whose overlays include --profile is used.

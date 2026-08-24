@@ -10,7 +10,7 @@ export PATH="$HOME/.local/bin:$PATH"
 SETUP_PROFILE="${SETUP_PROFILE:-personal}"
 SETUP_HOSTNAME="${SETUP_HOSTNAME:-}"
 
-DOTFILES_ROOT_PATH="${DOTFILES_ROOT_PATH:-$PROJECTS_SCRIPT_DIR/../dotfiles}"
+DOTFILES_ROOT_PATH="${DOTFILES_ROOT_PATH:-$PROJECTS_SCRIPT_DIR}"
 if [ ! -f "$DOTFILES_ROOT_PATH/dotfiles.toml" ]; then
     echo "Error: Missing dotfiles repository at ${DOTFILES_ROOT_PATH} (no dotfiles.toml)"
     exit 1
@@ -263,8 +263,34 @@ collect_contexts
     fi
 )
 
+# Generated entrypoints and bundles are ignored local artifacts. They may
+# contain rendered private overlay values, so do not let an ambient umask or an
+# older generation leave them group/world-readable.
+GENERATED_DIR="$DOTFILES_ROOT_PATH/dotfiles/dotdrop"
+harden_generated() {
+    if [ -d "$GENERATED_DIR/bundle" ]; then
+        find "$GENERATED_DIR/bundle" -type d -exec chmod 700 {} +
+        find "$GENERATED_DIR/bundle" -type f -exec chmod 600 {} +
+    fi
+    # An unmatched glob expands to the pattern itself, which is the normal
+    # state on a first bootstrap. Skipping it must not become the loop's exit
+    # status, or `set -e` would end the run here.
+    for _generated in "$GENERATED_DIR"/user.*.toml "$GENERATED_DIR"/system.*.toml; do
+        [ -f "$_generated" ] || continue
+        chmod 600 "$_generated"
+    done
+}
+
+harden_generated
 echo "Generating Dotdrop configs..."
-"$WITS_BIN" dotfiles generate --root "$DOTFILES_ROOT_PATH"
+# Scoped to generate alone: a process-wide umask would also apply to the
+# directories dotdrop creates during the system plane's `sudo` install.
+(
+    umask 077
+    "$WITS_BIN" dotfiles generate --root "$DOTFILES_ROOT_PATH"
+)
+harden_generated
+
 "$WITS_BIN" dotfiles check --root "$DOTFILES_ROOT_PATH" > "$CATALOG_FILE"
 cat "$CATALOG_FILE"
 

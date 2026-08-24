@@ -2,7 +2,7 @@
 
 [cache.disk]
 dir = "{{@@ sysenv.xdg_cache_home @@}}/sccache"
-size = {{@@ ((ccache_max_size[:-2]|float) * 1024 ** 3)|int @@}}
+size = {{@@ compiler_cache_max_bytes @@}}
 
 [cache.disk.preprocessor_cache_mode]
 # Whether to use the preprocessor cache mode

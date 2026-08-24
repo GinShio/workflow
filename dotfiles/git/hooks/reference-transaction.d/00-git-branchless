@@ -1,4 +1,8 @@
 #!/bin/sh
+command -v git-branchless >/dev/null 2>&1 || exit 0
+common_dir=${GIT_COMMON_DIR:-$(git rev-parse --git-common-dir 2>/dev/null)}
+[ -f "$common_dir/branchless/config" ] || exit 0
+
 git branchless hook reference-transaction "$@" || {
     echo 'branchless: failed to process reference transaction;' \
          'some events (e.g. branch updates) may have been lost.' >&2

@@ -1,5 +1,5 @@
 #!/bin/sh
-#@tags: domain:dev, type:nightly, gpu:any, dep:python3, power:ac, schedule:3d
+#@tags: domain:dev, type:nightly, state:disabled, gpu:any, dep:python3, power:ac, schedule:3d
 
 case "${1:-}" in
     ""|*[!0-9]*) now_timestamps=${NIGHTLY_CURRENT_TIMESTAMP:-$(date +%s)} ;;

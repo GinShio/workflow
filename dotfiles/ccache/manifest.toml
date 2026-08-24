@@ -1,4 +1,4 @@
-# ccache_max_size is also read by the sccache module template.
+# Shared as bytes so every cache backend consumes the same capacity.
 
 [[install]]
 id = 'ccache-config'
@@ -15,7 +15,7 @@ capabilities = ['develop']
 planes = ['user']
 
 [dynvariables]
-ccache_max_size = """df -h / |tail -n1 |awk '{print $2*0.2 substr($2,length($2),1) "i"}'"""
+compiler_cache_max_bytes = """df -Pk / | awk 'NR == 2 { printf "%.0f\\n", $2 * 1024 * 0.2 }'"""
 
 [variables.ccache]
 runtime_dir = "{{@@ env['XDG_RUNTIME_DIR'] @@}}/ccache"

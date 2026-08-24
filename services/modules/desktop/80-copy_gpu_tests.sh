@@ -1,5 +1,5 @@
 #!/bin/sh
-#@tags: domain:desktop, type:autostart, gpu:any, dep:python3
+#@tags: domain:desktop, type:autostart, state:disabled, gpu:any, dep:python3
 set -eu
 
 # shellcheck disable=SC1091

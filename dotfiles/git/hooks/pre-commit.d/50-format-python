@@ -11,18 +11,27 @@ oldifs=$IFS
 IFS='
 '
 set -f
+rc=0
 if command -v ruff >/dev/null 2>&1; then
     for f in $files; do
-        apply_to_staged "$f" ruff format --stdin-filename "$f" -
-        apply_to_staged "$f" ruff check --fix --select I --stdin-filename "$f" -
+        if ! apply_to_staged "$f" ruff format --stdin-filename "$f" -; then
+            rc=1
+            continue
+        fi
+        apply_to_staged "$f" ruff check --fix --select I --stdin-filename "$f" - ||
+            rc=1
     done
 elif command -v black >/dev/null 2>&1; then
     for f in $files; do
-        command -v isort >/dev/null 2>&1 && apply_to_staged "$f" isort -
-        apply_to_staged "$f" black -q -
+        if command -v isort >/dev/null 2>&1 &&
+           ! apply_to_staged "$f" isort -; then
+            rc=1
+            continue
+        fi
+        apply_to_staged "$f" black -q - || rc=1
     done
 fi
 IFS=$oldifs
 set +f
 
-exit 0
+exit "$rc"

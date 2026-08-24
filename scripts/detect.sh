@@ -206,25 +206,37 @@ detect_gpu_vendor() {
                 esac
 
                 if [ -n "$_v" ]; then
-                     case "$_vendors" in
-                        *"$_v"*) ;;
+                     case " $_vendors " in
+                        *" $_v "*) ;;
                         *) _vendors="$_vendors $_v" ;;
                      esac
                 fi
             done
         fi
 
-        if [ -z "$_vendors" ] && command -v lspci >/dev/null 2>&1; then
-            _pci=$(lspci -mm 2>/dev/null)
-            if echo "$_pci" | grep -iE "VGA|3D|Display" | grep -iq "NVIDIA"; then
-                 case "$_vendors" in *"nvidia"*) ;; *) _vendors="$_vendors nvidia" ;; esac
-            fi
-            if echo "$_pci" | grep -iE "VGA|3D|Display" | grep -iqE "AMD|ATI"; then
-                 case "$_vendors" in *"amd"*) ;; *) _vendors="$_vendors amd" ;; esac
-            fi
-            if echo "$_pci" | grep -iE "VGA|3D|Display" | grep -iq "Intel"; then
-                 case "$_vendors" in *"intel"*) ;; *) _vendors="$_vendors intel" ;; esac
-            fi
+        # sysfs only exposes devices with a bound driver.  Merge PCI evidence so
+        # a powered-down or unbound discrete GPU on a hybrid system is not lost.
+        # One awk pass; the END block fixes the order so repeated runs agree.
+        if command -v lspci >/dev/null 2>&1; then
+            for _v in $(lspci -mm 2>/dev/null | awk '
+                {
+                    line = tolower($0)
+                    if (line !~ /vga|3d|display/) next
+                    if (line ~ /nvidia/)   seen["nvidia"] = 1
+                    if (line ~ /amd|ati/)  seen["amd"] = 1
+                    if (line ~ /intel/)    seen["intel"] = 1
+                }
+                END {
+                    if ("nvidia" in seen) print "nvidia"
+                    if ("amd" in seen)    print "amd"
+                    if ("intel" in seen)  print "intel"
+                }
+            '); do
+                case " $_vendors " in
+                    *" $_v "*) ;;
+                    *) _vendors="$_vendors $_v" ;;
+                esac
+            done
         fi
 
     elif [ "$_os" = "darwin" ]; then
@@ -333,7 +345,7 @@ detect_hostname() {
 
 detect_desktop() {
     # Check common environment variables
-    _de="${XDG_CURRENT_DESKTOP:-${DESKTOP_SESSION}}"
+    _de="${XDG_CURRENT_DESKTOP:-${DESKTOP_SESSION:-}}"
     _de=$(echo "$_de" | tr '[:upper:]' '[:lower:]')
 
     if [ -n "$_de" ]; then
@@ -389,16 +401,21 @@ is_desktop() {
 
 detect_display_server() {
     _ds="unknown"
-    if [ -n "$WAYLAND_DISPLAY" ]; then
-        _ds="wayland"
-    elif [ -n "$DISPLAY" ]; then
-        # Check if it's Xwayland
-        if loginctl show-session $(loginctl | grep $(whoami) | awk '{print $1}') -p Type | grep -q "wayland"; then
-             _ds="wayland" # Or "xwayland" if we want to be specific, but usually context is "is it wayland or pure X11"
-        else
-             _ds="x11"
-        fi
-    fi
+    # pam_systemd exports the session's type, which is what distinguishes an
+    # X11 client under Xwayland (wayland) from a real X server (x11) — the
+    # question DISPLAY alone cannot answer. Any other value, `tty` included,
+    # falls through so the vocabulary here stays wayland/x11/unknown.
+    case "${XDG_SESSION_TYPE:-}" in
+        wayland) _ds="wayland" ;;
+        x11)     _ds="x11" ;;
+        *)
+            if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+                _ds="wayland"
+            elif [ -n "${DISPLAY:-}" ]; then
+                _ds="x11"
+            fi
+            ;;
+    esac
      # Fallback for some non-systemd or weird envs
     if [ "$_ds" = "unknown" ]; then
          if pgrep -x "Xorg" >/dev/null || pgrep -x "X" >/dev/null; then

@@ -2,11 +2,17 @@
 [Unit]
 Description=Set battery charge threshold
 After=systemd-user-sessions.service
+ConditionVirtualization=!container
+# Skip the unit outright where there is no battery. Testing inside the shell
+# instead would leave the last test's non-zero status as the unit's result and
+# park a desktop in `failed`.
+ConditionPathExists=/sys/class/power_supply/BAT0/charge_control_end_threshold
 
 [Service]
 Type=oneshot
-Restart=no
-ExecStart=/usr/bin/bash -c "echo 60 >/sys/class/power_supply/BAT0/charge_control_start_threshold; echo 80 > /sys/class/power_supply/BAT0/charge_control_end_threshold; :"
+# Not every laptop exposes a start threshold. The end threshold is the one the
+# condition above proved, so it goes last and its status is the unit's.
+ExecStart=/bin/sh -c "[ -f /sys/class/power_supply/BAT0/charge_control_start_threshold ] && echo 60 > /sys/class/power_supply/BAT0/charge_control_start_threshold; echo 80 > /sys/class/power_supply/BAT0/charge_control_end_threshold"
 RemainAfterExit=yes
 
 [Install]

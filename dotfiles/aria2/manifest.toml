@@ -21,4 +21,4 @@ port = 16000
 
 [dynvariables]
 aria2_bin = 'command -v aria2c 2>/dev/null || echo /usr/bin/aria2c'
-aria2_secret_key = """f="{{@@ env['HOME'] @@}}/.local/state/dotfiles/aria2_secret_key"; mkdir -p "$(dirname "$f")"; [ -f "$f" ] && cat "$f" || openssl rand -hex 12 | tee "$f""""
+aria2_secret_key = """python3 "{{@@ projects.script_dir @@}}/scripts/credential-state.py" secret "{{@@ env['HOME'] @@}}/.local/state/dotfiles/aria2_secret_key""""

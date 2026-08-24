@@ -62,14 +62,25 @@ null_sha() {
 # The pre-commit staged cache: one `--numstat` both enumerates the staged paths
 # (added/copied/modified) and classifies each as text or binary (a binary blob
 # shows '-' for its line counts), replacing the per-file `git diff`/`git cat-file`
-# every content script would otherwise fork. staged_files/is_staged_text (lib.sh)
-# read it back.
+# every content script would otherwise fork. A second pass over the same commit
+# in `--raw` form carries each entry's destination mode, which is what separates
+# a regular file from a symlink or a gitlink; it is scoped to the staged set
+# rather than the whole index, so its cost tracks the commit and not the repo.
+# staged_files/is_staged_text/is_staged_regular (lib.sh) read them back.
 warm_staged_cache() {
     _numstat=$(git diff --cached --numstat --diff-filter=ACM 2>/dev/null)
     STAGED_FILES=$(printf '%s\n' "$_numstat" | awk -F'\t' 'NF>=3 { print $3 }')
     STAGED_TEXT_FILES=$(printf '%s\n' "$_numstat" | awk -F'\t' 'NF>=3 && $1 != "-" { print $3 }')
+    _raw=$(git diff --cached --raw --diff-filter=ACM 2>/dev/null)
+    STAGED_REGULAR_FILES=$(
+        printf '%s\n' "$_raw" |
+            awk -F'\t' 'NF>=2 {
+                split($1, _f, " ")
+                if (_f[2] ~ /^100[0-7][0-7][0-7]$/) print $2
+            }'
+    )
     _WITS_STAGED_CACHED=1
-    export STAGED_FILES STAGED_TEXT_FILES _WITS_STAGED_CACHED
+    export STAGED_FILES STAGED_TEXT_FILES STAGED_REGULAR_FILES _WITS_STAGED_CACHED
 }
 
 # warm_config <hook>: batch this hook's config into env twins with one read, so
@@ -140,6 +151,16 @@ case "$HOOK_NAME" in
 esac
 
 STDIN_FILE=""
+cleanup_runner() {
+    if [ -n "$STDIN_FILE" ] && [ -f "$STDIN_FILE" ]; then
+        rm -f "$STDIN_FILE"
+    fi
+}
+trap cleanup_runner EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 if [ "$NEEDS_STDIN" -eq 1 ]; then
     # We must read stdin into a temp file
     # mktemp is POSIX-ish (standard on linux/bsd/macos)
@@ -150,9 +171,5 @@ fi
 run_hook_overlays "$HOOKS_DIR" "$HOOK_NAME" "$STDIN_FILE" "$@"
 run_external_hooks "$HOOK_NAME" "$STDIN_FILE" "$@"
 run_local_hook "$HOOK_NAME" "$STDIN_FILE" "$@"
-
-if [ -n "$STDIN_FILE" ] && [ -f "$STDIN_FILE" ]; then
-    rm "$STDIN_FILE"
-fi
 
 exit 0

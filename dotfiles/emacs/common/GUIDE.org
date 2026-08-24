@@ -46,23 +46,25 @@
 | =bin/ginshio-emacs sync --upgrade=     | 主動接受上游新 revision，重建並更新 lock              |
 | =bin/ginshio-emacs clean=              | 丟棄 tangle、套件與 native-comp 產物，回到未同步狀態  |
 | =bin/ginshio-emacs doctor=             | 配置能啓動，但某個外部功能不工作時                    |
+| =bin/ginshio-emacs test=               | 修改 tangle／套件生命週期後跑隔離回歸測試             |
 
 =--rebuild= 的症狀識別：某個包的命令報 =Cannot open load file=，或者一個模式明明裝了
 卻少一半功能，而 =sync= 跑完什麼都沒說。那表示 build 目錄不完整,而 =sync= 信任了
 build cache。它不改 =straight.lock=,也不聯網取新 revision。
 
-=clean= 只刪除可由 =sync= 重建 的內容：=early-init.el=、=init.el=、=modules/ginshio/= 與
+=clean= 只刪除可由 =sync= 重建的內容：=modules/ginshio/= 與
 =$XDG_DATA_HOME/emacs/straight/，以及 =$XDG_CACHE_HOME/emacs/eln-cache/=。文學源碼、
-=straight.lock=、=modules/= 下受版本控制的上游 modes 與資產、書籤、歷史、grammar、auto-save 與
+=early-init.el=、=init.el=、=straight.lock=、=modules/= 下受版本控制的上游 modes 與資產、書籤、歷史、grammar、auto-save 與
 backup 等都保留。先由 system/service 停止所有使用這份配置的 Emacs 再清理；腳本不探測
 或管理 daemon。執行後不要直接開始 Emacs：普通啟動會按契約失敗，下一步應是
 =bin/ginshio-emacs sync=。
 
-套件狀態在維護進程查看。=GINSHIO_EMACS_COMMAND=sync= 是讓配置載入 straight 的那個開關,
+套件狀態在維護進程查看。=GINSHIO_EMACS_COMMAND=inspect= 只載入 straight 與當前宣告,
+不改 lock、checkout、build 或 activation：
 所以查看命令也走同一條路:
 
 #+begin_src shell
-GINSHIO_EMACS_COMMAND=sync emacs -Q --batch \
+GINSHIO_EMACS_COMMAND=inspect emacs -Q --batch \
   --init-directory="$PWD" -l early-init.el -l init.el \
   --eval '(straight-check-all)'
 #+end_src

@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
+
+set -euo pipefail
+
+command -v sassc >/dev/null 2>&1 || {
+    echo "build.sh: sassc is required" >&2
+    exit 1
+}
+
 sassc main.scss main.css
 
-sassc --style compressed main.scss main.min.css
-if command -v csso &> /dev/null; then
-    csso main.min.css -o main.min.css
-fi
-
-ls _*.js | sort -V | xargs cat > main.js
+cat \
+    '_~magnet_licence.js' \
+    '_code.js' \
+    '_toc.js' \
+    '_$magnet_licence.js' \
+    > main.js

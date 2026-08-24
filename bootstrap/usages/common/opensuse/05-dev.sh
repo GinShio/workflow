@@ -81,7 +81,8 @@ sudo zypper in -y \
 
 # Java
 sudo zypper in -y \
-    java-{21,25}-openjdk{,-devel}
+    java-21-openjdk java-21-openjdk-devel \
+    java-25-openjdk java-25-openjdk-devel
 
 # Node.js
 sudo zypper in -y \
@@ -89,7 +90,8 @@ sudo zypper in -y \
 
 # Functional (Erlang/Elixir/Haskell)
 sudo zypper in -y \
-    elixir elixir-doc elixir-hex erlang erlang-doc ghc{,-doc,-manual,-prof} tree-sitter-haskell
+    elixir elixir-doc elixir-hex erlang erlang-doc \
+    ghc ghc-doc ghc-manual ghc-prof tree-sitter-haskell
 
 # Others
 sudo zypper in -y \
@@ -100,4 +102,4 @@ sudo zypper in -y 'texlive-*'
 
 # Emacs
 # -----------------------------------------------------------------------------
-sudo zypper in -y emacs emacs-nox emacs-x11 libtool libvterm-{tools,devel}
+sudo zypper in -y emacs emacs-nox emacs-x11 libtool libvterm-tools libvterm-devel

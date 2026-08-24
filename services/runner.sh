@@ -50,9 +50,6 @@ if [ -z "${PROJECTS_SCRIPT_DIR:-}" ]; then
     PROJECTS_SCRIPT_DIR=$(dirname "$_script_dir")
 fi
 
-# Fix detection usage spam
-if [ "${1:-}" = "detect_usage_fix" ]; then return 0; fi
-
 export PROJECTS_ROOT_DIR PROJECTS_SCRIPT_DIR
 export DOTFILES_ROOT_DIR DOTFILES_OVERLAYS
 
@@ -61,6 +58,8 @@ export DOTFILES_ROOT_DIR DOTFILES_OVERLAYS
 . "$PROJECTS_SCRIPT_DIR/scripts/tags.sh"
 # shellcheck source=../scripts/detect.sh
 . "$PROJECTS_SCRIPT_DIR/scripts/detect.sh"
+# shellcheck source=../scripts/constraints.sh
+. "$PROJECTS_SCRIPT_DIR/scripts/constraints.sh"
 
 # State Directory for Scheduling
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/workflow/services/timestamps"
@@ -75,6 +74,18 @@ fi
 
 TARGET_TYPE="type:$1"
 MODULES_DIR="$PROJECTS_SCRIPT_DIR/services/modules"
+RUNNER_FAILURES=$(mktemp) || exit 1
+RUNNER_CANDIDATES=$(mktemp) || {
+    rm -f "$RUNNER_FAILURES"
+    exit 1
+}
+cleanup_runner() {
+    rm -f "$RUNNER_FAILURES" "$RUNNER_CANDIDATES"
+}
+trap cleanup_runner EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # ==============================================================================
 # 2. Environment Detection
@@ -143,6 +154,12 @@ check_schedule_constraint() {
             fi
 
             _last_run=$(cat "$_state_file")
+            case "$_last_run" in
+                ''|*[!0-9]*)
+                    echo "Error: invalid schedule timestamp in $_state_file" >&2
+                    return 2
+                    ;;
+            esac
             _now=$(date +%s)
 
             # Parse Interval
@@ -229,10 +246,13 @@ update_schedule_timestamp() {
         case "$_t" in
             schedule:*)
                 _state_file=$(get_schedule_state_file "$_script_path")
-                # Ensure directory exists just in case
                 mkdir -p "$(dirname "$_state_file")"
-                date +%s > "$_state_file"
-                return 0
+                _state_tmp=$(mktemp "$STATE_DIR/.timestamp.XXXXXX") || return 1
+                if date +%s > "$_state_tmp" && mv "$_state_tmp" "$_state_file"; then
+                    return 0
+                fi
+                rm -f "$_state_tmp"
+                return 1
                 ;;
         esac
     done
@@ -242,119 +262,31 @@ update_schedule_timestamp() {
 # 3. Filtering Logic
 # ==============================================================================
 
-# Helper: Check if a script's specific tag matches current environment
-# Returns 0 (pass) or 1 (skip)
-check_tag_constraint() {
-    _tag="$1"
-    _file="$2"
+service_constraint() {
+    _sc_tag=$1
+    _sc_file=$2
 
-    # Prefix: schedule:* (Time-based Scheduling)
-    case "$_tag" in
-        schedule:*)
-            if ! check_schedule_constraint "$_tag" "$_file"; then
-                return 1
-            fi
-            ;;
-    esac
-
-    # Prefix: os:*
-    case "$_tag" in
-        os:*)
-            _req_os="${_tag#os:}"
-            # Check OS Family
-            if [ "$_req_os" = "$CURRENT_OS" ]; then return 0; fi
-            # Check Distro (Linux specific)
-            if [ "$CURRENT_OS" = "linux" ] && [ "$_req_os" = "$CURRENT_DISTRO" ]; then return 0; fi
-            return 1
-            ;;
-    esac
-
-    # Prefix: power:* (Power Source)
-    case "$_tag" in
+    case "$_sc_tag" in
         power:ac)
-            # Require AC Power
-            if [ "$IS_ON_AC" -eq 1 ]; then return 0; fi
-            return 1 ;;
+            [ "$IS_ON_AC" -eq 1 ]
+            ;;
         power:battery)
-            # Require Battery Power (Not AC)
-            if [ "$IS_ON_AC" -eq 0 ]; then return 0; fi
-            return 1 ;;
+            [ "$IS_ON_AC" -eq 0 ]
+            ;;
         power:any)
-            return 0 ;;
-    esac
-
-    # Prefix: gpu:* (GPU Vendor/Presence)
-    case "$_tag" in
-        gpu:any)
-            if [ -n "$GPU_VENDORS" ]; then return 0; fi
-            return 1 ;;
-        gpu:*)
-            _req_gpu="${_tag#gpu:}"
-            case "$GPU_VENDORS" in *"$_req_gpu"*) return 0 ;; esac
-            return 1 ;;
-    esac
-
-    # Prefix: cpu:* (CPU Vendor)
-    case "$_tag" in
-        cpu:*)
-            _req_cpu="${_tag#cpu:}"
-            if [ "$_req_cpu" = "$CPU_VENDOR" ]; then return 0; fi
-            return 1 ;;
-    esac
-
-    # Prefix: de:* (Desktop Environment)
-    case "$_tag" in
-        de:*)
-            _req_de="${_tag#de:}"
-            # Multi-value check? For now simple exact match or substring
-            if [ "$_req_de" = "$CURRENT_DE" ]; then return 0; fi
-            return 1 ;;
-    esac
-
-    # Prefix: hw:* (Other Hardware)
-    case "$_tag" in
-        hw:laptop)
-            [ "$IS_LAPTOP" -eq 1 ] && return 0
-            return 1 ;;
-    esac
-
-    # Prefix: dep:* (Dependency Check)
-    case "$_tag" in
-        dep:*)
-            _cmd="${_tag#dep:}"
-            if command -v "$_cmd" >/dev/null 2>&1; then return 0; fi
-            return 1
+            return 0
+            ;;
+        schedule:*)
+            check_schedule_constraint "$_sc_tag" "$_sc_file"
+            ;;
+        *)
+            return 2
             ;;
     esac
-
-    # Tag is not a constraint type we know, so it doesn't block execution.
-    return 0
 }
 
-# Helper: Decide if script should run based on ALL its tags
 should_run_script() {
-    _file="$1"
-    _file_tags=$(tags_get "$_file")
-
-    # Iterate over all tags in the file
-    for _t in $_file_tags; do
-
-        # Identify constraint tags
-        # We explicitly list all prefixes that impose an execution constraint
-        case "$_t" in
-            # Add schedule:* here to ensure it's caught
-            os:*|hw:*|dep:*|gpu:*|cpu:*|de:*|power:*|schedule:*)
-                if ! check_tag_constraint "$_t" "$_file"; then
-                    # Constraint failed -> Skip execution
-                    return 1
-                fi
-                ;;
-            # Future expansion for env:* (e.g. kde/gnome) can go here
-        esac
-    done
-
-    # All constraints passed (or none existed)
-    return 0
+    constraints_match_file "$1" service_constraint
 }
 
 
@@ -364,35 +296,49 @@ should_run_script() {
 
 echo "[Runner] scanning modules for $TARGET_TYPE..."
 
-# 1. Find candidates (files matching the requested type)
-# We use sort to ensure deterministic order (NN-name.sh) based on filename
-# Sort by filename (field 1) then by full path (field 2) to handle same-named files deterministically
-tags_find_all "$MODULES_DIR" "$TARGET_TYPE" | awk -F/ '{print $NF "\t" $0}' | sort -k1,1 -k2,2 | cut -f2- | while read -r script; do
+# A malformed tag is not a skippable module: an unknown `hw:`/`gpu:` value
+# reads as an unmet constraint further down, so a typo would silently drop the
+# module instead of failing here.
+constraints_validate_tree "$MODULES_DIR" || exit 1
+tags_find_all "$MODULES_DIR" "$TARGET_TYPE" |
+    awk -F/ '{print $NF "\t" $0}' |
+    sort -k1,1 -k2,2 |
+    cut -f2- > "$RUNNER_CANDIDATES"
 
+while IFS= read -r script; do
+    [ -n "$script" ] || continue
     script_name=$(basename "$script")
 
-if should_run_script "$script"; then
-    echo "[Runner] executing: $script_name"
+    should_run_script "$script"
+    _match_status=$?
+    case "$_match_status" in
+        0)
+            echo "[Runner] executing: $script_name"
+            sh -eu "$script"
+            _status=$?
+            if [ "$_status" -ne 0 ]; then
+                echo "[Runner] warning: $script_name exited with error $_status" >&2
+                printf '%s\n' "$script_name" >> "$RUNNER_FAILURES"
+            elif ! update_schedule_timestamp "$script"; then
+                echo "[Runner] warning: could not record schedule for $script_name" >&2
+                printf '%s\n' "$script_name (schedule state)" >> "$RUNNER_FAILURES"
+            fi
+            ;;
+        1)
+            ;;
+        *)
+            echo "[Runner] error: could not evaluate constraints for $script_name" >&2
+            printf '%s\n' "$script_name (constraints)" >> "$RUNNER_FAILURES"
+            ;;
+    esac
+done < "$RUNNER_CANDIDATES"
 
-    # 3. Execute
-    # Run in subshell to protect runner's environment
-    (
-        # Pass the trigger type as argument just in case
-        sh "$script"
-    )
-    _status=$?
+if [ -s "$RUNNER_FAILURES" ]; then
+    echo "[Runner] failed modules:" >&2
+    while IFS= read -r failed; do
+        printf '  - %s\n' "$failed" >&2
+    done < "$RUNNER_FAILURES"
+    exit 1
+fi
 
-    if [ $_status -ne 0 ]; then
-        echo "[Runner] warning: $script_name exited with error $_status" >&2
-    else
-        # Only update schedule on success
-        update_schedule_timestamp "$script"
-    fi
-    else
-        # Verbose debug (optional, currently commented out)
-        # echo "[Runner] skipping: $script_name (constraints unmet)"
-        :
-    fi
-done
-
-echo "[Runner] finished."
+echo "[Runner] finished successfully."

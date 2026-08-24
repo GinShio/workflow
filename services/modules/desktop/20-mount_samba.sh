@@ -1,24 +1,32 @@
 #!/bin/sh
-#@tags: domain:desktop, type:autostart, net:samba, dep:sudo, dep:mount
+#@tags: domain:desktop, type:autostart, dep:sudo, dep:mount
 set -eu
 
 trap "sudo -k" EXIT
 
-# POSIX compliant network wait
-_network_ready=0
-_i=0
-while [ "$_i" -lt 30 ]; do
-    if ping -c1 -W1 8.8.8.8 >/dev/null 2>&1 || ping -c1 -W1 1.1.1.1 >/dev/null 2>&1; then
-        _network_ready=1
-        break
-    fi
-    sleep 1
-    _i=$((_i + 1))
-done
+# dotfiles/samba deploys one `<overlay>.imm.fstab` per overlay. A host stacks
+# several overlays, so mount every fstab it actually received instead of
+# picking a single one out of the list.
+[ -n "${DOTFILES_OVERLAYS:-}" ] || {
+    echo "No Dotfiles overlays are active; skipping Samba mounts."
+    exit 0
+}
 
-if [ "$_network_ready" -eq 1 ]; then
-    sudo -A -- mount --all --fstab "$HOME/Public/.config.d/$DOTFILES_CURRENT_PROFILE.imm.fstab"
-    #sudo -A -- sh -c "nohup mount --all --fstab $HOME/Public/.config.d/$DOTFILES_CURRENT_PROFILE.nohup.fstab &"
-else
-    echo "Network not available, skipping Samba mounts"
+_mounted=0
+_old_ifs=$IFS
+IFS=:
+set -f
+for _overlay in $DOTFILES_OVERLAYS; do
+    _fstab="$HOME/Public/.config.d/$_overlay.imm.fstab"
+    [ -f "$_fstab" ] || continue
+    # `mount` reports the actual SMB/network failure. A public ICMP probe is
+    # not a reliable proxy for whether a private file server is reachable.
+    sudo -A -- mount --all --fstab "$_fstab"
+    _mounted=1
+done
+IFS=$_old_ifs
+set +f
+
+if [ "$_mounted" -eq 0 ]; then
+    echo "No Samba fstab for overlays '$DOTFILES_OVERLAYS'; nothing mounted."
 fi
