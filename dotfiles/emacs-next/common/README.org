@@ -35,12 +35,18 @@ $XDG_DATA_HOME/emacs/straight/
 
 * 控制命令
 
-| 命令                               | 用途                                                   |
-|------------------------------------+--------------------------------------------------------|
+| 命令                               | 用途                                                     |
+|------------------------------------+----------------------------------------------------------|
 | =bin/vanilla-emacs sync=             | 嚴格按 lock 安裝、切換 revision、構建並追加新增包的 lock   |
+| =bin/vanilla-emacs sync --rebuild=   | 不動上游與 lock，只把每個包按 lock 的 revision 重新構建   |
 | =bin/vanilla-emacs sync --upgrade=   | 忽略舊 lock，更新上游、重建並寫入新的 revision           |
-| =bin/vanilla-emacs clean=            | 刪除 tangle 產物、straight 套件樹與 native-comp cache    |
+| =bin/vanilla-emacs clean=            | 刪除 tangle 產物、straight 套件樹、activation 與 eln cache |
 | =bin/vanilla-emacs doctor=           | 載入完整配置並檢查外部程序、字體、grammar 與目錄          |
+
+=--rebuild= 補的是一個 =sync= 看不見的狀態。配置關掉了 straight 的修改偵測（理由見
+=05-packages.org=），所以 straight 從不自己判斷某個 build 過期；一次被打斷的 =sync=、
+或者換過一次 Emacs 版本，都會留下一棵「已構建」但缺檔案的樹，而普通 =sync= 會信任它。
+recipe 本身改了不需要這個——那會自動觸發重建。
 
 =clean= 是 =sync= 的反應：它刪除 =early-init.el=、=init.el=、=lisp/ginshio/=，以及
 =$XDG_DATA_HOME/emacs/straight/= 和 =$XDG_CACHE_HOME/emacs/eln-cache/=。它保留
@@ -123,8 +129,12 @@ Emacs 放在 =$XDG_RUNTIME_DIR/emacs=，配置不啓用 TCP server，也不設 =
 順序。停用時只把該文件改為 =disabled=；成功 tangle 會刪除殘留產物，因此其他啓用模塊若
 仍 ~require~ 它，完整啓動會直接失敗而不是暗中重新啓用。
 
-metadata、排序、生成清單與 hard-off 的 batch 測試：
+改動之後的完整檢查是一條命令：
 
 #+begin_src shell
-emacs -Q --batch -l test/tangle-tests.el -f ert-run-tests-batch-and-exit
+bin/vanilla-emacs sync && bin/vanilla-emacs doctor
 #+end_src
+
+=sync= 先 tangle（其中會驗證每個生成檔的括號與可讀性），再按 lock 安裝與構建，最後以
+一個獨立的 =validate= 進程逐個 ~require~ 每個宣告的 feature——延遲加載的 ~:config~ 因此
+仍然被執行過一次。任何一步失敗都以非零退出碼結束。

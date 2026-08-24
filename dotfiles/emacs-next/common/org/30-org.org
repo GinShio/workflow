@@ -63,14 +63,25 @@ Org 的檔案散在 =~/cyber/blog/= 下。筆記與行動檔都放同一棵樹�
 (defconst ginshio-org-blog-file
   (expand-file-name "blogs.org" ginshio-org-capture-dir))
 
-(dolist (dir (list ginshio-org-root
-                   ginshio-org-agenda-dir
-                   ginshio-org-capture-dir
-                   (file-name-directory (car ginshio-org-bibliography))))
-  (make-directory dir t))
+(defun ginshio-org--ensure-directories ()
+  "Create the Org data directories, once something actually needs them."
+  (dolist (dir (list ginshio-org-root
+                     ginshio-org-agenda-dir
+                     ginshio-org-capture-dir
+                     (file-name-directory (car ginshio-org-bibliography))))
+    (unless (file-directory-p dir)
+      (make-directory dir t))))
+
+(with-eval-after-load 'org
+  (ginshio-org--ensure-directories))
 
 (setq org-directory ginshio-org-root)
 #+end_src
+
+目錄等 org 真的加載才建立。這些路徑在 =~/cyber/blog= 底下，不在 XDG 的三檔裏，所以它
+們是 *使用者資料* 而不是運行時狀態——每次啓動都在家目錄裏憑空造四個目錄，即使這次會話
+一個 org 文件都不會開，那不是配置該做的事。~org-agenda~、~org-capture~ 與打開任何
+=.org= 都會加載 org，所以真正用到之前它們一定就位。
 
 ** 編輯行為
 
@@ -106,10 +117,15 @@ Org 首先是一個編輯器。這些設定讓它對「結構化純文本」這�
 todo 關鍵字與優先級是這套 GTD 的骨架。優先級從 ~A~ 到 ~E~，顔色對應到 leader 生態裏的
 nerd-icons 配色，讓「哪件事最急」一眼可見。
 
+記錄動作寫在 ~(...)~ 括號 *裏面* ——=PROJ(p@/!)= 而不是 =PROJ(p)@/!=。Org 解析關鍵字時
+要求那組括號緊貼字符串結尾；跟在後面的字符會讓整條匹配失敗，於是關鍵字的名字變成
+=PROJ(p)@/!= 這一整串。它不報錯，只是從此 =PROJ= 對不上 ~org-modern-todo-faces~，
+agenda 過濾也認不出它。
+
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
 (setq org-todo-keywords
       '((sequence "TODO(t)" "NEXT(n)" "STRT(s!)" "|" "DONE(d!)" "KILL(k@)")
-        (sequence "WAIT(w@/!)" "HOLD(h@/!)" "|" "PROJ(p)@/!"))
+        (sequence "WAIT(w@/!)" "HOLD(h@/!)" "|" "PROJ(p@/!)"))
       org-priority-highest ?A
       org-priority-lowest ?E
       org-priority-faces
@@ -126,14 +142,14 @@ nerd-icons 配色，讓「哪件事最急」一眼可見。
 或在內聯代碼塊前面補個符號。用零寬空格拆開它們即可。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
-(defun ginshio-org-insert-zero-width-space ()
+(defun ginshio/org-insert-zero-width-space ()
   "Insert a zero width space (U+200B) at point."
   (interactive)
   (insert "​"))
 
 (ginshio-leader-define
  "o" "org"
- "o z" #'ginshio-org-insert-zero-width-space)
+ "o z" #'ginshio/org-insert-zero-width-space)
 #+end_src
 
 *** eglot 認得的 src 塊
@@ -210,11 +226,23 @@ language; otherwise a temp file is used."
 [[https://github.com/minad/org-modern][org-modern]] 把標題星號、列表符號、關鍵字、todo 與表格變成接近排版成品的外觀。
 星號換成行星符號、列表換成 ➤/–/•、todo 配上底色。
 
+設定分兩處，界線是「這是誰的變量」。~org-modern-*~ 屬於這個包，什麼時候設都行，留在
+~:config~；~org-hide-emphasis-markers~、~org-hide-leading-stars~、~org-ellipsis~ 與
+~org-tags-column~ 屬於 Org 本身，而 ~:config~ 是掛在 ~org-mode-hook~ 上才跑的——那已經
+在 ~org-set-font-lock-defaults~ 之後，於是第一個打開的 org 緩衝區拿不到這幾項。它們移
+到 ~:init~，在啓動時就位。
+
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
 (use-package org-modern
   :straight t
   :hook ((org-mode . org-modern-mode)
          (org-agenda-finalize . org-modern-agenda))
+  :init
+  (setq org-auto-align-tags nil
+        org-tags-column 0
+        org-hide-emphasis-markers t
+        org-ellipsis " ▾ "
+        org-hide-leading-stars t)
   :config
   (setq org-modern-star 'replace
         org-modern-replace-stars "♇♆♅♄♃♂♀☿"
@@ -233,15 +261,12 @@ language; otherwise a temp file is used."
         org-modern-block-fringe nil
         org-modern-progress nil
         org-modern-priority nil
-        org-modern-horizontal-rule (make-string 36 ?─)
-        org-auto-align-tags nil
-        org-tags-column 0
-        org-hide-emphasis-markers t
-        org-ellipsis " ▾ "
-        org-hide-leading-stars t
-        org-agenda-tags-column 0
-        org-agenda-block-separator ?─))
+        org-modern-horizontal-rule (make-string 36 ?─)))
 #+end_src
+
+agenda 的兩項不在這裏。它們原本在這個 ~:config~ 裏各有一個值，在下面的 agenda 一節又
+各有另一個值——同一份文件裏兩處相反的聲明，最終生效的是後加載的那個，而讀配置的人沒有
+辦法從任一處看出來。整併到 agenda 那一節，它們屬於那裏。
 
 *** org-appear
 
@@ -313,10 +338,12 @@ Agenda 把 todo 與 project 兩份檔案的排程疊在一起，做成一份同�
       org-agenda-skip-scheduled-if-done t
       org-agenda-skip-deadline-if-done t
       org-agenda-include-deadlines t
-      org-agenda-block-separator nil
-      org-agenda-tags-column 100
       org-agenda-compact-blocks t
-      org-agenda-current-time-string "⭠ now ─────────────────────────────────")
+      org-agenda-current-time-string "⭠ now ─────────────────────────────────"
+      ;; `org-modern-agenda' draws the separator itself and reads the tags
+      ;; column, so these two follow it rather than Org's defaults.
+      org-agenda-block-separator ?─
+      org-agenda-tags-column 0)
 #+end_src
 
 *** 分組視圖：org-super-agenda
@@ -351,38 +378,43 @@ Agenda 把 todo 與 project 兩份檔案的排程疊在一起，做成一份同�
 快速記錄是 Org 的殺手級用法。一份方便的 capture 模板決定你願不願意當下把想法寫下來，
 而不是等「有空的時間」。模板按用途分組：寫作、評論、GTD 待辦、筆記、與代碼片段。
 
+兩處寫法值得說明。目標文件一律 unquote 成路徑字符串：~org-capture-expand-file~ 確實
+也接受一個已綁定的符號，但同一張表裏一半寫 ~,file~ 一半寫裸符號，讀的人分不清那是有
+意的還是漏了逗號。日期樹用 ~file+olp+datetree~ 加 ~:tree-type week~；~file+weektree~
+是 Org 9.0 起的舊名，現在只會被靜默改寫，並在每次 capture 時打印一行過時警告。
+
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
 (setq org-capture-templates
       `(("B" "Blog TODO List" entry (file ,ginshio-org-blog-file)
          "* TODO [#%^{priority|D|A|B|C|E}] %^{blog_title}\n:properties:\n:categories: %^{categories}\n:tags: %^{tags}\n:title: %\\1\n:file_name: %^{file_name}\n:end:\n%?"
          :empty-lines 1)
         ("c" "Comment")
-        ("cb" "Book" entry (file+weektree ,ginshio-org-comment-file)
-         "* %^{book} :book:%\\1:\n%?" :empty-lines 1)
-        ("cm" "Movie" entry (file+weektree ,ginshio-org-comment-file)
-         "* %^{movie} :movie:%\\1:\n%?" :empty-lines 1)
+        ("cb" "Book" entry (file+olp+datetree ,ginshio-org-comment-file)
+         "* %^{book} :book:%\\1:\n%?" :empty-lines 1 :tree-type week)
+        ("cm" "Movie" entry (file+olp+datetree ,ginshio-org-comment-file)
+         "* %^{movie} :movie:%\\1:\n%?" :empty-lines 1 :tree-type week)
         ("g" "GTD")
-        ("gt" "Todo" entry (file+headline ginshio-org-todo-file "Personal")
+        ("gt" "Todo" entry (file+headline ,ginshio-org-todo-file "Personal")
          "* TODO [#%^{priority|A|B|C|D|E}] %^{task}\n  SCHEDULED: %^T DEADLINE: %^T\n:properties:\n:end:\n%?"
          :empty-lines 1)
-        ("gi" "Interview" entry (file+headline ginshio-org-todo-file "Interview")
+        ("gi" "Interview" entry (file+headline ,ginshio-org-todo-file "Interview")
          "* WAIT [#%^{priority|B|A|C|D}] %^{company} - %^{position}\t:%\\2:\nSCHEDULED: %^T DEADLINE: %^T\n:properties:\n:url: %^{link}\n:end:\n%?"
          :prepend t :empty-lines 1)
-        ("gd" "Daily" entry (file+headline ginshio-org-todo-file "Daily")
+        ("gd" "Daily" entry (file+headline ,ginshio-org-todo-file "Daily")
          "* TODO [#%^{priority|C|A|B|D|E}] %^{task}\n SCHEDULED:  %<<%Y-%m-%d %a %H:%M ++1d>>\n:properties:\n:end:\n%?"
          :empty-lines 1)
-        ("gw" "Weekly" entry (file+headline ginshio-org-todo-file "Weekly")
+        ("gw" "Weekly" entry (file+headline ,ginshio-org-todo-file "Weekly")
          "* TODO [#%^{priority|B|A|C|D|E}] %^{task}\n SCHEDULED: %<<%Y-%m-%d %a %H:%M ++1w>>\n:properties:\n:end:\n%?"
          :empty-lines 1)
-        ("gm" "Monthly" entry (file+headline ginshio-org-todo-file "Monthly")
+        ("gm" "Monthly" entry (file+headline ,ginshio-org-todo-file "Monthly")
          "* TODO [#%^{priority|C|A|B|D|E}] %^{task}\n SCHEDULED: %<<%Y-%m-%d %a %H:%M ++1m>>\n:properties:\n:end:\n%?"
          :empty-lines 1)
         ("n" "Note")
-        ("nc" "Computer" entry (file+headline ginshio-org-note-file "Computer")
+        ("nc" "Computer" entry (file+headline ,ginshio-org-note-file "Computer")
          "* %^{heading} %^g\n%?\n" :empty-lines 1)
-        ("ne" "Emacs" entry (file+headline ginshio-org-note-file "Emacs")
+        ("ne" "Emacs" entry (file+headline ,ginshio-org-note-file "Emacs")
          "* %^{heading} %^g\n%?\n" :empty-lines 1)
-        ("ng" "Game" entry (file+headline ginshio-org-note-file "Game")
+        ("ng" "Game" entry (file+headline ,ginshio-org-note-file "Game")
          "* %^{heading} %^g\n%?\n" :empty-lines 1)
         ("s" "Code Snippet" entry (file ,ginshio-org-snippet-file)
          "* %^{heading} :code:%\\2:\n:properties:\n:language: %^{language}\n:end:\n\n#+begin_src %\\2\n%?\n#+end_src"
@@ -396,9 +428,13 @@ Agenda 把 todo 與 project 兩份檔案的排程疊在一起，做成一份同�
 一地；~consult-org-agenda~ 則在單一搜尋窗裏整合 search/todo/agenda 三種視圖。兩者都來自
 已裝的 consult，不需新套件。
 
+這兩行 ~autoload~ 的第四個參數不能省。activation 快照裏已經有 consult 自己聲明的
+interactive autoload；再寫一次而不說「這是命令」，會把那份覆蓋成非命令，於是按下
+=o h= 得到的是 =Wrong type argument: commandp=——綁定看起來完好，只是不再是命令。
+
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
-(autoload 'consult-org-heading "consult-org")
-(autoload 'consult-org-agenda "consult-org")
+(autoload 'consult-org-heading "consult-org" nil t)
+(autoload 'consult-org-agenda "consult-org" nil t)
 
 (ginshio-leader-define
  "o a" #'org-agenda
@@ -450,19 +486,25 @@ refile 的候選目標掃的是 agenda 檔，並顯示完整路徑（~outline-pa
 插入用 =org-cite=、挑選用 minibuffer 那套 vertico/embark。設定三個 org-cite processor
 後，~[[cite:key]]~ 就能在插入、跟隨與顯示三個層面都走 citar。
 
+接線寫在 ~:init~ 而不是 ~:config~。~:config~ 只在 citar 自己被加載之後執行，而沒有任何
+東西會加載它——~use-package-always-defer~ 之下這個宣告除了「裝這個包」以外不做事。於是
+打開一份 org 文件時三個 processor 都還是 nil，~org-cite-insert~ 直接報錯，而配置裏明明
+寫着它應該走 citar。
+
+~citar-bibliography~ 與 ~org-cite-*~ 都是 ~defcustom~，先賦值不會被之後的定義覆蓋；
+~citar-org~ 則等 org 到場再 ~require~ ——它是 processor 的實作，不能比 ~org-cite~ 早。
+
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
 (use-package citar
   :straight t
-  :config
+  :init
   (setq citar-bibliography ginshio-org-bibliography
-        citar-symbol-separator "  ")
-  ;; citar-org and the org-cite processors need org itself loaded, so wire
-  ;; them up lazily rather than pulling org in at startup.
+        citar-symbol-separator "  "
+        org-cite-insert-processor 'citar
+        org-cite-follow-processor 'citar
+        org-cite-activate-processor 'citar)
   (with-eval-after-load 'org
-    (require 'citar-org)
-    (setq org-cite-insert-processor 'citar
-          org-cite-follow-processor 'citar
-          org-cite-activate-processor 'citar)))
+    (require 'citar-org)))
 
 (ginshio-doctor-directory 'org
                           (file-name-directory (car ginshio-org-bibliography))

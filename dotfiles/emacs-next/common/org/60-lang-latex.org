@@ -25,6 +25,24 @@ Emacs 內建的 ~latex-mode~ 只做基本着色與縮進。AUCTeX 會解析 docu
 AUCTeX 內建 =LaTeXMk= 命令，也會按 ~TeX-engine~ 為 LuaLaTeX 選擇 =-pdflua=。每個緩衝區
 以 LuaLaTeX、PDF 和 LaTeXMk 起步，文件或目錄局部變量仍可在 mode hook 之後覆蓋它們。
 
+*** recipe 要寫全
+
+AUCTeX 是這份配置裏唯一必須手寫 recipe 的包，理由值得記下來，因為兩種偷懶的寫法都會
+壞，而且壞法不出聲。
+
+它的倉庫是兩層結構：頂層是 =tex.el=、=latex.el=、=preview.el= 這些 library，
+=style/= 底下是三百多個同名風格文件——=style/preview.el= 與頂層的 =preview.el= 是兩個
+不同的文件。所以 recipe 必須把 =style/= 保持成子目錄。
+
+- 用 recipe repository 給的 ~:files ("*" (:exclude ".git"))~：碰撞之下只有一部分頂層
+  library 進得了 build 目錄，=auctex.el= 與 =latex.el= 都不在其中。而 =tex.el= 第一行
+  就 ~(require 'auctex)~，於是打開任何 =.tex= 都是 =Cannot open load file=。
+- 用 straight 的默認 files directive：=style/*.el= 被攤平到頂層，與頂層 library 撞名，
+  straight 只能警告並丟掉一個。
+
+寫全之後 build 目錄有 25 個頂層 library 加一個完整的 =style/=，~TeX-style-path~ 找得到
+風格文件，~(require 'latex)~ 也成立。
+
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-latex.el"
 (defun ginshio-lang-latex-setup-h ()
   "Select the default engine and build command for an AUCTeX buffer."
@@ -32,7 +50,9 @@ AUCTeX 內建 =LaTeXMk= 命令，也會按 ~TeX-engine~ 為 LuaLaTeX 選擇 =-pd
   (setq-local TeX-command-default "LaTeXMk"))
 
 (use-package tex
-  :straight auctex
+  :straight (auctex :type git :host github :repo "emacs-straight/auctex"
+                    :files ("*.el" "*.info" "dir" ("style" "style/*.el")
+                            (:exclude "*-pkg.el")))
   :mode ("\\.tex\\'" . LaTeX-mode)
   :init
   (setq TeX-auto-save t

@@ -9,15 +9,25 @@ Emacs 自帶的包管理器只認發布到 ELPA 的版本,而 Emacs 生態裏大
 選用 [[https://github.com/radian-software/straight.el][straight.el]]。它同步地克隆和構建、直接以 commit 鎖定 git 倉庫。上游入口是
 [[https://github.com/radian-software/straight.el][straight.el README]]。
 
-包管理分成兩個明確階段:
+包管理分成幾個明確階段:
 
 - =bin/vanilla-emacs sync= 按 =straight.lock= 安裝、構建、驗證;既有 pin 不動,只把
-  新宣告的包追加進鎖。加 =--upgrade= 時忽略舊鎖、更新上游、重建構並全量重寫
-  新的 revision。
-- =bin/vanilla-emacs clean= 刪除 tangle 產物、=$XDG_DATA_HOME/emacs/straight/= 與
-  native-comp cache,但保留文學源碼與 =straight.lock=。
+  新宣告的包追加進鎖。
+- =sync --rebuild= 不碰上游也不碰鎖,只把每個包重新構建一次。
+- =sync --upgrade= 忽略舊鎖、更新上游、重建並全量重寫新的 revision。
+- =bin/vanilla-emacs clean= 刪除 tangle 產物、=$XDG_DATA_HOME/emacs/straight/=、
+  activation 快照與 native-comp cache,但保留文學源碼與 =straight.lock=。
 - 普通 Emacs 啓動只消費 =sync= 留下的 activation 快照。缺一個包、鎖檔或快照都立即
   報錯,不嘗試聯網修復。
+
+=--rebuild= 存在的理由是 ~straight-check-for-modifications~ 被關掉了(見下)。straight
+因此從不自己判斷「這個 build 過期了」,而 build 出錯的方式不只有「源碼變了」一種:一次
+被打斷的 sync、一個換過版本的 Emacs、或者一份當初就寫錯的 recipe,都會留下一棵看起來
+已經構建完成、實際上缺檔案的樹。那種狀態下普通 =sync= 什麼都不會做,因為它信任 build
+cache。
+
+要說清楚它 *不* 修什麼:改過的 recipe 本身會觸發重建,所以 =--rebuild= 不是「recipe 寫
+錯了的救命索」——recipe 錯了就要改 recipe。它修的是同一份 recipe 下不完整或過時的產物。
 
 普通會話不載入 straight 的一行代碼,只吃 =sync= 壓縮好的生成物;=straight= 這個名字
 只在維護進程裏出現。編輯器不在工作途中改寫自己的地基。
@@ -27,8 +37,8 @@ Emacs 自帶的包管理器只認發布到 ELPA 的版本,而 Emacs 生態裏大
 ~use-package~ 的 ~:straight~ 關鍵字由這個模塊自己接管,而不是交給 ~straight=
 use-package-mode~ 的內建整合。原因有二:
 
-- 配置的所有 recipe 都寫在 ~:straight~ 的值裏(從 elpaca 的 ~:ensure~ 語法平移過來,
-  語義一致);straight 的內建 ~:ensure~ 整合不接受這種配方。
+- 配置的所有 recipe 都寫在 ~:straight~ 的值裏;straight 自己的 use-package 整合走
+  ~:ensure~,不接受這種寫法。
 - 普通會話不載 straight,卻必須知道每個宣告是否靜態化在 activation 裏。一個統一的
   handler 同時服務維護與普通會話,比在兩套整合之間切換更靠得到。
 
@@ -63,7 +73,7 @@ Nil denotes an ordinary interactive consumer; validate is a read-only
 consumer which eagerly loads every declared feature.")
 
 (defconst ginshio-package-managing-p
-  (member ginshio-package-command '("sync" "upgrade"))
+  (member ginshio-package-command '("sync" "upgrade" "rebuild"))
   "Non-nil only while straight package control runs.")
 
 (defconst ginshio-package-validating-p
@@ -85,7 +95,14 @@ consumer which eagerly loads every declared feature.")
   (expand-file-name "activation.elc" ginshio-data-dir)
   "Compiled snapshot consumed by ordinary sessions.")
 
-(defvar ginshio-package-declarations nil)
+(defvar ginshio-package-declarations nil
+  "Recorded :straight declarations, most recently expanded first.
+Read through `ginshio-packages-declarations' for source order.")
+(defvar ginshio-package-features nil
+  "Features named by the `use-package' forms this session expanded.
+A package name and the feature it provides are different names: the
+`auctex' package provides `tex'.  Membership in the activation snapshot
+is checked against the former, `validate' loads the latter.")
 (defvar ginshio-package-manifest-declarations nil)
 (defvar ginshio-package-manifest-packages nil)
 (defvar ginshio-package-manifest-lock-hash nil)
@@ -145,8 +162,20 @@ bootstrap 之前:
 
 (when ginshio-package-managing-p
   (setq native-comp-jit-compilation nil)
-  (ginshio-packages--load-straight))
+  (ginshio-packages--load-straight)
+  (when (equal ginshio-package-command "rebuild")
+    (setq straight--packages-to-rebuild :all
+          straight--packages-not-to-rebuild (make-hash-table :test #'equal))))
 #+end_src
+
+=rebuild= 的開關必須在這裏打開,而不是等到 finalizer 調 ~straight-rebuild-all~ 。
+~straight-use-package~ 把每個 recipe 包在一個 transaction 裏,同一條 recipe 在同一個
+transaction 中第二次請求會被整段跳過——那是依賴解析所必需的去重。而本模塊的
+~:straight~ handler 在模塊加載期間就已經為每個包調過一次了,所以之後再調
+~straight-rebuild-all~ 一個包都不會重建,而且不出聲。
+
+換句話說:這份配置裏「構建」就發生在 handler 那一次調用,重建的意思只能是「讓那一次
+調用去重建」。開關因此設在 straight 剛加載完、任何模塊還沒讀的時候。
 
 ** :straight handler
 
@@ -157,13 +186,25 @@ bootstrap 之前:
 normalizer 複製自 straight 的語義:t、符號、以關鍵字開頭(無名 recipe,補上包名)與
 帶名的 recipe。~:straight nil~ 表示「不安裝」(vendored)或「內建」。
 
+記錄本身要是常數時間的。這個函數每個 ~:straight~ 宣告跑一次,而每次啓動的每一個
+=use-package= form 都會展開一次它——一份增長中的配置不該讓「記下有哪些包」隨包數的
+平方變慢。所以新條目 ~push~ 在前端(不 ~append~ 複製整條清單),重複判斷交給一張
+hash table(不 ~member~ 線性掃描)。代價是變數裏是倒序的,取用處各自 ~reverse~ 一次。
+
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
+(defvar ginshio-package--declaration-index (make-hash-table :test #'equal)
+  "Declarations already recorded, so a repeat costs one lookup.")
+
 (defun ginshio-packages--record-declaration (name arg)
-  "Record use-package NAME with :straight ARG in source order."
+  "Record use-package NAME with :straight ARG, most recent first."
   (let ((entry (list name (list arg))))
-    (unless (member entry ginshio-package-declarations)
-      (setq ginshio-package-declarations
-            (append ginshio-package-declarations (list entry))))))
+    (unless (gethash entry ginshio-package--declaration-index)
+      (puthash entry t ginshio-package--declaration-index)
+      (push entry ginshio-package-declarations))))
+
+(defun ginshio-packages-declarations ()
+  "Return the recorded declarations in source order."
+  (reverse ginshio-package-declarations))
 
 (defun ginshio-packages--normalize-straight (name _keyword args)
   "Normalize the :straight ARGS for use-package NAME.
@@ -185,6 +226,8 @@ sessions.  In both cases the declaration is recorded verbatim so a
 `sync' manifest can be compared later.  ARG is the normalizer's output:
 nil for `:straight nil', or a list whose elements are package-name
 symbols or recipe lists."
+  (unless (memq name ginshio-package-features)
+    (push name ginshio-package-features))
   (dolist (recipe arg)
     (when recipe
       (let ((pkg (if (consp recipe) (car recipe) recipe)))
@@ -216,10 +259,15 @@ symbols or recipe lists."
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
 (defun ginshio-packages--lock-digest ()
-  "SHA-256 digest of the committed lock file, or signal."
+  "SHA-256 digest of the committed lock file, or signal.
+`secure-hash' hashes a string argument as itself, so the file has to be
+read in: passing the name would digest the path and never change."
   (unless (file-readable-p ginshio-package-lock-file)
     (error "Package lock is missing; run %s sync" ginshio-package-script))
-  (secure-hash 'sha256 ginshio-package-lock-file))
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally ginshio-package-lock-file)
+    (secure-hash 'sha256 (current-buffer))))
 
 (defun ginshio-packages--load-activation ()
   "Activate the package snapshot recorded by the last sync."
@@ -247,15 +295,22 @@ symbols or recipe lists."
   "Return straight build directories in stable order.
 Entries on `load-path' keep their activation order; any remaining
 build directory is appended so every dependency's autoloads are
-captured."
+captured.  Names are normalized before they are compared, so a
+`load-path' entry and the same directory found by scanning the tree
+cannot both survive as two spellings of one path."
   (let* ((root (expand-file-name "build/" ginshio-package-straight-dir))
          (ordered nil))
     (dolist (path load-path)
-      (when (and (file-directory-p path)
-                 (string-prefix-p root (expand-file-name path)))
-        (push path ordered)))
-    (dolist (path (directory-files root))
-      (let ((dir (expand-file-name path root)))
+      (let ((dir (directory-file-name (expand-file-name path))))
+        (when (and (string-prefix-p root (file-name-as-directory dir))
+                   (not (equal dir (directory-file-name root)))
+                   (file-directory-p dir)
+                   (not (member dir ordered)))
+          (push dir ordered))))
+    ;; `directory-files' reports `.' and `..' too; expanding those yields the
+    ;; build root and the straight tree, neither of which holds any Lisp.
+    (dolist (name (directory-files root nil directory-files-no-dot-files-regexp))
+      (let ((dir (directory-file-name (expand-file-name name root))))
         (when (and (file-directory-p dir)
                    (not (member dir ordered)))
           (push dir ordered))))
@@ -312,7 +367,7 @@ captured."
              (current-buffer))
       (insert "\n")
       (prin1 `(setq ginshio-package-manifest-declarations
-                    ',ginshio-package-declarations)
+                    ',(ginshio-packages-declarations))
              (current-buffer))
       (insert "\n")
       (prin1 `(setq load-path (append ',builds load-path)) (current-buffer))
@@ -325,7 +380,15 @@ captured."
     (let ((compiled (expand-file-name "activation.elc" ginshio-data-dir)))
       (when (file-exists-p compiled)
         (delete-file compiled))
-      (let ((byte-compile-warnings nil))
+      ;; Nothing here is hand-written, so a warning about it is a report on
+      ;; the generator rather than something to act on.  The autoload forms
+      ;; in particular sit inside a `let' that pins `load-file-name', which
+      ;; the compiler flags for any autoloaded macro -- correctly, and
+      ;; irrelevantly, since this file only ever calls them at load time.
+      ;; `byte-compile-warnings' does not reach that one: it is signalled
+      ;; unconditionally, so the log function is what has to be silenced.
+      (let ((byte-compile-warnings nil)
+            (byte-compile-log-warning-function #'ignore))
         (byte-compile-file source))
       (unless (file-readable-p compiled)
         (error "Failed to compile package activation %s" source)))))
@@ -372,17 +435,20 @@ to the nil profile are left alone."
   "Finalize maintenance, or validate the read-only runtime activation."
   (if ginshio-package-managing-p
       (progn
+        ;; The rebuild an upgrade needs cannot happen here -- the sources
+        ;; only change on the line below, and every package has already
+        ;; been through its transaction by now.  The control script runs a
+        ;; separate `rebuild' process afterwards, which is the only shape
+        ;; in which a rebuild works at all.  See the bootstrap section.
         (when (equal ginshio-package-command "upgrade")
-          (straight-pull-all)
-          ;; check-for-modifications nil suppresses rebuilds after a pull.
-          (straight-rebuild-all))
+          (straight-pull-all))
         (when (or (equal ginshio-package-command "upgrade")
                   (not (file-exists-p ginshio-package-lock-file)))
           (straight-freeze-versions t))
-        ;; A plain sync against an existing lock must not disturb any
-        ;; pinned revision; it only appends packages newly declared since
-        ;; the last sync/upgrade.  An upgrade already rewrote everything.
-        (when (equal ginshio-package-command "sync")
+        ;; Neither a plain sync nor a rebuild may disturb a pinned
+        ;; revision; they only append packages newly declared since the
+        ;; last sync.  An upgrade already rewrote everything.
+        (when (member ginshio-package-command '("sync" "rebuild"))
           (ginshio-packages--merge-lock))
         (ginshio-packages--write-activation)
         ;; Reload the fresh activation so a drift from the new lock fails
@@ -393,7 +459,7 @@ to the nil profile are left alone."
     ;; between the maintenance and consumer processes even when nothing
     ;; changed.  Package identity is what must stay in lockstep.
     (unless (equal (ginshio-packages--declared-packages
-                    ginshio-package-declarations)
+                    (ginshio-packages-declarations))
                    (ginshio-packages--declared-packages
                     ginshio-package-manifest-declarations))
       (error "Package declarations changed; run %s sync"
@@ -403,10 +469,9 @@ to the nil profile are left alone."
 
 (defun ginshio-packages--require-all-declarations ()
   "Require every declared feature so deferred :config is exercised."
-  (dolist (declaration ginshio-package-declarations)
-    (unless (require (car declaration) nil t)
-      (error "Validation could not load feature `%s'"
-             (car declaration)))))
+  (dolist (feature (reverse ginshio-package-features))
+    (unless (require feature nil t)
+      (error "Validation could not load feature `%s'" feature))))
 #+end_src
 
 ** 自檢項

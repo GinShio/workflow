@@ -23,16 +23,25 @@
 ;;; ginshio-vc.el --- what the terminal cannot do -*- lexical-binding: t; -*-
 #+end_src
 
+只有 =server= 必須在啓動時就位——下面那段要問 ~server-running-p~ 並決定是否 ~server-start~。
+=vc= 與 =vc-git= 的命令都聲明過自動加載，本模塊用到的 ~vc-git-root~ 只出現在焦點刷新
+路徑上；=smerge-mode= 同理，它由 ~find-file-hook~ 在真的看到衝突標記時拉起。三者一起
+提前加載要付 16 毫秒，而其中絕大多數會話一次都用不到。
+
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'ginshio-keys)
 (require 'cl-lib)
 (require 'seq)
-(require 'vc)
-(require 'vc-git)
 (require 'server)
-(require 'smerge-mode)
+
+(autoload 'vc-git-root "vc-git")
+(dolist (command '(smerge-next smerge-prev
+                   smerge-keep-upper smerge-keep-lower smerge-keep-base
+                   smerge-keep-all smerge-keep-current
+                   smerge-resolve smerge-ediff))
+  (autoload command "smerge-mode" nil t))
 
 (declare-function ediff-setup-windows-plain "ediff-wind")
 #+end_src
@@ -106,13 +115,8 @@ Emacs——也可能是 =emacs= 本身，每次現開一個進程。兩條路都
 
 新開一個 Emacs 那條路上根本沒有 server，那個鉤子一次都不會跑。這條路上文件是作為命令行
 參數打開的，而啓動時的窗口佈局要等命令行處理完纔定下來——在那之前動手，佈局會在之後被重
-新擺一遍。所以時刻是 ~window-setup-hook~，Emacs 啓動序列的最後一步。
-
-只是那不一定是 *這份配置* 的最後一步。包管理器在 ~after-init-hook~ 裏開始幹活，而那個鉤
-子排在命令行處理之前：包都已經構建好的時候，它在那裏一口氣做完，magit 趕得上；只要有東西
-要克隆或者重新編譯，它就轉成異步，magit 落到 ~window-setup-hook~ 之後。那時
-=COMMIT_EDITMSG= 還停在 fundamental-mode，下面這個函數在窗口裏一個「git 正在等」的緩衝區
-都找不到。所以這條路上還有第三個時刻，是 magit 自己到場的那一刻——見「補上錯過的那一刻」。
+新擺一遍。所以時刻是 ~window-setup-hook~，Emacs 啓動序列的最後一步：命令行上的文件此時
+已經訪問過，模式也已經設好。
 
 兩個鉤子共用一個函數，於是它不能假設「當前緩衝區就是那一個」——~window-setup-hook~ 跑的
 時候當前緩衝區是誰都有可能。改成在這個 frame 的窗口裏找，並且把找到的窗口交還給調用者：
@@ -337,14 +341,18 @@ magit 依賴的另一個內建包 =seq= 沒有這個問題：它要 2.24，而 E
 出規律。
 #+end_quote
 
-*為什麼不能延遲加載。* ~git-rebase-mode~ 帶自動加載聲明，連同它的 ~auto-mode-alist~
-條目一起，所以打開一份 =git-rebase-todo= 會自己把 magit 拉起來。提交信息那邊沒有這個
-待遇：認文件名的是 ~global-git-commit-mode~ 掛在 ~find-file-hook~ 上的一個函數，而那
-個次模式本身沒有任何自動加載聲明。延遲加載的結果是 `git commit` 安靜地落回
-fundamental-mode——正是本節存在的理由。以 daemon 運行時這筆開銷一天只付一次。
+*為什麼可以延遲加載。* magit 是這份配置裏最重的一個包——單獨 ~require~ 要兩百毫秒，
+比整份配置的其餘部分加起來還多。而它只在 git 交出一個文件、或者你按下衝突相關的鍵時
+才有用，所以它不該出現在每一次啓動的帳單上。
 
-不過 ~:demand~ 只承諾「這個會話遲早會加載它」，並不承諾「在那個文件被打開之前」。剩下的那
-一半是下一節。
+代價是兩個編輯模式的觸發條件都要求 magit 先在場。~git-rebase-mode~ 自帶自動加載聲明，
+連同它的 ~auto-mode-alist~ 條目一起，所以 =git-rebase-todo= 會自己把 magit 拉起來。提
+交信息那邊沒有這個待遇：認文件名的是 ~global-git-commit-mode~ 掛在 ~find-file-hook~
+上的一個函數，而那個次模式本身沒有任何自動加載聲明。就這樣延遲下去的結果是
+`git commit` 安靜地落回 fundamental-mode。
+
+補上那一半的是下一節：本模塊自己在 ~find-file-hook~ 上認一次文件名。認出來纔加載，於是
+延遲加載與「提交信息一定有 ~C-c C-c~」兩件事同時成立。
 
 *關掉它的全域鍵位。* ~magit-define-global-key-bindings~ 默認會把 `magit-status` 裝到
 ~C-x g~ 上。那個前綴在這份配置裏不存在；而且它裝進去的是 *當時那張* 全域映射，
@@ -358,29 +366,23 @@ fundamental-mode——正是本節存在的理由。以 daemon 運行時這筆�
 除此之外沒有配置。~C-c C-c~ 與 ~C-c C-k~、寫完之後把佈局還原、把控制權交回給還在等待
 的 git——這些都由 `with-editor` 提供，兩個模式進來時各自打開它。
 
-*** 補上錯過的那一刻
+*** 自己認一次文件名
 
-上面那兩個模式都是靠「文件被打開」這件事觸發的：提交信息那邊是 magit 加載時掛到
-~find-file-hook~ 上的一個函數，rebase 那邊是它往 ~auto-mode-alist~ 裏加的一條。兩者都要
-求 magit 先在場。
+magit 沒加載時，上一節那兩個觸發條件都不成立。所以本模塊自己在 ~find-file-hook~ 上認
+一次：文件名對得上 git 會等的那幾個，就按需要 ~require~ 對應的那一半 magit——提交信息
+要 =git-commit=，rebase 清單要 =git-rebase=。兩者都遠比整個 magit 便宜，而且只在真的
+遇到這種文件時纔付。
 
-=emacsclient= 那條路上這是必然的——文件是在一個已經跑了很久的會話裏被打開的。新開一個
-Emacs 那條路上要看運氣：命令行上的文件緊接着 ~after-init-hook~ 就被打開，而包管理器是在那
-個鉤子裏開始處理隊列的。包樹是熱的（每個包都已經構建好）時，它在那裏就做完了，magit 趕得
-上；一旦有東西要克隆或者重新編譯，它轉成異步，於是 git 交過來的文件落進 fundamental-mode，
-這一節上面說的東西一件都不生效，而且不出聲——沒有 ~C-c C-c~、沒有信息歷史、沒有旁邊那份
-diff，~window-setup-hook~ 上那個佔滿 frame 的函數也什麼都找不到。
-
-換句話說，這條路平時是好的，只在你剛加了一個包、或者剛更新過的那一次是壞的。這種故障最不
-容易被聯繫到原因上：你會覺得是「這次 commit 怪怪的」，而不是「包管理器今天多做了一件事」。
-
-辦法不是想法子讓 magit 更早到，而是在它到了之後回頭認一次。這樣兩邊誰先誰後都不再重要，
-包管理器哪一刻把它加載完也不再重要——這也是為什麼補救寫在這裏，而不是寫成又一個啓動鉤子。
+深度給 90，排在後面：普通的 ~find-file-hook~ 函數先跑完，這一個纔動主模式與次模式。
 
 「還沒被認領」用 `with-editor` 那個次模式判斷，而不是問主模式是不是 fundamental-mode：那
 個次模式正是「有一個外部程序在等這個緩衝區」的標記，也就是這裏真正要問的事。認領分兩步，
 因為那兩個文件本來就是被兩套機制認出來的：先讓 magit 自己那個檢查函數過一遍，它認得提交信
 息的那幾個文件名；它沒認的（rebase 清單）交給 ~auto-mode-alist~。
+
+模塊加載時再回頭掃一遍緩衝區列表。普通啓動裏這一趟什麼都找不到——命令行上的文件要等
+模塊全部讀完纔被訪問——但它讓「模塊在文件之後到場」這種順序也有一個確定的答案，代價是
+一次 ~buffer-list~ 遍歷。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
 (defun ginshio-vc-setup-waiting-buffer-h ()
@@ -604,12 +606,18 @@ porcelain 要求你先離開文件。
             collect buffer)))
 
 (defun ginshio-vc--repository-signature (root)
-  "Return a cheap signature of tracked worktree and branch state at ROOT."
+  "Return a cheap signature of tracked worktree and branch state at ROOT.
+`--no-optional-locks' matters here and nowhere else in this module: this
+runs every time the frame regains focus, which is exactly the moment a
+`git' command may still be running in the terminal you came from.  A
+plain `git status' would refresh and rewrite the index, taking
+`.git/index.lock' and making the two contend."
   (with-temp-buffer
     (let ((default-directory root))
       (when (zerop
              (process-file
-              "git" nil t nil "status" "--porcelain=v2" "--branch"
+              "git" nil t nil "--no-optional-locks"
+              "status" "--porcelain=v2" "--branch"
               "--untracked-files=no"))
         (buffer-string)))))
 

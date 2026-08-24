@@ -143,12 +143,14 @@ window 模塊那張表(把 =*compilation*= 放進底部側窗),也不影響把�
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-shell.el"
 (require 'ansi-color)
 
-(defun ginshio-shell-colorize-compilation ()
+(defvar compilation-filter-start)
+
+(defun ginshio-shell-colorize-compilation-h ()
   "Colour the ANSI escapes in the compile output just appended."
   (let ((inhibit-read-only t))
     (ansi-color-apply-on-region compilation-filter-start (point))))
 
-(add-hook 'compilation-filter-hook #'ginshio-shell-colorize-compilation)
+(add-hook 'compilation-filter-hook #'ginshio-shell-colorize-compilation-h)
 #+end_src
 
 ** 鍵位

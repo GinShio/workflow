@@ -18,7 +18,7 @@ body {
   transition-duration: 100ms;
 }
 
-#content, header, .page-header {
+#content, header {
   margin: 32px;
   flex: 1 0 auto;
 }
@@ -37,7 +37,7 @@ body {
   display: table;
 }
 
-.page-header {
+#content > header {
   margin-top: 80px;
   margin-left: 0 !important; // as inside #content
   h1 {
@@ -126,7 +126,7 @@ header > div {
 }
 
 @media (min-width: 1000px) {
-  #content, header, .page-header {
+  #content, header {
     max-width: 720px;
     margin-left: 164px;
   }
@@ -143,7 +143,7 @@ header > div {
 }
 
 @media (min-width: 2800px) {
-  #content, header, .page-header {
+  #content, header {
     margin-left: auto;
     margin-right: auto;
   }

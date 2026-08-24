@@ -27,11 +27,15 @@
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
 (defconst ginshio-font-fixed "Fira Mono")
 (defconst ginshio-font-fixed-size 15)
-(defconst ginshio-font-variable "SourceCodeVF")
+(defconst ginshio-font-variable "Fira Sans")
 (defconst ginshio-font-serif "Source Serif 4")
 (defconst ginshio-font-unicode "JuliaMono")
-(defconst ginshio-font-cjk "Source Han Mono SC")
+(defconst ginshio-font-cjk "Source Han Sans CN")
 #+end_src
+
+比例字體取 Fira Sans，和等寬那個是同一套字體的兩個成員——同一位設計者、同一套字形骨架、
+同樣的 x-height。這件事在混排時看得出來：一段散文緩衝區裏引一段代碼，兩種字體的筆畫粗
+細和基線對得上，不像換了一份文件。
 
 等寬字體是 Fira Mono 而不是同門的 Fira Code。兩者字形一致，區別只在後者多了一組編程
 連字——把 ~->~ 畫成一個箭頭那一類。在字體這一層把它排除掉，比裝上再關掉省事：沒有哪
@@ -178,18 +182,41 @@ dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從�
 [[https://github.com/doomemacs/themes][doom-themes]] 是一組移植自各家編輯器的配色方案，數量足夠大，且對 Org、Magit 這類重度
 使用自定義 face 的模式有專門適配——這一點比配色本身更難得。
 
-從一組喜歡的主題裏隨機挑一個啓動。理由純粹是新鮮感：同一套配色看久了會察覺不到它的
-問題，換一換反而更容易發現哪裏不舒服。想固定下來就把列表改成一項。
+默認固定 =doom-vibrant=。
+
+先 ~disable-theme~ 再加載，因為主題是 *疊加* 的：直接 ~load-theme~ 只會把新的 face 蓋
+在舊的上面，沒有被新主題定義到的 face 仍然留着上一個主題的顏色。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
-(defun ginshio/load-theme ()
-  "Load one of theme"
-  (interactive)
-  (let ((theme 'doom-vibrant))
+(defconst ginshio-theme-default 'doom-vibrant
+  "The colour scheme this configuration starts with.")
+
+(defconst ginshio-themes
+  '(doom-vibrant doom-one doom-tokyo-night doom-snazzy doom-wilmersdorf)
+  "Themes worth waking up to.  Offered by `ginshio/load-theme'.")
+
+(defun ginshio/load-theme (&optional theme)
+  "Load THEME, defaulting to `ginshio-theme-default'.
+Called interactively, offers `ginshio-themes' to choose from."
+  (interactive
+   (list (intern (completing-read "Theme: " ginshio-themes nil t nil nil
+                                  (symbol-name ginshio-theme-default)))))
+  (let ((theme (or theme ginshio-theme-default)))
     (mapc #'disable-theme custom-enabled-themes)
     (load-theme theme t)
     (message "%s" theme)))
+#+end_src
 
+~ginshio-themes~ 也可以拿來每次啓動隨機挑一個。理由是新鮮感：同一套配色看久了會察覺不
+到它的問題，換一換反而更容易發現哪裏不舒服。代價是每次啓動的截圖、錄屏和向別人描述界面
+時都不一樣，而且某些主題下 org-modern 與 doom-modeline 的對比度差別不小——所以留着方法，
+暫不啓用。想要的話把下面這行接到 ~ginshio-theme-default~ 的位置上：
+
+#+begin_src emacs-lisp :tangle no
+(ginshio/load-theme (seq-random-elt ginshio-themes))
+#+end_src
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
 (use-package doom-themes
   :straight t
   :demand t

@@ -6,7 +6,7 @@ Classic 編輯使用成熟的 [[https://github.com/haskell/haskell-mode][haskell
 [[https://codeberg.org/pranshu/haskell-ts-mode][haskell-ts-mode]]。語義由
 [[https://haskell-language-server.readthedocs.io/][Haskell Language Server]] 提供，調試則沿用 Dape 的 =hdb= 配置。
 
-TS mode 的 canonical repository 在 Codeberg；Elpaca 從
+TS mode 的 canonical repository 在 Codeberg；recipe 從
 [[https://github.com/emacsmirror/haskell-ts-mode][Emacsmirror]] 的逐 commit 鏡像取得，最後仍由 lock file 固定 revision。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el" :comments no

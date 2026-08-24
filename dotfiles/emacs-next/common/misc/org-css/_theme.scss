@@ -74,14 +74,25 @@ $text-dark: var(--text-dark);
     }
 }
 
-#theme-switch {
-    display: none;
+#theme-switch,
+#switch-label .switch-label-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
 }
 
 #switch-label {
     position: fixed;
     bottom: 4rem;
     left: 3rem;
+    cursor: pointer;
 }
 
 #switch-label::before {

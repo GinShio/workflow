@@ -40,8 +40,9 @@ tangle() {
 
 # Load the full configuration in a single batch process.  A command is
 # injected through GINSHIO_EMACS_COMMAND so the package module knows
-# whether to maintain (`sync' / `upgrade'), to validate every declared
-# feature (`validate'), or to act as an ordinary consumer (no variable).
+# whether to maintain (`sync' / `rebuild' / `upgrade'), to validate every
+# declared feature (`validate'), or to act as an ordinary consumer (no
+# variable).
 #
 # Package installs are deterministic batch work; they must not trip over
 # interactive or machine-specific git hooks.  `core.hooksPath=/dev/null'
@@ -59,6 +60,10 @@ batch_config() {
     "${@:2}"
 }
 
+# An upgrade needs a second maintenance process.  Rebuilding has to happen
+# while the configuration declares its packages, and by the time `upgrade'
+# has fetched new sources that pass is already over -- so the rebuild runs
+# as its own process against the revisions the upgrade just wrote.
 manage_packages() {
   local command=$1
   require_command "$emacs_bin"
@@ -66,6 +71,9 @@ manage_packages() {
   require_xdg
   tangle
   batch_config "$command" --eval '(princ "Package graph synchronized.\n")'
+  if [[ $command == upgrade ]]; then
+    batch_config rebuild --eval '(princ "Package graph rebuilt.\n")'
+  fi
   batch_config validate --eval '(princ "Package graph validated.\n")'
 }
 
@@ -76,31 +84,37 @@ doctor() {
   batch_config validate -f ginshio-doctor-batch
 }
 
+# The activation snapshot must go with the package tree it describes: an
+# ordinary session checks the snapshot before anything else, so leaving it
+# behind would let Emacs start against packages that no longer exist.
 clean() {
-  local tree_dir activation_dir native_cache_dir
+  local tree_dir native_cache_dir
   require_xdg
   tree_dir="${XDG_DATA_HOME%/}/emacs/straight"
-  activation_dir="${XDG_DATA_HOME%/}/emacs/ginshio-activation"
   native_cache_dir="${XDG_CACHE_HOME%/}/emacs/eln-cache"
-  rm -rf -- "$root/lisp/ginshio" "$tree_dir" "$activation_dir" "$native_cache_dir"
+  rm -rf -- "$root/lisp/ginshio" "$tree_dir" "$native_cache_dir"
+  rm -f -- "${XDG_DATA_HOME%/}/emacs/activation.el" \
+    "${XDG_DATA_HOME%/}/emacs/activation.elc"
   printf 'Removed tangled Lisp, package tree, activation, and native-comp cache.\n'
 }
 
 usage() {
   cat <<'EOF'
 Usage:
-  bin/vanilla-emacs sync [--upgrade]
+  bin/vanilla-emacs sync [--rebuild | --upgrade]
   bin/vanilla-emacs clean
   bin/vanilla-emacs doctor
 
 Commands:
-  sync [--upgrade]   Install the packages declared by the configuration and
-                     regenerate the activation file (upgrade: also fetch
-                     upstream changes and rewrite the version lockfile)
+  sync               Install the packages declared by the configuration at
+                     their locked revisions and regenerate the activation
   clean              Remove tangled Lisp, packages, activation, and cache
   doctor             Check the loaded configuration and external dependencies
 
-Sync option:
+Sync options (mutually exclusive):
+  --rebuild          Rebuild every package at its locked revision, without
+                     touching upstream or the lock.  For a build left
+                     incomplete or stale, which a plain sync trusts.
   --upgrade          Fetch upstream updates, rebuild, and rewrite the lock
 
 Environment:
@@ -112,11 +126,13 @@ case ${1:-} in
   sync)
     if (( $# == 1 )); then
       manage_packages sync
+    elif (( $# == 2 )) && [[ $2 == --rebuild ]]; then
+      manage_packages rebuild
     elif (( $# == 2 )) && [[ $2 == --upgrade ]]; then
       manage_packages upgrade
     else
       usage >&2
-      die "sync accepts only the optional --upgrade flag"
+      die "sync accepts one of --rebuild or --upgrade"
     fi
     ;;
   clean)

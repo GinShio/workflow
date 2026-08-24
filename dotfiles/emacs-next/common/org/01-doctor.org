@@ -52,8 +52,17 @@ Recognised PROPS:
                             ginshio-doctor-checks)))))
 #+end_src
 
-三種檢查佔了實際用量的絕大部分，所以給它們各自一個入口。字體那個帶有默認的適用條件：
-終端下沒有字體可言，這時報告缺失只是噪音。
+三種檢查佔了實際用量的絕大部分，所以給它們各自一個入口。
+
+字體那個要特別小心，因為它原本是一條 *永遠不會執行* 的檢查。~find-font~ 需要一個能顯
+示字體的 frame，所以它掛了 ~:when #'display-graphic-p~；而 =bin/vanilla-emacs doctor=
+跑在 =--batch= 裏，那個條件恆假。結果是七條字體檢查每次都報「跳過」，而唯一該告訴你
+「這個字體沒裝」的命令從來沒有檢查過任何字體。這台機器上 =Source Han Mono SC= 其實
+沒裝，漢字一直由 wine 帶來的 MS PGothic 畫——一個日文字體畫簡體字，字形是錯的，而且不
+會有任何提示。
+
+所以問兩次。有圖形 frame 時問 Emacs 自己，那是真正決定屏幕上畫什麼的那一層；沒有的時
+候問 fontconfig，它知道系統裝了什麼。批處理下第二條路成立，這條檢查纔真的存在。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-doctor.el"
 (defun ginshio-doctor-executable (module name &rest props)
@@ -62,11 +71,33 @@ Recognised PROPS:
          (lambda () (executable-find name))
          props))
 
+(defun ginshio-doctor--font-installed-p (family)
+  "Return non-nil when fontconfig reports FAMILY as installed.
+Used where `find-font' cannot answer, which is any batch process."
+  (when-let* ((fc (executable-find "fc-list")))
+    (with-temp-buffer
+      (and (zerop (call-process fc nil t nil "--format" "%{family}\\n"
+                                (format ":family=%s" family)))
+           (goto-char (point-min))
+           ;; fc-list answers a near miss with whatever it matched, so the
+           ;; requested name has to appear in the reply to count.
+           (let ((case-fold-search t))
+             (re-search-forward
+              (concat "^\\(.*,\\)?" (regexp-quote family) "\\(,.*\\)?$")
+              nil t))
+           t))))
+
 (defun ginshio-doctor-font (module family &rest props)
   "Declare that MODULE wants the FAMILY font installed."
   (apply #'ginshio-doctor-declare module family
-         (lambda () (find-font (font-spec :family family)))
-         (append props (list :when #'display-graphic-p))))
+         (lambda ()
+           (if (display-graphic-p)
+               (find-font (font-spec :family family))
+             (ginshio-doctor--font-installed-p family)))
+         (append props
+                 (list :when (lambda ()
+                               (or (display-graphic-p)
+                                   (and (executable-find "fc-list") t)))))))
 
 (defun ginshio-doctor-directory (module directory &rest props)
   "Declare that MODULE needs DIRECTORY to exist and be writable."

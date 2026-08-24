@@ -31,8 +31,8 @@ tree-sitter grammar、格式化或 =opt=/=llc=/=mlir-opt=/TableGen 工具。等�
 
 ** 文件識別
 
-~use-package~ 在這裏只建立 autoload 和文件關聯；=:straight nil~ 明確表示 library 已經在配置
-樹裏，不交給 Elpaca。精確子目錄由本模塊加入 ~load-path~，所以停用 =lang-llvm= 之後，
+~use-package~ 在這裏只建立 autoload 和文件關聯；~:straight nil~ 明確表示 library 已經在配置
+樹裏，不交給套件管理器。精確子目錄由本模塊加入 ~load-path~，所以停用 =lang-llvm= 之後，
 snapshot 仍在版本控制中，卻不會偷偷成為可見的運行時依賴。
 
 啓動時只驗證四個 source 可讀，不提早 ~require~：缺 source 是配置不完整，必須 fail-fast；

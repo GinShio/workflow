@@ -33,15 +33,9 @@
 
 本模塊從頭到尾不 ~require~ eglot，這一點需要說明，因為下面幾乎每一行都在配置它。
 
-eglot 自己 ~require~ 了 =compat=。=compat= 不是內建包，是包管理器裝的一個包，而它要
-到 ~after-init-hook~ 纔開始激活自己那一份——模塊全部加載完之後。所以在這裏
-~require~ eglot，等於在包管理器接手之前先把它管的包加載進來，於是每次啓動都得到一句
-「compat loaded before Elpaca activation」，以及一個為此彈出來的 =*Warnings*= 窗口。
-那個窗口是真正的代價：它此後一直佔着底部，而 git 叫 Emacs 來寫提交信息時，你看到的第
-一屏就是它。
-
-第二個理由是時間。eglot 連帶 jsonrpc、flymake、xref 一起加載，而 `git commit` 每次都
-是一個全新的 Emacs——為一條提交信息付一次語言服務器客戶端的加載，付得毫無道理。
+理由是時間。eglot 連帶 jsonrpc、flymake、xref 與 =compat= 一起加載，而 `git commit`
+每次都可能是一個全新的 Emacs——為一條提交信息付一次語言服務器客戶端的加載，付得毫無
+道理。真正需要它的會話會在打開第一個代碼文件時付這筆錢，那時它換得到東西。
 
 不加載也能配好，因為需要的三樣東西各有辦法：*變量* 全是 ~defcustom~，先賦值不會被之後
 的定義覆蓋；*鉤子* 用名字掛，不要求那個變量已經存在；*命令* 聲明成自動加載，按下去的
