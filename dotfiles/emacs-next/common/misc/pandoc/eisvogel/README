@@ -1,0 +1,23 @@
+Eisvogel pandoc templates
+=========================
+
+These files are copied unchanged from the Eisvogel release `v3.5.1`:
+
+- `eisvogel.latex`
+- `eisvogel.beamer`
+
+Upstream: https://github.com/Wandmalfarbe/pandoc-latex-template
+License: BSD-3-Clause; see `LICENSE`.
+Imported: 2026-08-24
+Local modifications: none
+
+Take both files from the same release archive (`Eisvogel-VERSION.tar.gz`),
+not from the repository's default branch: `template-multi-file/` there holds
+the split source, and the single-file templates only exist once
+`tools/release.sh` has spliced the partials together.
+
+Both are pandoc templates written in pandoc's template language, so only
+pandoc can expand them.  `ox-latex` builds its preamble from
+`org-latex-classes` and a standalone `.tex` has no template stage at all;
+neither can consume these files.  Which pandoc formats select which template,
+and the variables that go with them, belong in `org/32-org-pandoc.org`.

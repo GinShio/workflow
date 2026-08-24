@@ -588,6 +588,7 @@ Emacs client。本模塊不配置 Org 公式預覽或 Org → LaTeX 導出。詳
 | Eat                    | [[https://codeberg.org/akib/emacs-eat][Eat manual and README]] |
 | multiple-cursors       | [[https://github.com/magnars/multiple-cursors.el][multiple-cursors README]] |
 | AUCTeX / CDLaTeX       | [[info:auctex#Top][AUCTeX manual]] / [[https://github.com/cdominik/cdlatex][CDLaTeX README]] |
+| Pandoc 導出            | [[https://github.com/emacsorphanage/ox-pandoc][ox-pandoc README]] / [[https://pandoc.org/MANUAL.html][pandoc MANUAL]] / [[https://github.com/Wandmalfarbe/pandoc-latex-template][Eisvogel README]] |
 | Markdown / reST / AsciiDoc | [[file:org/60-lang-markup.org][本配置的入口與上游鏈接]] |
 | LLVM IR / MIR / MLIR / TableGen | [[file:org/68-lang-llvm.org][本配置的 upstream mode snapshot]] |
 

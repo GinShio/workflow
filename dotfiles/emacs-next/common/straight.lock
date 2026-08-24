@@ -52,6 +52,7 @@
  ("org-modern" . "d106d02cf045cc968c09989e9c48e0f2b44c574c")
  ("org-super-agenda" . "fb20ad9c8a9705aa05d40751682beae2d094e0fe")
  ("ox-hugo" . "b7dc44dc28911b9d8e3055a18deac16c3b560b03")
+ ("ox-pandoc" . "1caeb56a4be26597319e7288edbc2cabada151b4")
  ("parsebib" . "5b837e0a5b91a69cc0e5086d8e4a71d6d86dac93")
  ("popon" . "bf8174cb7e6e8fe0fe91afe6b01b6562c4dc39da")
  ("queue" . "8df1334d54d4735d2f821790422a850dfaaa08ef")
