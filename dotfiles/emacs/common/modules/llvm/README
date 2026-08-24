@@ -1,36 +1,17 @@
--*- llvm/utils/emacs/README -*-
+LLVM Emacs modes
+================
 
-These are syntax highlighting files for the Emacs and XEmacs editors. Included
-are:
+These files are copied unchanged from llvm-project tag `llvmorg-22.1.8`:
 
-* llvm-mode.el
+- `llvm/utils/emacs/llvm-mode.el`
+- `llvm/utils/emacs/llvm-mir-mode.el`
+- `llvm/utils/emacs/tablegen-mode.el`
 
-  Syntax highlighting mode for LLVM assembly files. To use, add this code to
-  your ~/.emacs :
+Upstream: https://github.com/llvm/llvm-project
+License: Apache-2.0 WITH LLVM-exception; see `LICENSE.TXT`.
+Imported: 2026-08-22
+Local modifications: none
 
-  (setq load-path
-    (cons (expand-file-name "path-to-llvm/utils/emacs") load-path))
-  (require 'llvm-mode)
-  
-* llvm-mir-mode.el
-
-  Syntax highlighting mode for LLVM Machine IR files. To use, add this code to
-  your ~/.emacs :
-
-  (setq load-path
-    (cons (expand-file-name "path-to-llvm/utils/emacs") load-path))
-  (require 'llvm-mir-mode)
-
-* tablegen-mode.el
-
-  Syntax highlighting mode for TableGen description files. To use, add this code
-  to your ~/.emacs:
-
-  (setq load-path
-    (cons (expand-file-name "path-to-llvm/utils/emacs") load-path))
-  (require 'tablegen-mode)
-
-
-Note: If you notice missing or incorrect syntax highlighting, please contact
-<llvm-bugs [at] lists.llvm.org>; if you wish to provide a patch to improve the
-functionality, it will be most appreciated. Thank you.
+Update all three files from the same llvm-project revision.  Configuration,
+file associations beyond upstream defaults, and local policy belong in
+`org/68-lang-llvm.org`, not in these snapshots.

@@ -1,9 +1,0 @@
-# -*- mode: snippet -*-
-# name: gpg
-# key: gpg
-# expand-env: ((yas-indent-line nil))
-# --
-######################### GPG #########################
-# repo: github/gitignore; pin: d9b8a12b5f2; file: Global/GPG.gitignore
-# LICENSE: Creative Commons Zero v1.0 Universal
-secring.*

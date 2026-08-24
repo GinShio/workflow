@@ -1,31 +1,136 @@
-# SPDX-FileCopyrightText:
+# SPDX-FileCopyrightText: GinShio
 # SPDX-License-Identifier: MIT
-# Title: Doom Emacs 配置文件
-#+title: Doom Emacs Configuration
-#+html_head: <link rel='shortcut icon' type='image/png' href='https://www.gnu.org/software/emacs/favicon.png'>
+#+title: GNU Emacs Configuration
+#+author: GinShio
 #+property: header-args:emacs-lisp :tangle yes :comments link
-#+property: header-args:elisp :exports code
 #+property: header-args :tangle "no" :results silent :eval no
-#+options: coverpage:yes
 #+startup: fold
-#+latex_compiler: lualatex
-#+latex_header: \usepackage{ctex}
 
 #+begin_quote
-让我们改变对程序构建的传统态度：
-与其想象我们的主要任务是指导计算机做什么，
-不如专注于向人们解释我们想让计算机做什么。
-@@latex:\mbox{@@--- 高德纳@@latex:}@@
+讓我們改變對程序構建的傳統態度：
+與其想象我們的主要任務是指導計算機做什麼，
+不如專注於向人們解釋我們想讓計算機做什麼。
+@@latex:\mbox{@@--- 高德納@@latex:}@@
 #+end_quote
 
+* 這份配置的取捨
 
-#+include: org/00-basic.org
-#+include: org/10-packages.org
-#+include: org/20-lang-common.org
-#+include: org/21-lang-lsp-dap.org
-#+include: org/25-org-mode.org
-#+include: org/27-org-html.org
-#+include: org/27-org-latex.org
-#+include: org/29-lang-others.org
-#+include: org/90-workarounds.org
-#+include: org/99-references.org
+一份手寫的 Emacs 配置遲早會長到沒人記得住，包括作者本人。真正決定它能活多久的不是
+寫得多好，而是三年後你還能不能快速回答「這行為什麼在這裏」。所以這裏用文學編程：
+散文是主體，代碼是散文的產物。
+
+四條貫穿始終的規則：
+
+*地基不依賴任何第三方包。* 加載順序上排在包管理器之前的模塊，只使用 Emacs 內建設施。
+代價是這些模塊寫起來稍微囉嗦；回報是 tangle、smoke test 與 package bootstrap 可以在
+套件尚未激活時運行。這不表示普通啓動會容忍殘缺的包樹——完整配置缺一塊就立即失敗。
+
+*配置只有完整成立和啓動失敗兩種狀態。* 模塊錯誤不捕獲，套件的構建與 ~:config~ 錯誤也
+必須在 =init.el= 結束前拋出。半份配置帶着已執行的副作用繼續運行，比一個直接的 backtrace
+更難修。
+
+*運行中的 Emacs 只消費套件。* 下載、更新、構建與寫鎖由 =bin/ginshio-emacs= 在獨立批處理進程
+裏完成；普通會話根本不載入 straight，所以它的變更命令一個都不存在。編輯器不在工作途中改寫
+自己的地基。
+
+*生成物不進版本控制，而且有明確的銷毀邊界。* tangle 產物與套件樹都可由
+=bin/ginshio-emacs clean= 整體刪除，再由 =sync= 重建；文學源碼、lock 與使用者資料不在
+這條邊界內。tangle 模塊只住在 =modules/ginshio/=；其他 =modules/= 子目錄是受版本控制的上游
+Lisp 與外部資產，不在清理邊界內。其餘運行時狀態按性質分流到 XDG 目錄。
+
+* 模塊
+
+| 模塊         | 職責                                 | 可用第三方包 |
+|--------------+--------------------------------------+--------------|
+| =path=         | 目錄劃分                             | 否           |
+| =doctor=       | 環境自檢                             | 否           |
+| =core=         | 編輯行為、文件處理、內建設施的默認值 | 否           |
+| =keys=         | 全域鍵位重置、leader                 | 否           |
+| =packages=     | 包管理器。此後的模塊才可以用包       | 引導         |
+| =theme=        | 字體、配色、modeline、啓動畫面       | 是           |
+| =minibuffer=   | 選擇任何東西：補全、搜索、對候選項動手 | 是         |
+| =window=       | 窗口、緩衝區顯示規則、項目           | 是           |
+| =edit=         | 撤銷歷史、空白與換行、一次改多個地方 | 是           |
+| =file=         | 目錄即緩衝區                         | 否           |
+| =tty=          | 終端裏的 Emacs 缺的那幾樣            | 否           |
+| =shell=        | 把活交給外部程序                     | 是           |
+| =remote=       | 別的機器上的文件                     | 否           |
+| =lang=         | 語法樹、主模式、縮進、摺疊           | 否           |
+| =lsp=          | 語言服務器：文檔、診斷、跳轉、重構   | 是           |
+| =dap=          | 調試                                 | 是           |
+| =vc=           | 版本控制裏終端做不到的那部分         | 是           |
+| =lang-c=       | C/C++：向上面三個框架註冊自己        | 否           |
+| =lang-haskell= | Haskell：classic/TS、HLS 與 hdb       | 是           |
+| =lang-latex=   | LaTeX：編輯、引用、構建、PDF 同步    | 是           |
+| =lang-markup=   | Markdown、reST 與 AsciiDoc           | 是           |
+| =lang-llvm=     | LLVM IR、MIR、MLIR 與 TableGen modes | vendored Lisp |
+| =lang-python=  | Python 3：classic/TS、Pyright、debugpy | 否          |
+| =lang-rust=    | Rust：classic/TS、rust-analyzer、LLDB | 是           |
+| =lang-zig=     | Zig：classic/TS、zls、LLDB            | 是           |
+| =cmake=        | CMake 構建文件：classic/TS 與 help    | 是           |
+| =meson=        | Meson 構建文件：編輯、補全、Eldoc    | 是           |
+
+=path= 由 =bootstrap= 生成，=doctor= 是只供其他模塊 ~require~ 的 =support=；兩者都不進
+~ginshio-modules~。其餘模塊由 tangle 按文件名生成清單。
+
+功能模塊往 leader 樹上掛自己的分支，不回頭改 =keys=。=w= 與 =p= 屬於 =window=，
+=i= 屬於 =minibuffer=，=e= 屬於 =edit=，=!= 屬於 =shell=，=r= 屬於 =remote=，
+=c= 屬於 =lsp=，=z= 屬於 =lang=，=g= 屬於 =vc=，=d= 屬於 =dap=；把一個模塊的 metadata
+改成 =disabled=，它的鍵位隨之消失。
+
+=file= 是唯一的例外：它往 =keys= 已有的 =f= 上補兩個鍵，而不是另開一支。它做的正是
+「文件」，分家只會讓同一類事住在兩個前綴底下。
+
+每個 =org/NN-name.org= 都以一行 metadata 開頭：
+
+#+begin_example
+#+GINSHIO_MODULE: enabled
+#+end_example
+
+值只有 =bootstrap=、=support=、=enabled= 與 =disabled=。tangle 直接列出 =org/*.org=，
+按完整文件名字典序排序，再從文件名取得 module 名；沒有第二份手寫順序。=enabled= 會被
+include、tangle 並加入 ~ginshio-modules~，=disabled= 三者都不做，舊生成檔也在成功 tangle
+後刪除。=bootstrap= 與 =support= 始終 tangle，但不加入運行時清單。
+
+所以文件名就是加載順序。數字仍可留白或共用；共用編號時由 =name= 的字典序決定。排序必須
+讓 =packages= 位於所有第三方包模塊之前，也必須讓被直接 ~require~ 的模塊排在使用者之前。
+
+最後一段每個文件是一種語言，或一組共享同一用途的格式。有 tree-sitter/LSP 能力的語言只
+向框架註冊，框架不認識任何具體語言；llvm-project 自帶的純 Lisp modes 則由 =lang-llvm=
+從受版本控制的 snapshot 接入。Markdown、reST 與 AsciiDoc 這類文檔標記共用一個模塊。
+三者都保持同一條邊界：增加一類支持只新增一個配置文件，停用時只改自己的 metadata。
+CMake 與 Meson 文件排在語言之後，只負責描述構建的文本；真正的項目、branch 與 backend
+仍由 Wits 決定。
+
+* 命名約定
+
+| 形式             | 用途                   | 例                        |
+|------------------+------------------------+---------------------------|
+| ~ginshio-foo~      | 內部函數與變量         | ~ginshio-cache-dir~         |
+| ~ginshio/foo~      | 交互命令               | ~ginshio/doctor~            |
+| ~ginshio-foo-h~    | 掛在 hook 上的函數     | ~ginshio-restore-gc-h~      |
+| ~ginshio-foo-a~    | 作為 advice 的函數     | ~ginshio-suppress-message-a~ |
+| =ginshio-foo.el=   | 模塊，提供 ~ginshio-foo~ | =ginshio-keys.el=           |
+
+* 原樣文本
+
+Emacs Lisp 沒有 raw string。把 LaTeX 直接塞進字符串會吃掉單個反斜線，手動改成雙反斜線
+又讓原文不能直接複製、編譯或用 LaTeX mode 編輯。LaTeX 因此保持在具名 source block 裏，
+tangle 時才把整塊內容打印成合法的 Elisp 字符串字面量。
+
+全局的 =:eval no= 仍然成立；下面是唯一允許求值的 block。它只讀另一個 source block 的
+文字，不執行其中內容。使用處還必須明確寫 =:noweb yes :noweb-prefix no=；後者避免 Org 把
+引用位置前面的 Elisp 逐行加到多行 LaTeX 上。
+
+#+name: ginshio-source-string
+#+begin_src emacs-lisp :var name="" :eval yes :tangle no
+(let ((position (org-babel-find-named-block name)))
+  (unless position
+    (error "No source block named %S" name))
+  (org-with-point-at position
+    (format "%S"
+            (string-remove-suffix
+             "\n" (org-element-property :value (org-element-at-point))))))
+#+end_src
+
+#+GINSHIO_MODULES:

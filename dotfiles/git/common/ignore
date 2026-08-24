@@ -21,14 +21,14 @@ ENV/
 env.bak/
 venv.bak/
 
-{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/C' @@%}
-{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/C++' @@%}
-{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/Diff' @@%}
-{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/Emacs' @@%}
-{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/JetBrains' @@%}
-{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/Kate' @@%}
-{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/Linux' @@%}
-{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/macOS' @@%}
-{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/Vim' @@%}
-{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/VisualStudioCode' @@%}
-{%@@ include _dotdrop_dotpath + '/emacs/common/snippets/gitignore-mode/Windows' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/modules/gitignore/C.gitignore' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/modules/gitignore/C++.gitignore' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/modules/gitignore/Diff.gitignore' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/modules/gitignore/Emacs.gitignore' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/modules/gitignore/JetBrains.gitignore' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/modules/gitignore/Kate.gitignore' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/modules/gitignore/Linux.gitignore' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/modules/gitignore/macOS.gitignore' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/modules/gitignore/Vim.gitignore' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/modules/gitignore/VisualStudioCode.gitignore' @@%}
+{%@@ include _dotdrop_dotpath + '/emacs/common/modules/gitignore/Windows.gitignore' @@%}
