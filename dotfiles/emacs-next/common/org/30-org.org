@@ -138,19 +138,53 @@ agenda 過濾也認不出它。
 
 *** 零寬空格
 
-偶爾需要把兩個看似相鄰、其實分屬不同結構的片段「接」在一起——加粗一個詞的一部分、
-或在內聯代碼塊前面補個符號。用零寬空格拆開它們即可。
+Org 判斷 =*粗體*=、=~code~= 這類行內標記是否成立，要看收尾符號後面接的是什麼；能接
+的那組字符裏只有 ASCII 標點與空白。中文標點不在其中，所以 =*粗體*，= 整串原樣輸出，
+=*粗體* ，= 卻正常——一句中文寫下來，強調與代碼幾乎必然撞上這件事。
+
+同一個機制也擋住另一類需求：把兩個看似相鄰、其實分屬不同結構的片段接在一起，例如
+只加粗一個詞的一部分，或在內聯代碼塊前面補個符號。
+
+兩者的解法相同——在標記與它後面的字之間放一個零寬空格，讓 Org 看見一個它認得的邊界。
+插入是手動的，因為只有寫的人知道哪裏真的需要一個；字面上打不出來，給它一個鍵。
 
 #+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(defconst ginshio-org-zero-width-space "\u200B"
+  "Character inserted to give Org markup a boundary it recognises.")
+
 (defun ginshio/org-insert-zero-width-space ()
   "Insert a zero width space (U+200B) at point."
   (interactive)
-  (insert "​"))
+  (insert ginshio-org-zero-width-space))
 
 (ginshio-leader-define
  "o" "org"
  "o z" #'ginshio/org-insert-zero-width-space)
 #+end_src
+
+它只是給解析器看的，不該出現在成品裏，所以導出時一併去掉。過濾器掛在 plain text 上
+而不是最終輸出，界線就落在對的地方：src 塊、example 塊與行內的 =...= / ~...~ 都是逐
+字內容，不經過這一層，裏面要是有零寬空格，那是作者真的要那個字符（例如正在講解它），
+不該被順手抹掉。散文裏的則一律清掉。
+
+輸出本身就是 Org 源碼的後端要跳過：=ox-org= 的產物還要再被 Org 讀一次，=ox-pandoc=
+更是先產一份 Org 再交給 pandoc，而 pandoc 的 Org reader 有同樣的邊界問題。這兩處拿掉
+零寬空格，等於把它當初要修的東西又弄壞一遍。過濾器回傳 nil 表示不改動，正是 Org 對
+「這一段我不處理」的約定。
+
+#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+(defun ginshio-org-export-strip-zero-width-space (text backend _info)
+  "Remove zero width spaces from TEXT, unless BACKEND emits Org source."
+  (unless (org-export-derived-backend-p backend 'org)
+    (string-replace ginshio-org-zero-width-space "" text)))
+
+(with-eval-after-load 'ox
+  (add-to-list 'org-export-filter-plain-text-functions
+               #'ginshio-org-export-strip-zero-width-space))
+#+end_src
+
+代價是 pandoc 這條路上零寬空格會留在成品裏：LaTeX 變成 ~\hspace{0pt}~，HTML 與 docx
+就是那個看不見的字符本身。三者都是零寬、不影響排版與斷行。
 
 *** eglot 認得的 src 塊
 
