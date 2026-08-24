@@ -297,8 +297,13 @@ than creating intermediate directories."
           (dolist (target expected-targets)
             (unless (and (member target tangled-targets)
                          (file-exists-p target))
-              (error "Tangle did not produce expected target %s" target))
-            (ginshio-tangle--validate-elisp target))
+              (error "Tangle did not produce expected target %s" target)))
+          ;; Every generated file is checked, not just the ones named above: a
+          ;; source may tangle helpers alongside its module, and unparseable
+          ;; Lisp in one of those fails just as hard at startup.
+          (dolist (target tangled-targets)
+            (when (string-suffix-p ".el" target)
+              (ginshio-tangle--validate-elisp target)))
           (ginshio-tangle--promote staging directory)
           (message "Tangling complete, %s" file))
       (when (file-exists-p temp-file)

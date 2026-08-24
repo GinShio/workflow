@@ -14,130 +14,150 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
 
-require_xdg() {
+# Only the variables this script dereferences itself.  The full XDG contract
+# -- the other two variables, and the mode of the runtime directory -- is
+# stated once, in ginshio-path.el; restating it here would leave two
+# definitions of one rule to keep in step.
+require_env() {
   local value variable
-  for variable in \
-    XDG_CONFIG_HOME \
-    XDG_DATA_HOME \
-    XDG_STATE_HOME \
-    XDG_CACHE_HOME \
-    XDG_RUNTIME_DIR
-  do
+  for variable in XDG_DATA_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR; do
     value=${!variable:-}
-    [[ -n $value ]] || die "required environment variable is not set: $variable"
-    [[ $value == /* ]] || die "required environment variable is not absolute: $variable=$value"
+    [[ -n $value ]] ||
+      die "required environment variable is not set: $variable"
+    [[ $value == /* ]] ||
+      die "required environment variable is not absolute: $variable=$value"
   done
-  [[ -d $XDG_RUNTIME_DIR ]] || die "XDG_RUNTIME_DIR does not exist: $XDG_RUNTIME_DIR"
-  [[ -w $XDG_RUNTIME_DIR ]] || die "XDG_RUNTIME_DIR is not writable: $XDG_RUNTIME_DIR"
-  [[ $(stat -c '%a' "$XDG_RUNTIME_DIR") == 700 ]] ||
-    die "XDG_RUNTIME_DIR must be private (0700): $XDG_RUNTIME_DIR"
+}
+
+# Held for the lifetime of the process: the kernel drops the lock when the
+# descriptor closes, however this script exits.
+lock() {
+  local fd
+  exec {fd}> "${XDG_RUNTIME_DIR%/}/ginshio-emacs.lock"
+  flock -n "$fd" || die "another ginshio-emacs command is running"
 }
 
 tangle() {
-  require_command "$emacs_bin"
   "$emacs_bin" -Q --batch -l "$root/tangle.el"
 }
 
-# Load the full configuration in a single batch process.  A command is
-# injected through GINSHIO_EMACS_COMMAND so the package module knows
-# whether to maintain (`sync' / `rebuild' / `upgrade'), to validate every
-# declared feature (`validate'), or to act as an ordinary consumer (no
-# variable).
+# Package work runs in a process that never loads the configuration, so a
+# broken :init or :config cannot stop you from installing packages.
 #
-# Package installs are deterministic batch work; they must not trip over
-# interactive or machine-specific git hooks.  `core.hooksPath=/dev/null'
-# disables every hook (including reference-transaction) for the commands
-# straight runs, while keeping the rest of the user's git environment.
-batch_config() {
+# Installs are deterministic batch work and must not trip over interactive or
+# machine-specific git hooks.  core.hooksPath=/dev/null disables every hook,
+# including reference-transaction, for the commands straight runs, while
+# leaving the rest of the user's git environment alone.
+maintain() {
   GIT_CONFIG_COUNT=1 \
   GIT_CONFIG_KEY_0=core.hooksPath \
   GIT_CONFIG_VALUE_0=/dev/null \
-  env GINSHIO_EMACS_COMMAND="$1" \
     "$emacs_bin" -Q --batch \
+    --init-directory="$root" \
+    -l "$root/maintain.el" "$1"
+}
+
+# A separate process is the whole point: it starts from nothing, consumes the
+# snapshot exactly as an ordinary session does, and requires every declared
+# feature so that deferred :config bodies are executed once.
+validate() {
+  "$emacs_bin" -Q --batch \
     --init-directory="$root" \
     -l "$root/early-init.el" \
     -l "$root/init.el" \
-    "${@:2}"
+    -f ginshio-packages-require-all \
+    --eval '(princ "Configuration validated.\n")'
 }
 
-# An upgrade needs a second maintenance process.  Rebuilding has to happen
-# while the configuration declares its packages, and by the time `upgrade'
-# has fetched new sources that pass is already over -- so the rebuild runs
-# as its own process against the revisions the upgrade just wrote.
-manage_packages() {
-  local command=$1
+packages() {
   require_command "$emacs_bin"
   require_command git
-  require_xdg
+  require_command flock
+  require_env
+  lock
   tangle
-  batch_config "$command" --eval '(princ "Package graph synchronized.\n")'
-  if [[ $command == upgrade ]]; then
-    batch_config rebuild --eval '(princ "Package graph rebuilt.\n")'
-  fi
-  batch_config validate --eval '(princ "Package graph validated.\n")'
+  maintain "$1"
+  validate
 }
 
 doctor() {
   require_command "$emacs_bin"
-  require_xdg
+  require_command flock
+  require_env
+  lock
   tangle
-  batch_config validate -f ginshio-doctor-batch
+  "$emacs_bin" -Q --batch \
+    --init-directory="$root" \
+    -l "$root/early-init.el" \
+    -l "$root/init.el" \
+    -f ginshio-doctor-batch
 }
 
-# The activation snapshot must go with the package tree it describes: an
-# ordinary session checks the snapshot before anything else, so leaving it
-# behind would let Emacs start against packages that no longer exist.
+# The snapshot must go with the builds it describes: an ordinary session reads
+# it before anything else, so leaving it behind would let Emacs start against
+# packages that no longer exist.
 clean() {
-  local tree_dir native_cache_dir
-  require_xdg
-  tree_dir="${XDG_DATA_HOME%/}/emacs/straight"
-  native_cache_dir="${XDG_CACHE_HOME%/}/emacs/eln-cache"
-  rm -rf -- "$root/modules/ginshio" "$tree_dir" "$native_cache_dir"
-  rm -f -- "${XDG_DATA_HOME%/}/emacs/activation.el" \
-    "${XDG_DATA_HOME%/}/emacs/activation.elc"
-  printf 'Removed tangled Lisp, package tree, activation, and native-comp cache.\n'
+  local data cache
+  data="${XDG_DATA_HOME%/}/emacs"
+  cache="${XDG_CACHE_HOME%/}/emacs"
+  rm -rf -- "$root/modules/ginshio"
+  # One glob covers every Emacs version's build tree and build cache, and the
+  # unversioned names left by configurations older than per-version builds.
+  rm -rf -- "$data"/straight/build*
+  rm -f -- "$data"/activation*.el "$data"/activation*.elc
+  rm -rf -- "$cache/eln-cache"
+  printf 'Removed tangled Lisp, package builds, snapshots and the native-comp cache.\n'
+}
+
+cleanall() {
+  clean
+  rm -rf -- "${XDG_DATA_HOME%/}/emacs/straight"
+  printf 'Removed cloned repositories.\n'
 }
 
 usage() {
   cat <<'EOF'
 Usage:
-  bin/ginshio-emacs sync [--rebuild | --upgrade]
+  bin/ginshio-emacs sync
+  bin/ginshio-emacs upgrade
+  bin/ginshio-emacs rebuild
   bin/ginshio-emacs clean
+  bin/ginshio-emacs cleanall
   bin/ginshio-emacs doctor
 
 Commands:
-  sync               Install the packages declared by the configuration at
-                     their locked revisions and regenerate the activation
-  clean              Remove tangled Lisp, packages, activation, and cache
-  doctor             Check the loaded configuration and external dependencies
-
-Sync options (mutually exclusive):
-  --rebuild          Rebuild every package at its locked revision, without
-                     touching upstream or the lock.  For a build left
-                     incomplete or stale, which a plain sync trusts.
-  --upgrade          Fetch upstream updates, rebuild, and rewrite the lock
+  sync       Install the packages the configuration declares, at the
+             revisions straight.lock pins.  Existing pins are left alone;
+             newly declared packages are appended and dropped ones removed.
+             Makes no network request when nothing has moved.
+  upgrade    Fetch upstream, rebuild the packages that moved, and rewrite
+             straight.lock with the new revisions.
+  rebuild    Rebuild every package at its locked revision, and normalize
+             every repository's remotes and branch.  For a build left
+             incomplete, which sync trusts.  Not needed after an Emacs
+             version change: builds are kept per version.
+  clean      Remove tangled Lisp, package builds, snapshots and the
+             native-comp cache.  Cloned repositories are kept, so the next
+             sync needs no network to restore them.
+  cleanall   clean, and remove the cloned repositories as well.
+  doctor     Report what the configuration needs but cannot find.
 
 Environment:
-  EMACS               Override the Emacs executable
+  EMACS      Override the Emacs executable
 EOF
 }
 
 case ${1:-} in
-  sync)
-    if (( $# == 1 )); then
-      manage_packages sync
-    elif (( $# == 2 )) && [[ $2 == --rebuild ]]; then
-      manage_packages rebuild
-    elif (( $# == 2 )) && [[ $2 == --upgrade ]]; then
-      manage_packages upgrade
-    else
-      usage >&2
-      die "sync accepts one of --rebuild or --upgrade"
-    fi
+  sync|upgrade|rebuild)
+    (( $# == 1 )) || die "$1 accepts no arguments"
+    packages "$1"
     ;;
-  clean)
-    (( $# == 1 )) || die "clean accepts no arguments"
-    clean
+  clean|cleanall)
+    (( $# == 1 )) || die "$1 accepts no arguments"
+    require_command flock
+    require_env
+    lock
+    "$1"
     ;;
   doctor)
     (( $# == 1 )) || die "doctor accepts no arguments"

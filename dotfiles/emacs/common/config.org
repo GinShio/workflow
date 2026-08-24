@@ -29,14 +29,17 @@
 必須在 =init.el= 結束前拋出。半份配置帶着已執行的副作用繼續運行，比一個直接的 backtrace
 更難修。
 
-*運行中的 Emacs 只消費套件。* 下載、更新、構建與寫鎖由 =bin/ginshio-emacs= 在獨立批處理進程
-裏完成；普通會話根本不載入 straight，所以它的變更命令一個都不存在。編輯器不在工作途中改寫
-自己的地基。
+*運行中的 Emacs 只消費套件，維護套件的程序也不執行配置。* 下載、更新、構建與寫鎖由
+=maintain.el= 在獨立批處理進程裏完成；普通會話根本不載入 straight，所以它的變更命令一個都
+不存在。反過來，=maintain.el= 從不 ~load~ 任何模塊——它把 tangle 產物當作資料 ~read~，取出
+其中的 ~:straight~ 宣告。編輯器不在工作途中改寫自己的地基，而寫壞一段 ~:config~ 也擋不住
+你裝包。
 
 *生成物不進版本控制，而且有明確的銷毀邊界。* tangle 產物與套件樹都可由
-=bin/ginshio-emacs clean= 整體刪除，再由 =sync= 重建；文學源碼、lock 與使用者資料不在
-這條邊界內。tangle 模塊只住在 =modules/ginshio/=；其他 =modules/= 子目錄是受版本控制的上游
-Lisp 與外部資產，不在清理邊界內。其餘運行時狀態按性質分流到 XDG 目錄。
+=bin/ginshio-emacs clean= 與 =cleanall= 刪除，再由 =sync= 重建；兩者的差別是留不留 clone，
+也就是恢復需不需要網路。文學源碼、lock 與使用者資料不在這條邊界內。tangle 模塊只住在
+=modules/ginshio/=；其他 =modules/= 子目錄是受版本控制的上游 Lisp 與外部資產，不在清理邊界
+內。其餘運行時狀態按性質分流到 XDG 目錄。
 
 * 模塊
 
@@ -71,7 +74,8 @@ Lisp 與外部資產，不在清理邊界內。其餘運行時狀態按性質分
 | =meson=        | Meson 構建文件：編輯、補全、Eldoc    | 是           |
 
 =path= 由 =bootstrap= 生成，=doctor= 是只供其他模塊 ~require~ 的 =support=；兩者都不進
-~ginshio-modules~。其餘模塊由 tangle 按文件名生成清單。
+~ginshio-modules~。=packages= 另外生成 =ginshio-manifest.el=，那是啓動與 =maintain.el=
+共用的快照格式，兩邊各自 ~load~ 它，所以格式只寫一次。其餘模塊由 tangle 按文件名生成清單。
 
 功能模塊往 leader 樹上掛自己的分支，不回頭改 =keys=。=w= 與 =p= 屬於 =window=，
 =i= 屬於 =minibuffer=，=e= 屬於 =edit=，=!= 屬於 =shell=，=r= 屬於 =remote=，

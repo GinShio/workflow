@@ -37,41 +37,53 @@
 * 安裝、同步、清理與診斷
 
 普通 Emacs 是套件 *消費者*。它只讀 =straight.lock= 與 =sync= 留下的 activation 快照；
-缺任何一項就中止，不嘗試聯網修復。
+缺任何一項就中止，不嘗試聯網修復。反過來，維護進程也不載入配置：它把
+=modules/ginshio/*.el= 當資料讀，取出 ~:straight~ 宣告，一行配置代碼都不執行。
 
-| shell 命令                           | 何時使用                                             |
-|--------------------------------------+------------------------------------------------------|
-| =bin/ginshio-emacs sync=               | 第一次安裝，或配置/lock 改變後按鎖安裝與重建          |
-| =bin/ginshio-emacs sync --rebuild=     | 某個包裝了卻不完整、或換過 Emacs 版本之後              |
-| =bin/ginshio-emacs sync --upgrade=     | 主動接受上游新 revision，重建並更新 lock              |
-| =bin/ginshio-emacs clean=              | 丟棄 tangle、套件與 native-comp 產物，回到未同步狀態  |
-| =bin/ginshio-emacs doctor=             | 配置能啓動，但某個外部功能不工作時                    |
-| =bin/ginshio-emacs test=               | 修改 tangle／套件生命週期後跑隔離回歸測試             |
+| shell 命令                     | 何時使用                                              |
+|--------------------------------+-------------------------------------------------------|
+| =bin/ginshio-emacs sync=         | 第一次安裝，或改過宣告／拉到新 lock 之後              |
+| =bin/ginshio-emacs upgrade=      | 主動接受上游新 revision，重建動過的包並更新 lock      |
+| =bin/ginshio-emacs rebuild=      | 某個包裝了卻不完整，或懷疑構建與源碼不同步            |
+| =bin/ginshio-emacs clean=        | 丟棄 tangle、構建與快照，但留着 clone                 |
+| =bin/ginshio-emacs cleanall=     | 連 clone 一起丟                                       |
+| =bin/ginshio-emacs doctor=       | 配置能啓動，但某個外部功能不工作時                    |
 
-=--rebuild= 的症狀識別：某個包的命令報 =Cannot open load file=，或者一個模式明明裝了
-卻少一半功能，而 =sync= 跑完什麼都沒說。那表示 build 目錄不完整,而 =sync= 信任了
-build cache。它不改 =straight.lock=,也不聯網取新 revision。
+=sync= 在無事可做時不聯網也不輸出：它先比對每個倉庫的 HEAD 與鎖，對得上就什麼都不做。
+所以「改了一行配置」與「什麼都沒改」兩種情況的代價差不多，可以隨手跑。
 
-=clean= 只刪除可由 =sync= 重建的內容：=modules/ginshio/= 與
-=$XDG_DATA_HOME/emacs/straight/，以及 =$XDG_CACHE_HOME/emacs/eln-cache/=。文學源碼、
-=early-init.el=、=init.el=、=straight.lock=、=modules/= 下受版本控制的上游 modes 與資產、書籤、歷史、grammar、auto-save 與
-backup 等都保留。先由 system/service 停止所有使用這份配置的 Emacs 再清理；腳本不探測
-或管理 daemon。執行後不要直接開始 Emacs：普通啟動會按契約失敗，下一步應是
-=bin/ginshio-emacs sync=。
+=rebuild= 的症狀識別：某個包的命令報 =Cannot open load file=，或者一個模式明明裝了卻少
+一半功能，而 =sync= 跑完什麼都沒說。那表示 build 目錄不完整，而 =sync= 信任了 build
+cache。它不改 =straight.lock=，也不聯網取新 revision，但它走 straight 完整的規範化
+checkout，所以跑偏的分支與 remote 也一併修正。
 
-套件狀態在維護進程查看。=GINSHIO_EMACS_COMMAND=inspect= 只載入 straight 與當前宣告,
-不改 lock、checkout、build 或 activation：
-所以查看命令也走同一條路:
+*換過 Emacs 版本不需要 =rebuild=。* 構建目錄與快照按版本分家，新版本的 build cache 是空
+的，=sync= 自然全建；切回舊版本也不用重建。
+
+=clean= 與 =cleanall= 的差別只有一個：要不要重新下載。=clean= 刪
+=modules/ginshio/=、=$XDG_DATA_HOME/emacs/straight/build*=、
+=$XDG_DATA_HOME/emacs/activation*= 與 =$XDG_CACHE_HOME/emacs/eln-cache/=，保留
+=straight/repos/=——之後的 =sync= 純本地恢復。=cleanall= 連 =repos/= 一起刪。
+
+文學源碼、=early-init.el=、=init.el=、=straight.lock=、=maintain.el=、=modules/= 下受版本
+控制的上游 modes 與資產、書籤、歷史、grammar、auto-save 與 backup 都保留。先由
+system/service 停止所有使用這份配置的 Emacs 再清理；腳本不探測或管理 daemon。執行後不要
+直接開 Emacs：普通啟動會按契約失敗，下一步應是 =bin/ginshio-emacs sync=。
+
+要不改動任何東西地查看套件樹，直接用 =maintain.el= 的內部函數：
 
 #+begin_src shell
-GINSHIO_EMACS_COMMAND=inspect emacs -Q --batch \
-  --init-directory="$PWD" -l early-init.el -l init.el \
-  --eval '(straight-check-all)'
+emacs -Q --batch --init-directory="$PWD" \
+  --eval '(setq ginshio-maintain-auto-run nil)' \
+  -l maintain.el \
+  --eval '(progn (ginshio-maintain--load-straight)
+                 (setq ginshio-maintain--declarations (ginshio-maintain--collect))
+                 (ginshio-maintain--resolve nil)
+                 (pp (ginshio-maintain--revisions)))'
 #+end_src
 
-普通會話不載入 straight 於正當考慮(見 =05-packages.org=),因此它的管理命令只存在
-於 =bin/ginshio-emacs= 的批次進程裏。fetch、update、merge、rebuild、delete、
-write-lock 一律在維護進程執行,不會在運行中的編輯器裏偷偷改套件樹。
+fetch、update、merge、rebuild、delete、write-lock 一律在維護進程執行，不會在運行中的編輯
+器裏偷偷改套件樹。
 
 手冊：[[https://github.com/radian-software/straight.el][straight README]]、[[file:org/05-packages.org][本配置的 package lifecycle]]。
 

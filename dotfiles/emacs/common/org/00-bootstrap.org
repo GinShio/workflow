@@ -22,29 +22,17 @@ Emacs 在讀取主配置之前會先讀 =early-init.el=。這個時間點的特�
 環境不對時，越早停下來，錯誤越接近真正原因。尤其不使用 XDG 規範裏的默認回退；啓動器
 沒有傳入這些變量，本身就是需要修正的環境錯誤。
 
+環境檢查與目錄劃分是同一件事的兩面，所以它們同住在 =ginshio-path.el= 裏，由這裏第一
+個載入。=early-init.el= 早於 ~load-path~ 建立，因此按絕對路徑 ~load~；之後
+=ginshio-init.el= 的 ~require~ 與 =maintain.el= 的 ~load~ 拿到的都是同一份，這條規則
+在整棵樹裏只有一個定義。
+
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-early-init.el"
 (when (version< emacs-version "30.1")
   (error "Ginshio Emacs requires Emacs 30.1 or newer; found %s" emacs-version))
 
-(dolist (variable '("XDG_CONFIG_HOME"
-                    "XDG_DATA_HOME"
-                    "XDG_STATE_HOME"
-                    "XDG_CACHE_HOME"
-                    "XDG_RUNTIME_DIR"))
-  (let ((value (getenv variable)))
-    (unless value
-      (error "Required environment variable %s is not set" variable))
-    (unless (file-name-absolute-p value)
-      (error "Required environment variable %s is not absolute: %s"
-             variable value))))
-
-(let ((runtime (getenv "XDG_RUNTIME_DIR")))
-  (unless (file-directory-p runtime)
-    (error "XDG_RUNTIME_DIR does not exist: %s" runtime))
-  (unless (file-writable-p runtime)
-    (error "XDG_RUNTIME_DIR is not writable: %s" runtime))
-  (unless (= (logand (file-modes runtime) #o777) #o700)
-    (error "XDG_RUNTIME_DIR must be private (0700): %s" runtime)))
+(load (expand-file-name "modules/ginshio/ginshio-path.el" user-emacs-directory)
+      nil 'nomessage)
 #+end_src
 
 啓動期間分配的對象幾乎全部存活到會話結束，回收它們找不到任何垃圾。把閾值頂到最大
@@ -92,8 +80,7 @@ Emacs 在讀取主配置之前會先讀 =early-init.el=。這個時間點的特�
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-early-init.el"
 (when (fboundp 'startup-redirect-eln-cache)
-  (startup-redirect-eln-cache
-   (expand-file-name "emacs/eln-cache/" (getenv "XDG_CACHE_HOME"))))
+  (startup-redirect-eln-cache (ginshio-cache "eln-cache/")))
 
 (setq native-comp-async-report-warnings-errors 'silent
       native-comp-jit-compilation t)
@@ -210,8 +197,10 @@ Signal an error when it is absent or relative."
 ;;; ginshio-init.el --- generated module loader -*- lexical-binding: t; -*-
 #+end_src
 
+=early-init.el= 已經載入 =ginshio-path.el=，~load-path~ 也是在那裏建立的。這裏仍然
+寫出依賴，但它是一次 no-op：模塊該說出自己依賴什麼。
+
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-init.el"
-(add-to-list 'load-path (expand-file-name "modules/ginshio/" user-emacs-directory))
 (require 'ginshio-path)
 #+end_src
 
