@@ -9,6 +9,7 @@ use anyhow::Result;
 
 use wits_util::forge::MrState;
 use wits_util::git::Repository;
+use wits_util::log as wits_log;
 use wits_util::time::parse_cutoff;
 
 use super::model::state_word;
@@ -24,14 +25,14 @@ pub fn run(repo: &Repository, args: &PruneArgs) -> Result<()> {
     if let Some(handle) = &args.mr {
         let id = parse_mr_handle(handle)?;
         prune_one(&ctx, &id, "requested", &current)?;
-        reclaim_worktree_if_empty(&ctx);
+        reclaim_worktree_if_empty(&ctx, std::slice::from_ref(&id));
         return Ok(());
     }
 
     // Otherwise sweep: terminal MRs always, plus dormant ones under a cutoff.
     // `--older-than` is a day count or an ISO-8601 date, as a Unix instant.
     let cutoff = args.older_than.as_deref().map(parse_cutoff).transpose()?;
-    let mut pruned = 0;
+    let mut pruned: Vec<String> = Vec::new();
     for info in ctx.store.list_infos() {
         let terminal = matches!(info.mr.state, MrState::Merged | MrState::Closed);
         // Dormant iff we have a real last-sync time (a full fetch, `fetched_at`
@@ -46,14 +47,19 @@ pub fn run(repo: &Repository, args: &PruneArgs) -> Result<()> {
             "dormant"
         };
         prune_one(&ctx, &info.mr.id, why, &current)?;
-        pruned += 1;
+        pruned.push(info.mr.id.clone());
     }
 
-    if pruned == 0 {
+    if pruned.is_empty() {
         log::info!("nothing to prune");
     } else {
-        log::info!("pruned {pruned} MR(s)");
-        reclaim_worktree_if_empty(&ctx);
+        let verb = if wits_log::is_dry_run() {
+            "would prune"
+        } else {
+            "pruned"
+        };
+        log::info!("{verb} {} MR(s)", pruned.len());
+        reclaim_worktree_if_empty(&ctx, &pruned);
     }
     Ok(())
 }
@@ -69,6 +75,16 @@ fn prune_one(ctx: &ReviewCtx, id: &str, why: &str, current: &Option<String>) -> 
         if let Err(e) = ctx.repo.delete_ref(&name) {
             log::warn!("MR {id}: could not delete {name}: {e}");
         }
+    }
+    // The ref deletions above are git mutations, so they preview themselves. The
+    // store below is plain filesystem work with no such guard, and it holds
+    // `local.json` — an unsubmitted draft nothing can reconstruct — so a `-n` run
+    // has to stop here rather than at the next mutation down.
+    if wits_log::is_dry_run() {
+        wits_log::dry_run(&format!(
+            "prune MR {id} ({why}): remove its store directory"
+        ));
+        return Ok(());
     }
     ctx.store.delete_mr(id)?;
     // If we just pruned the checked-out MR, drop the dangling pointer so a
@@ -86,8 +102,18 @@ fn prune_one(ctx: &ReviewCtx, id: &str, why: &str, current: &Option<String>) -> 
 /// nothing more to show. Best-effort and forced (untracked build output is the
 /// reviewer's, but an empty store means the review session is over). It is a
 /// no-op while any MR remains, since a stack shares this one worktree.
-fn reclaim_worktree_if_empty(ctx: &ReviewCtx) {
-    if !ctx.store.list_infos().is_empty() {
+///
+/// `pruned` names the MRs this run dropped. Emptiness is asked of the store as it
+/// *would* be rather than as it is, because under dry-run nothing was actually
+/// removed — and a preview that skipped this step would omit the worktree
+/// removal a real run performs.
+fn reclaim_worktree_if_empty(ctx: &ReviewCtx, pruned: &[String]) {
+    let remains = ctx
+        .store
+        .list_infos()
+        .iter()
+        .any(|info| !pruned.contains(&info.mr.id));
+    if remains {
         return;
     }
     let dir = default_worktree_dir(&ctx.repo);
@@ -95,6 +121,10 @@ fn reclaim_worktree_if_empty(ctx: &ReviewCtx) {
         return;
     }
     match wits_util::worktree::remove(&ctx.repo, &dir, true) {
+        // `remove` drives git through the streamed path, which under dry-run
+        // prints the command and reports success without touching anything — so
+        // the past tense below would be a lie there.
+        Ok(()) if wits_log::is_dry_run() => {}
         Ok(()) => log::info!("removed review worktree {}", dir.display()),
         Err(e) => log::warn!("could not remove review worktree {}: {e}", dir.display()),
     }

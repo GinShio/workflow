@@ -271,6 +271,17 @@ const INFO: &str = r##"{
   "files": [ { "path": "src/x.c", "status": "M" } ]
 }"##;
 
+/// A terminal MR — what `prune` sweeps without needing `--older-than`.
+const MERGED: &str = r##"{
+  "schema": 1,
+  "mr": { "id": "1", "display": "#1", "state": "merged", "draft": false,
+          "title": "Landed a while ago", "author": "alice", "base": "main",
+          "source": "feature-1", "head_sha": "head111",
+          "updated_at": "2026-07-01T00:00:00Z", "labels": [],
+          "web_url": "https://github.com/me/proj/pull/1" },
+  "snapshots": [], "fetched_at": 1700000000, "commits": [], "files": []
+}"##;
+
 /// A store entry a feed refresh would leave: metadata only, no review point.
 const FEED_ONLY: &str = r##"{
   "schema": 1,
@@ -469,6 +480,39 @@ fn submit_dry_run_plans_without_touching_the_network() {
     assert!(out.stdout.contains("src/x.c:50"));
     // A dry run leaves the draft untouched.
     assert!(fx.local_exists("1"));
+}
+
+/// The regression: `prune` carried no dry-run guard at all, so `-n` destroyed the
+/// very thing it was meant to preview — `local.json` included, the one file in the
+/// store that no refetch can rebuild.
+#[test]
+fn prune_dry_run_previews_without_dropping_the_store() {
+    let fx = Fixture::new();
+    fx.seed_info("1", MERGED);
+    fx.write_local(
+        "1",
+        r#"{ "schema": 1,
+             "actions": [
+               { "action": "comment", "file": "src/x.c", "line": 3, "body": "unsubmitted" }
+             ] }"#,
+    );
+
+    let preview = fx.run(&["-n", "review", "prune"]);
+    assert!(preview.success, "stderr: {}", preview.stderr);
+    assert!(
+        preview.stdout.contains("[DRY-RUN]") && preview.stdout.contains("prune MR 1"),
+        "stdout: {}",
+        preview.stdout
+    );
+    assert!(
+        fx.local_exists("1"),
+        "a dry run deleted the draft it was asked to preview"
+    );
+
+    // The real sweep still drops it, so the guard did not disable pruning.
+    let real = fx.run(&["review", "prune"]);
+    assert!(real.success, "stderr: {}", real.stderr);
+    assert!(!fx.local_exists("1"));
 }
 
 #[test]

@@ -35,14 +35,13 @@ const USER_AGENT: &str = concat!("wits/", env!("CARGO_PKG_VERSION"));
 /// The literal a caller passes for "the authenticated user".
 pub(crate) const SELF_REF: &str = "@me";
 
-/// Send a request with retry on transient failures (429, 502, 503). Returns
-/// the raw `ureq::Response` on success so callers can read headers before
-/// consuming the body.
+/// Send a request with retry on transient failures. Returns the raw
+/// `ureq::Response` on success so callers can read headers before consuming the
+/// body.
 ///
 /// Exponential backoff (1s → 2s → 4s, capped at 30s) with `Retry-After`
-/// honoured. All forge mutations here are either idempotent or additive, so
-/// a retry on a definitive server response never creates duplicate side
-/// effects.
+/// honoured. *Which* failures are retried depends on the method — see
+/// [`is_retryable`], where the duplicate-submission hazard is decided.
 fn send_with_retry(
     method: &str,
     url: &str,
@@ -67,7 +66,9 @@ fn send_with_retry(
 
         match response {
             Ok(r) => return Ok(r),
-            Err(ureq::Error::Status(code, r)) if is_retryable(code) && attempt < max_retries => {
+            Err(ureq::Error::Status(code, r))
+                if is_retryable(code, method) && attempt < max_retries =>
+            {
                 let wait_ms = r
                     .header("retry-after")
                     .and_then(|v| v.parse::<u64>().ok())
@@ -102,11 +103,30 @@ fn apply_auth(req: ureq::Request, auth: &Auth) -> ureq::Request {
     }
 }
 
-/// Whether a status code warrants a retry. Only codes where the server
-/// explicitly signals a transient condition are included — 4xx errors (other
-/// than 429) are permanent and retrying them wastes time.
-fn is_retryable(code: u16) -> bool {
-    matches!(code, 429 | 502 | 503)
+/// Whether a `method` request that failed with `code` may be sent again.
+///
+/// The dividing line is whether the server has *told* us it did not act. A 429
+/// is a refusal by the rate limiter before the request reached anything that
+/// could commit (RFC 6585 §4) — which is why `Retry-After` is defined on it — so
+/// replaying it cannot duplicate an effect. A 502/503 from a gateway is ambiguous
+/// in exactly the wrong way: the upstream may have committed the write and only
+/// the response was lost. Replaying a state-changing request there is how one
+/// `stack submit` opens two merge requests. GET is the only safe method this
+/// transport sends (RFC 9110 §9.2.1), so it is the only one a gateway error may
+/// be replayed on.
+///
+/// Keyed on the method rather than the endpoint because the backends send reads
+/// and mutations through the same POST — GitHub's GraphQL queries included, which
+/// therefore give up gateway retries. That is the accepted cost of not making
+/// every call site declare its own idempotency; note it also means a *bodyless*
+/// POST (GitLab's approve/unapprove) is treated as unsafe even though it happens
+/// to be idempotent.
+fn is_retryable(code: u16, method: &str) -> bool {
+    match code {
+        429 => true,
+        502 | 503 => method.eq_ignore_ascii_case("GET"),
+        _ => false,
+    }
 }
 
 /// DELETE a resource, treating **404 as success** (already gone). Deferred
@@ -243,5 +263,37 @@ mod tests {
         assert_eq!(encode_path("src/a b.c"), "src/a%20b.c");
         assert_eq!(encode_path("plain.rs"), "plain.rs");
         assert_eq!(encode_path("d/e/f.txt"), "d/e/f.txt");
+    }
+
+    /// A gateway error leaves it unknown whether the upstream committed, so only
+    /// GET may be replayed on one. Retrying a create-MR POST there is what opens
+    /// the same merge request twice.
+    #[test]
+    fn a_gateway_error_is_replayed_only_for_reads() {
+        for code in [502, 503] {
+            assert!(is_retryable(code, "GET"), "{code} on GET");
+            assert!(!is_retryable(code, "POST"), "{code} on POST");
+            assert!(!is_retryable(code, "PATCH"), "{code} on PATCH");
+            assert!(!is_retryable(code, "PUT"), "{code} on PUT");
+        }
+    }
+
+    /// A rate limiter refuses before anything can commit, so every method is
+    /// safe to replay — that is the whole point of `Retry-After`.
+    #[test]
+    fn a_rate_limit_is_replayed_for_every_method() {
+        for method in ["GET", "POST", "PATCH", "PUT"] {
+            assert!(is_retryable(429, method), "429 on {method}");
+        }
+    }
+
+    /// Anything the server answered definitively stays answered; replaying it
+    /// only wastes time.
+    #[test]
+    fn a_definitive_status_is_never_replayed() {
+        for code in [400, 401, 403, 404, 409, 422, 500] {
+            assert!(!is_retryable(code, "GET"), "{code} on GET");
+            assert!(!is_retryable(code, "POST"), "{code} on POST");
+        }
     }
 }
