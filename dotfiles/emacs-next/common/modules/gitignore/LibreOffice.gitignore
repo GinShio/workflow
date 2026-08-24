@@ -1,0 +1,5 @@
+######################### LibreOffice #########################
+# repo: github/gitignore; pin: 0b421ba8dbb; file: Global/LibreOffice.gitignore
+# LICENSE: Creative Commons Zero v1.0 Universal
+# LibreOffice locks
+.~lock.*#

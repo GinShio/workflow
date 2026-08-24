@@ -5,19 +5,21 @@
 日常的 git 操作在終端裏。這不是妥協，是分工：提交、分支、變基、疊放提交的來回移動，
 命令行做得又快又準，Emacs 裏再造一套只是多一種心智模型。
 
-所以本模塊不是一個 git 界面。它做兩件終端做不到的事，加上一件終端已經在做、但做得
+所以本模塊不是一個 git 界面。它做終端做不到的那些事，加上一件終端已經在做、但做得
 不夠好的事。
 
 *終端做不到的*：在你編輯的同時，把「這幾行是新寫的」直接畫在緩衝區旁邊，並且讓你就
 在那裏挑出其中幾行送去暫存；把一次 blame 從一次性的文本輸出，變成可以繼續往下追的活
-頁面。
+頁面；給 git 自己那幾種配置文件一個認得它們語法的模式；以及把一份新的 =.gitignore=
+從離線的規則清單裏挑出來，而不必去記 =*.gch= 和 =CMakeFiles/= 各自屬於誰。
 
 *終端已經在做的*：`git` 需要一個編輯器的時候會叫 Emacs——寫提交信息、編排 rebase、
 解決衝突。這條路徑已經在用，但 Emacs 這邊什麼都沒準備，所以它落到最原始的模式裏。
 
 內建部分見 [[info:emacs#Version Control][Emacs manual: Version Control]]；提交與 rebase 編輯模式由 Magit/with-editor
-提供，完整手冊是 [[info:magit#Top][Magit]] 與 [[info:with-editor#Top][With-Editor]]；三方合併見 [[info:ediff#Top][Ediff]]。本配置的
-終端協作、hunk、衝突與 server 工作流先看 [[file:../GUIDE.org::*版本控制][GUIDE.org]]。
+提供，完整手冊是 [[info:magit#Top][Magit]] 與 [[info:with-editor#Top][With-Editor]]；三方合併見 [[info:ediff#Top][Ediff]]；忽略與屬性文件的語法見
+=gitignore(5)= 與 =gitattributes(5)=。本配置的終端協作、hunk、衝突與 server 工作流先看
+[[file:../GUIDE.org::*版本控制][GUIDE.org]]。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el" :comments no
 ;;; ginshio-vc.el --- what the terminal cannot do -*- lexical-binding: t; -*-
@@ -427,6 +429,120 @@ magit 沒加載時，上一節那兩個觸發條件都不成立。所以本模�
 (add-to-list 'recentf-exclude "/\\.git/")
 #+end_src
 
+** git 自己的那幾種文件
+
+上面那兩個是 git 在一次操作中途交出來的，用完就刪。還有一類長期躺在倉庫裏：
+=.gitignore=、=.gitattributes=、=.gitconfig= 與 =.gitmodules=。出廠的 Emacs 對它們
+同樣沒有準備——Emacs 30.2 的 ~auto-mode-alist~ 裏與 git 有關的只有 =gitconfig= 一條，
+=.gitignore= 落進 fundamental-mode，連 =#= 是註釋都不知道。
+
+[[https://github.com/magit/git-modes][git-modes]] 提供這三個模式。它和 magit 同一個維護者、同一個 GitHub 組織，卻 *不是*
+magit 的依賴——magit 的 =Package-Requires= 裏沒有它，所以要單獨宣告。它自己只要
+=compat=，而那個 magit 已經帶進來了。
+
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
+(use-package git-modes
+  :straight t
+  :defer t)
+#+end_src
+
+不需要 ~:mode~，也不需要列出任何文件名。三個模式與它們的 ~auto-mode-alist~ 條目在上游
+都帶 ~;;;###autoload~，而 packages 模塊的 activation 快照收錄每個包的 autoload forms
+——所以文件用對的模式打開，而啓動時這個包一行都不載入。自己再寫一份文件名列表只會多
+出一份會過期的副本。
+
+三者的份量並不相等。~gitignore-mode~ 從 ~conf-unix-mode~ 派生，多的是 =!= 反選、=/=、
+=*= =?= 與 =[…]= 的著色；順帶認得 =.git/info/exclude= 與 =$XDG_CONFIG_HOME/git/ignore=。
+~gitconfig-mode~ 同樣派生自 ~conf-unix-mode~，改用 tab 縮進，覆蓋 =.gitconfig=、
+=.git/config=、=.gitmodules= 與 =/etc/gitconfig=。
+
+~gitattributes-mode~ 是其中最實在的一個，而且它給的正好是終端沒有的東西：光標停在一個
+attribute 上，eldoc 直接在回音區說明那個 attribute 做什麼。=.gitattributes= 的語法是一
+串沒有任何提示的名字——=text=、=eol=lf=、=diff=cpp=、=-merge=、=filter=lfs=——查一次要
+開一次 man page，而這個模式把 man page 搬到了光標底下。~forward-sexp~ 在這裏改成逐個
+field 移動，所以 motion 組召回的 ~C-M-f~ 跨過的是一個完整的屬性而不是一個詞。完整手冊仍然按
+~M-x gitattributes-mode-help~ 打開；這個模式沒有綁任何鍵，它的命令都在菜單和 ~M-x~ 裏。
+
+** 一份忽略規則要從哪裏來
+
+新建一個項目要寫 =.gitignore=，而憑記憶寫的那份總是漏。=*.o= 記得，=*.gch= 與 =*.dwo=
+不會；CMake 那一串 =CMakeFiles/= =cmake_install.cmake= =compile_commands.json= 更是每
+次都得現去翻一個舊項目。
+
+github/gitignore 那個倉庫就是為這件事存在的。問題只在於怎麼把它拿到手邊：網頁要離開編
+輯器，gitignore.io 要聯網，而兩者給的都是「當下那一版」——同樣的操作在半年後得到不一樣
+的結果，而你不會注意到。
+
+所以規則清單和 pandoc 模板、llvm 的那幾個 mode 一樣，是一份受版本控制的離線資產，住在
+=modules/gitignore/=。一個主題一個文件。與另外兩份資產不同的是，這裏的 pin 逐個文件不
+同：它們是各自在需要時取的，所以整個目錄不對應任何單一 revision，每個文件開頭記自己的
+上游路徑與 revision。這件事連同「哪些文件帶了本地追加」寫在該目錄的 =README= 裏。
+
+缺席就是配置不完整，與 =lang-llvm= 對 vendored mode、=org-pandoc= 對模板的態度一致：
+啓動時就失敗，不留到某次真的要寫 =.gitignore= 時纔發現目錄不見了。
+
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
+(defconst ginshio-vc-ignore-dir
+  (expand-file-name "gitignore/" ginshio-modules-dir)
+  "Ignore-rule fragments, one file per topic.")
+
+(unless (file-directory-p ginshio-vc-ignore-dir)
+  (error "Ignore-rule fragments are missing: %s" ginshio-vc-ignore-dir))
+#+end_src
+
+*** 挑出來
+
+選 *多個* 是這裏唯一真正的設計決定。一份 =.gitignore= 幾乎不會只有一個主題——一個 C++
+項目至少是 C++ 加 CMake 加 Linux 加你的編輯器。逐個插入意味著同一個命令按四遍，而
+~completing-read-multiple~ 一趟就選完。
+
+候選項就是文件名，所以沒有第二套代號要記；=.gitignore= 這個後綴同時也是「哪些文件是
+fragment」的判準，於是 =README= 不必被特別排除。
+
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
+(defun ginshio-vc-ignore-topics ()
+  "Return the topics available below `ginshio-vc-ignore-dir'."
+  (mapcar #'file-name-base
+          (directory-files ginshio-vc-ignore-dir nil "\\.gitignore\\'")))
+
+(defun ginshio-vc--ignore-fragment (topic)
+  "Return the ignore rules recorded for TOPIC."
+  (let ((file (expand-file-name (concat topic ".gitignore")
+                                ginshio-vc-ignore-dir)))
+    (unless (file-readable-p file)
+      (user-error "No ignore fragment named `%s'" topic))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (buffer-string))))
+
+(defun ginshio/insert-gitignore (topics)
+  "Insert the ignore rules recorded for TOPICS at point.
+Each fragment names its own upstream and revision in its opening lines."
+  (interactive
+   (list (completing-read-multiple
+          "Ignore rules (comma separated): "
+          (ginshio-vc-ignore-topics) nil t)))
+  ;; `completing-read-multiple' drops empty elements, so confirming an empty
+  ;; prompt arrives here as nil.  Without this the command would open a line
+  ;; and insert nothing into it.
+  (unless topics
+    (user-error "No ignore rules chosen"))
+  ;; Assemble before inserting.  One undo takes the whole thing back, and a
+  ;; topic whose file has gone missing aborts before anything reaches the
+  ;; buffer -- rather than leaving half the selection behind.
+  (let ((text (mapconcat #'ginshio-vc--ignore-fragment topics "\n")))
+    (unless (bolp) (insert "\n"))
+    (insert text)))
+#+end_src
+
+插入位置是 point，而且不要求當前緩衝區是 =.gitignore=。往一份已經存在的清單中間補一
+段、或者把幾條規則塞進別處，走的都是同一個命令——這是綁在文件類型上的 snippet 做不到
+的，而它恰恰是最常見的第二種用法。
+
+每個 fragment 自帶 =######### 主題 #########= 的分隔行，所以插進去之後仍然看得出哪一段
+是誰帶來的，去掉某一組時也知道邊界在哪。這也意味著本命令不做去重：同一個主題插兩次會
+出現兩段，而那是看得見的，比一個安靜地跳過你剛選的東西的命令好。
+
 ** 衝突
 
 衝突有兩種處理姿勢，值得都留著，因為它們適合的場合不同。
@@ -696,6 +812,8 @@ plain `git status' would refresh and rewrite the index, taking
  "g a" #'diff-hl-stage-dwim
  "g x" #'diff-hl-revert-hunk
 
+ "g i" #'ginshio/insert-gitignore
+
  "g c"   "conflict"
  "g c n" #'smerge-next
  "g c p" #'smerge-prev
@@ -713,6 +831,10 @@ plain `git status' would refresh and rewrite the index, taking
 
 暫存用 =a= 而不是 =s=，因為 =s= 已經是 `vc-dir`。=a= 是 git 自己的說法——你在終端裏
 敲的就是 `git add`，一個字母都不用另記。
+
+=g i= 掛在 git 這一支而不是 minibuffer 的 =i=（插入）底下，理由是它插入的東西只在
+git 的語境裏有意義；按這個鍵的時刻你想的是「這個倉庫要忽略什麼」，不是「我要插入一段
+文字」。同一條規則讓它不必去和 =i y= =i r= 那幾個通用的插入命令爭字母。
 
 上下兩組衝突命令的命名跟隨 git 自己的說法：upper 是你這邊，lower 是合過來的那邊。
 配置了 =diff3= 衝突樣式之後還有第三塊，base 就是它——共同祖先，往往是判斷「對方到底
@@ -783,6 +905,11 @@ leader 順手。
 
 **Ediff 會話裏**：全部鍵位由 ediff 自己提供，在控制面板裏按 ~?~ 展開。最常用的是
 ~n~ / ~p~ 換差異塊，~a~ / ~b~ 取某一邊，~!~ 重算，~q~ 結束。
+
+**編輯 =.gitignore= 與 =.gitconfig= 時**：git-modes 沒有新增任何鍵，兩者都從
+~conf-unix-mode~ 繼承，所以能用的是 conf-mode 自己那一套。=.gitattributes= 同樣不綁
+鍵，它給的是被動的東西——eldoc 的說明，以及讓已經召回的 ~C-M-f~ / ~C-M-b~ 逐個 field
+移動；man page 走 ~M-x gitattributes-mode-help~。
 
 ** 這個模塊會產生的緩衝區
 

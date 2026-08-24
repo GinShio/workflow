@@ -246,6 +246,11 @@ Corfu 自動在輸入兩個字符後彈出，候選項由 Eglot、major mode 與
 與終端不需切換模式。手動觸發仍是 major mode 的 ~completion-at-point~；可用
 ~M-x completion-at-point~。
 
+語言服務器的候選項可以帶參數：選中 ~emplace_back~ 之後插入的是
+~emplace_back(Args&&... args)~，光標落在第一個參數上，~TAB~ 跳到下一個，~S-TAB~ 回上一
+個。展開由 yasnippet 負責，但這份配置一個 snippet 都不放——模板全部由服務器供給，所以
+沒有觸發詞要記，也沒有模板庫要維護。理由見 [[file:org/55-lsp.org][lsp 模塊]]。
+
 上游文檔：[[https://github.com/minad/corfu][Corfu]]、[[https://github.com/minad/cape][Cape]]、
 [[https://codeberg.org/akib/emacs-corfu-terminal][corfu-terminal]]。
 
@@ -467,7 +472,7 @@ Tree-sitter grammar 缺失時保留可用的傳統 major mode，doctor 以 warn 
 * 版本控制
 
 日常提交、分支與 rebase 仍以終端 Git 為主；Emacs 負責文件旁的差異、歷史追蹤、選行暫存、
-Git 叫出的編輯器與衝突解決。
+Git 叫出的編輯器、衝突解決，以及 Git 自己那幾種配置文件。
 
 | 鍵                    | 用途                                  |
 |-----------------------+---------------------------------------|
@@ -482,6 +487,17 @@ Git 叫出的編輯器與衝突解決。
 | ~M-m g v~               | 顯示 hunk                            |
 | ~M-m g a~               | 暫存當前 hunk 或選區                 |
 | ~M-m g x~               | 還原當前 hunk                        |
+| ~M-m g i~               | 插入忽略規則，可一次選多個主題       |
+
+~M-m g i~ 從 =modules/gitignore/= 讀一份離線的規則清單，逗號分隔可以一次選多個主題
+（=C++,CMake,Linux,Emacs=），插在 point 處。它不要求當前緩衝區是 =.gitignore=，所以往
+一份已有的清單裏補一段也走同一個鍵。清單的來源、各自的 revision 與本地追加見該目錄的
+=README=。
+
+=.gitignore=、=.gitattributes=、=.gitconfig= 與 =.gitmodules= 由 git-modes 提供 major
+mode。=.gitattributes= 那個最值得知道：光標停在一個 attribute 上，eldoc 直接說明它做什
+麼，~M-C-f~ / ~M-C-b~ 逐個 field 移動，~M-x gitattributes-mode-help~ 開
+=gitattributes(5)=。
 
 衝突：
 

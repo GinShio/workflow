@@ -25,6 +25,7 @@
  ("embark" . "87e53827cf6659dcc4ac4e54be9af34aeca44f6e")
  ("engrave-faces" . "031e18c1261165cf462d18da403d67d0fcbf0d89")
  ("f.el" . "931b6d0667fe03e7bf1c6c282d6d8d7006143c52")
+ ("git-modes" . "f291a4cc4a8b02a25d5cf93b4ab6af29e6f060d9")
  ("gnu-elpa-mirror" . "6390a0b5e8ff9fbbb7f108ac8d4221b72a6415b1")
  ("haskell-mode" . "781e4669a0e0917fa8c532371cbfb1eb5b03b645")
  ("haskell-ts-mode" . "bf143ee8382f09e0a68d775d80445065f32929c3")
@@ -68,6 +69,7 @@
  ("ts.el" . "552936017cfdec89f7fc20c254ae6b37c3f22c5b")
  ("vertico" . "a6874e3d8c74a9eea77967d702d608ebbd6b27ec")
  ("with-editor" . "d6d859f7839a2ced6700857976270be56cd225b0")
+ ("yasnippet" . "c1e6ff23e9af16b856c88dfaab9d3ad7b746ad37")
  ("zig-mode" . "66490933a468b5d55a90645c4c87067c508ccd04")
  ("zig-ts-mode" . "bb1e8287800868ee338e986bda5b5a1f5abf7445"))
 :epsilon

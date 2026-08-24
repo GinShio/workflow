@@ -1,0 +1,20 @@
+######################### Elisp #########################
+# repo: github/gitignore; pin: 64340cce992; file: Elisp.gitignore
+# LICENSE: Creative Commons Zero v1.0 Universal
+# Compiled
+*.elc
+
+# Packaging
+.cask/
+.eask/
+.eldev/
+.keg/
+
+# Built distribution
+dist/
+
+# Backup files
+*~
+
+# Undo-tree save-files
+*.~undo-tree

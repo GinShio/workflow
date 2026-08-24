@@ -1,0 +1,10 @@
+######################### Scheme #########################
+# repo: github/gitignore; pin: acba43a590; file: Scheme.gitignore
+# LICENSE: Creative Commons Zero v1.0 Universal
+*.ss~
+*.ss#*
+.#*.ss
+
+*.scm~
+*.scm#*
+.#*.scm

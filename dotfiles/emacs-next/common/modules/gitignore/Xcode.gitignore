@@ -1,0 +1,5 @@
+######################### Xcode #########################
+# repo: github/gitignore; pin: a4043487860; file: Global/Xcode.gitignore
+# LICENSE: Creative Commons Zero v1.0 Universal
+## User settings
+xcuserdata/

@@ -115,7 +115,7 @@ LSP 服務器啓動時會報告它能做什麼，eglot 回答它打算用什麼�
 | 能力                    | 用 | 理由                                               |
 |-------------------------+----+----------------------------------------------------|
 | hover                   | 是 | 光標處的類型與文檔，eldoc 的主要來源               |
-| completion              | 是 | 補全候選，經由 capf 交給補全前端                   |
+| completion              | 是 | 補全候選，經由 capf 交給補全前端；含帶參數的 snippet 格式 |
 | signatureHelp           | 是 | 填參數時顯示函數簽名                               |
 | definition              | 是 | ~M-m c d~                                            |
 | typeDefinition          | 是 | ~M-m c t~                                            |
@@ -314,6 +314,65 @@ contact 有問題時，直接 ~M-x eglot~ 手動啓動，那條路徑會如實�
 
 不在這裏配。eglot 把補全掛在 ~completion-at-point-functions~ 上，那是 Emacs 的標準
 接口；前端長什麼樣是補全模塊的事，本模塊只要不碰那個變量，兩邊就不會打架。
+
+*** 帶參數的候選項
+
+有一件事那條分工管不到，因為它發生在候選項還沒成為文本之前。
+
+LSP 的補全項可以是 *snippet* 格式——服務器送來的不是 =emplace_back=，而是
+=emplace_back(${1:Args&&... args})=，接收方負責把它展開成可以逐個填的參數。這是簽名幫
+助之外最有用的一件事：補完一個重載很多的函數之後，光標直接落在第一個參數上，而不是停
+在一個右括號都還沒有的名字後面。
+
+服務器送不送，取決於 eglot 在握手時宣告什麼；而 eglot 宣告什麼，取決於它能不能找到一
+個展開器。這兩件事寫在同一個表達式裏：
+
+#+begin_src emacs-lisp :tangle no
+;; eglot.el, in `eglot-client-capabilities'
+:completionItem `(:snippetSupport
+                  ,(if (and (not (eglot--stay-out-of-p 'yasnippet))
+                            (eglot--snippet-expansion-fn))
+                       t
+                     :json-false)
+                  ...)
+
+(defun eglot--snippet-expansion-fn ()
+  "Compute a function to expand snippets.
+Doubles as an indicator of snippet support."
+  (and (fboundp 'yas-minor-mode) ...))
+#+end_src
+
+所以這裏沒有選擇的餘地：eglot 認的展開器只有 yasnippet 一個，寫死在 ~fboundp~ 上。
+tempel 之類的替代品要靠額外的橋接包纔進得來，而那是為了避開一個並不存在的問題。
+
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
+(use-package yasnippet
+  :straight t
+  :defer t)
+#+end_src
+
+*一個 snippet 都不放。* 這個包出廠不帶任何 snippet——那是 =yasnippet-snippets= 與
+=doom-snippets= 這類獨立套件的事——所以「只裝不用」是它的自然狀態，不需要關掉什麼。它
+在這份配置裏的職責只有一個：讓上面那個 ~fboundp~ 成立，並在服務器真的送來 snippet 時
+把它展開。模板由服務器供給，本配置不寫、也不維護任何一份。
+
+*為什麼 ~:defer t~ 就夠。* ~yas-minor-mode~ 帶 ~;;;###autoload~，而 packages 模塊的
+activation 快照收錄每個包的 autoload forms，所以 ~fboundp~ 在 yasnippet.el 完全沒有載
+入時就已經成立。eglot 要展開的那一刻纔真的把它拉進來，並自己 ~(yas-minor-mode 1)~。
+啓動時的帳單是零。
+
+*次模式打開之後會做什麼。* 它把 ~yas--direct-keymaps~ 推進 ~emulation-mode-map-alists~
+——正是 keys 模塊聲明「只用來安放 leader」的那一層。這裏不構成爭搶，但理由要寫下來，
+因為它不是自明的：進那張映射的只有宣告了 =# binding:= 的 snippet，而字串 =# key:=
+觸發器走的是另一條路（hash table 加 ~TAB~）。零 snippet 意味著那是一張空表。哪天真的
+往這份配置裏放 snippet，這句話就要重新檢查一次。
+
+~yas-minor-mode-map~ 的 ~TAB~ 綁的是一個帶 ~:filter~ 的 ~menu-item~，沒有可展開的東
+西時回傳 nil，於是按鍵落回主模式的縮進命令。所以它也不會擋住 ~TAB~。
+
+*要退回純文本。* 把 =yasnippet= 加進 ~eglot-stay-out-of~ 即可——eglot 會照舊宣告
+=snippetSupport: false=，服務器改送純文本，參數回到由 eldoc 在回音區顯示。整個決定就
+是這一行的有無。
 
 ** 鍵位
 

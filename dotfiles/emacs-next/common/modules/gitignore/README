@@ -1,0 +1,31 @@
+Ignore-rule fragments
+=====================
+
+One file per topic, each holding the ignore rules for that topic and nothing
+else.  `ginshio/insert-gitignore' reads this directory and inserts the chosen
+fragments at point; see `org/45-vc.org'.
+
+Upstream: https://github.com/github/gitignore
+License: CC0-1.0; every fragment carries its own `# LICENSE:' line.
+Imported: 2026-08-24 (carried over from the previous configuration)
+
+Provenance is per fragment, not per directory.  Each file's first lines record
+the upstream path and the revision it was taken at:
+
+    ######################### C++ #########################
+    # repo: github/gitignore; pin: 9ffced6030e; file: C++.gitignore
+    # LICENSE: Creative Commons Zero v1.0 Universal
+
+The pins differ between files because each was taken when it was needed.  There
+is no single revision this directory as a whole corresponds to, and refreshing
+one fragment does not oblige the others.
+
+Local modifications: several fragments carry additions beyond their upstream
+file -- `C++.gitignore' adds `build-*/', `vcpkg_installed/', `Testing/' and
+`.cache/', for instance.  These are deliberate and survive a refresh; when
+updating a fragment, re-apply them rather than replacing the file wholesale.
+
+File names are the completion candidates, so they are chosen to be recognised
+rather than to match upstream: `Golang' for upstream's `Go.gitignore', `SASS'
+for `Sass.gitignore'.  The `.gitignore' extension is what separates fragments
+from this README, so a new fragment must have it.
