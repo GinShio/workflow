@@ -13,11 +13,11 @@
 Dape 的配置格式、適配器、資訊面板與 REPL 見 [[https://elpa.gnu.org/packages/dape.html][GNU ELPA: Dape]]；從設斷點到結束會話的
 最短流程及完整鍵位索引在 [[file:../GUIDE.org::*Dape][GUIDE.org]]。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-dap.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-dap.el" :comments no
 ;;; ginshio-dap.el --- stopping the program to ask it things -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-dap.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-dap.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'ginshio-keys)
@@ -50,7 +50,7 @@ lldb 還是別的什麼。dape 是一個直接說這個協議的客戶端，不�
 *信息窗口靠右。* 這是本模塊唯一一處關於位置的設置，因為它不經過 ~display-buffer~：
 dape 自己編排那一組窗口。要精細控制哪個面板去哪裏，popup 模塊仍然可以插手。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-dap.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-dap.el"
 (setq dape-key-prefix nil
       dape-default-breakpoints-file (ginshio-state "dape-breakpoints")
       dape-buffer-window-arrangement 'right
@@ -59,7 +59,7 @@ dape 自己編排那一組窗口。要精細控制哪個面板去哪裏，popup 
 
 調試配置是一段可以編輯的表達式，你上次跑的那一條值得留到下次。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-dap.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-dap.el"
 (add-to-list 'savehist-additional-variables 'dape-history)
 #+end_src
 
@@ -69,7 +69,7 @@ dape 自己編排那一組窗口。要精細控制哪個面板去哪裏，popup 
 自動加載入口，其餘命令要在這裏點名，否則按下鍵得到的是「函數未定義」。這張表就是本
 模塊全部的入口。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-dap.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-dap.el"
 (use-package dape
   :straight (:host github :repo "svaante/dape")
   :commands (dape
@@ -94,7 +94,7 @@ dape 自己編排那一組窗口。要精細控制哪個面板去哪裏，popup 
 ~defcustom~ 給出的——它不覆蓋已經有值的變量。提前掛的後果是那兩項默認值被靜默地擠
 掉，症狀是會話開始時信息窗口不再自動出現，而看起來和鉤子毫無關係。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-dap.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-dap.el"
 (defun ginshio-dap-save-project-buffers (config)
   "Save relevant source buffers before CONFIG's compile step."
   (if-let* ((project (project-current nil))
@@ -116,7 +116,7 @@ dape 自己編排那一組窗口。要精細控制哪個面板去哪裏，popup 
 
 在一個難復現的問題上佈置好的一組斷點，是你花時間換來的。它默認活不過一次重啓。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-dap.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-dap.el"
 (with-eval-after-load 'dape
   (when (file-exists-p dape-default-breakpoints-file)
     (dape-breakpoint-load))
@@ -230,7 +230,7 @@ gdb :program "a.out" :args []
 
 ** 鍵位
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-dap.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-dap.el"
 (ginshio-leader-define
  "d"   "debug"
  "d d" #'dape
@@ -301,7 +301,7 @@ dape 出廠還有一個 ~C-x C-a~ 全局前綴，涵蓋上面同一批命令。�
 本模塊不聲明任何檢查。它需要的東西只有一個包，而包在不在由 packages 模塊回答；具體
 適配器裝沒裝是各語言的事，聲明在各語言自己的文件裏。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-dap.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-dap.el" :comments no
 (provide 'ginshio-dap)
 ;;; ginshio-dap.el ends here
 #+end_src

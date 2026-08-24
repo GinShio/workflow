@@ -11,11 +11,11 @@ Org → Hugo 是這份配置把部落文章發佈到 Hugo 靜態站的導出後�
 ox-hugo 是 autoload，平常不會載入，開啟時不拖時間。因此導出設定都包在
 ~with-eval-after-load 'ox-hugo~ 裏，真正要導出時才被套用。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-hugo.el" :comments no
 ;;; ginshio-org-hugo.el --- Org to Hugo export, ox-hugo -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-hugo.el"
 (require 'cl-lib)
 (require 'subr-x)
 (require 'ginshio-org)
@@ -26,7 +26,7 @@ ox-hugo 是 autoload，平常不會載入，開啟時不拖時間。因此導出
 ox-hugo 是 Org 生態裏最完整的 Hugo 導出後端，直接自 GitHub 上游安裝，與其他
 :straight recipe 一致。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-hugo.el"
 (use-package ox-hugo
   :straight (ox-hugo :host github :repo "kaushalmodi/ox-hugo"))
 #+end_src
@@ -37,7 +37,7 @@ Hugo 站台的來源與 Org 源料分開：=publisher/hugo/= 是站台根，=con
 的文章，=static/images/= 放外連圖片。三條路徑與 =hugo.make= 的 =HUGOBASEDIR=、
 =HUGOPOSTDIR=、=HUGOIMAGEDIR= 對應，只是由 ~ginshio-org-root~ 推導而非環境變數。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-hugo.el"
 (defconst ginshio-org-hugo-publisher-dir
   (expand-file-name "publisher/hugo" ginshio-org-root)
   "Root directory of the Hugo site.")
@@ -65,7 +65,7 @@ posts/images 目錄的名字（等同原腳本用 ~get-dir-name~）；日期格�
 用 TOML；Hugo ≥ 0.60 的 Goldmark 渲染器在此開啟。再把 LaTeX 特殊區塊註記成 :raw，
 導出時保留原始文本，交給下一節的 shortcode 包裝。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-hugo.el"
 (defvar org-file-dir ginshio-org-root
   "Directory of the Org sources, mirroring the blog build's ORGMODE_FILEDIR.")
 
@@ -93,7 +93,7 @@ Hugo 的 shortcode 直接由 Org special block 承接：LaTeX 區塊包成
 帶的話用 ~org-element-interpret-data~ 把元素還原成原始源料，不帶就以傳入的
 contents 為準。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-hugo.el"
 (defun hugo/special-block/before-until (special-block contents _info)
   "Advice the function before until the org-hugo-special-block.
 Args SPECIAL-BLOCK, CONTENTS, and _INFO, see `org-hugo-special-block'."
@@ -139,7 +139,7 @@ emacs 導過之後直接 `make sitehugo` 就能收進站（或整條 `make` 全�
 ~find-file-noselect~ 開檔，導完的當該檔原先不在編輯器就 kill-buffer 回收，不讓
 `hugo/export-all` 留下一堆殘留緩衝。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-hugo.el"
 (defun ginshio-org-hugo-updated-p (file1 file2)
   "Return non-nil if FILE1 is older than FILE2."
   (time-less-p (file-attribute-modification-time (file-attributes file1))
@@ -182,7 +182,7 @@ run; every buffer this function opens itself is killed afterwards, so a bulk
 
 ** 收束
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-hugo.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-hugo.el" :comments no
 (provide 'ginshio-org-hugo)
 ;;; ginshio-org-hugo.el ends here
 #+end_src

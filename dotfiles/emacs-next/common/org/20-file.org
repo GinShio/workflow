@@ -13,11 +13,11 @@ Dired 與可編輯目錄的完整手冊分別是 [[info:emacs#Dired][Emacs manua
 [[info:emacs#Wdired][Emacs manual: Wdired]]；文件比較見 [[info:ediff#Top][Ediff manual]]。從「標記一批文件」到批量改名、
 比較與桌面打開的最短路徑在 [[file:../GUIDE.org::*文件與 Dired][GUIDE.org]]。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el" :comments no
 ;;; ginshio-file.el --- directories as buffers -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'ginshio-keys)
@@ -30,7 +30,7 @@ Dired 與可編輯目錄的完整手冊分別是 [[info:emacs#Dired][Emacs manua
 出廠行為是每進一層目錄開一個新緩衝區。逛十層留十個，而其中九個你再也不會回去看。它
 們不佔什麼內存，佔的是後面每一次切緩衝區時的注意力。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el"
 (setq dired-kill-when-opening-new-dired-buffer t)
 #+end_src
 
@@ -48,7 +48,7 @@ Dired 與可編輯目錄的完整手冊分別是 [[info:emacs#Dired][Emacs manua
 =-v= 讓 =file2= 排在 =file10= 前面。按字符串排序時 =10= 小於 =2=，這在任何帶編號的
 目錄裏都是錯的。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el"
 (setq dired-listing-switches
       "-Ahlv --group-directories-first --time-style=long-iso")
 #+end_src
@@ -63,13 +63,13 @@ Dired 與可編輯目錄的完整手冊分別是 [[info:emacs#Dired][Emacs manua
 磁盤上變了就重新讀，但只在確實變了的時候讀——每次切回緩衝區都無條件重列，大目錄下能
 感覺得到。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el"
 (setq dired-auto-revert-buffer #'dired-directory-changed-p)
 #+end_src
 
 搜索時只匹配文件名。一個目錄列表裏，日期和大小構成的數字串很容易撞上你要找的東西。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el"
 (setq dired-isearch-filenames 'dwim)
 #+end_src
 
@@ -79,7 +79,7 @@ Dired 與可編輯目錄的完整手冊分別是 [[info:emacs#Dired][Emacs manua
 個窗口的目錄填成默認值，於是雙窗口文件管理器的操作方式就成立了：左邊標記，右邊是去
 處，按 =C=。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el"
 (setq dired-dwim-target t)
 #+end_src
 
@@ -89,7 +89,7 @@ Dired 與可編輯目錄的完整手冊分別是 [[info:emacs#Dired][Emacs manua
 目標路徑上缺目錄時問一句而不是報錯；用 git 管着的文件改名時走 git，這樣改名不會在版
 本控制眼裏變成一刪一增。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el"
 (setq dired-recursive-copies 'always
       dired-recursive-deletes 'always
       dired-create-destination-dirs 'ask
@@ -109,7 +109,7 @@ wdired 把目錄列表變成可寫的：改文件名就是改那一行文字，�
 去，靠的是全域的 =C-x= 前綴，所以清空全域之後它就消失了——不報錯，只是按下去什麼也不
 發生。換一個 dired 沒用過的字母。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el"
 (keymap-set dired-mode-map "r" #'dired-toggle-read-only)
 #+end_src
 
@@ -117,7 +117,7 @@ wdired 把目錄列表變成可寫的：改文件名就是改那一行文字，�
 
 權限也可以在同一個緩衝區裏改。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el"
 (setq wdired-allow-to-change-permissions t)
 #+end_src
 
@@ -131,7 +131,7 @@ wdired 把目錄列表變成可寫的：改文件名就是改那一行文字，�
 
 標記的文件數量決定比較什麼：標一個就再問你另一個，標兩個或三個就直接比。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el"
 (defun ginshio/dired-ediff ()
   "Compare the marked files.
 One marked file is compared against another you are asked for; two or
@@ -162,7 +162,7 @@ three are compared with each other."
 
 標籤數據庫是你自己輸入的，重新生成不出來，所以和縮略圖分開放。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el"
 (setq image-dired-dir (ginshio-cache "image-dired/")
       image-dired-db-file (ginshio-data "image-dired-tags"))
 #+end_src
@@ -172,7 +172,7 @@ three are compared with each other."
 進入 dired 的路有兩條，這裏補的是第二條：從當前文件跳進它所在的目錄，光標停在這個文
 件上。出廠的 =C-x C-j= 隨全域一起沒了。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el"
 (ginshio-leader-define
  "f d" #'dired
  "f j" #'dired-jump
@@ -203,7 +203,7 @@ three are compared with each other."
 列目錄的開關依賴 GNU coreutils。這件事失敗時的樣子是 dired 整個打不開，而錯誤信息是
 =ls= 抱怨一個它不認識的選項——離「配置寫了一串它不支持的開關」還有幾步推理。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el"
 (ginshio-doctor-declare 'file "GNU ls"
                         (lambda ()
                           (eq 0 (call-process insert-directory-program nil nil nil
@@ -212,7 +212,7 @@ three are compared with each other."
                         :remedy "zypper install coreutils")
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-file.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-file.el" :comments no
 (provide 'ginshio-file)
 ;;; ginshio-file.el ends here
 #+end_src

@@ -13,11 +13,11 @@ Emacs 裏幾乎每個「選一個」都走 ~completing-read~：切緩衝區、�
 Emacs 內直接閱讀的 [[info:orderless#Top][Orderless manual]] 和 [[info:embark#Top][Embark manual]]。每個包的 README 仍在
 各節首次出現處鏈接。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el" :comments no
 ;;; ginshio-minibuffer.el --- choosing things -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'ginshio-keys)
@@ -31,7 +31,7 @@ Emacs 內直接閱讀的 [[info:orderless#Top][Orderless manual]] 和 [[info:emb
 
 提示語默認是普通文本：光標能走進去，退格能把它吃掉。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (setq completion-ignore-case t
       read-file-name-completion-ignore-case t
       read-buffer-completion-ignore-case t
@@ -50,7 +50,7 @@ Emacs 內直接閱讀的 [[info:orderless#Top][Orderless manual]] 和 [[info:emb
 把上一次的會話原樣再跑一遍——搜完發現看漏了，不必重新輸入；~vertico-directory~ 讓文
 件路徑裏的 ~DEL~ 按目錄層級退，而不是一個字符一個字符退。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (use-package vertico
   :straight (vertico :files (:defaults "extensions/*"))
   :demand t
@@ -71,7 +71,7 @@ Emacs 內直接閱讀的 [[info:orderless#Top][Orderless manual]] 和 [[info:emb
 排序和重複都依賴歷史，而歷史由 core 模塊的 ~savehist-mode~ 持久化。關掉它不會報錯，
 只會讓這兩件事安靜地退化。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (with-eval-after-load 'savehist
   (add-to-list 'savehist-additional-variables 'vertico-repeat-history))
 #+end_src
@@ -84,7 +84,7 @@ Emacs 內直接閱讀的 [[info:orderless#Top][Orderless manual]] 和 [[info:emb
 ~basic~ 必須留在樣式列表末尾。文件名和 TRAMP 遠程路徑的補全依賴它的具體行為，只留
 orderless 會讓 =~/= 展開和遠程主機名補全失靈，而症狀看起來像「TRAMP 壞了」。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (use-package orderless
   :straight t
   :demand t
@@ -110,7 +110,7 @@ orderless 會讓 =~/= 展開和遠程主機名補全失靈，而症狀看起來�
 [[https://github.com/minad/marginalia][marginalia]] 在候選項右邊補上它的來歷：緩衝區的模式和路徑、命令的鍵位和文檔首行、變量
 的當前值。這些信息本來就在 Emacs 裏，只是從不出現在你需要它的那一刻。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (defun ginshio-minibuffer-enable-marginalia-h ()
   "Load Marginalia for the first minibuffer which needs annotations."
   (remove-hook 'minibuffer-setup-hook
@@ -136,7 +136,7 @@ vertico 改候選項怎麼顯示，[[https://github.com/minad/consult][consult]]
 ~M-r~ 換成 ~consult-history~：出廠的 ~previous-matching-history-element~ 要你先想出一
 個正則，consult 的版本直接把歷史列出來讓你挑。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (use-package consult
   :straight t
   :commands (consult-history consult-xref consult-project-buffer consult-buffer
@@ -156,7 +156,7 @@ vertico 改候選項怎麼顯示，[[https://github.com/minad/consult][consult]]
 跨文件的命令要關掉自動預覽：~consult-ripgrep~ 有幾百個結果時，每按一次方向鍵就打開一
 個文件。改成按 ~M-.~ 才預覽。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (with-eval-after-load 'consult
   (consult-customize
    consult-ripgrep consult-grep consult-git-grep
@@ -179,7 +179,7 @@ vertico 改候選項怎麼顯示，[[https://github.com/minad/consult][consult]]
 ~xref-find-apropos~ 也要在一堆文件裏找匹配，它們走 ~xref-search-program~，而那個變量
 出廠指向 grep。同一棵樹，同一件事，兩種速度，還有兩套「哪些文件該跳過」的規則。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (setq xref-search-program 'ripgrep)
 #+end_src
 
@@ -201,7 +201,7 @@ URL 或符號。它認類型的依據正是 marginalia 提供的那些元數據�
 
 慣例的 ~C-.~ 這裏不用，終端未必送得到；改掛在 leader 的 ~.~ 上。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (use-package embark
   :straight t
   :commands (embark-act embark-dwim embark-bindings
@@ -234,7 +234,7 @@ URL 或符號。它認類型的依據正是 marginalia 提供的那些元數據�
 延遲取 0.2 秒。這個數字不是手感問題而是負載問題：每一次觸發都是一次發往語言服務器的
 請求，在一個大型 C++ 項目上，把它調到零點一秒以下等於在打字時持續地問 clangd。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (use-package corfu
   :straight t
   :demand t
@@ -261,7 +261,7 @@ URL 或符號。它認類型的依據正是 marginalia 提供的那些元數據�
 延遲是一對數字：第一次彈出等久一點，之後在候選項之間移動時更新得快一點。這樣掃列表時
 不會有東西一直在旁邊閃，停下來看時又不用等。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (setq corfu-popupinfo-delay '(0.5 . 0.2)
       corfu-popupinfo-max-height 20)
 #+end_src
@@ -272,7 +272,7 @@ corfu 默認也會在 minibuffer 裏啓用。那本來是給沒有 vertico 的�
 結果是一個彈出框壓在候選項列表上——最容易撞見的是 ~M-:~，它給 minibuffer 掛了本地的
 補全函數，正好滿足 corfu 的啓用條件。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (defun ginshio-minibuffer-corfu-wanted-p ()
   "Return non-nil when this minibuffer has no completion UI of its own."
   (and (not (bound-and-true-p vertico--input))
@@ -286,7 +286,7 @@ corfu 默認也會在 minibuffer 裏啓用。那本來是給沒有 vertico 的�
 自動彈出關掉之後總得有辦法叫它出來，而全域映射是空的。用內建的辦法：讓 ~TAB~ 在該縮進
 時縮進、在已經縮好時補全。這是 Emacs 自己推薦的設置，也是 ~TAB~ 在其他編輯器裏的行為。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (setq tab-always-indent 'complete)
 #+end_src
 
@@ -297,7 +297,7 @@ corfu 的彈出框是 child frame，終端下根本不存在——不裝下面�
 ~corfu-terminal-disable-on-gui~ 讓圖形 frame 繼續使用 Corfu 的 child frame，終端 frame
 才使用 popon；因此混合 GUI/TTY daemon 只需要把模式永久打開。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (use-package corfu-terminal
   :straight (corfu-terminal :host codeberg :repo "akib/emacs-corfu-terminal")
   :after corfu
@@ -314,7 +314,7 @@ corfu 的彈出框是 child frame，終端下根本不存在——不裝下面�
 換成左邊一列圖標之後，「這一屏裏哪幾個是函數」變成掃一眼的事，而且候選項本身的排版不
 再被那串 kind 文字撐開。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (use-package nerd-icons-corfu
   :straight t
   :commands nerd-icons-corfu-formatter
@@ -347,7 +347,7 @@ minibuffer 裏是干擾；elisp 代碼塊只在 org 和 markdown 裏存在。二
 言服務器前面，正數排在後面。路徑補全用負數，因為當你已經在寫一個字符串路徑時，服務器
 給的符號名不可能是你要的；dabbrev 用正數，它是所有辦法都沒有時的兜底。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (defun ginshio-minibuffer-add-file-capf-h ()
   (add-hook 'completion-at-point-functions #'cape-file -10 t))
 
@@ -381,7 +381,7 @@ minibuffer 裏是干擾；elisp 代碼塊只在 org 和 markdown 裏存在。二
 
 cape 提供了一個包裝，把獨佔改成可共存。同一件事對 comint 和 pcomplete 也成立。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (with-eval-after-load 'eglot
   (advice-add #'eglot-completion-at-point :around #'cape-wrap-nonexclusive))
 
@@ -419,7 +419,7 @@ isearch 不另設入口。keys 模塊在 =s s= 上綁的仍然是它；若有意
 全域表——~consult-project-buffer~ 那時會先問你要哪個項目，而按這個鍵是為了換緩衝區，不是為
 了回答問題。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (defun ginshio/switch-buffer ()
   "Switch buffers inside this project, or among all of them when there is none."
   (interactive)
@@ -441,7 +441,7 @@ isearch 不另設入口。keys 模塊在 =s s= 上綁的仍然是它；若有意
 診斷列表也不在 =s= 底下。~consult-flymake~ 和 lsp 模塊的 =c x= / =c X= 覆蓋範圍完全一樣，
 而診斷屬於「寫代碼」那條線，和它上下的 =c n= / =c p= 待在一起纔連貫。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
 (ginshio-leader-define
  "."   #'embark-act
  ","   #'vertico-repeat
@@ -467,7 +467,7 @@ isearch 不另設入口。keys 模塊在 =s s= 上綁的仍然是它；若有意
  "i s" #'consult-register-store)
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-minibuffer.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el" :comments no
 (provide 'ginshio-minibuffer)
 ;;; ginshio-minibuffer.el ends here
 #+end_src

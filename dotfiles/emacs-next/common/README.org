@@ -2,8 +2,8 @@
 #+author: GinShio
 
 一份以文學編程維護的 Vanilla Emacs 配置。=config.org= 與 =org/*.org= 是 Ginshio 配置
-模塊的唯一真實來源；=early-init.el=、=init.el= 與 =lisp/ginshio/*.el= 都由它們生成，不
-直接編輯。=lisp/= 的其他子目錄保存受版本控制的上游 Emacs Lisp source。
+模塊的唯一真實來源；=early-init.el=、=init.el= 與 =modules/ginshio/*.el= 都由它們生成，不
+直接編輯。=modules/= 的其他子目錄保存受版本控制的上游 Lisp 與外部資產。
 
 * 契約
 
@@ -13,12 +13,12 @@
 - =XDG_RUNTIME_DIR= 必須已存在、可寫，且權限是 =0700=。
 - 正常 Emacs 啓動只激活已安裝、已構建、已鎖定的套件；不下載、不更新、不修復。
 - 配置或套件缺失時直接中止啓動。不隔離失敗模塊，不建立 safe mode。
-- 套件下載、更新、構建與 lock file 全部由 =bin/vanilla-emacs= 的獨立批處理進程完成。
+- 套件下載、更新、構建與 lock file 全部由 =bin/ginshio-emacs= 的獨立批處理進程完成。
 
 * 第一次安裝
 
 #+begin_src shell
-bin/vanilla-emacs sync
+bin/ginshio-emacs sync
 #+end_src
 
 =sync= 會 tangle 配置，載入 straight，依據 =straight.lock= 記錄的 commit 安裝、構建並
@@ -37,31 +37,31 @@ $XDG_DATA_HOME/emacs/straight/
 
 | 命令                               | 用途                                                     |
 |------------------------------------+----------------------------------------------------------|
-| =bin/vanilla-emacs sync=             | 嚴格按 lock 安裝、切換 revision、構建並追加新增包的 lock   |
-| =bin/vanilla-emacs sync --rebuild=   | 不動上游與 lock，只把每個包按 lock 的 revision 重新構建   |
-| =bin/vanilla-emacs sync --upgrade=   | 忽略舊 lock，更新上游、重建並寫入新的 revision           |
-| =bin/vanilla-emacs clean=            | 刪除 tangle 產物、straight 套件樹、activation 與 eln cache |
-| =bin/vanilla-emacs doctor=           | 載入完整配置並檢查外部程序、字體、grammar 與目錄          |
+| =bin/ginshio-emacs sync=             | 嚴格按 lock 安裝、切換 revision、構建並追加新增包的 lock   |
+| =bin/ginshio-emacs sync --rebuild=   | 不動上游與 lock，只把每個包按 lock 的 revision 重新構建   |
+| =bin/ginshio-emacs sync --upgrade=   | 忽略舊 lock，更新上游、重建並寫入新的 revision           |
+| =bin/ginshio-emacs clean=            | 刪除 tangle 產物、straight 套件樹、activation 與 eln cache |
+| =bin/ginshio-emacs doctor=           | 載入完整配置並檢查外部程序、字體、grammar 與目錄          |
 
 =--rebuild= 補的是一個 =sync= 看不見的狀態。配置關掉了 straight 的修改偵測（理由見
 =05-packages.org=），所以 straight 從不自己判斷某個 build 過期；一次被打斷的 =sync=、
 或者換過一次 Emacs 版本，都會留下一棵「已構建」但缺檔案的樹，而普通 =sync= 會信任它。
 recipe 本身改了不需要這個——那會自動觸發重建。
 
-=clean= 是 =sync= 的反應：它刪除 =early-init.el=、=init.el=、=lisp/ginshio/=，以及
+=clean= 是 =sync= 的反應：它刪除 =early-init.el=、=init.el=、=modules/ginshio/=，以及
 =$XDG_DATA_HOME/emacs/straight/= 和 =$XDG_CACHE_HOME/emacs/eln-cache/=。它保留
-=config.org=、=org/*.org=、=tangle.el=、=straight.lock=、=lisp/= 下受版本控制的 source、
+=config.org=、=org/*.org=、=tangle.el=、=straight.lock=、=modules/= 下受版本控制的 source 與資產、
 tree-sitter grammars 與其他使用者資料；auto-save 和 backup cache 也不受影響。清理後普通
 Emacs 必須啓動失敗，直到再次運行
-=bin/vanilla-emacs sync=。執行前應先由 system/service 停止所有使用這份配置的 Emacs；
+=bin/ginshio-emacs sync=。執行前應先由 system/service 停止所有使用這份配置的 Emacs；
 腳本不探測或管理 daemon。
 
-普通會話不載入 straight；套件管理命令只存在於 =bin/vanilla-emacs= 的維護進程裏。
+普通會話不載入 straight；套件管理命令只存在於 =bin/ginshio-emacs= 的維護進程裏。
 需要查看或改動套件樹時退出編輯流程，用 =sync= / =sync --upgrade= / =clean= 處理。
 
 * Server
 
-配置同時兼容普通圖形 Emacs、默認 daemon 與具名 daemon；=bin/vanilla-emacs= 不負責它們的啓停。
+配置同時兼容普通圖形 Emacs、默認 daemon 與具名 daemon；=bin/ginshio-emacs= 不負責它們的啓停。
 daemon 的進程生命週期應由 system/service 維護，客戶端直接使用 Emacs 原生的
 =emacsclient=。
 
@@ -108,12 +108,12 @@ Emacs 放在 =$XDG_RUNTIME_DIR/emacs=，配置不啓用 TCP server，也不設 =
 * 結構
 
 =tangle.el= 自動發現全部 =org/NN-name.org=，按完整文件名字典序 include。功能模塊從文件名
-得到 =name=，生成 =lisp/ginshio/ginshio-name.el=，同一順序也直接生成 ~ginshio-modules~；不存在
+得到 =name=，生成 =modules/ginshio/ginshio-name.el=，同一順序也直接生成 ~ginshio-modules~；不存在
 另一份要同步修改的 manifest。
 
-=lisp/ginshio/= 是唯一可由 tangle 與 =clean= 整體重建的 Lisp 子樹。其他 =lisp/NAME/=
-目錄是受版本控制的 source；啓用它們的配置模塊只把自己需要的精確目錄加入 ~load-path~，
-不遞迴暴露整棵 =lisp/=。
+=modules/ginshio/= 是唯一可由 tangle 與 =clean= 整體重建的 Lisp 子樹。其他
+=modules/NAME/= 目錄是受版本控制的上游 Lisp 或外部資產；啓用它們的配置模塊只把自己
+需要的精確目錄加入 ~load-path~，不遞迴暴露整棵 =modules/=。
 
 每個文件第一行用 =#+GINSHIO_MODULE:= 聲明自己的狀態：
 
@@ -125,14 +125,14 @@ Emacs 放在 =$XDG_RUNTIME_DIR/emacs=，配置不啓用 TCP server，也不設 =
 | =disabled=     | 否     | 否                     |
 
 新增功能模塊只需建立 =org/NN-name.org=、寫上 =enabled=，並讓它生成及提供
-=lisp/ginshio/ginshio-name.el= / ~ginshio-name~。=NN= 不必連續；它和後面的 =name= 共同決定加載
+=modules/ginshio/ginshio-name.el= / ~ginshio-name~。=NN= 不必連續；它和後面的 =name= 共同決定加載
 順序。停用時只把該文件改為 =disabled=；成功 tangle 會刪除殘留產物，因此其他啓用模塊若
 仍 ~require~ 它，完整啓動會直接失敗而不是暗中重新啓用。
 
 改動之後的完整檢查是一條命令：
 
 #+begin_src shell
-bin/vanilla-emacs sync && bin/vanilla-emacs doctor
+bin/ginshio-emacs sync && bin/ginshio-emacs doctor
 #+end_src
 
 =sync= 先 tangle（其中會驗證每個生成檔的括號與可讀性），再按 lock 安裝與構建，最後以

@@ -3,7 +3,7 @@
 (defvar ginshio-init-complete nil)
 
 (let ((payload
-       (expand-file-name "lisp/ginshio/ginshio-init.el" user-emacs-directory)))
+       (expand-file-name "modules/ginshio/ginshio-init.el" user-emacs-directory)))
   (condition-case err
       (progn
         (load payload nil 'nomessage t)

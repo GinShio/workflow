@@ -6,11 +6,11 @@ Emacs 的 mode 與 LSP language id 都叫 Python；只有實際執行程序明�
 使用內建 classic/tree-sitter modes、[[https://github.com/microsoft/pyright][Pyright]] 與 Dape 已有的
 [[https://github.com/microsoft/debugpy][debugpy]] 配置，不再安裝另一套 Python major mode。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-python.el" :comments no
 ;;; ginshio-lang-python.el --- Python 3 -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-python.el"
 (require 'ginshio-doctor)
 (require 'ginshio-lang)
 (require 'ginshio-lsp)
@@ -24,7 +24,7 @@ Emacs 的 mode 與 LSP language id 都叫 Python；只有實際執行程序明�
 fallback；~python-indent-guess-indent-offset~ 保持開啓，已有文件會從內容推斷，而
 EditorConfig 的明確聲明最後生效。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-python.el"
 (setq python-indent-offset 4
       python-indent-guess-indent-offset t
       python-shell-interpreter "python3")
@@ -45,7 +45,7 @@ Python 基礎 mode 自帶 Flymake backend。Eglot 接管時會保存並暫時替
 恢復；因此 standalone file、缺 server 或連接失敗時仍有 native 診斷，而 managed buffer
 只保留 Pyright 一個來源。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-python.el"
 (ginshio-lsp-register-server
  :modes '(python-mode python-ts-mode)
  :program "pyright-langserver"
@@ -60,7 +60,7 @@ Pyright 的 interpreter、venv 與分析範圍由項目配置決定；本文件�
 Dape 的兩條 Python 配置默認執行名是 =python=，而這台系統只保證 =python3=。等 Dape
 真正加載後修改既有 plist；adapter 的其他字段仍由 Dape 上游維護。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-python.el"
 (defun ginshio-lang-python-use-python3-for-dape ()
   "Run Dape's debugpy adapter with the configured Python 3 executable."
   (dolist (name '(debugpy debugpy-module))
@@ -75,7 +75,7 @@ Dape 的兩條 Python 配置默認執行名是 =python=，而這台系統只保�
 debugpy 屬於 interpreter 環境，不只是一個 PATH executable，所以 doctor 直接要求
 =python3= 匯入 adapter module。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-python.el"
 (defun ginshio-lang-python-debugpy-available-p ()
   "Return non-nil when Python 3 can import the debugpy adapter."
   (and (executable-find python-shell-interpreter)
@@ -97,7 +97,7 @@ debugpy 屬於 interpreter 環境，不只是一個 PATH executable，所以 doc
 grammar 檢查由 lang 註冊產生；Python 沒有語言 compiler，=python3= runtime 在本模塊
 直接檢查；Pyright 的必要檢查由 lsp 註冊產生。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-python.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-python.el" :comments no
 (provide 'ginshio-lang-python)
 ;;; ginshio-lang-python.el ends here
 #+end_src

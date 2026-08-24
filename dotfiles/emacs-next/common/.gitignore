@@ -1,7 +1,7 @@
 # Tangled output.  The tracked early-init.el and init.el are fail-closed
 # loaders; config.org and org/*.org generate their payloads below.
-# Other lisp/ subdirectories contain tracked upstream sources.
-/lisp/ginshio/
+# Other modules/ subdirectories contain tracked upstream sources and assets.
+/modules/ginshio/
 /.ginshio-tangle-*/
 
 # Package manager and generated state.  The straight data tree and activations

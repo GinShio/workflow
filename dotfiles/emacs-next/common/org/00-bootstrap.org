@@ -14,7 +14,7 @@ Emacs 的啓動次序、early init 與 init file 契約見 [[info:emacs#Init Fil
 Emacs 在讀取主配置之前會先讀 =early-init.el=。這個時間點的特殊之處在於：包系統尚未
 激活，第一個窗口尚未創建。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-early-init.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-early-init.el" :comments no
 ;;; ginshio-early-init.el --- generated early-init payload -*- lexical-binding: t; -*-
 #+end_src
 
@@ -22,7 +22,7 @@ Emacs 在讀取主配置之前會先讀 =early-init.el=。這個時間點的特�
 環境不對時，越早停下來，錯誤越接近真正原因。尤其不使用 XDG 規範裏的默認回退；啓動器
 沒有傳入這些變量，本身就是需要修正的環境錯誤。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-early-init.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-early-init.el"
 (when (version< emacs-version "30.1")
   (error "Ginshio Emacs requires Emacs 30.1 or newer; found %s" emacs-version))
 
@@ -50,7 +50,7 @@ Emacs 在讀取主配置之前會先讀 =early-init.el=。這個時間點的特�
 啓動期間分配的對象幾乎全部存活到會話結束，回收它們找不到任何垃圾。把閾值頂到最大
 等於在這段時間關掉 GC，正常值由 core 模塊在啓動完成後恢復。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-early-init.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-early-init.el"
 (setq gc-cons-threshold most-positive-fixnum
       gc-cons-percentage 0.6)
 #+end_src
@@ -58,14 +58,14 @@ Emacs 在讀取主配置之前會先讀 =early-init.el=。這個時間點的特�
 包管理器由專門的模塊負責，Emacs 自帶的那套要在此關掉，否則它會在啓動時激活一份平行
 的包樹，兩邊的同名包互相覆蓋，症狀難以歸因。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-early-init.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-early-init.el"
 (setq package-enable-at-startup nil)
 #+end_src
 
 界面元素從 frame 的默認參數裏拿掉，而不是創建之後再關閉。差別是肉眼可見的：後者會
 讓工具欄先畫出來再消失，每次啓動閃一下。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-early-init.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-early-init.el"
 (push '(menu-bar-lines . 0) default-frame-alist)
 (push '(tool-bar-lines . 0) default-frame-alist)
 (push '(vertical-scroll-bars) default-frame-alist)
@@ -76,7 +76,7 @@ Emacs 在讀取主配置之前會先讀 =early-init.el=。這個時間點的特�
 
 啓動途中字體和界面元素還在變化，此時每次變化都讓 frame 重新計算尺寸純屬浪費。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-early-init.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-early-init.el"
 (setq frame-inhibit-implied-resize t
       frame-resize-pixelwise t
       inhibit-startup-screen t
@@ -90,7 +90,7 @@ Emacs 在讀取主配置之前會先讀 =early-init.el=。這個時間點的特�
 它被使用之前就改道。這件事必須在 =early-init.el= 完成——一旦有代碼被編譯過，改就
 晚了。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-early-init.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-early-init.el"
 (when (fboundp 'startup-redirect-eln-cache)
   (startup-redirect-eln-cache
    (expand-file-name "emacs/eln-cache/" (getenv "XDG_CACHE_HOME"))))
@@ -115,11 +115,15 @@ Emacs 會生成大量運行時文件：包、備份、歷史、書籤、緩存�
 這三檔對應 XDG 規範的三個目錄，其中 =XDG_STATE_HOME= 正是為第二檔設立的。分開還有
 一個現實好處：清理緩存的自動化規則可以放心地掃 =cache=，不會誤傷你的歷史記錄。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-path.el" :comments no
+配置自己捆綁的內容另放 =modules/=：tangle 產物在 =modules/ginshio/=，上游 Lisp 與外部
+資產（pandoc 模板、HTML 樣式）在同層的其他子目錄。只有 =modules/ginshio/= 進入
+~load-path~；其餘子目錄由需要它們的模塊自己加入。
+
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-path.el" :comments no
 ;;; ginshio-path.el --- where things live -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-path.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-path.el"
 (defgroup ginshio nil
   "Personal Emacs configuration."
   :group 'convenience
@@ -159,11 +163,11 @@ Signal an error when it is absent or relative."
 (defconst ginshio-config-dir (file-name-as-directory user-emacs-directory)
   "This configuration itself.  Under version control; treated as read-only.")
 
-(defconst ginshio-lisp-dir (expand-file-name "lisp/" ginshio-config-dir)
-  "Version-controlled and generated Emacs Lisp used by this configuration.")
+(defconst ginshio-modules-dir (expand-file-name "modules/" ginshio-config-dir)
+  "Vendored Lisp, tangled modules, and other bundled assets.")
 
 (defconst ginshio-generated-lisp-dir
-  (expand-file-name "ginshio/" ginshio-lisp-dir)
+  (expand-file-name "ginshio/" ginshio-modules-dir)
   "Where literate configuration modules are tangled.")
 
 (defconst ginshio-data-dir (ginshio-path--xdg "XDG_DATA_HOME" "emacs/")
@@ -186,13 +190,13 @@ Signal an error when it is absent or relative."
 三個輔助函數，讓後續模塊不必反覆寫 ~expand-file-name~，也讓每個文件的歸類在調用處
 一目瞭然。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-path.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-path.el"
 (defun ginshio-data (name) (expand-file-name name ginshio-data-dir))
 (defun ginshio-state (name) (expand-file-name name ginshio-state-dir))
 (defun ginshio-cache (name) (expand-file-name name ginshio-cache-dir))
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-path.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-path.el" :comments no
 (provide 'ginshio-path)
 ;;; ginshio-path.el ends here
 #+end_src
@@ -202,18 +206,18 @@ Signal an error when it is absent or relative."
 =init.el= 應該短到一屏讀完。它不配置任何東西，只負責找到模塊並按順序交給加載器——
 這樣啓動出問題時，你一眼就能看出卡在哪一步。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-init.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-init.el" :comments no
 ;;; ginshio-init.el --- generated module loader -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-init.el"
-(add-to-list 'load-path (expand-file-name "lisp/ginshio/" user-emacs-directory))
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-init.el"
+(add-to-list 'load-path (expand-file-name "modules/ginshio/" user-emacs-directory))
 (require 'ginshio-path)
 #+end_src
 
 *** 加載器
 
-模塊就是 =lisp/ginshio/ginshio-NAME.el=，提供特性 ~ginshio-NAME~。這裏刻意不捕獲錯誤：一份配置
+模塊就是 =modules/ginshio/ginshio-NAME.el=，提供特性 ~ginshio-NAME~。這裏刻意不捕獲錯誤：一份配置
 只有「完整成立」和「啓動失敗」兩種狀態。吞掉一個模塊的異常會留下已經執行的副作用，卻
 讓後面的模塊在半成品上繼續工作；那不是降級，而是把真正錯誤藏到更遠的地方。
 
@@ -224,7 +228,7 @@ Signal an error when it is absent or relative."
 模塊清單由 tangle 根據文件名與各文件的 metadata 生成。文件名是加載順序；=packages=
 仍是分水嶺，排在它前面的模塊不得使用第三方包。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-init.el" :noweb yes
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-init.el" :noweb yes
 (defvar ginshio-modules
   '<<ginshio-generated-modules>>
   "Modules to load, in order.")
@@ -243,7 +247,7 @@ Signal an error when it is absent or relative."
 ~customize~ 界面默認把它的結果寫進 =init.el=。這裏的 =init.el= 是生成的，被改寫就
 會在下次生成時憑空產生衝突，所以指到別處去。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-init.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-init.el"
 (setq custom-file (ginshio-data "custom.el"))
 (when (file-exists-p custom-file)
   (load custom-file nil 'nomessage))

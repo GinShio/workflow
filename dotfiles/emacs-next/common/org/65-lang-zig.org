@@ -10,11 +10,11 @@ classic mode 直接取官方 GitHub；TS mode 的 canonical repository 在 Codeb
 [[https://github.com/emacsmirror/zig-ts-mode][Emacsmirror]] 的逐 commit 鏡像取得。lock file 仍釘住確切 commit，不把 mirror 的 HEAD
 當版本。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-zig.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-zig.el" :comments no
 ;;; ginshio-lang-zig.el --- Zig -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-zig.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-zig.el"
 (require 'ginshio-doctor)
 (require 'ginshio-lang)
 (require 'ginshio-lsp)
@@ -33,7 +33,7 @@ classic mode 直接取官方 GitHub；TS mode 的 canonical repository 在 Codeb
 加載後把 classic association 放回最前面，同時重跑 remap；這一步不能刪，因為 package 的
 autoload association 是它自己加入的。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-zig.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-zig.el"
 (defconst ginshio-lang-zig-source-mode-entry
   '("\\.\\(zig\\|zon\\)\\'" . zig-mode)
   "Auto-mode entry which keeps grammar absence on the classic mode.")
@@ -87,7 +87,7 @@ autoload association 是它自己加入的。
 仍應回到 shell 模塊的 =wits build=。mode hook 發生在 directory locals 之前，所以項目仍可
 覆蓋它。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-zig.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-zig.el"
 (defun ginshio-lang-zig-project-compile-h ()
   "Use the cross-language project build default in Zig buffers."
   (setq-local compile-command (default-value 'compile-command)))
@@ -106,7 +106,7 @@ autoload association 是它自己加入的。
 Zig 產生的是原生可執行文件，lldb-dap 能調試它；Dape 的既有配置只漏了 mode filter。把
 兩個 mode 加進同一條配置，不複製 adapter 的 command、protocol 或 launch defaults。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-zig.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-zig.el"
 (defun ginshio-lang-zig-enable-lldb-dap ()
   "Let Dape offer its existing lldb-dap configuration for Zig."
   (when-let* ((config (alist-get 'lldb-dap dape-configs)))
@@ -125,7 +125,7 @@ Zig 產生的是原生可執行文件，lldb-dap 能調試它；Dape 的既有�
 
 ** 自檢項
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-zig.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-zig.el"
 (ginshio-doctor-executable 'lang-zig "lldb-dap"
                            :severity 'warn
                            :note "debug adapter"
@@ -134,7 +134,7 @@ Zig 產生的是原生可執行文件，lldb-dap 能調試它；Dape 的既有�
 
 zig compiler 與 grammar 檢查由 lang 註冊產生；zls 的必要檢查由 lsp 註冊產生。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-zig.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-zig.el" :comments no
 (provide 'ginshio-lang-zig)
 ;;; ginshio-lang-zig.el ends here
 #+end_src

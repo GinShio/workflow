@@ -11,13 +11,14 @@ Org 源料額外能變成 docx、ODT、EPUB、Beamer，以及套了外部 LaTeX 
 的細節（fancy 樣式、engraved 代碼框）是 Org 原生的，pandoc 產不出來；反過來
 「交一份 Word 給別人」或「要一份帶封面頁的成品 PDF」歸這裏。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el" :comments no
 ;;; ginshio-org-pandoc.el --- Org export through pandoc -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (require 'cl-lib)
 (require 'subr-x)
+(require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'ginshio-org)
 #+end_src
@@ -28,7 +29,7 @@ Org 源料額外能變成 docx、ODT、EPUB、Beamer，以及套了外部 LaTeX 
 累積了一批壞掉的地方；=emacsorphanage/ox-pandoc= 是 a-fent 接手維護的分支，MELPA 上
 的 =ox-pandoc= 指的就是它。取後者。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (use-package ox-pandoc
   :straight (ox-pandoc :host github :repo "emacsorphanage/ox-pandoc"))
 #+end_src
@@ -38,7 +39,7 @@ ox-pandoc 的導出命令都有 autoload，但 =C-c C-e= 選單裏的 =p= 分支
 ~ox~ 上：導出框架本身就是延遲載入的，開一份 =.org= 不會碰到它，第一次按 =C-c C-e=
 才連帶把 pandoc 後端帶進來。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (with-eval-after-load 'ox
   (require 'ox-pandoc))
 #+end_src
@@ -53,7 +54,7 @@ html5、gfm、docx、odt、pptx 也都在。上游把絕大多數格式註釋掉
 選項，檔案寫 =#+PANDOC_OPTIONS: pdf-engine:xelatex= 就換掉，所以留在 ox-pandoc 自己
 的格式層。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (with-eval-after-load 'ox-pandoc
   (setq org-pandoc-options-for-latex-pdf  '((pdf-engine . "lualatex"))
         org-pandoc-options-for-beamer-pdf '((pdf-engine . "lualatex"))))
@@ -68,7 +69,7 @@ html5、gfm、docx、odt、pptx 也都在。上游把絕大多數格式註釋掉
 所以不寫進註冊表，而是對每個 LaTeX 系的輸出格式都套上。真正套用的位置見下面的
 「套用」一節：這批值不能走格式層，那條路會把它們整批弄丟。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (defconst ginshio-org-pandoc-latex-formats
   '(latex latex-pdf beamer beamer-pdf)
   "Pandoc output formats produced by a LaTeX writer.")
@@ -99,12 +100,12 @@ html5、gfm、docx、odt、pptx 也都在。上游把絕大多數格式註釋掉
 序言，獨立 =.tex= 連模板這個階段都沒有，兩者都無法直接用它。所以主題只在 pandoc
 這條路上存在；=32-org-latex= 那套 engraved 外觀是另一個機制，不在同一張表裏。
 
-模板原樣放在 =misc/pandoc/eisvogel/=，來源、release tag 與更新規則見該目錄的
+模板原樣放在 =modules/pandoc/eisvogel/=，來源、release tag 與更新規則見該目錄的
 =README=。一個主題就是「模板 + 一組 pandoc 變量」的具名捆綁。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (defconst ginshio-org-pandoc-template-dir
-  (expand-file-name "misc/pandoc/" ginshio-config-dir)
+  (expand-file-name "pandoc/" ginshio-modules-dir)
   "Vendored pandoc templates, one directory per upstream project.")
 
 (defun ginshio-org-pandoc-template-file (name)
@@ -124,7 +125,7 @@ A relative NAME is resolved below `ginshio-org-pandoc-template-dir'."
 的變量。pandoc 3.10 起舊的 ~--listings~ 只是它的別名，而且每次導出都會印一行過時
 警告，所以直接用新名字。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (defcustom ginshio-org-pandoc-themes
   '((default)
     (eisvogel
@@ -157,7 +158,7 @@ which names none, is pandoc's own unmodified output."
 模板缺一份就是配置不完整，跟 =lang-llvm= 對 vendored mode 的態度一樣：啓動時驗證，
 不等到某次導出才發現 pandoc 找不到檔案。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (dolist (theme ginshio-org-pandoc-themes)
   (dolist (entry (plist-get (cdr theme) :templates))
     (let ((file (ginshio-org-pandoc-template-file (cdr entry))))
@@ -175,7 +176,7 @@ pandoc 後端認得這個關鍵字，做法與 =32-org-html= 給 ox-html 加 =:c
 選項表第四格是「預設值的求值形式」，寫變量名即取它當時的值；因此 =info= 裏的
 =:pandoc-theme= 永遠有一個有效主題，關鍵字缺席時就是全域那個。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (with-eval-after-load 'ox-pandoc
   (eval '(cl-pushnew '(:pandoc-theme "PANDOC_THEME" nil ginshio-org-pandoc-theme t)
                      (org-export-backend-options
@@ -187,7 +188,7 @@ pandoc 後端認得這個關鍵字，做法與 =32-org-html= 給 ox-html 加 =:c
 關鍵字帶進來的是字串、全域預設是符號，兩邊都要收。名字不在註冊表裏就報錯並列出認識
 哪些——打錯一個字而靜默套用 pandoc 預設外觀，比直接失敗難查得多。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (defun ginshio-org-pandoc--theme-name (value)
   "Return the theme name VALUE denotes, or nil when it denotes none."
   (cond ((null value) nil)
@@ -214,7 +215,7 @@ pandoc 後端認得這個關鍵字，做法與 =32-org-html= 給 ox-html 加 =:c
 但 =info= 裏還留着 =#+PANDOC_OPTIONS:= 與 =#+PANDOC_VARIABLES:= 的原始字串，照
 ox-pandoc 自己的方式拆一遍，就能準確知道「這篇文件親自指定了哪些鍵」。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (defun ginshio-org-pandoc--variable-name (assignment)
   "Return the variable name of a pandoc NAME:VALUE ASSIGNMENT."
   (if (string-match "\\`\\([^:]+\\):" assignment)
@@ -250,7 +251,7 @@ ox-pandoc 自己的方式拆一遍，就能準確知道「這篇文件親自指�
 換掉，得按名字合併：檔案指定過的原樣留着，其餘同名的讓位。其他選項都是單值，後寫的
 蓋掉先寫的本來就對。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (defun ginshio-org-pandoc--merge-variables (variables claimed)
   "Add the pandoc VARIABLES whose names are not among CLAIMED to the table."
   (let* ((wanted (mapcar #'ginshio-org-pandoc--variable-name variables))
@@ -274,7 +275,7 @@ ox-pandoc 自己的方式拆一遍，就能準確知道「這篇文件親自指�
 句 =header-left:草稿=」的副作用是中文從此不出現，而且沒有任何提示。~pdf-engine~ 這
 種單值選項沒有這個問題，所以它留在格式層。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (defun ginshio-org-pandoc-apply-defaults (info)
   "Merge this configuration's fonts and INFO's theme into the option table."
   (let ((claimed-variables
@@ -303,7 +304,7 @@ ox-pandoc 自己的方式拆一遍，就能準確知道「這篇文件親自指�
 ~org-pandoc-template~ 是 pandoc 後端的 template transcoder，選項表在它裏面從無到有
 建起來，所以只能跟在它後面。它同時也是唯一同時看得到 =info= 與那張表的位置。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (defun ginshio-org-pandoc-template-a (orig-fn contents info)
   "Apply this configuration's pandoc defaults once ORIG-FN has built the table."
   (prog1 (funcall orig-fn contents info)
@@ -335,7 +336,7 @@ pandoc 未經改動的輸出。
 按 (module, label) 併成一條。缺字體只降級不擋路，所以是 ~warn~；改
 ~ginshio-org-pandoc-latex-fonts~ 換成裝了的字體同樣算修好。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el"
 (ginshio-doctor-executable 'org-pandoc "pandoc"
                            :note "Org export through pandoc"
                            :remedy "zypper install pandoc")
@@ -354,7 +355,7 @@ pandoc 未經改動的輸出。
 
 ** 收束
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-pandoc.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-pandoc.el" :comments no
 (provide 'ginshio-org-pandoc)
 ;;; ginshio-org-pandoc.el ends here
 #+end_src

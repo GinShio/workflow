@@ -4,29 +4,29 @@
 
 LLVM IR、Machine IR、MLIR 與 TableGen 的 major modes 都由 llvm-project 自己維護。
 它們不是四個獨立演進的套件，所以這裏從同一個 release tag 保存一份原樣 snapshot：
-=lisp/llvm/= 放 LLVM IR、MIR 與 TableGen，=lisp/mlir/= 放 MLIR。來源、授權與更新規則見
+=modules/llvm/= 放 LLVM IR、MIR 與 TableGen，=modules/mlir/= 放 MLIR。來源、授權與更新規則見
 各目錄的 =README=；本文件只負責把那些 Lisp library 接進配置。
 
 第一版只提供文本編輯：文件識別、語法着色、註釋語法與上游模式自己的命令。不啓用 LSP、
 tree-sitter grammar、格式化或 =opt=/=llc=/=mlir-opt=/TableGen 工具。等其中一條工作流真的
 需要外部程序時，再在相應責任下設計，不讓 mode support 預先長成 toolchain framework。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-llvm.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-llvm.el" :comments no
 ;;; ginshio-lang-llvm.el --- LLVM project language modes -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-llvm.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-llvm.el"
 (require 'ginshio-path)
 
 (dolist (library '("llvm/llvm-mode.el"
                    "llvm/llvm-mir-mode.el"
                    "llvm/tablegen-mode.el"
                    "mlir/mlir-mode.el"))
-  (unless (file-readable-p (expand-file-name library ginshio-lisp-dir))
+  (unless (file-readable-p (expand-file-name library ginshio-modules-dir))
     (error "Vendored language mode is missing: %s" library)))
 
-(add-to-list 'load-path (expand-file-name "llvm/" ginshio-lisp-dir))
-(add-to-list 'load-path (expand-file-name "mlir/" ginshio-lisp-dir))
+(add-to-list 'load-path (expand-file-name "llvm/" ginshio-modules-dir))
+(add-to-list 'load-path (expand-file-name "mlir/" ginshio-modules-dir))
 #+end_src
 
 ** 文件識別
@@ -42,7 +42,7 @@ MLIR 文件，而不是讓所有 Emacs 會話為沒用到的模式承擔副作�
 =.lgc= 是 LLPC/LGC 使用的 LLVM IR 文本，沿用 ~llvm-mode~。其餘擴展名與 upstream mode
 一致，但仍在這裏顯式聲明，讓第一次打開文件時可以在 library 尚未加載前正確 autoload。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-llvm.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-llvm.el"
 (use-package llvm-mode
   :straight nil
   :mode (("\\.ll\\'" . llvm-mode)
@@ -64,7 +64,7 @@ MLIR 文件，而不是讓所有 Emacs 會話為沒用到的模式承擔副作�
 四個模式都保留自己的 mode-local map；本模塊不另設全域或 leader 鍵位。打開文件後用
 ~M-m h m~ 查看當前模式實際提供的接口。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-llvm.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-llvm.el" :comments no
 (provide 'ginshio-lang-llvm)
 ;;; ginshio-lang-llvm.el ends here
 #+end_src

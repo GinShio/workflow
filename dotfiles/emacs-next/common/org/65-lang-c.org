@@ -9,11 +9,11 @@
 一種語言的所有事情集中在一個文件裏：語法、主模式、縮進、語言服務器、調試適配器。註
 釋掉 =init.el= 裏的 ~lang-c~，這一切一起消失，其他語言不受影響。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-c.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-c.el" :comments no
 ;;; ginshio-lang-c.el --- C and C++ -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-c.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-c.el"
 (require 'ginshio-doctor)
 (require 'ginshio-lang)
 (require 'ginshio-lsp)
@@ -25,7 +25,7 @@
 可能是 C 也可能是 C++，光看擴展名分不出來，所以 Emacs 把它交給一個讀內容再決定的模
 式。那個模式兩種 grammar 都要，缺一個就整條退回傳統模式。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-c.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-c.el"
 (ginshio-lang-register
  :module 'lang-c
  :grammars '((c   "https://github.com/tree-sitter/tree-sitter-c"   "v0.23.6")
@@ -56,7 +56,7 @@ compiler 則由本模塊的 ~:compilers~ 分開聲明。
 
 所以問一下那個工具本身。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-c.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-c.el"
 (setq c-ts-mode-indent-style 'k&r
       c-ts-mode-indent-offset 4)
 #+end_src
@@ -72,7 +72,7 @@ compiler 則由本模塊的 ~:compilers~ 分開聲明。
 ~--dump-config~ 讓它自己回答，輸出的是合併之後的最終值。在這台機器上一次調用約十幾毫
 秒，而且結果按目錄緩存，所以一個項目只問幾次。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-c.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-c.el"
 (defconst ginshio-lang-c-format-settings-regexp
   (concat "^\\(IndentWidth\\|TabWidth\\|UseTab\\|ColumnLimit\\)"
           ":[ \t]*\\([^ \t\n]+\\)")
@@ -153,7 +153,7 @@ re-indent every C file on the machine that belongs to no project."
 ~ColumnLimit~ 為零在 clang-format 裏表示「不限」，而 ~fill-column~ 沒有這個值，所以那
 種情況保留 core 給的默認寬度。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-c.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-c.el"
 (defun ginshio-lang-c-adopt-format-settings-h ()
   "Indent the way this directory's clang-format would."
   (when-let* ((file buffer-file-name)
@@ -183,7 +183,7 @@ re-indent every C file on the machine that belongs to no project."
 
 ** clangd
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-c.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-c.el"
 (defun ginshio-lang-c-clangd-contact (_interactive _project)
   "Return the command line for clangd in the current buffer."
   (list "clangd"
@@ -256,7 +256,7 @@ ln -sfn _build/release/compile_commands.json compile_commands.json
 gdb 的版本是硬門檻而不是偏好：DAP 接口是 14.1 才加進去的，更早的版本連不上，而症狀
 是一條來自適配器內部的錯誤，看不出和版本有關。所以這條檢查報出實際版本號。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-c.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-c.el"
 (defconst ginshio-lang-c-gdb-minimum-version 14.1
   "First GDB release to speak the Debug Adapter Protocol.")
 
@@ -289,7 +289,7 @@ gdb 的版本是硬門檻而不是偏好：DAP 接口是 14.1 才加進去的，
 
 clangd 的檢查不在這裏——註冊服務器時 lsp 模塊已經替本語言聲明了一條。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-c.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-c.el" :comments no
 (provide 'ginshio-lang-c)
 ;;; ginshio-lang-c.el ends here
 #+end_src

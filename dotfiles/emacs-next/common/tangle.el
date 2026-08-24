@@ -25,12 +25,12 @@
 (defconst ginshio-tangle--manifest-marker-regexp
   "^[ \t]*#\\+GINSHIO_MODULES:[ \t]*$")
 
-(defconst ginshio-tangle--module-directory "lisp/ginshio/"
+(defconst ginshio-tangle--module-directory "modules/ginshio/"
   "Directory below the configuration root containing tangled modules.")
 
 (defconst ginshio-tangle--payload-targets
-  '("lisp/ginshio/ginshio-early-init.el"
-    "lisp/ginshio/ginshio-init.el")
+  '("modules/ginshio/ginshio-early-init.el"
+    "modules/ginshio/ginshio-init.el")
   "Generated payloads loaded by the tracked root bootstrap files.")
 
 (cl-defstruct

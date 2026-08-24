@@ -9,11 +9,11 @@ Classic 編輯使用成熟的 [[https://github.com/haskell/haskell-mode][haskell
 TS mode 的 canonical repository 在 Codeberg；recipe 從
 [[https://github.com/emacsmirror/haskell-ts-mode][Emacsmirror]] 的逐 commit 鏡像取得，最後仍由 lock file 固定 revision。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-haskell.el" :comments no
 ;;; ginshio-lang-haskell.el --- Haskell -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-haskell.el"
 (require 'ginshio-doctor)
 (require 'ginshio-lang)
 (require 'ginshio-lsp)
@@ -30,7 +30,7 @@ Haskell layout 是語法的一部分，fallback 使用 haskell-mode 經過多年
 Literate Haskell 與預處理過的 source 不是普通 =.hs=：它們保留專門的 classic mode，不被
 TS dispatcher 一併吞掉。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-haskell.el"
 (use-package haskell-mode
   :straight t
   :mode (("\\.\\(?:hs\\|hs-boot\\|hsig\\|hsc\\|gs\\)\\'" . haskell-mode)
@@ -50,7 +50,7 @@ TS dispatcher 一併吞掉。
 outline 與結構導航時，顯式調用 ~ginshio/haskell-ts-mode~。上游留下的 electric newline
 hook 仍會修改縮進，手動 TS mode 中也一併摘掉。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-haskell.el"
 (defconst ginshio-lang-haskell-classic-entry
   '("\\.hs\\'" . haskell-mode)
   "Auto-mode entry which keeps ordinary Haskell editing reliable.")
@@ -108,7 +108,7 @@ Eglot 從 mode 名推導 language id；=haskell-literate-mode= 會被誤推成
 =haskell-literate=。HLS 要的仍是 =haskell=，所以在 Eglot 建立 server 表之前把這個穩定
 外部名稱放到 mode symbol 上。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-haskell.el"
 (put 'haskell-literate-mode 'eglot-language-id "haskell")
 
 (ginshio-lsp-register-server
@@ -122,7 +122,7 @@ Eglot 從 mode 名推導 language id；=haskell-literate-mode= 會被誤推成
 Dape 0.27 的 =hdb= 已經覆蓋 classic、TS 與 literate modes，因此不複製配置。它需要
 well-typed 的 =hdb= adapter；項目入口和參數仍在啓動時編輯，或寫入 =.dir-locals.el=。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-haskell.el"
 (ginshio-doctor-executable 'lang-haskell "ghci"
                            :severity 'warn
                            :note "interactive Haskell"
@@ -136,7 +136,7 @@ well-typed 的 =hdb= adapter；項目入口和參數仍在啓動時編輯，或�
 
 ghc 與 grammar 檢查由 lang 註冊產生；HLS 的必要檢查由 lsp 註冊產生。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-haskell.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-haskell.el" :comments no
 (provide 'ginshio-lang-haskell)
 ;;; ginshio-lang-haskell.el ends here
 #+end_src

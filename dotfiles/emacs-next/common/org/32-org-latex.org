@@ -10,11 +10,11 @@ Emacs 當前主題著色的 =engraved= 前後端渲染代碼塊、用 =latexmk= 
 只管「把 Org 變成 PDF」，是同一棵樹的另一個後端（=org-latex=）。=ox-latex= 是 Org
 內建後端，不需第三方包；引擎由導出動作延遲載入，不拖慢啟動。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-latex.el" :comments no
 ;;; ginshio-org-latex.el --- Org LaTeX export, engraved -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-latex.el"
 (require 'cl-lib)
 (require 'subr-x)
 (require 'ginshio-doctor)
@@ -31,7 +31,7 @@ Org 的默認 =org-latex-pdf-process= 在系統有 =latexmk= 時已是一行的
 ~luatex~ 引擎編排，Org 導出跟著走，避免同一台機器 pdflatex/lualatex 混用造成目錄
 與 log 汙染。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-latex.el"
 (with-eval-after-load 'ox-latex
   (setq org-latex-compiler "lualatex"
         org-latex-bib-compiler "biber"))
@@ -55,7 +55,7 @@ Org 的默認 =org-latex-pdf-process= 在系統有 =latexmk= 時已是一行的
 ~engrave-faces~ 是第三方包，照例以 ~use-package :straight~ 宣告。導出時 ~ox-latex~
 用 ~require 'engrave-faces-latex~ 拉起，啟動時不載入。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-latex.el"
 (use-package engrave-faces
   :straight t)
 #+end_src
@@ -69,7 +69,7 @@ PDF 的格子才與 Editor 一致，所以這裡把它钉到當下主題，而�
 主因）。設定要等 ~engrave-faces~ 載入後才執行：導出時才會 ~require 'engrave-faces-latex~，
 而 ~engrave-faces-get-theme~ 沒有 autoload，頂層直接呼叫會 void-function：
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-latex.el"
 (with-eval-after-load 'ox-latex
   (setq org-latex-src-block-backend 'engraved
         org-latex-engraved-theme t)  ; 用當前 Emacs theme 的高亮
@@ -145,7 +145,7 @@ noweb 的逐行前綴（~:noweb-prefix no~）。
 [LISTINGS-SETUP]
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el" :noweb yes :noweb-prefix no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-latex.el" :noweb yes :noweb-prefix no
 (with-eval-after-load 'ox-latex
   (setq org-latex-engraved-preamble
         <<ginshio-source-string("ginshio-org-latex-engraved-preamble")>>))
@@ -160,7 +160,7 @@ noweb 的逐行前綴（~:noweb-prefix no~）。
 格都會用它的水平線（table 有 ~#+ATTR_LATEX: :booktabs nil~ 能逐張關）。圖片維持默認
 居中、caption 在下方；表格 caption 預設在表上方（Org 內建即如此），不調整。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-latex.el"
 (with-eval-after-load 'ox-latex
   (setq org-latex-tables-booktabs t))
 #+end_src
@@ -183,7 +183,7 @@ noweb 的逐行前綴（~:noweb-prefix no~）。
 ~cleveref~ 必須在 ~hyperref~ 之後載入，splice 順序（默認包先、~org-latex-packages-alist~
 後）保證這點。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-latex.el"
 (with-eval-after-load 'ox-latex
   (setq org-latex-packages-alist
         '(("" "booktabs" nil)
@@ -198,7 +198,7 @@ noweb 的逐行前綴（~:noweb-prefix no~）。
 型前綴的形式，長文更可讀。改 ~org-latex-reference-command~ 即切換輸出，而宏包已在上
 節列入，並保證在 ~hyperref~ 之後 load。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-latex.el"
 (with-eval-after-load 'ox-latex
   (setq org-latex-reference-command "\\cref{%s}"))
 #+end_src
@@ -214,7 +214,7 @@ noweb 的逐行前綴（~:noweb-prefix no~）。
 
 ** 收束
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-latex.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-latex.el" :comments no
 (provide 'ginshio-org-latex)
 ;;; ginshio-org-latex.el ends here
 #+end_src

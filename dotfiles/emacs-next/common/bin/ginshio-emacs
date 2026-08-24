@@ -6,7 +6,7 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 emacs_bin=${EMACS:-emacs}
 
 die() {
-  printf 'vanilla-emacs: %s\n' "$*" >&2
+  printf 'ginshio-emacs: %s\n' "$*" >&2
   exit 1
 }
 
@@ -92,7 +92,7 @@ clean() {
   require_xdg
   tree_dir="${XDG_DATA_HOME%/}/emacs/straight"
   native_cache_dir="${XDG_CACHE_HOME%/}/emacs/eln-cache"
-  rm -rf -- "$root/lisp/ginshio" "$tree_dir" "$native_cache_dir"
+  rm -rf -- "$root/modules/ginshio" "$tree_dir" "$native_cache_dir"
   rm -f -- "${XDG_DATA_HOME%/}/emacs/activation.el" \
     "${XDG_DATA_HOME%/}/emacs/activation.elc"
   printf 'Removed tangled Lisp, package tree, activation, and native-comp cache.\n'
@@ -101,9 +101,9 @@ clean() {
 usage() {
   cat <<'EOF'
 Usage:
-  bin/vanilla-emacs sync [--rebuild | --upgrade]
-  bin/vanilla-emacs clean
-  bin/vanilla-emacs doctor
+  bin/ginshio-emacs sync [--rebuild | --upgrade]
+  bin/ginshio-emacs clean
+  bin/ginshio-emacs doctor
 
 Commands:
   sync               Install the packages declared by the configuration at

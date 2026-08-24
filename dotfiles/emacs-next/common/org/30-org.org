@@ -9,11 +9,11 @@ Org 是這份配置裏的知識與行動中樞：純文本的結構化筆記、�
 因為 Org 佔了編輯器很大一塊，這裡分成四節：先定好資料放在哪、再調教編輯行為、然後是
 「看得順眼」的視覺層、最後是每天會用的 capture 與 agenda。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el" :comments no
 ;;; ginshio-org.el --- org, the knowledge & action hub -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (require 'cl-lib)
 (require 'subr-x)
 (require 'ginshio-doctor)
@@ -31,7 +31,7 @@ Emacs 30 的 org 主體本身就是 autoload：開啟 ~.org~ 檔、呼叫 ~org-a
 Org 的檔案散在 =~/cyber/blog/= 下。筆記與行動檔都放同一棵樹，capture 與 agenda 各自
 佔一個子目錄，讓「正在想」與「排好了」的資料分開。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (defgroup ginshio-org nil
   "Org configuration."
   :group 'ginshio)
@@ -88,7 +88,7 @@ Org 的檔案散在 =~/cyber/blog/= 下。筆記與行動檔都放同一棵樹�
 Org 首先是一個編輯器。這些設定讓它對「結構化純文本」這個事實更友善：屬性繼承、完成
 記錄時間、字母序列表、以及避免在不該動的地方誤動。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (setq org-use-property-inheritance t     ; 屬性能被子標題繼承，方便
       org-log-done 'time                 ; 記下從事項完成的那一刻
       org-list-allow-alphabetical t      ; 允許 a. A. a) A) 這種列表
@@ -102,7 +102,7 @@ Org 首先是一個編輯器。這些設定讓它對「結構化純文本」這�
 我偏好 ~:comments~ 作為 babel 的預設 header，這樣 tangle 出來的文件會帶回指向來源
 的位置註記，方便逆查。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (setq org-babel-default-header-args
       '((:session . "none")
         (:results . "replace")
@@ -122,7 +122,7 @@ nerd-icons 配色，讓「哪件事最急」一眼可見。
 =PROJ(p)@/!= 這一整串。它不報錯，只是從此 =PROJ= 對不上 ~org-modern-todo-faces~，
 agenda 過濾也認不出它。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (setq org-todo-keywords
       '((sequence "TODO(t)" "NEXT(n)" "STRT(s!)" "|" "DONE(d!)" "KILL(k@)")
         (sequence "WAIT(w@/!)" "HOLD(h@/!)" "|" "PROJ(p@/!)"))
@@ -148,7 +148,7 @@ Org 判斷 =*粗體*=、=~code~= 這類行內標記是否成立，要看收尾�
 兩者的解法相同——在標記與它後面的字之間放一個零寬空格，讓 Org 看見一個它認得的邊界。
 插入是手動的，因為只有寫的人知道哪裏真的需要一個；字面上打不出來，給它一個鍵。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (defconst ginshio-org-zero-width-space "\u200B"
   "Character inserted to give Org markup a boundary it recognises.")
 
@@ -172,7 +172,7 @@ Org 判斷 =*粗體*=、=~code~= 這類行內標記是否成立，要看收尾�
 零寬空格，等於把它當初要修的東西又弄壞一遍。過濾器回傳 nil 表示不改動，正是 Org 對
 「這一段我不處理」的約定。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (defun ginshio-org-export-strip-zero-width-space (text backend _info)
   "Remove zero width spaces from TEXT, unless BACKEND emits Org source."
   (unless (org-export-derived-backend-p backend 'org)
@@ -192,7 +192,7 @@ LSP 預設不進入 ~src_*~ 編輯窗。讓 eglot 在 =C-c '= 打開的 org-babe
 動啓動，這樣在 Org 裏寫程式一樣有診斷與補全。需要在 header 裏給 ~:file test.xx~ 指定
 真實檔名，eglot 才知道語言。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (defun ginshio-org-babel-edit-prep:with-eglot (info)
   "Set up eglot in the org-babel edit buffer for INFO.
 The src block should carry a `:file' header argument so eglot knows the
@@ -217,7 +217,7 @@ language; otherwise a temp file is used."
 在空行敲 `<s`、`<n`、`<e` 再按 ~TAB~，org-tempo 就展開成完整的 ~#+begin_src~ /
 ~#+begin_example~ 等模板。要寫程式塊時不必再一個字一個字敲外框。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (with-eval-after-load 'org
   (require 'org-tempo))
 #+end_src
@@ -238,7 +238,7 @@ language; otherwise a temp file is used."
 不是所有標題都該躺在硬盤上。掛上 ~crypt~ 標籤的標題用 GPG 加密，寫回時自動處理，避免
 把機密資料洩漏成明文的同級標題。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (ginshio-leader-define
  "o e" "encrypt"
  "o e e" #'org-encrypt-entry
@@ -266,7 +266,7 @@ language; otherwise a temp file is used."
 在 ~org-set-font-lock-defaults~ 之後，於是第一個打開的 org 緩衝區拿不到這幾項。它們移
 到 ~:init~，在啓動時就位。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (use-package org-modern
   :straight t
   :hook ((org-mode . org-modern-mode)
@@ -307,7 +307,7 @@ agenda 的兩項不在這裏。它們原本在這個 ~:config~ 裏各有一個�
 ~org-hide-emphasis-markers~ 讓畫面乾淨，代價是在邊緣編輯時眼睛要猜哪裏是標記。
 [[https://github.com/awth13/org-appear][org-appear]] 在游標靠近時臨時把標記補回來，兩種好處都要。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (use-package org-appear
   :straight (org-appear :host github :repo "awth13/org-appear")
   :hook (org-mode . org-appear-mode)
@@ -323,7 +323,7 @@ agenda 的兩項不在這裏。它們原本在這個 ~:config~ 裏各有一個�
 
 優先級符號用彩色圖標代替單調的 ~[#A]~。摺疊的省略號則改成一個明顯的 ▾。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (use-package org-fancy-priorities
   :straight (org-fancy-priorities :host github :repo "harrybournis/org-fancy-priorities")
   :hook (org-mode . org-fancy-priorities-mode)
@@ -339,7 +339,7 @@ agenda 的兩項不在這裏。它們原本在這個 ~:config~ 裏各有一個�
 用 ~dvisvgm~ 渲染成 SVG，清晰度比 png 高、縮放不糊。需要 ~lualatex~ 與 ~dvisvgm~ 在
 PATH 上；缺了也只是回到純文本顯示。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (setq org-preview-latex-default-process 'dvisvgm
       org-preview-latex-process-alist
       '((dvisvgm :programs ("latex" "dvisvgm")
@@ -367,7 +367,7 @@ PATH 上；缺了也只是回到純文本顯示。
 Agenda 把 todo 與 project 兩份檔案的排程疊在一起，做成一份同時看得到期限與排期的視
 圖。做完的項目不再佔位置。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (setq org-agenda-files (list ginshio-org-todo-file ginshio-org-project-file)
       org-agenda-skip-scheduled-if-done t
       org-agenda-skip-deadline-if-done t
@@ -386,7 +386,7 @@ Agenda 把 todo 與 project 兩份檔案的排程疊在一起，做成一份同�
 排的 deadline 緊急區、以及已經排定的項目——讓「今天到底要顧什麼」一眼分明。它攔截
 ~org-agenda-finalize-entries~ 的結果，只改顯示、不改資料。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 ;; org-super-agenda pulls in org + org-agenda, so enable it only once org
 ;; itself is loaded, not at startup.
 (with-eval-after-load 'org
@@ -417,7 +417,7 @@ Agenda 把 todo 與 project 兩份檔案的排程疊在一起，做成一份同�
 意的還是漏了逗號。日期樹用 ~file+olp+datetree~ 加 ~:tree-type week~；~file+weektree~
 是 Org 9.0 起的舊名，現在只會被靜默改寫，並在每次 capture 時打印一行過時警告。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (setq org-capture-templates
       `(("B" "Blog TODO List" entry (file ,ginshio-org-blog-file)
          "* TODO [#%^{priority|D|A|B|C|E}] %^{blog_title}\n:properties:\n:categories: %^{categories}\n:tags: %^{tags}\n:title: %\\1\n:file_name: %^{file_name}\n:end:\n%?"
@@ -466,7 +466,7 @@ Agenda 把 todo 與 project 兩份檔案的排程疊在一起，做成一份同�
 interactive autoload；再寫一次而不說「這是命令」，會把那份覆蓋成非命令，於是按下
 =o h= 得到的是 =Wrong type argument: commandp=——綁定看起來完好，只是不再是命令。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (autoload 'consult-org-heading "consult-org" nil t)
 (autoload 'consult-org-agenda "consult-org" nil t)
 
@@ -486,7 +486,7 @@ todo 檔越來越臃腫。兩者配合，capture 才能「進得來、出得去�
 refile 的候選目標掃的是 agenda 檔，並顯示完整路徑（~outline-path~），一次一步到位，
 不需要逐步展開目錄。移到不存在的標題時會先確認再幫你建。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (setq org-refile-use-outline-path t
       org-outline-path-complete-in-steps nil
       org-refile-allow-creating-parent-nodes 'confirm
@@ -498,7 +498,7 @@ refile 的候選目標掃的是 agenda 檔，並顯示完整路徑（~outline-pa
 ~org-archive-location~ 用 ~%s~ 代入原檔名，把歸檔內容集中到 =archive/= 子目錄，並按
 完成日期分層（datetree），方便日後回查。refile 與 archive 的入口一起掛在 =o r= 下。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (ginshio-leader-define
  "o r" "refile"
  "o r r" #'org-refile
@@ -508,7 +508,7 @@ refile 的候選目標掃的是 agenda 檔，並顯示完整路徑（~outline-pa
 跨檔案拖動與 ~[[id:...]]~ 鏈接要可靠，標題需要永久的 ID。org-id 在 refile 時「記住」
 每個標題的唯一識別碼，鏈接就不會因為標題改名或位置移動而斷掉。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (with-eval-after-load 'org
   (require 'org-id)
   (setq org-id-link-to-org-use-id t))
@@ -528,7 +528,7 @@ refile 的候選目標掃的是 agenda 檔，並顯示完整路徑（~outline-pa
 ~citar-bibliography~ 與 ~org-cite-*~ 都是 ~defcustom~，先賦值不會被之後的定義覆蓋；
 ~citar-org~ 則等 org 到場再 ~require~ ——它是 processor 的實作，不能比 ~org-cite~ 早。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (use-package citar
   :straight t
   :init
@@ -549,7 +549,7 @@ refile 的候選目標掃的是 agenda 檔，並顯示完整路徑（~outline-pa
 
 ** 收束
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el" :comments no
 (provide 'ginshio-org)
 ;;; ginshio-org.el ends here
 #+end_src

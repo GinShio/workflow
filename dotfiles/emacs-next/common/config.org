@@ -29,14 +29,14 @@
 必須在 =init.el= 結束前拋出。半份配置帶着已執行的副作用繼續運行，比一個直接的 backtrace
 更難修。
 
-*運行中的 Emacs 只消費套件。* 下載、更新、構建與寫鎖由 =bin/vanilla-emacs= 在獨立批處理進程
+*運行中的 Emacs 只消費套件。* 下載、更新、構建與寫鎖由 =bin/ginshio-emacs= 在獨立批處理進程
 裏完成；普通會話根本不載入 straight，所以它的變更命令一個都不存在。編輯器不在工作途中改寫
 自己的地基。
 
 *生成物不進版本控制，而且有明確的銷毀邊界。* tangle 產物與套件樹都可由
-=bin/vanilla-emacs clean= 整體刪除，再由 =sync= 重建；文學源碼、lock 與使用者資料不在
-這條邊界內。tangle 模塊只住在 =lisp/ginshio/=；其他 =lisp/= 子目錄是受版本控制的上游
-source，不在清理邊界內。其餘運行時狀態按性質分流到 XDG 目錄。
+=bin/ginshio-emacs clean= 整體刪除，再由 =sync= 重建；文學源碼、lock 與使用者資料不在
+這條邊界內。tangle 模塊只住在 =modules/ginshio/=；其他 =modules/= 子目錄是受版本控制的上游
+Lisp 與外部資產，不在清理邊界內。其餘運行時狀態按性質分流到 XDG 目錄。
 
 * 模塊
 

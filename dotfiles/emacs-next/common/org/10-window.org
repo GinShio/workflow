@@ -12,11 +12,11 @@
 [[info:emacs#Projects][Emacs manual: Projects]] 與 [[info:emacs#Tab Bars][Emacs manual: Tab Bars]]。實際工作流與完整
 鍵位索引在 [[file:../GUIDE.org::*窗口、項目與 layout][GUIDE.org]]；窗口編號包的入口是 [[https://github.com/deb0ch/emacs-winum][winum README]]。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el" :comments no
 ;;; ginshio-window.el --- where things go -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'ginshio-keys)
@@ -42,7 +42,7 @@
 前兩組綁在 leader 上。後兩組不綁——刪除可以「先過去再 =w k=」，而定向顯示在下面那張
 規則表存在之後基本用不上。沒綁不等於不存在，這個表就是它們的文檔。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (setq windmove-wrap-around nil          ; running off the edge should do nothing
       window-min-height 3
       window-min-width 20
@@ -62,7 +62,7 @@ winum 會安裝一張自己的 ~winum-keymap~，這裏交給它一張空的。�
 ~mode-line-format~ 換掉，那次插入注定無效——關掉它，由 doom-modeline 自己的
 window-number 分區顯示。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (use-package winum
   :straight t
   :demand t
@@ -87,7 +87,7 @@ window-number 分區顯示。
 前兩類用側窗。側窗不受 ~delete-other-windows~ 影響，所以 =w o= 清場之後底部那條編譯
 輸出還在——清場是為了專注代碼，不是為了關掉正在跑的編譯。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (defconst ginshio-window-read-and-close
   '("\\*Help\\*" "\\*Apropos\\*" "\\*Man " "\\*WoMan"
     "\\*eldoc" "\\*info\\*" "\\*Shortdoc")
@@ -107,7 +107,7 @@ window-number 分區顯示。
 每側只給一個槽位，於是同一類的緩衝區共用一個窗口，新的替換舊的。這是「底部只有一條
 輸出」而不是「底部堆了七條」的來源。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (setq window-sides-slots '(0 0 1 1)     ; left top right bottom
       window-resize-pixelwise t
       switch-to-buffer-in-dedicated-window 'pop
@@ -147,7 +147,7 @@ minibuffer 模塊的 consult 預覽也走 ~display-buffer~，所以上面這張�
 
 那條 bar 不顯示。有幾個項目不是需要持續盯着的信息。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (setq tab-bar-show nil
       tab-bar-new-tab-choice "*scratch*"
       tab-bar-close-last-tab-choice nil   ; refuse to close the only project
@@ -177,7 +177,7 @@ minibuffer 模塊的 consult 預覽也走 ~display-buffer~，所以上面這張�
 那條規則帶例外的時候，代價全落在這裏：一個「有時開有時不開」的動作，配一條看不見的 tab
 bar，結果就是 =p ]= 沒反應時你無法分辨它是沒東西可切還是壞了。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (defun ginshio-window--current-tab ()
   (assq 'current-tab (frame-parameter nil 'tabs)))
 
@@ -211,7 +211,7 @@ recognise still gets a tab of its own rather than none."
 認領放在切換 *之後*：切換的那一步會停下來問你要做什麼，而在那裏按 ~C-g~ 應該什麼都沒發生
 過——包括 tab 的名字。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (defvar ginshio-window-inhibit-project-tab nil
   "When non-nil, switching projects stays in the tab you are already in.")
 
@@ -244,7 +244,7 @@ For looking something up in another project and coming straight back."
 收掉一個項目要收掉的是 *這個 tab 的* 項目，不是光標所在緩衝區的項目——在 A 的 tab 裏開着
 一個 B 的文件，這兩個答案不一樣，而你按下去要的顯然是前者。tab 沒被認領時退回後者。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (defun ginshio/close-project ()
   "Kill the buffers of the project this tab is for, and drop its layout."
   (interactive)
@@ -269,7 +269,7 @@ For looking something up in another project and coming straight back."
 問「這個緩衝區屬於哪個項目」時要把遠程目錄擋掉：為了決定一次按鍵落在哪裏而去開一條 ssh
 連接，不划算。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (defun ginshio-window--buffer-project (buffer)
   "Return the root of the project BUFFER belongs to, or nil.
 A remote directory is answered nil without asking: finding out would open a
@@ -287,7 +287,7 @@ connection, and the answer is only needed to decide where a keypress lands."
 日常換緩衝區不走這裏，走 =b b=。這張表是「一次處理一批」用的，也是整份配置裏唯一還用到
 ibuffer 的地方。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (setq project-buffers-viewer #'project-list-buffers-ibuffer)
 #+end_src
 
@@ -301,7 +301,7 @@ ibuffer 的地方。
 第一個被跳過的緩衝區，函數形式不退。所以一個項目裏只剩一個緩衝區時，這兩個鍵什麼都不做，而
 不是把你帶到別的項目去——這正是想要的。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (defun ginshio-window-skip-other-projects (window buffer _bury-or-kill)
   "Return non-nil when BUFFER belongs to a project other than WINDOW's."
   (when-let* ((here (ginshio-window--buffer-project (window-buffer window))))
@@ -326,7 +326,7 @@ ibuffer 的地方。
 兩條命令的入口 ~desktop-save~ 與 ~desktop-read~ 都聲明過自動加載，按下去的那一刻它纔
 進來。下面這些值全是 ~defcustom~，先賦值不會被之後的定義覆蓋。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (setq desktop-dirname ginshio-state-dir
       desktop-path (list ginshio-state-dir)
       desktop-base-file-name "desktop"
@@ -354,7 +354,7 @@ ibuffer 的地方。
 上面那條 ~check-pid~ 去判斷持有者是不是已經死了——能work，但那是給崩潰準備的退路，不
 該是正常路徑。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (defun ginshio-window--layout-file ()
   (expand-file-name desktop-base-file-name ginshio-state-dir))
 
@@ -410,7 +410,7 @@ consult 這幾個命令是統一的：不帶前綴參數以項目根為起點，
 
 整片替換仍然留在 =p r=——那件事沒有 consult 版本。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (ginshio-leader-define
  "w"         "window"
  "w w"       #'other-window
@@ -458,7 +458,7 @@ consult 這幾個命令是統一的：不帶前綴參數以項目根為起點，
 編號鍵按規律生成。手寫九遍的話，第七行寫錯一個數字不會被任何東西發現——它照樣是合法
 綁定，只是跳去了別的窗口。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (dotimes (index 9)
   (let ((number (1+ index)))
     (ginshio-leader-define
@@ -468,7 +468,7 @@ consult 這幾個命令是統一的：不帶前綴參數以項目根為起點，
 
 ** 自檢項
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (ginshio-doctor-declare 'window "session file"
                         (lambda () (file-writable-p ginshio-state-dir))
                         :severity 'warn
@@ -476,7 +476,7 @@ consult 這幾個命令是統一的：不帶前綴參數以項目根為起點，
                         :remedy (format "make %s writable" ginshio-state-dir))
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-window.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el" :comments no
 (provide 'ginshio-window)
 ;;; ginshio-window.el ends here
 #+end_src

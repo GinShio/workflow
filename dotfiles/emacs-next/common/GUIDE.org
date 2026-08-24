@@ -41,22 +41,22 @@
 
 | shell 命令                           | 何時使用                                             |
 |--------------------------------------+------------------------------------------------------|
-| =bin/vanilla-emacs sync=               | 第一次安裝，或配置/lock 改變後按鎖安裝與重建          |
-| =bin/vanilla-emacs sync --rebuild=     | 某個包裝了卻不完整、或換過 Emacs 版本之後              |
-| =bin/vanilla-emacs sync --upgrade=     | 主動接受上游新 revision，重建並更新 lock              |
-| =bin/vanilla-emacs clean=              | 丟棄 tangle、套件與 native-comp 產物，回到未同步狀態  |
-| =bin/vanilla-emacs doctor=             | 配置能啓動，但某個外部功能不工作時                    |
+| =bin/ginshio-emacs sync=               | 第一次安裝，或配置/lock 改變後按鎖安裝與重建          |
+| =bin/ginshio-emacs sync --rebuild=     | 某個包裝了卻不完整、或換過 Emacs 版本之後              |
+| =bin/ginshio-emacs sync --upgrade=     | 主動接受上游新 revision，重建並更新 lock              |
+| =bin/ginshio-emacs clean=              | 丟棄 tangle、套件與 native-comp 產物，回到未同步狀態  |
+| =bin/ginshio-emacs doctor=             | 配置能啓動，但某個外部功能不工作時                    |
 
 =--rebuild= 的症狀識別：某個包的命令報 =Cannot open load file=，或者一個模式明明裝了
 卻少一半功能，而 =sync= 跑完什麼都沒說。那表示 build 目錄不完整,而 =sync= 信任了
 build cache。它不改 =straight.lock=,也不聯網取新 revision。
 
-=clean= 只刪除可由 =sync= 重建 的內容：=early-init.el=、=init.el=、=lisp/ginshio/= 與
+=clean= 只刪除可由 =sync= 重建 的內容：=early-init.el=、=init.el=、=modules/ginshio/= 與
 =$XDG_DATA_HOME/emacs/straight/，以及 =$XDG_CACHE_HOME/emacs/eln-cache/=。文學源碼、
-=straight.lock=、=lisp/= 下受版本控制的上游 modes、書籤、歷史、grammar、auto-save 與
+=straight.lock=、=modules/= 下受版本控制的上游 modes 與資產、書籤、歷史、grammar、auto-save 與
 backup 等都保留。先由 system/service 停止所有使用這份配置的 Emacs 再清理；腳本不探測
 或管理 daemon。執行後不要直接開始 Emacs：普通啟動會按契約失敗，下一步應是
-=bin/vanilla-emacs sync=。
+=bin/ginshio-emacs sync=。
 
 套件狀態在維護進程查看。=GINSHIO_EMACS_COMMAND=sync= 是讓配置載入 straight 的那個開關,
 所以查看命令也走同一條路:
@@ -68,7 +68,7 @@ GINSHIO_EMACS_COMMAND=sync emacs -Q --batch \
 #+end_src
 
 普通會話不載入 straight 於正當考慮(見 =05-packages.org=),因此它的管理命令只存在
-於 =bin/vanilla-emacs= 的批次進程裏。fetch、update、merge、rebuild、delete、
+於 =bin/ginshio-emacs= 的批次進程裏。fetch、update、merge、rebuild、delete、
 write-lock 一律在維護進程執行,不會在運行中的編輯器裏偷偷改套件樹。
 
 手冊：[[https://github.com/radian-software/straight.el][straight README]]、[[file:org/05-packages.org][本配置的 package lifecycle]]。
@@ -90,7 +90,7 @@ write-lock 一律在維護進程執行,不會在運行中的編輯器裏偷偷�
 
 ** 默認 server
 
-配置本身同時兼容普通圖形 Emacs 與 daemon；=bin/vanilla-emacs= 不包裝它們。普通圖形 Emacs
+配置本身同時兼容普通圖形 Emacs 與 daemon；=bin/ginshio-emacs= 不包裝它們。普通圖形 Emacs
 啓動後會自動開 server，daemon 則應由 system/service 管理。
 
 絕大多數時候只用 Emacs 的默認名字 =server=。daemon service 的底層命令與日常客戶端可以
@@ -451,7 +451,7 @@ Tree-sitter grammar 缺失時保留可用的傳統 major mode，doctor 以 warn 
 * LLVM IR、MIR、MLIR 與 TableGen
 
 這四類文件使用 llvm-project 隨上游維護的 major modes；它們以同一個固定 release tag
-保存在 =lisp/llvm/= 與 =lisp/mlir/=，不經套件管理器另取互相漂移的版本。
+保存在 =modules/llvm/= 與 =modules/mlir/=，不經套件管理器另取互相漂移的版本。
 
 | 文件                         | major mode        |
 |------------------------------+-------------------|

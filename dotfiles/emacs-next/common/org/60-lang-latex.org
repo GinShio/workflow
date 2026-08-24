@@ -8,11 +8,11 @@
 
 上游入口是 [[info:auctex#Top][AUCTeX manual]] 與 [[https://github.com/cdominik/cdlatex][CDLaTeX README]]。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-latex.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-latex.el" :comments no
 ;;; ginshio-lang-latex.el --- LaTeX editing -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-latex.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-latex.el"
 (require 'ginshio-doctor)
 #+end_src
 
@@ -43,7 +43,7 @@ AUCTeX 是這份配置裏唯一必須手寫 recipe 的包，理由值得記下�
 寫全之後 build 目錄有 25 個頂層 library 加一個完整的 =style/=，~TeX-style-path~ 找得到
 風格文件，~(require 'latex)~ 也成立。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-latex.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-latex.el"
 (defun ginshio-lang-latex-setup-h ()
   "Select the default engine and build command for an AUCTeX buffer."
   (TeX-engine-set 'luatex)
@@ -119,7 +119,7 @@ Elisp 字符串：下面兩塊保持單個反斜線，能直接複製到 =.tex=�
 ~ginshio-source-string~ 在 tangle 時才把它們轉成合法字符串。這個 block 必須關掉 noweb 的
 逐行前綴；規則與原因統一寫在 =config.org= 的「原樣文本」一節。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-latex.el" :noweb yes :noweb-prefix no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-latex.el" :noweb yes :noweb-prefix no
 (use-package cdlatex
   :straight t
   :init
@@ -157,7 +157,7 @@ preview-latex 的 PDF 路徑依賴 =pdf2dsc=，而當前系統的 Ghostscript �
 完整的 DVI 路徑，所以只替換 preview launcher 裏的引擎佔位符，保留其餘上游命令結構。若
 AUCTeX 改掉該結構，載入 preview-latex 時會直接報錯，而不是悄悄退回不可用的 PDF 路徑。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-latex.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-latex.el"
 (with-eval-after-load 'preview
   (setq preview-image-type 'dvi*)
   (let ((launcher (car preview-LaTeX-command)))
@@ -181,7 +181,7 @@ AUCTeX 改掉該結構，載入 preview-latex 時會直接報錯，而不是悄�
 
 ** 自檢項
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-latex.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-latex.el"
 (ginshio-doctor-executable 'lang-latex "latexmk"
                            :note "repeatable LaTeX builds"
                            :remedy "zypper install texlive-latexmk-bin")
@@ -199,7 +199,7 @@ AUCTeX 改掉該結構，載入 preview-latex 時會直接報錯，而不是悄�
                            :remedy "zypper install texlive-dvipng-bin")
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-latex.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-latex.el" :comments no
 (provide 'ginshio-lang-latex)
 ;;; ginshio-lang-latex.el ends here
 #+end_src

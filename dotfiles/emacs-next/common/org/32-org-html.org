@@ -3,17 +3,18 @@
 * HTML 導出
 
 Org → HTML 是這份配置最常用到的導出後端，本文移植自原配置的 =27-org-html.org=：
-一套「fancy」外觀客製，資產（樣式表、腳本、字體）統一放在 =misc/org-css/= 下，
+一套「fancy」外觀客製，資產（樣式表、腳本、字體）統一放在 =modules/org-css/= 下，
 由本模組拼進導出的 ~<head>~。所有設定都包在 ~with-eval-after-load 'ox-html~
 裏，導出時才觸發，不拖慢啟動。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el" :comments no
 ;;; ginshio-org-html.el --- Org HTML export, fancy -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (require 'cl-lib)
 (require 'subr-x)
+(require 'ginshio-path)
 (require 'ginshio-org)
 #+end_src
 
@@ -21,7 +22,7 @@ Org → HTML 是這份配置最常用到的導出後端，本文移植自原配�
 
 org-html 在 Org 9.6 起已自帶 HTML5 與 MathJax 3。這裡只把輸出基調調成「自成一份可讀文檔」：程式碼用 css 配方著色（而非內嵌 inline-CSS）、HTML5 doctype、啟用語意標籤。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (with-eval-after-load 'ox-html
   (setq ginshio-org-html-style-plain org-html-style-default)
   (setq org-html-htmlize-output-type 'css
@@ -37,7 +38,7 @@ org-html 在 Org 9.6 起已自帶 HTML5 與 MathJax 3。這裡只把輸出基調
 順序也對，但那讓一個 =defcustom= 的歸屬依賴於別人排在前面。~:group~ 兩處都要寫：
 ~define-minor-mode~ 自己也生成一個 =defcustom=，不給 group 的話它會落到 =emacs= 頂層。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (defcustom ginshio-org-html-fancy t
   "Whether the fancy Org→HTML export looks are active by default."
   :type 'boolean
@@ -67,20 +68,20 @@ Set once ox-html is loaded; see `with-eval-after-load' below.")
 
 *** 合成 fancy 樣式
 
-導出的 ~<head>~ 內嵌三樣資產：=misc/org-export-header.html=（字體 preload）、
-=misc/org-css/main.js=、=misc/org-css/main.min.css=。CSS/JS 直接塞進導出的 HTML，
+導出的 ~<head>~ 內嵌三樣資產：=modules/org-export-header.html=（字體 preload）、
+=modules/org-css/main.js=、=modules/org-css/main.min.css=。CSS/JS 直接塞進導出的 HTML，
 自包含、不依賴外部請求。
 
-字體 preload 的 head 片段 =misc/org-export-header.html= 作為資產放在 misc/ 樹下；它
+字體 preload 的 head 片段 =modules/org-export-header.html= 作為資產放在 modules/ 樹下；它
 引用與 =main.min.css= 裏 ~@font-face~ 相同的 woff2 檔名（=etbookot-*= 與
-=Merriweather-*=）。把導出的 HTML 與 =misc/org-css/=.woff2 放在同一資料夾即可生效，
+=Merriweather-*=）。把導出的 HTML 與 =modules/org-css/=.woff2 放在同一資料夾即可生效，
 不需外部 CDN 或手動下載。下列 emacs-lisp 在導出時把它拼進 ~<head>~。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (with-eval-after-load 'ox-html
 (defun ginshio-org-html-asset (name)
-  "Return the path to asset NAME under this config's misc/ directory."
-  (expand-file-name name (expand-file-name "misc/" ginshio-config-dir)))
+  "Return the path to asset NAME under this config's modules/ directory."
+  (expand-file-name name ginshio-modules-dir))
 
 (defun ginshio-org-html-reload-fancy-style ()
   "Rebuild `ginshio-org-html-style-fancy' from the header, JS, and CSS assets."
@@ -111,7 +112,7 @@ HTML5 文件時，以 final-output filter 加上 =org-css= 需要的 =#theme-swi
 外框，並在標題上方加入實際非空的日期與作者。其他 backend、非 HTML5 與 body-only
 片段原樣返回；這樣 Org 新增 content class、script 或其他模板內容時不會被本配置吞掉。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (defun ginshio-org-html--page-meta (info)
   "Return non-empty date and author markup described by INFO, or nil."
   (let* ((date (and (plist-get info :with-date)
@@ -184,7 +185,7 @@ GitHub 式摺疊：把 ~<pre>~ 包在 ~<details>~ 裏，不需 CSS 就有原生�
 
 首先要讓 ox-html 認識 :collapsed 選項。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (defvar ginshio-org-html-collapsed nil
   "Whether src blocks collapse by default in exports.")
 
@@ -199,7 +200,7 @@ GitHub 式摺疊：把 ~<pre>~ 包在 ~<details>~ 裏，不需 CSS 就有原生�
   (add-to-list 'org-default-properties "EXPORT_COLLAPSED"))
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (defvar ginshio-org-html-lang-name-alist
   '(("emacs-lisp" . "Emacs Lisp") ("elisp" . "Emacs Lisp")
     ("cpp" . "C++") ("C" . "C")
@@ -254,7 +255,7 @@ with no :language), never errors."
 example 塊、fixed-width（= 逐字段）與 property drawer 也用同樣的 ~<details>~ 摺疊。
 property drawer 預設收合（屬性表通常只是包袱）。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (defun ginshio-org-html-block-a (orig-fn block contents info)
   "Wrap the usual example/fixed-width/property block in a <details>."
   (if (not org-fancy-html-export-mode)
@@ -300,7 +301,7 @@ property drawer 預設收合（屬性表通常只是包袱）。
 要處理寬表格——尤其行動裝置上——需要把 overflow 控制在容器。~table~ 元素不能直接
 設 max-width/overflow，所以包一層 ~div~，並像 src 塊一樣加連結錨與 ~#+name~（若有的話）。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (defun ginshio-org-html-table-a (orig-fn table contents info)
   "Wrap the usual <table> in a <div>."
   (if (not org-fancy-html-export-mode)
@@ -328,7 +329,7 @@ property drawer 預設收合（屬性表通常只是包袱）。
 舊配置選擇用 checkbox＋label、配合 ~org-html--toc-text~ 的正則把「葉」顆粒的 label
 拆掉，做出樹狀折疊。照搬。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (defun ginshio-org-html-toc-headline-a (orig-fn headline info)
   "Add a label and checkbox to `org-html--format-toc-headline's output,
 making the TOC a collapsible tree."
@@ -359,7 +360,7 @@ making the TOC a collapsible tree."
 ~code~ 留給程式片段/命令，~verbatim~（=...=）讓它變成明顯的等寬——例如鍵盤鍵、
 檔名。把它輸出為 ~<kbd>~。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (with-eval-after-load 'ox-html
   (setq org-html-text-markup-alist
         '((bold . "<b>%s</b>")
@@ -374,7 +375,7 @@ making the TOC a collapsible tree."
 
 HTML checkbox 也可客製成更悅目的樣式。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (with-eval-after-load 'ox-html
 (setq org-html-checkbox-types
       (append org-html-checkbox-types
@@ -391,7 +392,7 @@ HTML checkbox 也可客製成更悅目的樣式。
 ~org-html-special-string-regexps~ 處理破折號/省略號之外，也把 ~->~ 與 ~<-~ 渲染成
 真正的箭頭。此為 ~defconst~，這裡以 ~cl-pushnew~ 追加（模仿原本不做抵抗的意圖）。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (with-eval-after-load 'ox-html
 (dolist (entry '(("-&gt;" . "&#8594;")
                  ("&lt;-" . "&#8592;")))
@@ -403,7 +404,7 @@ HTML checkbox 也可客製成更悅目的樣式。
 
 Github 式標題右側 # 結頭。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (with-eval-after-load 'ox-html
 (defun ginshio-org-html-headline-anchor (text backend info)
   "Add a GitHub-style anchor link to each exported headline hierarchy."
@@ -424,7 +425,7 @@ Github 式標題右側 # 結頭。
 
 用官方 CDN 的 MathJax 3（tex-svg），並設定一個較完整的全局配置 template。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
 (with-eval-after-load 'ox-html
 (setcdr (assoc 'path org-html-mathjax-options)
         (list "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"))
@@ -474,7 +475,7 @@ window.MathJax = {
 
 ** 收束
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-org-html.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el" :comments no
 (provide 'ginshio-org-html)
 ;;; ginshio-org-html.el ends here
 #+end_src

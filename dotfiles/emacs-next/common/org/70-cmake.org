@@ -6,11 +6,11 @@
 縮進和 CMake 內建 help。真正的 configure/build 由 shell 模塊的 =wits build= 進入 Wits，
 不在 major mode 裏維護另一套 preset 或 build-directory 狀態。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-cmake.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-cmake.el" :comments no
 ;;; ginshio-cmake.el --- CMake build files -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-cmake.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-cmake.el"
 (require 'ginshio-doctor)
 (require 'ginshio-lang)
 #+end_src
@@ -21,7 +21,7 @@ Emacs 30.2 自帶 =cmake-ts-mode=，但 grammar 缺失時不會為 CMake 文件�
 Kitware 隨 CMake 維護的 =cmake-mode= 補上可用的 fallback；lang 框架只在 grammar ready
 時 remap 到 TS mode。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-cmake.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-cmake.el"
 (use-package cmake-mode
   :straight t
   :mode (("CMakeLists\\.txt\\'" . cmake-mode)
@@ -51,7 +51,7 @@ Classic mode 的 =cmake-help=、=cmake-help-command=、=cmake-help-variable= 等
 外部 =cmake= 讀取當前版本的文檔；TS mode 則只負責結構。打開文件後用 ~M-m h m~ 看實際
 mode 提供的命令。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-cmake.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-cmake.el"
 (ginshio-doctor-executable 'cmake "cmake"
                            :severity 'warn
                            :note "build system and mode-local help"
@@ -61,7 +61,7 @@ mode 提供的命令。
 grammar 檢查由 lang 註冊產生；補建 grammar 的 C compiler 由通用 lang 段檢查。generator
 由 Wits 項目選擇，所以這裏不把 Ninja 寫成全局依賴。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-cmake.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-cmake.el" :comments no
 (provide 'ginshio-cmake)
 ;;; ginshio-cmake.el ends here
 #+end_src

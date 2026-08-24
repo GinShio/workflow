@@ -19,7 +19,7 @@
 提供，完整手冊是 [[info:magit#Top][Magit]] 與 [[info:with-editor#Top][With-Editor]]；三方合併見 [[info:ediff#Top][Ediff]]。本配置的
 終端協作、hunk、衝突與 server 工作流先看 [[file:../GUIDE.org::*版本控制][GUIDE.org]]。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el" :comments no
 ;;; ginshio-vc.el --- what the terminal cannot do -*- lexical-binding: t; -*-
 #+end_src
 
@@ -28,7 +28,7 @@
 路徑上；=smerge-mode= 同理，它由 ~find-file-hook~ 在真的看到衝突標記時拉起。三者一起
 提前加載要付 16 毫秒，而其中絕大多數會話一次都用不到。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'ginshio-keys)
@@ -52,7 +52,7 @@
 CVS、是不是 SVN……這些後端在這台機器上一個都不會遇到，而每一問都是若干次文件系統
 調用。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (setq vc-handled-backends '(Git)
       vc-git-diff-switches '("--histogram")
       vc-git-print-log-follow t
@@ -74,14 +74,14 @@ git 把編輯任務交給 =emacsclient= 時，必須有一個服務器在聽。�
 mergetool 那條路無論如何都要它：它是 ~--eval~ 調進來的，只有 =emacsclient= 有這條路。
 
 默認 server 名仍然是 Emacs 的 =server=，所以日常的裸 =emacsclient= 不需要任何參數。
-daemon 的啓停由 system/service 管理，=bin/vanilla-emacs= 不包裝進程生命週期。具名 daemon 使用
+daemon 的啓停由 system/service 管理，=bin/ginshio-emacs= 不包裝進程生命週期。具名 daemon 使用
 Emacs 原生的 ~--daemon=NAME~ 或 ~--fg-daemon=NAME~，客戶端使用 ~emacsclient -s NAME~；普通
 圖形 Emacs 若要作為額外 server，啓動時設 =GINSHIO_SERVER_NAME=name=。
 
 本機 Unix socket 已由 Emacs 放在 =$XDG_RUNTIME_DIR/emacs=。~server-auth-dir~ 只服務 TCP
 server，這份配置沒有啓用 TCP，因此不設它。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (when-let* ((name (getenv "GINSHIO_SERVER_NAME")))
   (setq server-name name))
 
@@ -126,7 +126,7 @@ Emacs——也可能是 =emacs= 本身，每次現開一個進程。兩條路都
 （下一節）。順序有講究：先清場、再顯示 diff，得到的是「信息在左、改動在右」；反過來則是
 清場把剛剛開好的那個 diff 窗口一起收掉。所以這一個要求排在前面。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (defun ginshio-vc-waiting-on-p (&optional buffer)
   "Return non-nil when Git has stopped and is waiting on BUFFER."
   (with-current-buffer (or buffer (current-buffer))
@@ -184,7 +184,7 @@ diff 是參照物，要和正在寫的那段話並排纔讀得下去——上下
 
 按模式認而不是按緩衝區名：那個名字由 ~magit-buffer-name-format~ 拼出來，是可配置的。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (add-to-list 'display-buffer-alist
              '((derived-mode . magit-diff-mode)
                (display-buffer-in-direction)
@@ -203,7 +203,7 @@ diff 是參照物，要和正在寫的那段話並排纔讀得下去——上下
 同時也要求次模式在，而不是看文件名：手動打開一份舊的 =COMMIT_EDITMSG= 也會經過 magit 的
 設置函數，但那時沒有什麼「即將提交的內容」，不該引出一個 diff。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (defun ginshio-vc-show-what-is-being-committed ()
   "Put the changes about to be committed beside the message being written."
   (when (bound-and-true-p git-commit-mode)
@@ -217,7 +217,7 @@ diff 是參照物，要和正在寫的那段話並排纔讀得下去——上下
 只有 mergetool 那條路不歸 `with-editor` 管——它是 ~--eval~ 直接調進來的，沒有經過編輯
 器交接的那套機制。所以它自己存、自己還。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (defvar ginshio-vc--interrupted-layout nil
   "The window layout to put back once the merge is resolved.")
 
@@ -247,7 +247,7 @@ layout recorded there went with it."
 定下來；而「結束時做什麼」與佈局無關，這正是它該待的地方。rebase 那邊沒有對應的設置鉤
 子，用它的主模式鉤子——那時 `with-editor` 已經在了，模式自己剛把它打開。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (defconst ginshio-vc-side-buffer-modes '(magit-diff-mode magit-revision-mode)
   "Modes Magit brings up while Git waits, and does not take back.")
 
@@ -271,7 +271,7 @@ Emacs 是為了一次編輯而存在的，編完就該走。
 這個問題要在 magit 加載之前回答，用不上它那幾個更完整的正則，所以自己寫一個。少認幾個文
 件名的後果只是少一次自動退出，不會誤退。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (defconst ginshio-vc-waiting-file-regexp
   "/\\(COMMIT_EDITMSG\\|MERGE_MSG\\|TAG_EDITMSG\\|NOTES_EDITMSG\\|git-rebase-todo\\)\\'"
   "Files Git hands to an editor and then waits on.")
@@ -322,7 +322,7 @@ Magit 的界面框架 =transient= 要單獨聲明一行，否則整個包裝不�
 
 那份名單的說明寫着「除非用戶明確要求，否則不安裝」。下面這一行就是那個明確要求。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (use-package transient
   :straight t
   :defer t)
@@ -384,7 +384,7 @@ magit 沒加載時，上一節那兩個觸發條件都不成立。所以本模�
 模塊全部讀完纔被訪問——但它讓「模塊在文件之後到場」這種順序也有一個確定的答案，代價是
 一次 ~buffer-list~ 遍歷。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (defun ginshio-vc-setup-waiting-buffer-h ()
   "Load only the Git editing mode needed by this waiting buffer."
   (when (and buffer-file-name
@@ -423,7 +423,7 @@ magit 沒加載時，上一節那兩個觸發條件都不成立。所以本模�
 很快就會變成一串同名的 =COMMIT_EDITMSG=。git-commit 自己排除了它認得的那幾個文件名，
 但 =git-rebase-todo= 不在其中，所以整個目錄一起排掉。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (add-to-list 'recentf-exclude "/\\.git/")
 #+end_src
 
@@ -435,7 +435,7 @@ magit 沒加載時，上一節那兩個觸發條件都不成立。所以本模�
 一個折中。這種情況佔絕大多數，開一個三窗格的比較界面反而是繞路。內建的衝突模式在檢
 測到標記時自動打開。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (defun ginshio-vc-enable-smerge-h ()
   "Turn on conflict editing when this file actually has a conflict in it."
   (when (and buffer-file-name
@@ -473,7 +473,7 @@ ediff 的控制緩衝區裏執行，所以在那裏設的局部值只對這一�
 束 Emacs，在 daemon 上那意味著每解決一次衝突就丟掉一次整個會話，連同所有未保存的緩
 衝區。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (defvar ediff-buffer-C)
 (defvar ediff-quit-merge-hook)
 (defvar ediff-after-quit-hook-internal)
@@ -523,7 +523,7 @@ git config --global mergetool.ediff.cmd \
 ediff 默認把控制面板放進一個獨立的 frame。在平鋪的窗口管理器下那是一個突然出現的小
 窗口，並且它和三個比較窗口分屬兩個 frame，切換時很容易丟掉焦點。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (setq ediff-window-setup-function #'ediff-setup-windows-plain
       ediff-split-window-function #'split-window-horizontally
       ediff-merge-split-window-function #'split-window-horizontally)
@@ -535,7 +535,7 @@ ediff 默認把控制面板放進一個獨立的 frame。在平鋪的窗口管�
 
 哪幾行相對上一次提交被改過，這件事終端沒有辦法在你編輯的時候告訴你。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (use-package diff-hl
   :straight t
   :commands (diff-hl-next-hunk diff-hl-previous-hunk diff-hl-show-hunk
@@ -590,7 +590,7 @@ porcelain 要求你先離開文件。
 所以在窗口重新獲得焦點時，重新問一次 git。只問看得見的緩衝區——這是「回到編輯器」這
 個動作的自然邊界，也讓開銷與打開了多少文件無關。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (defvar ginshio-vc--repository-signatures (make-hash-table :test #'equal)
   "Last Git status signature observed for each visible repository.")
 
@@ -677,7 +677,7 @@ plain `git status' would refresh and rewrite the index, taking
 
 ** 鍵位
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (ginshio-leader-define
  "g"   "git"
  "g d" #'vc-diff
@@ -819,7 +819,7 @@ Emacs，提交信息立刻就在眼前；=emacs= 每次現開一個進程，要�
 裏，跟着提交信息一起被你翻閱、也跟着一起被 =git= 剪掉，適合最後通讀一遍。開了之後
 magit 會把它染色並允許摺疊。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (defun ginshio-vc--git-editor (variable)
   "Return the command Git resolves VARIABLE to, or nil when it cannot say."
   (ignore-errors (car (process-lines "git" "var" variable))))
@@ -884,7 +884,7 @@ magit 會把它染色並允許摺疊。
                                         "\\\"$MERGED\\\")\"'"))
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-vc.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el" :comments no
 (provide 'ginshio-vc)
 ;;; ginshio-vc.el ends here
 #+end_src

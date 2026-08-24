@@ -13,11 +13,11 @@
 [[info:elisp#Documentation Basics][Eldoc]]。本配置把它們組成同一條代碼工作流，入口與範圍規則見
 [[file:../GUIDE.org::*Eglot、xref、Eldoc 與 Flymake][GUIDE.org]]。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el" :comments no
 ;;; ginshio-lsp.el --- what the code means -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'ginshio-keys)
@@ -44,7 +44,7 @@
 真正加載它的時刻只有兩個：某個註冊過的主模式在一個裝了服務器的項目裏打開文件，或者你
 自己按了下面那些鍵。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
 (dolist (command '(eglot-code-actions
                    eglot-find-implementation
                    eglot-find-typeDefinition
@@ -76,7 +76,7 @@ flymake，補全交給 capf，符號列表交給 imenu。你已經會用的鍵�
 
 ** 連接
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
 (setq eglot-autoshutdown t
       eglot-sync-connect 0
       eglot-connect-timeout 60
@@ -99,7 +99,7 @@ eglot 默認把與服務器往來的每一條 JSON 留在一個緩衝區裏，�
 協議問題時有用，而那種事一年遇不到一次；平時它是持續的內存與字符串處理開銷，並且在
 一個活躍的 C++ 會話裏增長得很快。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
 (setq eglot-events-buffer-config '(:size 0 :format full))
 #+end_src
 
@@ -139,7 +139,7 @@ LSP 服務器啓動時會報告它能做什麼，eglot 回答它打算用什麼�
 | color                   | 否 | 在色值旁邊畫色塊                                   |
 | documentLink            | 否 | 把註釋裏的 URL 變成可點的鏈接                      |
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
 (setq eglot-ignored-server-capabilities
       '(:documentFormattingProvider
         :documentRangeFormattingProvider
@@ -168,7 +168,7 @@ LSP 服務器啓動時會報告它能做什麼，eglot 回答它打算用什麼�
 高度。完整內容仍然按 ~M-m c h~ 進專門的緩衝區看；那個緩衝區開着的時候，回音區就不再
 重複一遍。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
 (setq eldoc-idle-delay 0.3
       eldoc-echo-area-use-multiline-p 5
       eldoc-echo-area-prefer-doc-buffer t)
@@ -187,7 +187,7 @@ The hook this runs from also fires on shutdown, hence the guard."
 flymake 的指示器和版本控制的邊欄改動標記都想要 fringe。左邊留給 vc——哪幾行被改過是
 持續存在的背景信息，錯誤是偶發的前景信息，兩者搶同一條窄縫時會互相遮蔽。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
 (setq flymake-fringe-indicator-position 'right-fringe
       flymake-suppress-zero-counters t
       flymake-wrap-around nil)
@@ -206,7 +206,7 @@ flymake 的指示器和版本控制的邊欄改動標記都想要 fringe。左�
 動之前檢查哪個可執行文件、以及自檢報告裏怎麼寫。分成三份的話，遲早有一天你改了命令
 行卻忘了改其中之一。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
 (defvar ginshio-lsp-servers nil
   "Language servers registered by the language modules, most recent first.")
 
@@ -240,7 +240,7 @@ PROPERTIES is a plist:
 而 eglot 可能到你打開第一個 C 文件時纔加載。所以註冊只記在自己這邊，等 eglot 出現再一
 併交過去；之後若還有新的註冊進來，那時 eglot 已經在了，直接交。兩條路匯到同一個函數。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
 (defun ginshio-lsp--teach-eglot (server)
   "Tell Eglot how to start SERVER."
   (let ((modes (plist-get server :modes)))
@@ -275,7 +275,7 @@ contact 有問題時，直接 ~M-x eglot~ 手動啓動，那條路徑會如實�
 
 這三種都不是異常，是日常。所以先問清楚，能成再啓動。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
 (defvar ginshio-lsp--executable-cache (make-hash-table :test #'equal)
   "Executable lookup results keyed by program, host, and exec-path.")
 
@@ -324,7 +324,7 @@ Emacs 自己的符號表，老倉庫問 TAGS，都沒有就退回搜索。
 
 大小寫成對：小寫問這個緩衝區，大寫問整個項目。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
 (ginshio-leader-define
  "c"   "code"
  "c a" #'eglot-code-actions
@@ -387,7 +387,7 @@ Emacs 自己的符號表，老倉庫問 TAGS，都沒有就退回搜索。
 
 ** 自檢項
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
 (defun ginshio-lsp--declare-server-check (server)
   "Have the doctor report on SERVER's executable."
   (let ((program (plist-get server :program))
@@ -399,7 +399,7 @@ Emacs 自己的符號表，老倉庫問 TAGS，都沒有就退回搜索。
                                :remedy (format "install %s and put it on PATH" program))))
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lsp.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el" :comments no
 (provide 'ginshio-lsp)
 ;;; ginshio-lsp.el ends here
 #+end_src

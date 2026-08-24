@@ -4,7 +4,7 @@
 
 (let ((payload
        (expand-file-name
-        "lisp/ginshio/ginshio-early-init.el" user-emacs-directory)))
+        "modules/ginshio/ginshio-early-init.el" user-emacs-directory)))
   (condition-case err
       (progn
         (load payload nil 'nomessage t)

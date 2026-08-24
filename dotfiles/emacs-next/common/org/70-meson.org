@@ -6,11 +6,11 @@
 [[https://github.com/wentasah/meson-mode][meson-mode]] 提供對應的 font-lock、SMIE 縮進、Eldoc 與 completion-at-point。本模塊
 只配置這個編輯面；configure/compile/test 仍由 =wits build= 選 Meson backend。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-meson.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-meson.el" :comments no
 ;;; ginshio-meson.el --- Meson build files -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-meson.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-meson.el"
 (require 'ginshio-doctor)
 #+end_src
 
@@ -20,7 +20,7 @@ Emacs 30.2 沒有 =meson-ts-mode=，現有 Meson grammar 也沒有一個可接�
 mode。只有 parser 沒有 mode，不能帶來高亮、縮進或導航；所以這裏不註冊一份用不到的
 grammar，直接使用成熟的 classic mode。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-meson.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-meson.el"
 (use-package meson-mode
   :straight t
   :mode (("/meson\\.build\\'" . meson-mode)
@@ -38,7 +38,7 @@ completion frontend。全部 mode-local 命令仍從 ~M-m h m~ 發現。
 
 ** 自檢項
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-meson.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-meson.el"
 (ginshio-doctor-executable 'meson "meson"
                            :severity 'warn
                            :note "build system"
@@ -48,7 +48,7 @@ completion frontend。全部 mode-local 命令仍從 ~M-m h m~ 發現。
 Wits 的項目配置決定 generator、build directory 與 backend arguments；這裏不把 Ninja 或
 任何固定目錄提升成全局契約。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-meson.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-meson.el" :comments no
 (provide 'ginshio-meson)
 ;;; ginshio-meson.el ends here
 #+end_src

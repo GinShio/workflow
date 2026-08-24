@@ -11,11 +11,11 @@ Emacs 自帶的包管理器只認發布到 ELPA 的版本,而 Emacs 生態裏大
 
 包管理分成幾個明確階段:
 
-- =bin/vanilla-emacs sync= 按 =straight.lock= 安裝、構建、驗證;既有 pin 不動,只把
+- =bin/ginshio-emacs sync= 按 =straight.lock= 安裝、構建、驗證;既有 pin 不動,只把
   新宣告的包追加進鎖。
 - =sync --rebuild= 不碰上游也不碰鎖,只把每個包重新構建一次。
 - =sync --upgrade= 忽略舊鎖、更新上游、重建並全量重寫新的 revision。
-- =bin/vanilla-emacs clean= 刪除 tangle 產物、=$XDG_DATA_HOME/emacs/straight/=、
+- =bin/ginshio-emacs clean= 刪除 tangle 產物、=$XDG_DATA_HOME/emacs/straight/=、
   activation 快照與 native-comp cache,但保留文學源碼與 =straight.lock=。
 - 普通 Emacs 啓動只消費 =sync= 留下的 activation 快照。缺一個包、鎖檔或快照都立即
   報錯,不嘗試聯網修復。
@@ -46,7 +46,7 @@ use-package-mode~ 的內建整合。原因有二:
 ~:demand~ 明確說明觸發點。完整 ~:config~ 由 =validate= 進程逐一 require 執行,因此
 lazy loading 不再以漏掉配置錯誤為代價。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-packages.el" :comments no
 ;;; ginshio-packages.el --- package manager -*- lexical-binding: t; -*-
 
 (require 'ginshio-path)
@@ -66,9 +66,9 @@ path。配置只決定「保守」與「厳進」,其餘全交給 straight。
 控制腳本用 ~GINSHIO_EMACS_COMMAND~ 告訴配置這次身分;Nil 是普通消費者,=validate=
 是只讀校驗進程,=sync= 與 =upgrade= 是維護進程。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-packages.el"
 (defconst ginshio-package-command (getenv "GINSHIO_EMACS_COMMAND")
-  "Package operation requested by bin/vanilla-emacs.
+  "Package operation requested by bin/ginshio-emacs.
 Nil denotes an ordinary interactive consumer; validate is a read-only
 consumer which eagerly loads every declared feature.")
 
@@ -81,7 +81,7 @@ consumer which eagerly loads every declared feature.")
   "Non-nil while an offline process validates every deferred package.")
 
 (defconst ginshio-package-script
-  (expand-file-name "bin/vanilla-emacs" ginshio-config-dir))
+  (expand-file-name "bin/ginshio-emacs" ginshio-config-dir))
 
 (defconst ginshio-package-straight-dir
   (expand-file-name "straight/" ginshio-data-dir)
@@ -126,7 +126,7 @@ bootstrap 之前:
 - ~straight-vc-git-default-protocol https~ 與 ~straight-repository-branch~ 讓 bootstrap
   走公開 GitHub。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-packages.el"
 (defvar straight-base-dir ginshio-data-dir
   "Parent directory for the straight tree; straight adds `straight/'.")
 (defvar straight-build-dir "build/"
@@ -191,7 +191,7 @@ normalizer 複製自 straight 的語義:t、符號、以關鍵字開頭(無名 r
 平方變慢。所以新條目 ~push~ 在前端(不 ~append~ 複製整條清單),重複判斷交給一張
 hash table(不 ~member~ 線性掃描)。代價是變數裏是倒序的,取用處各自 ~reverse~ 一次。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-packages.el"
 (defvar ginshio-package--declaration-index (make-hash-table :test #'equal)
   "Declarations already recorded, so a repeat costs one lookup.")
 
@@ -257,7 +257,7 @@ symbols or recipe lists."
 激活只讀一次快照。鎖檔的 digest 記錄在 activation 裏,啓動時比對,避免吃到半截
 =clean= 或未 sync 的混亂狀態。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-packages.el"
 (defun ginshio-packages--lock-digest ()
   "SHA-256 digest of the committed lock file, or signal.
 `secure-hash' hashes a string argument as itself, so the file has to be
@@ -290,7 +290,7 @@ read in: passing the name would digest the path and never change."
 快照並立即重新載入驗證;普通會話只比對宣告與快照的一致性,不載 straight。=validate=
 進程再逐個 require 每個宣告的 feature。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-packages.el"
 (defun ginshio-packages--build-directories ()
   "Return straight build directories in stable order.
 Entries on `load-path' keep their activation order; any remaining
@@ -476,17 +476,17 @@ to the nil profile are left alone."
 
 ** 自檢項
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-packages.el"
 (ginshio-doctor-directory 'packages ginshio-package-straight-dir
                           :note "installed packages")
 (ginshio-doctor-declare 'packages "lock file"
                         (lambda ()
                           (file-readable-p ginshio-package-lock-file))
                         :note "pinned revisions for reproducible installs"
-                        :remedy "bin/vanilla-emacs sync")
+                        :remedy "bin/ginshio-emacs sync")
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-packages.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-packages.el" :comments no
 (provide 'ginshio-packages)
 ;;; ginshio-packages.el ends here
 #+end_src

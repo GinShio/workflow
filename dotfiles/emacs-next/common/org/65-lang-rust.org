@@ -6,11 +6,11 @@ Rust 的結構由內建 [[info:emacs#Parsing Program Source][tree-sitter]] mode 
 [[https://rust-analyzer.github.io/][rust-analyzer]]，調試交給 Dape 已有的 =lldb-dap= 配置。這個模塊只把三者接到既有
 lang/lsp/dap 邊界，不讓 =cargo= 或 rustfmt 在保存時暗中改寫文件。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-rust.el" :comments no
 ;;; ginshio-lang-rust.el --- Rust -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-rust.el"
 (require 'ginshio-doctor)
 (require 'ginshio-lang)
 (require 'ginshio-lsp)
@@ -25,7 +25,7 @@ Emacs 30 自帶 =rust-ts-mode=，卻沒有不依賴 grammar 的 =rust-mode=。�
 兩套 mode 都保持 Rust 慣例的四格空白。EditorConfig 已認識兩個變量，項目聲明仍會在
 mode hook 之後覆蓋這裏的默認值。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-rust.el"
 (use-package rust-mode
   :straight t
   :mode ("\\.rs\\'" . rust-mode)
@@ -55,7 +55,7 @@ Eglot 接管時會保存並暫時替換它，避免和 rust-analyzer 重複；�
 
 ** rust-analyzer
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-rust.el"
 (ginshio-lsp-register-server
  :modes '(rust-mode rust-ts-mode)
  :program "rust-analyzer"
@@ -71,7 +71,7 @@ Dape 0.27 的 =lldb-dap= 配置已列出兩個 Rust mode，不需要複製 adapt
 ~:program~ 改成 Cargo 產生的可執行文件，例如 =target/debug/demo=；固定值仍應寫在項目的
 =.dir-locals.el=。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-rust.el"
 (ginshio-doctor-executable 'lang-rust "lldb-dap"
                            :severity 'warn
                            :note "debug adapter"
@@ -80,7 +80,7 @@ Dape 0.27 的 =lldb-dap= 配置已列出兩個 Rust mode，不需要複製 adapt
 
 rustc 與 grammar 檢查由 lang 註冊產生；rust-analyzer 的必要檢查由 lsp 註冊自動產生。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-lang-rust.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-rust.el" :comments no
 (provide 'ginshio-lang-rust)
 ;;; ginshio-lang-rust.el ends here
 #+end_src

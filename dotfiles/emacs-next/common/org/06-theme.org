@@ -8,11 +8,11 @@
 
 本模塊使用第三方包，所以排在包管理器之後。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el" :comments no
 ;;; ginshio-theme.el --- how this editor looks -*- lexical-binding: t; -*-
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (require 'ginshio-path)
 (require 'ginshio-doctor)
 (require 'seq)
@@ -24,7 +24,7 @@
 於引文一類需要與正文區分的內容；還需要一個覆蓋面廣的字體兜底那些前三者沒有的符號，
 否則它們會顯示成方框。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (defconst ginshio-font-fixed "Fira Mono")
 (defconst ginshio-font-fixed-size 15)
 (defconst ginshio-font-variable "Fira Sans")
@@ -49,7 +49,7 @@
 齊問題：表格、註釋縮進、以及任何按列排版的內容，都建立在「中文字符寬度是西文的整數
 倍」這個假設上。西文字號選 =5= 的倍數可以讓這個乘積落在整數上。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (defconst ginshio-font-cjk-scale 1.2)
 #+end_src
 
@@ -59,7 +59,7 @@
 
 缺字體不應該讓配置報錯，只是退回到系統默認；缺什麼由自檢負責告知。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (defun ginshio-theme--font-exists-p (family)
   (and family (display-graphic-p) (find-font (font-spec :family family))))
 
@@ -94,7 +94,7 @@
 ~tab-bar-mode~ 不在這裏開關。window 模塊用 tab 承載工作區，並且把那條 bar 隱藏起來
 ——tab 存在但不佔屏幕。也就是說「有沒有 tab」是功能問題，不是外觀問題。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (setq-default cursor-type 'box)
 (blink-cursor-mode -1)
 (when (fboundp 'pixel-scroll-precision-mode)
@@ -103,7 +103,7 @@
 
 相對行號讓「往上第幾行」變成一眼可讀的數字，配合帶前綴參數的移動命令使用。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (setq display-line-numbers-type 'relative
       display-line-numbers-width-start t)
 (add-hook 'prog-mode-hook #'display-line-numbers-mode)
@@ -122,7 +122,7 @@ point 上——那個位置未必是非選中窗口自己的光標所在。
 
 dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從它派生。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (add-hook 'prog-mode-hook #'hl-line-mode)
 (add-hook 'special-mode-hook #'hl-line-mode)
 (add-hook 'dired-mode-hook #'hl-line-mode)
@@ -134,7 +134,7 @@ dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從�
 後者有個副作用值得知道：加載主題會重繪默認 face，把不繪製背景這件事覆蓋掉。所以這個
 動作必須在每次主題切換之後重新執行一遍。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (defconst ginshio-frame-alpha 96)
 
 (defun ginshio-theme-apply-frame-h (&rest _)
@@ -151,7 +151,7 @@ dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從�
 逐級查找版本控制標記——那是一連串文件系統調用。不緩存的話，編輯遠程文件時每次重繪都
 會變成一次網絡往返。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (defvar-local ginshio-theme--project-name 'unset)
 
 (defun ginshio-theme-project-name ()
@@ -168,7 +168,7 @@ dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從�
       '("%b – GNU Emacs" (:eval (ginshio-theme-project-name))))
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (add-hook 'window-setup-hook #'ginshio-theme-apply-fonts-h)
 (add-hook 'window-setup-hook #'ginshio-theme-apply-frame-h)
 (add-hook 'server-after-make-frame-hook #'ginshio-theme-apply-fonts-h)
@@ -187,7 +187,7 @@ dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從�
 先 ~disable-theme~ 再加載，因為主題是 *疊加* 的：直接 ~load-theme~ 只會把新的 face 蓋
 在舊的上面，沒有被新主題定義到的 face 仍然留着上一個主題的顏色。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (defconst ginshio-theme-default 'doom-vibrant
   "The colour scheme this configuration starts with.")
 
@@ -216,7 +216,7 @@ Called interactively, offers `ginshio-themes' to choose from."
 (ginshio/load-theme (seq-random-elt ginshio-themes))
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (use-package doom-themes
   :straight t
   :demand t
@@ -241,7 +241,7 @@ Called interactively, offers `ginshio-themes' to choose from."
 
 它默認不進 org。那裏的 =TODO= 是 org 自己的待辦狀態，已經有顏色，也已經有含義。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (use-package hl-todo
   :straight t
   :init
@@ -263,7 +263,7 @@ Called interactively, offers `ginshio-themes' to choose from."
 
 文件名按項目相對路徑顯示：在同時打開多個同名文件時，這是唯一能區分它們的形式。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (use-package nerd-icons
   :straight t
   :commands nerd-icons-install-fonts)
@@ -282,7 +282,7 @@ Called interactively, offers `ginshio-themes' to choose from."
 
 進度條做成一隻貓。它佔用的空間本來就要被進度指示佔掉，而且會動。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (use-package nyan-mode
   :straight (:host github :repo "TeMPOraL/nyan-mode")
   :after doom-modeline
@@ -301,7 +301,7 @@ Called interactively, offers `ginshio-themes' to choose from."
 都失焦、或只剩終端時暫停 timer；回來時從當前 frame 繼續，不在背景以 5Hz 強制重畫
 modeline。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (defun ginshio-theme-nyan-visible-p ()
   "Return non-nil when a focused graphical frame can display Nyan."
   (seq-some (lambda (frame)
@@ -341,7 +341,7 @@ dashboard 選擇算出空格數，然後在每次窗口變化時重算一遍。�
 每次重繪都重新抽一次，所以同一次會話裏開新 frame 也會換一張。目錄空了就交回給
 dashboard 自帶的橫幅，不報錯——啓動畫面壞掉不該影響啓動。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (defconst ginshio-banner-dir (expand-file-name "banners/" ginshio-config-dir))
 
 (defun ginshio-banner--random (pattern)
@@ -387,7 +387,7 @@ back to its own."
 交回列表裏已經有的緩衝區不會讓列表變長，於是它獨佔 frame 並且拿到焦點——正是 Emacs 沒有
 啓動畫面時的行為。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (defun ginshio-theme-initial-buffer ()
   "Return the buffer to put in front when Emacs starts.
 The dashboard, unless Emacs was told to open a file, in which case that
@@ -406,7 +406,7 @@ file has already been visited by the time this runs."
 圖標在終端裏也開。它們來自 Nerd Font，而這份配置的 modeline 已經在終端裏用著同一套字
 體；出廠設置只在圖形界面顯示圖標，會讓兩個界面莫名其妙地不一樣。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (use-package dashboard
   :straight t
   :commands dashboard-refresh-buffer
@@ -470,7 +470,7 @@ window 模塊在同一個鉤子上恢復上次的會話，排在這之後。有�
 
 字體缺失只在圖形界面下才有意義，自檢會在終端下自動跳過這些條目。
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el"
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
 (ginshio-doctor-font 'theme ginshio-font-fixed
                      :note "the main typeface"
                      :remedy "https://github.com/mozilla/Fira")
@@ -494,7 +494,7 @@ window 模塊在同一個鉤子上恢復上次的會話，排在這之後。有�
                         :remedy (format "put images in %s" ginshio-banner-dir))
 #+end_src
 
-#+begin_src emacs-lisp :tangle "lisp/ginshio/ginshio-theme.el" :comments no
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el" :comments no
 (provide 'ginshio-theme)
 ;;; ginshio-theme.el ends here
 #+end_src
