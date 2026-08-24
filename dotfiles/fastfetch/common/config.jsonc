@@ -37,6 +37,6 @@
   ],
   "logo": {
     "type": "file-raw",
-    "source": "{{@@ _dotdrop_dotpath @@}}/emacs-next/common/banners/aperture.txt"
+    "source": "{{@@ _dotdrop_dotpath @@}}/emacs/common/banners/aperture.txt"
   }
 }
