@@ -1,26 +1,35 @@
 # --- cursor -----------------------------------------------------------------
 
 [[install]]
-id = 'prompts-cursor'
+id = 'agents-cursor-prompts'
 dst = '~/.cursor/'
-path = '.'
+path = 'prompts'
 capabilities = ['develop']
 planes = ['user']
 
 # --- claude-code ------------------------------------------------------------
 
 [[install]]
-id = 'prompts-claude'
+id = 'agents-claude-prompts'
 dst = '~/.claude/'
-path = '.'
+path = 'prompts'
 capabilities = ['develop']
 planes = ['user']
+
+[[install]]
+id = 'agents-claude-settings'
+dst = '~/.claude.json'
+path = 'config/claude.json'
+capabilities = ['develop']
+requires_overlays = ['personal']
+planes = ['user']
+chmod = '600'
 
 # --- codex ------------------------------------------------------------------
 
 [[install]]
-id = 'prompts-codex'
+id = 'agents-codex-prompts'
 dst = '~/.codex/'
-path = '.'
+path = 'prompts'
 capabilities = ['develop']
 planes = ['user']
