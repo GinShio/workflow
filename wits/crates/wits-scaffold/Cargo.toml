@@ -1,0 +1,26 @@
+[package]
+name = "wits-scaffold"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Scaffold the boilerplate a new Vulkan/SPIR-V extension needs across target trees"
+
+[[bin]]
+name = "wits-scaffold"
+path = "src/main.rs"
+
+[dependencies]
+wits-util.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+toml.workspace = true
+minijinja.workspace = true
+regex.workspace = true
+roxmltree.workspace = true
+similar.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

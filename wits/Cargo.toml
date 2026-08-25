@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/wits-util", "crates/wits"]
+members = ["crates/wits-util", "crates/wits", "crates/wits-scaffold"]
 
 [workspace.package]
 version = "0.1.0"
@@ -30,4 +30,16 @@ base64 = "0.22"
 rand = "0.8"
 toml = "0.8"
 tempfile = "3"
+# The scaffold plugin renders code templates that need loops, conditionals and
+# list filters. `wits_util::template` deliberately has none of those (it
+# resolves a config context, it does not generate text), so text generation
+# gets a real Jinja engine rather than growing one inside the config resolver.
+minijinja = "2"
+regex = "1"
+# Unified diffs that `git apply` accepts. The edits are pure insertions at known
+# offsets, but deriving hunk line numbers by hand across several insertions into
+# one file is exactly the arithmetic a diff library already gets right.
+similar = "3"
+# Read-only DOM: vk.xml is navigated by element/attribute, never mutated.
+roxmltree = "0.21"
 wits-util = { path = "crates/wits-util" }

@@ -64,6 +64,12 @@ depend on `wits-util` to reuse the process/git/config/template floor rather than
 reinventing it. `wits help` lists the built-ins plus the plugins it discovers on
 `$PATH`. The full contract is in [docs/plugins.md](docs/plugins.md).
 
+Shipped in this workspace:
+
+| Plugin | Purpose |
+|---|---|
+| [`wits scaffold`](docs/scaffold.md) | Register a new Vulkan/SPIR-V extension everywhere a tree needs it, from the specification that defines it |
+
 ## Global flags
 
 | Flag | Meaning |
