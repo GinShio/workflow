@@ -14,7 +14,7 @@ ignoreempty = false
 keepdot = false
 longkey = false
 showdiff = false
-workdir = '~/cyber/dotfiles'
+workdir = '~/cyber/workflow'
 
 # An unprivileged run, as the logged-in user.
 [planes.user]
@@ -31,7 +31,7 @@ workdir = '/var/lib/dotdrop'
 [defaults]
 ccache_remote_enabled = false
 
-[hosts.strix]
+[hosts.'ginshio-openSUSE-strix']
 capabilities = ['develop', 'desktop']
 overlays = ['common', 'personal']
 planes = ['user', 'system']
