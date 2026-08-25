@@ -7,7 +7,7 @@
 # The Dotdrop [config] every generated entrypoint starts from. `dotpath` and the
 # `import_*` keys are computed by the generator and rejected here.
 [config]
-backup = true
+backup = false
 banner = true
 create = true
 ignoreempty = false
