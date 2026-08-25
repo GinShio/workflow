@@ -331,16 +331,24 @@ is_staged_text() {
     [ "$(git diff --cached --numstat -- "$1" | cut -f1)" != "-" ]
 }
 
+# True when a filter name is an encrypting clean/smudge filter (transcrypt,
+# git-crypt). A predicate over the *name* rather than a path, so a batch
+# `check-attr` scan over the whole tree and the per-file `is_encrypted` share
+# one definition of what counts as encrypted.
+is_crypt_filter() {
+    case "$1" in
+        transcrypt|transcrypt-*|git-crypt|git-crypt-*|crypt|crypt-*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # True when a file is managed by an encrypting clean/smudge filter (transcrypt,
 # git-crypt): its staged blob is ciphertext, not content we should format or
 # inspect, so content hooks skip it.
 is_encrypted() {
     _encrypted_attr=$(git check-attr filter -- "$1" 2>/dev/null)
     _encrypted_filter=${_encrypted_attr##*: filter: }
-    case "$_encrypted_filter" in
-        transcrypt|transcrypt-*|git-crypt|git-crypt-*|crypt|crypt-*) return 0 ;;
-        *) return 1 ;;
-    esac
+    is_crypt_filter "$_encrypted_filter"
 }
 
 # Echo the staged text paths whose extension matches one of the given suffixes,

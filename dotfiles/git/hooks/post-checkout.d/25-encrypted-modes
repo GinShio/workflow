@@ -1,0 +1,40 @@
+#!/bin/sh
+# chmod 0600 every file an encrypting clean/smudge filter owns.
+#
+# The index records only the executable bit of a file's mode; the rest of a
+# checkout is materialised from the umask, so a transcrypt secret lands at 0644
+# no matter what its author intended, and the filter itself cannot fix it --
+# clean/smudge see a byte stream, not the file. So the mode is re-asserted here,
+# at the moment the working tree changes (checkout, merge, rebase). chmod is
+# invisible to git status (600 vs 644 differ only in bits the index drops), so
+# the tree stays clean. Idempotent and cheap: one `check-attr` pass, no rule
+# beyond "is the filter encrypting?".
+#
+# Shared by post-checkout, post-merge and post-rewrite; the other two .d
+# entries are symlinks to this one.
+
+. "$HOOKS_DIR/core/lib.sh"
+
+# Git guarantees hooks run with cwd at the root of the working tree, so all
+# relative paths -- both `git ls-files`' output and the chmod targets.
+#
+# One batched scan over the whole index instead of a per-file `git check-attr`.
+# Output is one `path: filter: <value>` line per path; a value the crypt-filter
+# predicate accepts earns its path a chmod. Paths the attribute never touched
+# are skipped.
+git ls-files |
+    git check-attr --stdin filter 2>/dev/null |
+while IFS= read -r _line || [ -n "$_line" ]; do
+    case "$_line" in
+        *": filter: "*) ;;
+        *) continue ;;
+    esac
+    _filter=${_line##*: filter: }
+    if is_crypt_filter "$_filter"; then
+        _path=${_line%: filter: *}
+        chmod 0600 "$_path" 2>/dev/null ||
+            log_debug "encrypted-modes: chmod failed for $_path"
+    fi
+done
+
+exit 0

@@ -252,6 +252,17 @@ active branch's build directory, so language servers and clang-tooling index the
 branch you're actually on. It only manages that path when it is a symlink or
 absent, and never clobbers a real file you keep in-tree. Nothing to configure.
 
+### Encrypted-file modes
+
+Locks the files that encrypting clean/smudge filters own — transcrypt,
+git-crypt, and friends — to `0600` in the working tree. Git tracks only the
+executable bit of a file's mode, so a checkout materializes the rest from your
+umask: a transcrypt secret lands `0644` no matter what its author intended, and
+the filter itself cannot fix it because clean/smudge see a byte stream, never
+the file. The hook re-asserts the mode at the moment the tree changes. Because
+`600` vs `644` differ only in bits the index drops, `git status` stays quiet —
+the chmod never dirties your tree.
+
 ### Dependency-change warning
 
 A nudge so you don't run against stale dependencies. When a checkout changes a
@@ -303,7 +314,9 @@ because it deletes files — enable it per repo where you want the housekeeping.
 `post-commit`, `post-merge`, `post-applypatch`, `post-rewrite`, and `pre-auto-gc`
 mostly exist to feed the two pass-through integrations — `git-branchless` on all
 of them, Git LFS on `post-commit` and `post-merge`. `post-merge` additionally
-reuses the dependency-change warning above. There is nothing framework-specific
+reuses the dependency-change warning and the encrypted-file-modes script above;
+`post-rewrite` likewise runs the encrypted-file-modes script, since a rebase or
+amend can surface freshly smudged secrets. There is nothing framework-specific
 to configure on any of them.
 
 ## Turning pieces off

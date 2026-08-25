@@ -4,10 +4,6 @@ dst = '~/.ssh/'
 path = '.'
 capabilities = ['develop']
 planes = ['user']
-actions = ['ssh-chmod']
-
-[actions]
-ssh-chmod = """find {{@@ _dotfile_abs_dst @@}} -type f -exec chmod 600 {{}} +"""
 
 [variables.ssh.github]
 remote = 'github'
