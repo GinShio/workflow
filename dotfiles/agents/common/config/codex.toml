@@ -1,0 +1,13 @@
+# -*- mode: toml; coding: utf-8; indent-tabs-mode: nil; -*-
+
+model_provider         = "{{@@ agents.vendors['codex'] @@}}"
+model                  = "{{@@ agents.model[agents.vendors['codex']].default @@}}"
+model_reasoning_effort = "max"
+approvals_reviewer     = "user"
+
+[model_providers.{{@@ agents.vendors['codex'] @@}}]
+name         = "CODEX API Vendor"
+base_url     = "{{@@ agents.vendor[agents.vendors['codex']].url @@}}"
+api_key      = "{{@@ agents.vendor[agents.vendors['codex']].key @@}}"
+http_headers = { "Ocp-Apim-Subscription-Key" = "{{@@ agents.key[agents.vendors['codex']].key @@}}" }
+wire_api     = "responses"

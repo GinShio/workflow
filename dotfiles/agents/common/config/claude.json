@@ -1,20 +1,19 @@
 {
   "customApiKeyResponses": {
     "approved": [
-      "{{@@ agents[agents.vendor].api_key[-20:] @@}}"
+      "{{@@ agents.vendor[agents.vendors['claude']].key[-20:] @@}}"
     ],
     "rejected": []
   },
   "effortLevel": "xhigh",
   "env": {
-    "ANTHROPIC_API_KEY": "{{@@ agents[agents.vendor].api_key @@}}",
-    "ANTHROPIC_AUTH_TOKEN": "{{@@ agents[agents.vendor].auth_token @@}}",
-    "ANTHROPIC_BASE_URL": "{{@@ agents[agents.vendor].url @@}}",
-    "ANTHROPIC_MODEL": "deepseek/deepseek-v4-flash-0731[1m]",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek/deepseek-v4-flash-0731[1m]",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek/deepseek-v4-flash-0731[1m]",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek/deepseek-v4-flash-0731[1m]",
-    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek/deepseek-v4-flash-0731[1m]",
+    "ANTHROPIC_API_KEY": "{{@@ agents.vendor[agents.vendors['claude']].key @@}}",
+    "ANTHROPIC_BASE_URL": "{{@@ agents.vendor[agents.vendors['claude']].url @@}}",
+    "ANTHROPIC_MODEL": "{{@@ agents.model[agents.vendors['claude']].default @@}}",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{@@ agents.model[agents.vendors['claude']].haiku @@}}",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "{{@@ agents.model[agents.vendors['claude']].sonnet @@}}",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "{{@@ agents.model[agents.vendors['claude']].opus @@}}",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "{{@@ agents.model[agents.vendors['claude']].subagent @@}}",
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": 1
   },
   "hasCompletedOnboarding": true

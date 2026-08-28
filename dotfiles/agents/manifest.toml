@@ -33,3 +33,12 @@ dst = '~/.codex/'
 path = 'prompts'
 capabilities = ['develop']
 planes = ['user']
+
+[[install]]
+id = 'agents-codex-settings'
+dst = '~/.codex/config.toml'
+path = 'config/codex.toml'
+capabilities = ['develop']
+requires_overlays = ['khronos3d']
+planes = ['user']
+chmod = '600'
