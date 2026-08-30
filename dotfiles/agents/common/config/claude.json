@@ -10,9 +10,9 @@
     "ANTHROPIC_API_KEY": "{{@@ agents.vendor[agents.vendors['claude']].key @@}}",
     "ANTHROPIC_BASE_URL": "{{@@ agents.vendor[agents.vendors['claude']].url @@}}",
     "ANTHROPIC_MODEL": "{{@@ agents.model[agents.vendors['claude']].default @@}}",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{@@ agents.model[agents.vendors['claude']].haiku @@}}",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "{{@@ agents.model[agents.vendors['claude']].sonnet @@}}",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "{{@@ agents.model[agents.vendors['claude']].opus @@}}",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{@@ agents.model[agents.vendors['claude']].turing @@}}",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "{{@@ agents.model[agents.vendors['claude']].wintermute @@}}",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "{{@@ agents.model[agents.vendors['claude']].neuromancer @@}}",
     "CLAUDE_CODE_SUBAGENT_MODEL": "{{@@ agents.model[agents.vendors['claude']].subagent @@}}",
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": 1
   },

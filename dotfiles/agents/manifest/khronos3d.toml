@@ -4,8 +4,8 @@ codex  = 'khronos3d-azure'
 cursor = 'khronos3d-azure'
 
 [variables.agents.model.'khronos3d-azure']
-default  = "gpt-5.6-sol"
-haiku    = "gpt-5.6-luna"
-sonnet   = "gpt-5.6-terra"
-opus     = "gpt-5.6-sol"
-subagent = "gpt-5.6-sol"
+default     = "gpt-5.6-sol"
+turing      = "gpt-5.6-luna"
+wintermute  = "gpt-5.6-terra"
+neuromancer = "gpt-5.6-sol"
+subagent    = "gpt-5.6-sol"
