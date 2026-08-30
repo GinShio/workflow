@@ -6,7 +6,7 @@
 //!   a *single* whole-string placeholder returns the value with its type intact
 //!   (a list or an integer survives); an embedded placeholder is stringified.
 //! - `[[ expr ]]` — a minimal numeric expression, kept for real needs like
-//!   `[[ max(1, system.memory.total_gb // 4) ]]`. It is not a general expression
+//!   `[[ max(1, system.mem.gb // 4) ]]`. It is not a general expression
 //!   language: no `**`, no bitwise ops, no boolean connectives, no arbitrary
 //!   names (conditions are a structured match elsewhere, not here).
 //!

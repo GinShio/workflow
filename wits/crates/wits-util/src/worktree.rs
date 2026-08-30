@@ -583,7 +583,7 @@ pub fn create_known(repo: &Repository, dir: &Path, rev: &str) -> Result<()> {
 /// [`sync_submodules`].
 pub fn repoint(dir: &Path, rev: &str) -> Result<()> {
     let wt = Repository::new(dir);
-    if wt.is_dirty() {
+    if wt.is_dirty_tracked() {
         bail!(
             "worktree {} has uncommitted changes; commit or stash them before moving its HEAD",
             dir.display()
@@ -1076,6 +1076,11 @@ mod tests {
         let sub = mk("sub");
         let sup = root.join("P");
         run(root, &["init", "-q", "-b", "main", "P"]);
+        // A *tracked* file for the dirty-guard assertions below. Without one, the
+        // "dirty" fixture was an untracked file all along — which only refused
+        // because the guard used to count untracked files too.
+        std::fs::write(sup.join("f"), "v1").unwrap();
+        run(&sup, &["add", "f"]);
         run(
             &sup,
             &[
@@ -1145,6 +1150,18 @@ mod tests {
         std::fs::write(wt.join("f"), "dirty").unwrap();
         let err = repoint(&wt, "feat").unwrap_err().to_string();
         assert!(err.contains("uncommitted"), "got: {err}");
+
+        // Untracked files are scratch a HEAD move cannot bury — they must not
+        // block a re-point. Clear the tracked dirt, leave an untracked file, and
+        // the same move goes through.
+        run(&wt, &["checkout", "--", "f"]);
+        std::fs::write(wt.join("build.out"), "x").unwrap();
+        repoint(&wt, "feat").unwrap();
+        assert_eq!(
+            Repository::new(&wt).current_branch().as_deref(),
+            Some("feat"),
+            "an untracked file did not block the move"
+        );
     }
 
     /// The bare-backed case, which git leaves with nowhere durable to put a

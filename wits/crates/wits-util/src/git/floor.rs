@@ -371,6 +371,33 @@ impl Repository {
         self.query(&["rev-parse", "--short", rev])
     }
 
+    /// Whether the working tree has uncommitted **tracked** changes — staged or
+    /// modified files, untracked excluded. This is the "would moving HEAD bury
+    /// work?" question for a *re-point* ([`repoint`](super::Repository::repoint)):
+    /// an untracked file is scratch a HEAD move cannot bury, so it must not block
+    /// one, where the broader [`is_dirty`](Self::is_dirty) — which feeds the
+    /// auto-stash and the reclaim guards — must count it.
+    pub fn is_dirty_tracked(&self) -> bool {
+        let result = crate::process::Command::new("git")
+            .args([
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+                "--ignore-submodules=all",
+            ])
+            .current_dir(self.path())
+            .force_run()
+            .exec();
+        match &result {
+            Ok(r) => eprintln!(
+                "DEBUG raw exit={} stdout={:?} stderr={:?}",
+                r.exit_code, r.stdout, r.stderr
+            ),
+            Err(e) => eprintln!("DEBUG raw err={e}"),
+        }
+        result.map(|r| !r.stdout.is_empty()).unwrap_or(false)
+    }
+
     /// What is uncommitted in the working tree, split the way a person would
     /// describe it. Submodules are excluded for the same reason
     /// [`is_dirty`](Self::is_dirty) excludes them.

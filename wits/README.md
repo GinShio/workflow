@@ -1,6 +1,6 @@
 # `wits`
 
-A single binary that collects my personal workflow tools behind one command
+A single binary that collects personal workflow tools behind one command
 tree. The point of a collection (rather than a directory of loose scripts) is a
 shared library, consistent flags, and one thing to build and put on `$PATH`.
 
@@ -9,19 +9,24 @@ contains what is actually finished. Today that is:
 
 | Command | Purpose |
 |---|---|
-| [`wits transcrypt`](docs/transcrypt.md) | Transparent file encryption wired into git's clean/smudge filters |
-| [`wits stack`](docs/stack.md) | Manage a stack of branches as a set of merge requests (push, open/retarget MRs, navigation) |
-| [`wits review`](docs/review.md) | Review merge requests locally across forges: fetch, comment, verdict, and submit as one batch |
-| [`wits worktree`](docs/worktree.md) | Create, inspect, and reclaim git worktrees in any repo (submodules borrowed, not re-cloned) |
-| [`wits project`](docs/project.md) | Describe/validate source projects from one declarative registry, and answer path queries for scripts |
-| [`wits build`](docs/project.md) | Configure and build a project on top of that registry (cmake/meson/cargo) |
-| [`wits update`](docs/project.md) | Refresh git for every repo of a project |
-| [`wits dotfiles`](docs/dotfiles.md) | Compile a TOML manifest tree into Dotdrop's per-host configs |
+| [`wits transcrypt`](docs/commands/transcrypt.rst) | Transparent file encryption wired into git's clean/smudge filters |
+| [`wits stack`](docs/commands/stack.rst) | Manage a stack of branches as a set of merge requests (push, open/retarget MRs, navigation) |
+| [`wits review`](docs/commands/review.rst) | Review merge requests locally across forges: fetch, comment, verdict, and submit as one batch |
+| [`wits worktree`](docs/commands/worktree.rst) | Create, inspect, and reclaim git worktrees in any repo (submodules borrowed, not re-cloned) |
+| [`wits project`](docs/commands/project.rst) | Describe/validate source projects from one declarative registry, and answer path queries for scripts |
+| [`wits build`](docs/commands/build.rst) | Configure and build a project on top of that registry (cmake/meson/cargo) |
+| [`wits update`](docs/commands/update.rst) | Refresh git for every repo of a project |
+| [`wits dotfiles`](docs/commands/dotfiles.rst) | Compile a TOML manifest tree into Dotdrop's per-host configs |
 
 Built-in commands live in the `wits` binary (a module under
 `crates/wits/src/cmd/` plus a match arm). Anything else is a **plugin**: `wits
 foo` runs a `wits-foo` executable from your `$PATH`, git-style, so a
 domain-specific workflow plugs in without being compiled into `wits`.
+
+The documentation is a full RST book under [`docs/`](docs/index.rst):
+installation, the command guides, plugins, the scaffold plugin, and a
+`reference/` volume holding the exhaustive config/flag tables together with
+the design notes.
 
 ## Build and install
 
@@ -40,7 +45,9 @@ meson install -C build         # installs wits + wits-<sub> symlinks into <prefi
 
 Pass `--prefix ~/.local` to `meson setup` to install under your home; Meson
 honours `DESTDIR` for packaging. For plain development, `cargo build`/`cargo
-test` work as usual (binary at `target/release/wits`), no Meson required.
+test` work as usual (binary at `target/debug/wits`; add `--release` for
+`target/release/wits`), no Meson required. See
+[Installation](docs/installation.rst) for the details.
 
 ## Invocation forms
 
@@ -62,13 +69,13 @@ When `foo` is not a built-in, `wits foo` execs a `wits-foo` executable found on
 named `wits-<name>`, in any language; an in-tree Rust plugin can additionally
 depend on `wits-util` to reuse the process/git/config/template floor rather than
 reinventing it. `wits help` lists the built-ins plus the plugins it discovers on
-`$PATH`. The full contract is in [docs/plugins.md](docs/plugins.md).
+`$PATH`. The full contract is in [Writing a wits plugin](docs/plugins.rst).
 
 Shipped in this workspace:
 
 | Plugin | Purpose |
 |---|---|
-| [`wits scaffold`](docs/scaffold.md) | Register a new Vulkan/SPIR-V extension everywhere a tree needs it, from the specification that defines it |
+| [`wits scaffold`](docs/scaffold.rst) | Register a new Vulkan/SPIR-V extension everywhere a tree needs it, from the specification that defines it |
 
 ## Global flags
 
