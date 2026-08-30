@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 wits-util.workspace = true
 clap.workspace = true
+clap_complete.workspace = true
 anyhow.workspace = true
 log.workspace = true
 serde.workspace = true

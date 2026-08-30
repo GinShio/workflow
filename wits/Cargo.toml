@@ -12,6 +12,9 @@ license = "MIT"
 # future plugin crates).
 [workspace.dependencies]
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+# Shell completion scripts are generated from the clap tree, never maintained
+# by hand, so a completion can never advertise a flag the CLI no longer has.
+clap_complete = "4"
 anyhow = "1"
 thiserror = "2"
 log = "0.4"

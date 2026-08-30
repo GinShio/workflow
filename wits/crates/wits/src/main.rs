@@ -30,6 +30,7 @@ use std::os::unix::process::CommandExt;
 compile_error!("wits requires a Unix platform (uses exec() for plugin dispatch)");
 
 use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 
 mod cmd;
 
@@ -76,6 +77,22 @@ enum Commands {
     Update(cmd::update::UpdateArgs),
     /// Compile a dotfiles manifest tree into Dotdrop's inputs.
     Dotfiles(cmd::dotfiles::DotfilesArgs),
+    /// Emit the shell completion script for this binary's command tree.
+    ///
+    /// The static surface — subcommands, flags, enum values — is generated from
+    /// the clap definitions and never maintained by hand: a hand-written tree
+    /// is how a completion comes to advertise flags the CLI no longer has.
+    /// Hidden like [`Commands::Applets`]: this is plumbing the shell consumes,
+    /// not a workflow verb, so it earns no help entry and no applet symlink.
+    /// The generator walks the whole tree without honouring `hide`, so both
+    /// plumbing names do appear as completion candidates — accepted, rather
+    /// than filtering generated output by text.
+    #[command(name = "__completions", hide = true)]
+    Completions {
+        /// Shell whose completion script to emit.
+        #[arg(value_enum)]
+        shell: Shell,
+    },
     /// Print the built-in subcommand names, one per line — a runtime cross-check
     /// of the applet set.
     #[command(name = "__applets", hide = true)]
@@ -106,6 +123,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Build(args) => cmd::build::run(args),
         Commands::Update(args) => cmd::update::run(args),
         Commands::Dotfiles(args) => cmd::dotfiles::run(args),
+        Commands::Completions { shell } => print_completions(*shell),
         Commands::Applets => {
             for name in builtin_names() {
                 println!("{name}");
@@ -257,6 +275,15 @@ fn is_executable(_path: &Path) -> bool {
     false
 }
 
+/// Write the completion script for `shell` to stdout, generated from the live
+/// clap tree so that script and CLI cannot disagree.
+fn print_completions(shell: Shell) -> anyhow::Result<()> {
+    let mut cmd = Cli::command();
+    let bin = cmd.get_name().to_owned();
+    clap_complete::generate(shell, &mut cmd, &bin, &mut std::io::stdout());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +318,30 @@ mod tests {
         // A `wits-gputest` plugin binary must not be mistaken for a built-in.
         assert_eq!(applet_from_prog("wits-gputest"), None);
         assert_eq!(applet_from_prog("wits-bogus"), None);
+    }
+
+    #[test]
+    fn completion_scripts_cover_the_command_tree() {
+        // The generator is only useful while it reflects the real tree: a real
+        // subcommand and the tree's own name must both appear in each script.
+        for shell in [Shell::Fish, Shell::Bash] {
+            let mut buf = Vec::new();
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "wits", &mut buf);
+            let script = String::from_utf8(buf).expect("completion script is UTF-8");
+            assert!(script.contains("wits"), "{shell:?} script names the binary");
+            assert!(
+                script.contains("stack"),
+                "{shell:?} script covers subcommands"
+            );
+        }
+    }
+
+    #[test]
+    fn hidden_plumbing_stays_out_of_the_applet_set() {
+        // `__completions` is consumed by shells, not typed by people: like
+        // `__applets` it must not surface in the applet list.
+        let names = builtin_names();
+        assert!(!names.iter().any(|name| name == "__completions"));
     }
 }

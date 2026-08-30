@@ -27,6 +27,14 @@ path = 'root-passphrase'
 capabilities = ['develop']
 planes = ['user']
 
+[[install]]
+id = 'wits-completions'
+dst = '~/.config/fish/conf.d/wits-dynamic-completions.fish'
+path = 'completions/wits-dynamic.fish'
+capabilities = ['develop']
+planes = ['user']
+actions = ['wits-bash-completions-install', 'wits-fish-completions-install']
+
 [variables.wits.projects.source_info]
 amdd3d         = { org = 'amd',      name = 'amdd3d' }
 amdllpc        = { org = 'amd',      name = 'amdllpc' }
@@ -46,3 +54,7 @@ spirv-headers  = { org = 'khronos',  name = 'spirv-headers' }
 spirv-tools    = { org = 'khronos',  name = 'spirv-tools' }
 vulkan-samples = { org = 'khronos',  name = 'vulkan-samples' }
 vvl            = { org = 'khronos',  name = 'vvl' }
+
+[actions]
+wits-fish-completions-install = 'mkdir -p {{@@ sysenv.xdg_config_home @@}}/fish/completion && wits __completions fish > $_/wits.fish'
+wits-bash-completions-install = 'mkdir -p {{@@ sysenv.xdg_data_home @@}}/bash-completion/completions && wits __completions bash > $_/wits'
