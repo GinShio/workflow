@@ -63,6 +63,17 @@ Set once ox-html is loaded; see `with-eval-after-load' below.")
           org-html-checkbox-type 'html)))
 #+end_src
 
+~:init-value~ 只給模式變量賦默認值，不會執行 mode 的 body：變量是 ~t~，上面那組
+~setq~ 卻一次都沒跑過，~global-minor-modes~ 的簿記裏也沒有它。定義之後顯式打開一次，
+讓狀態變真；~ginshio-org-html-fancy~ 為 nil 時這一行保持旁觀，與 ~:init-value~ 的取值
+一致。此時 ~ox-html~ 尚未加載，~org-html-style-default~ 暫時是空串，等 ~ox-html~ 載入
+時由 ~ginshio-org-html-reload-fancy-style~ 換成真值。
+
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-html.el"
+(when ginshio-org-html-fancy
+  (org-fancy-html-export-mode 1))
+#+end_src
+
 ~org-html-style-plain~ 與 ~org-html-style-fancy~ 不是 ox-html 的變量，卻用了它的前綴；
 一個讀配置的人會以為那是上游的東西而去查它的文檔。改回 ~ginshio-~ 命名空間。
 

@@ -13,7 +13,19 @@
     (error
      (if init-file-debug
          (signal (car err) (cdr err))
-       (message "Ginshio early init failed: %s" (error-message-string err))
-       (kill-emacs 1)))))
+       (let ((reason (concat (error-message-string err)
+                             "  Start again with --debug-init for a backtrace.")))
+         ;; A desktop launch has no stderr to read and the echo area dies
+         ;; with the process: put the reason where it can actually be read.
+         ;; A dialog waits for dismissal, a terminal holds the message for a
+         ;; few seconds, batch keeps the plain stderr line.
+         (message "Ginshio early init failed: %s" reason)
+         (condition-case nil
+             (cond ((and (display-graphic-p) (not noninteractive))
+                    (message-box "Ginshio early init failed: %s" reason))
+                   ((and (not noninteractive) (not (daemonp)))
+                    (sit-for 4)))
+           (error nil))
+         (kill-emacs 1))))))
 
 ;;; early-init.el ends here

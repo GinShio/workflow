@@ -58,10 +58,14 @@
                    flymake-show-buffer-diagnostics
                    flymake-show-project-diagnostics))
   (autoload command "flymake" nil t))
+
+(autoload 'eldoc-doc-buffer "eldoc" nil t)
 #+end_src
 
 ~eglot~ 與 ~eglot-ensure~ 上游已經聲明過，不必重複。flymake 那四個要自己聲明的原因是
 它們在上游一個都沒有聲明——之前它們能用，靠的是 eglot 把 flymake 一起拉了進來。
+~eldoc-doc-buffer~ 同理，內建 loaddefs 裏也沒有它的條目：此前能用，靠的也是 eglot 把
+eldoc 一起拉了進來，而 =c h= 的綁定存在於每一個緩衝區。
 
 ** 為什麼是 eglot
 

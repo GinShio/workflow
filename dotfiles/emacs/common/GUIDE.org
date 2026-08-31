@@ -159,6 +159,7 @@ dashboard 的 =r=、=p=、=m= 分別進入最近文件、項目、書籤；在 d
 | ~M-m e~      | 編輯與多光標     | edit                    |
 | ~M-m !~      | 外部命令與終端   | shell、Eat              |
 | ~M-m r~      | 遠程             | TRAMP                   |
+| ~M-m o~      | Org：agenda、capture、refile | org          |
 | ~M-m z~      | 結構與摺疊       | treesit、outline        |
 | ~M-m c~      | 語義與診斷       | Eglot、xref、Flymake    |
 | ~M-m d~      | 調試             | Dape                    |

@@ -23,14 +23,19 @@ TRAMP 的 method、multi-hop、連接屬性與除錯方式見 [[info:tramp#Top][
 (require 'ginshio-keys)
 (require 'files-x)
 
-(declare-function tramp-cleanup-this-connection "tramp-cmds")
-(declare-function tramp-cleanup-all-connections "tramp-cmds")
-(declare-function tramp-cleanup-all-buffers "tramp-cmds")
+(autoload 'tramp-cleanup-this-connection "tramp-cmds" nil t)
+(autoload 'tramp-cleanup-all-connections "tramp-cmds" nil t)
+(autoload 'tramp-cleanup-all-buffers "tramp-cmds" nil t)
 #+end_src
 
 TRAMP 自己不在這裏加載。它是內建包裏最大的幾個之一，而多數 Emacs 會話從頭到尾不碰一個
 遠程文件；真要碰的時候不需要幫忙——遠程路徑的處理函數是自動加載的，打進一個 =/ssh:= 開
 頭的文件名，TRAMP 自己就進來了。
+
+上面三個清理命令是例外。它們的 autoload 住在 =tramp-loaddefs.el=，而那個文件由
+=tramp-compat= 在 TRAMP 加載時纔拉起——在此之前，這三個名字在 Emacs 裏不存在；
+~declare-function~ 只把這個事實記給編譯器看，不產生任何可調用的東西。綁在 leader 上的
+是鍵，鍵不會替你去加載文件，所以在這裏顯式聲明 autoload，讓按鍵在任何會話裏都成立。
 
 於是下面幾乎所有變量都是在 TRAMP 還沒加載的時候賦的值。這是可以的：它們都是
 ~defcustom~，而 ~defcustom~ 不會覆蓋一個已經有值的變量。反過來就不行——~defvar~ 帶初值

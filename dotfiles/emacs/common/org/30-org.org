@@ -395,15 +395,15 @@ Agenda 把 todo 與 project 兩份檔案的排程疊在一起，做成一份同�
   (setq org-super-agenda-groups
         '((:name "Today" :time-grid t)
           (:name "Scheduled earlier" :scheduled past)
-          (:name "Due soon" :deadline (before today) :order 1)
-          (:name "Overdue" :deadline (before today) :scheduled (before today) :order 1)
-          (:name "Other deadlines" :deadline (after today) :order 2)
+          (:name "Overdue" :deadline (before today))
+          (:name "Upcoming deadlines" :deadline (after today))
           (:auto-todo t))))
 #+end_src
 
-這組規則把「今天」「已排過期」「即將到期」「逾期」「其他截止」分開，並按 todo 狀態補
-一組自動分組。規則可以按你的習慣調整，規則說明見
-[[https://github.com/alphapapa/org-super-agenda#usage][org-super-agenda usage]]。
+org-super-agenda 按列表順序逐組匹配，先命中先接走，所以順序就是優先級：進了時間網格
+的歸 Today，排期已過的歸 Scheduled earlier，deadline 已過的歸 Overdue，剩下的 deadline
+都在未來。四組各管一段，謂詞互不重疊；自動分組補在最後。規則可以按你的習慣調整，規則
+說明見 [[https://github.com/alphapapa/org-super-agenda#usage][org-super-agenda usage]]。
 
 ** Capture
 

@@ -108,10 +108,10 @@ Args SPECIAL-BLOCK, CONTENTS, and _INFO, see `org-hugo-special-block'."
     (when natural
       (cond
        ((string= block-type "LaTeX")
-        (format "{{< math >}}\x5C\x5B\xA%s\x5C\x5D\xA{{< /math >}}"
+        (format "{{< math >}}\\[\n%s\\]\n{{< /math >}}"
                 natural))
        ((member block-type '("success" "info" "warning" "error"))
-        (format "{{< admonition type=\"%s\" >}}\xA%s\xA{{< /admonition >}}"
+        (format "{{< admonition type=\"%s\" >}}\n%s\n{{< /admonition >}}"
                 block-type natural))
        (t nil)))))
 
@@ -128,19 +128,19 @@ Args SPECIAL-BLOCK, CONTENTS, and _INFO, see `org-hugo-special-block'."
 =sitehugo= 再以 =HUGOBASEDIR= 為來源 `hugo --destination`。本模組補的是「編輯器
 內單篇觸發」的互動入口：~hugo/export-one~ — 把「目標 .md 檔」算在
 =content/posts= 下，比 mtime 與源檔，比源檔舊或不存在才導出——與 make 共用同一份
-=ginshio-org-hugo-updated-p~ 判定，產物落在同一個 =publisher/hugo/= 站台，因此
+=ginshio-org-hugo-stale-p~ 判定，產物落在同一個 =publisher/hugo/= 站台，因此
 emacs 導過之後直接 `make sitehugo` 就能收進站（或整條 `make` 全量重建）。
 
 ~hugo/export-all~ 是給 `make` batch 或「整棵 blog/ 對齊一次」用的，走
 ~org-hugo-export-wim-to-md~（WIM：一個 Org 檔可含多篇拆成多個 md）。
 
-原腳本那段「比新」靠 ~file-updatedp~ 完成，這裡保留同名思想、實作成自己的
-~ginshio-org-hugo-updated-p~，並加上 buffer 管理：批次導出幾十個檔時用
+原腳本那段「比新」靠 ~file-updatedp~ 完成，這裡保留同一個思想、實作成自己的
+~ginshio-org-hugo-stale-p~，並加上 buffer 管理：批次導出幾十個檔時用
 ~find-file-noselect~ 開檔，導完的當該檔原先不在編輯器就 kill-buffer 回收，不讓
 `hugo/export-all` 留下一堆殘留緩衝。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org-hugo.el"
-(defun ginshio-org-hugo-updated-p (file1 file2)
+(defun ginshio-org-hugo-stale-p (file1 file2)
   "Return non-nil if FILE1 is older than FILE2."
   (time-less-p (file-attribute-modification-time (file-attributes file1))
                (file-attribute-modification-time (file-attributes file2))))
@@ -169,7 +169,7 @@ run; every buffer this function opens itself is killed afterwards, so a bulk
             (mdfile (org-export-output-file-name
                      ".md" nil (expand-file-name ginshio-org-hugo-posts-dir))))
        (when (or (not (file-exists-p mdfile))
-                 (ginshio-org-hugo-updated-p mdfile file))
+                 (ginshio-org-hugo-stale-p mdfile file))
          (org-hugo-export-to-md))))))
 
 (defun hugo/export-all (dir)

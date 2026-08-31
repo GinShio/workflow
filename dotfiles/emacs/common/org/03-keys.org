@@ -549,6 +549,49 @@ Asks first when there are unsaved changes, because rereading discards them."
  "q d" #'ginshio/doctor)
 #+end_src
 
+** leader 的自檢
+
+按名召回那一側有自檢兜底；leader 這一側也該有，而且更有必要。模塊往這棵樹上掛的是符
+號，綁定發生的時候不檢查命令是否存在——一個指向未定義命令的綁定不報錯、不警告，安靜地
+等到按下去那一刻，給出一條與「鍵位寫錯」難以分辨的錯誤。
+
+檢查聲明在 keys 模塊，卻要到自檢運行時纔有意義：排在後面的模塊還會往樹上掛分支，而到
+了 doctor 運行的時候，快照的 autoload 已經在場。所以它只問一個問題——對每個符號綁定，
+此刻是不是一條命令。前綴遞歸進去，非命令的符號連同到達它的鍵序列一起記下。
+
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-keys.el"
+(defun ginshio-keys--unbound-leader-commands (map path dead)
+  "Collect bindings in leader MAP that resolve to no command.
+PATH is the key sequence reached so far, nil at the root, and DEAD is the
+accumulator.  A keymap recurses; a symbol that is not a command is recorded
+with the sequence that reaches it."
+  (map-keymap
+   (lambda (event binding)
+     (let ((key (if path
+                    (concat path " " (key-description (vector event)))
+                  (key-description (vector event)))))
+       (cond
+        ((keymapp binding)
+         (setq dead (ginshio-keys--unbound-leader-commands binding key dead)))
+        ((and (symbolp binding) (not (commandp binding)))
+         (push (format "%s -> %s" key binding) dead)))))
+   map)
+  dead)
+
+(ginshio-doctor-declare 'keys "leader bindings resolve"
+                        (lambda ()
+                          (null (ginshio-keys--unbound-leader-commands
+                                 ginshio-leader-map nil nil)))
+                        :severity 'warn
+                        :note "every command under the leader is defined"
+                        :detail (lambda ()
+                                  (string-join
+                                   (ginshio-keys--unbound-leader-commands
+                                    ginshio-leader-map nil nil)
+                                   "\n"))
+                        :remedy "declare the package, or drop the binding")
+#+end_src
+
 ** 提示
 
 一棵按主題分區的鍵位樹只有在能被看見時才好用。按下 leader 之後停頓片刻，下一層有
