@@ -41,11 +41,21 @@ EditorConfig 的明確聲明最後生效。
 
 ** 診斷
 
-Python 基礎 mode 自帶 Flymake backend。Eglot 接管時會保存並暫時替換它，shutdown 後再
-恢復；因此 standalone file、缺 server 或連接失敗時仍有 native 診斷，而 managed buffer
-只保留 Pyright 一個來源。
+Python 基礎 mode 自帶 Flymake backend，本地後備選 ruff。它默認要 pyflakes，而這台機
+器上的是 ruff：~--output-format=concise~ 的輸出與 python.el 的解析格式兼容，但純餵入
+~-~ 時 ruff 把檔名打成 =-=，解析不認，所以要用 ~--stdin-filename~ 釘回 =stdin=。
+Eglot 接管時會保存並暫時替換後端表，shutdown 後再恢復；因此 standalone file、缺
+server 或連接失敗時仍有本地診斷，而 managed buffer 只保留 Pyright 一個來源。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-python.el"
+(setq python-flymake-command
+      '("ruff" "check" "--output-format=concise" "--stdin-filename" "stdin" "-"))
+
+(ginshio-doctor-executable 'lang-python "ruff"
+                           :severity 'warn
+                           :note "local flymake diagnostics"
+                           :remedy "install ruff and put it on PATH")
+
 (ginshio-lsp-register-server
  :modes '(python-mode python-ts-mode)
  :program "pyright-langserver"

@@ -261,6 +261,17 @@ gdb :program "a.out" :args []
  "d t" #'dape-select-thread)
 #+end_src
 
+單步是一連串決定：越過一步，發現函數可疑就步入，看完步出，再繼續——這些命令天生要
+連按，而三鍵前綴讓連按變貴。keys 模塊留的建表函數在這裏派上用場：剛按過 =d n= 之
+後，單鍵 =n= 就是再來一次，=c= =i= =o= =u= 在同一張表裏隨時切換；=b= 也在表裏，沿着代
+碼連續標幾個斷點不必反復回到前綴。退出類的鍵刻意不在表裏——單步途中一個手滑的 =q=
+不該結束會話。
+
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-dap.el"
+(ginshio-keys-repeatable 'ginshio-dape-repeat-map
+                         "d c" "d n" "d i" "d o" "d u" "d b")
+#+end_src
+
 三種斷點都值得知道，它們解決的是不同的問題。普通斷點停下來；~d e~ 的條件斷點只在表
 達式成立時停，用來從一萬次循環裏抓住出問題的那一次；~d l~ 的日誌斷點不停，只打印一
 行——那才是 printf 調試本該有的樣子，不用重新編譯，也不用記得刪掉。

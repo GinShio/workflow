@@ -51,7 +51,9 @@ mode hook 之後覆蓋這裏的默認值。
 
 =rust-ts-mode= 會自行加入一個每次把整份 buffer 喂給 =clippy-driver= 的 Flymake backend。
 Eglot 接管時會保存並暫時替換它，避免和 rust-analyzer 重複；關閉 Eglot、server 缺失或
-文件不屬於 project 時，原本的 backend 仍然可用。
+文件不屬於 project 時，原本的 backend 仍然可用。它的命令是 standalone 的
+clippy-driver，解析不了 Cargo 依賴，所以它的診斷只在腳本式的孤立文件上完整；項目內
+的語義本來就歸 rust-analyzer，那裏的後備價值主要是「server 起不來時還有點東西看」。
 
 ** rust-analyzer
 

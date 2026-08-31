@@ -204,6 +204,22 @@ flymake 的指示器和版本控制的邊欄改動標記都想要 fringe。左�
 ~flymake-wrap-around~ 關掉：跳到最後一個錯誤再按一次，默認會回到第一個。在一個長文件
 裏，那和「沒有更多錯誤了」在視覺上難以區分，於是你會來回轉圈。
 
+** 後備診斷
+
+診斷有兩層來源。服務器在場時，eglot 接管緩衝區：它自己打開 flymake-mode，並把後端表
+逐緩衝區換成只剩它自己——~eglot--managed-mode~ 裏的 ~(flymake-mode 1)~ 與
+~(setq flymake-diagnostic-functions '(eglot-flymake-backend))~ 兩行做完了全部的事。
+服務器不在場時，接手的是各主模式自己註冊的本地後端：elisp-mode 掛了 checkdoc 與
+byte-compile，python-mode 掛了 python-flymake，rust-ts-mode 掛了 clippy。
+
+出廠的後端表是空的，所以下面這一行在沒有後端註冊的緩衝區裏是惰性的——開着不做事，
+不是開着添亂。這一層的價值在單文件與無項目的場景：clangd 只在項目裏啓動，而一個獨立
+的 .py、一段 elisp、一個腳本式的 .rs 不需要項目也配得上診斷。
+
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
+(add-hook 'prog-mode-hook #'flymake-mode)
+#+end_src
+
 ** 註冊
 
 語言模塊用一次調用聲明它的服務器。一處聲明同時決定三件事：eglot 用什麼命令啓動、啓
@@ -383,7 +399,9 @@ activation 快照收錄每個包的 autoload forms，所以 ~fboundp~ 在 yasnip
 跳轉綁在 xref 上，不綁 eglot 自己的命令。這一點值得解釋，因為看起來像是繞遠路：eglot
 在接管緩衝區時把自己註冊為 xref 的後端，所以有語言服務器時 ~M-m c d~ 拿到的就是服務
 器的答案。綁 xref 換來的是同一個鍵在沒有服務器的地方也還是「跳到定義」——elisp 問
-Emacs 自己的符號表，老倉庫問 TAGS，都沒有就退回搜索。
+Emacs 自己的符號表，老倉庫問 TAGS 表，兩者都沒有就直接報錯。沒有後備是刻意的：語義
+跳轉歸語言服務器，文本搜索歸 =s g=，一個用 grep 猜出來的「定義」只會把人送到錯的
+地方。
 
 大小寫成對：小寫問這個緩衝區，大寫問整個項目。
 
