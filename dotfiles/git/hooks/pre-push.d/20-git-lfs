@@ -1,4 +1,5 @@
 #!/bin/sh
 # Ensure Git LFS objects are uploaded before the push completes.
 
+command -v git-lfs >/dev/null 2>&1 || exit 0
 git lfs pre-push "$@"

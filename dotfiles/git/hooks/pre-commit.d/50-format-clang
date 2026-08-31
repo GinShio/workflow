@@ -1,17 +1,33 @@
 #!/bin/sh
 . "$HOOKS_DIR/core/lib.sh"
 
-# Format staged C/C++ (and friends) with clang-format, rewriting the index copy
-# via apply_to_staged so unstaged edits are left intact. clang-format discovers a
-# nearby .clang-format through --assume-filename; an explicit configured style
-# overrides that. A missing tool is a silent skip.
+# Format the staged C/C++ changes with clang-format, rewriting the index copy
+# via apply_to_staged so unstaged edits are left intact. A missing tool is a
+# silent skip.
+#
+# By default only a window around the lines this commit touches is formatted,
+# so a one-line fix in a file that predates the formatter stays a handful of
+# lines instead of arriving as a wall of unrelated churn. The window is the
+# staged diff's new-side hunks at `-U3` context: clang-format is fed the whole
+# staged blob on stdin, but is only allowed to change the lines those hunks
+# cover, which takes in three lines around each edit. The widening over LLVM's
+# strict `-U0` (the way git-clang-format drives it) is deliberate — a
+# reformatted line can otherwise sit next to neighbours the edit never
+# touched, and the context window gives the formatter room to keep the edited
+# region locally consistent. On a tree that is already clang-format-clean,
+# whole-file and diff-scoped are identical.
+#
+# wits.hooks.pre-commit.format-clang-whole-file-enable (off by default)
+# switches to whole-file formatting. clang-format discovers a nearby
+# .clang-format through --assume-filename; an explicit configured style
+# overrides that.
 command -v clang-format >/dev/null 2>&1 || exit 0
 
 style=$(cfg_value wits.hooks.pre-commit.format-clang-style)
-if [ -n "$style" ]; then
-    set -- "-style=$style"
+if cfg_bool wits.hooks.pre-commit.format-clang-whole-file-enable; then
+    _whole=1
 else
-    set -- -style=file -fallback-style=LLVM
+    _whole=0
 fi
 
 files=$(staged_lang_files .c .h .inc .hh .hpp .hxx .h++ .cc .cpp .cxx .c++ .icc .ipp .ixx .i++ .tcc .tpp .txx)
@@ -21,6 +37,36 @@ IFS='
 set -f
 rc=0
 for f in $files; do
+    if [ -n "$style" ]; then
+        set -- "-style=$style"
+    else
+        set -- -style=file -fallback-style=LLVM
+    fi
+
+    if [ "$_whole" = 1 ]; then
+        apply_to_staged "$f" clang-format "--assume-filename=$f" "$@" || rc=1
+        continue
+    fi
+
+    # The new-side hunk ranges of the staged diff are line numbers in the
+    # staged blob — the same content clang-format reads on stdin. At -U3 each
+    # hunk carries its context lines, so a range covers the edit plus three
+    # lines on each side, and ranges from neighbouring hunks may overlap;
+    # clang-format unions them. A hunk that only deletes lines has a new-side
+    # count of 0, so nothing to format. One range per line: the loop's $IFS is
+    # a newline, and the unquoted expansion below splits on exactly that.
+    _lines=$(git diff --cached -U3 -- "$f" 2>/dev/null | awk '
+        /^@@ / {
+            split($3, _n, ",")
+            _s = substr(_n[1], 2) + 0
+            _c = (2 in _n) ? _n[2] + 0 : 1
+            if (_c > 0)
+                printf "--lines=%d:%d\n", _s, _s + _c - 1
+        }')
+    [ -n "$_lines" ] || continue
+
+    # shellcheck disable=SC2086
+    set -- "$@" $_lines
     apply_to_staged "$f" clang-format "--assume-filename=$f" "$@" || rc=1
 done
 IFS=$oldifs

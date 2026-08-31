@@ -9,14 +9,32 @@ cfg_bool wits.hooks.reference-transaction.cleanup-build-dir-enable || exit 0
 [ "$1" = "committed" ] || exit 0
 
 # stdin: <old-sha> <new-sha> <ref-name>. A new-sha of all-zero means deletion.
+# Git applies a branch rename as a zero-update of the old name plus a create
+# of the new name at the same commit in this transaction (see cleanup-machete);
+# such a pair is a rename, and the branch's build directory must survive it.
+deletions=""   # one "<branch> <old-sha>" pair per line
+creations=""   # one new sha per line
 while read -r old_sha new_sha ref_name; do
-    [ "$new_sha" = "$NULL_SHA" ] || continue
     case "$ref_name" in
-        refs/heads/*) branch=${ref_name#refs/heads/} ;;
+        refs/heads/*) ;;
         *) continue ;;
     esac
+    if [ "$new_sha" = "$NULL_SHA" ]; then
+        deletions="$deletions${ref_name#refs/heads/} $old_sha
+"
+    else
+        creations="$creations$new_sha
+"
+    fi
+done
 
-    build_dirs=$(resolve_build_dirs "$branch" || true)
+while read -r _branch _old; do
+    [ -n "$_branch" ] || continue
+    case "$creations" in
+        *"$_old"*) continue ;;   # the sha lives on under a new name: a rename
+    esac
+
+    build_dirs=$(resolve_build_dirs "$_branch" cleanup || true)
     oldifs=$IFS
     IFS='
 '
@@ -30,4 +48,6 @@ while read -r old_sha new_sha ref_name; do
     done
     IFS=$oldifs
     set +f
-done
+done <<_REFS_EOF
+$deletions
+_REFS_EOF

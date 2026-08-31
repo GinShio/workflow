@@ -162,43 +162,55 @@ prompt_confirm() {
 }
 
 # Resolve build directories for a specific branch using wits.
-# Usage: resolve_build_dirs <branch_name>
+# Usage: resolve_build_dirs <branch_name> [cleanup]
+# Without "cleanup" (the workspace-restore caller) a build directory shared
+# with the main branch is a fine target to link against; with "cleanup" (the
+# branch-deletion caller) a shared root is refused, so a cleanup can never
+# remove the build tree the main branch is using.
 resolve_build_dirs() {
     _branch="$1"
     _repo="$GIT_TOPLEVEL"
     _bd=""
 
     command -v wits >/dev/null 2>&1 || {
-        log_warn "cleanup-build-dir: wits is unavailable; no build directory will be deleted."
+        log_warn "build-dirs: wits is unavailable; no build directory will be deleted."
         return 1
     }
     _bd=$(wits project build-dir "$_repo" --branch "$_branch" 2>/dev/null) || {
-        log_warn "cleanup-build-dir: cannot resolve build directory for $_branch."
+        log_warn "build-dirs: cannot resolve build directory for $_branch."
         return 1
     }
     [ -n "$_bd" ] || return 1
 
-    _main_branch=$(wits project main-branch "$_repo" 2>/dev/null) || return 1
-    _main_bd=$(wits project build-dir "$_repo" --branch "$_main_branch" 2>/dev/null) ||
+    _main_branch=$(wits project main-branch "$_repo" 2>/dev/null) || {
+        log_warn "build-dirs: cannot resolve the project's main branch."
         return 1
+    }
+    _main_bd=$(wits project build-dir "$_repo" --branch "$_main_branch" 2>/dev/null) || {
+        log_warn "build-dirs: cannot resolve the main branch's build directory."
+        return 1
+    }
 
-    # A branch cleanup may remove variants of that branch's base, but never a
-    # build root shared with the main branch.
+    # Variants of a build directory share the base with the main branch's. A
+    # cleanup must never remove a root the main branch is using, so it refuses
+    # there; the restore caller links instead of deleting, and a shared build
+    # directory is exactly the right target for it — which is why the refusal
+    # applies to cleanup mode only.
     _bd_base=${_bd%-debug}
     _bd_base=${_bd_base%-release}
     _main_base=${_main_bd%-debug}
     _main_base=${_main_base%-release}
-    if [ "$_bd_base" = "$_main_base" ]; then
-        log_warn "cleanup-build-dir: $_branch shares $_bd_base with $_main_branch; keeping it."
+    if [ "$2" = "cleanup" ] && [ "$_bd_base" = "$_main_base" ]; then
+        log_warn "build-dirs: $_branch shares $_bd_base with $_main_branch; keeping it."
         return 1
     fi
     _build_parent=$(dirname "$_main_base")
     _build_root=$(CDPATH= cd -P "$_build_parent" 2>/dev/null && pwd) || {
-        log_warn "cleanup-build-dir: cannot prove build root $_build_parent."
+        log_warn "build-dirs: cannot prove build root $_build_parent."
         return 1
     }
     [ "$_build_root" != / ] || {
-        log_warn "cleanup-build-dir: refusing filesystem root as a build root."
+        log_warn "build-dirs: refusing filesystem root as a build root."
         return 1
     }
 
@@ -206,30 +218,30 @@ resolve_build_dirs() {
         _bd_target="${_bd_base}${suffix}"
         [ -d "$_bd_target" ] || continue
         if [ -L "$_bd_target" ]; then
-            log_warn "cleanup-build-dir: refusing symlink $_bd_target."
+            log_warn "build-dirs: refusing symlink $_bd_target."
             continue
         fi
         _bd_safe=$(CDPATH= cd -P "$_bd_target" 2>/dev/null && pwd) || continue
         case "$_bd_safe" in
             /|"$HOME"|"$GIT_TOPLEVEL")
-                log_warn "cleanup-build-dir: refusing unsafe path $_bd_safe."
+                log_warn "build-dirs: refusing unsafe path $_bd_safe."
                 continue
                 ;;
         esac
         if [ "$_bd_safe" = "$_build_root" ]; then
-            log_warn "cleanup-build-dir: refusing build root $_bd_safe."
+            log_warn "build-dirs: refusing build root $_bd_safe."
             continue
         fi
         case "$_bd_safe/" in
             "$_build_root/"*) ;;
             *)
-                log_warn "cleanup-build-dir: $_bd_safe is outside $_build_root."
+                log_warn "build-dirs: $_bd_safe is outside $_build_root."
                 continue
                 ;;
         esac
         case "$GIT_TOPLEVEL/" in
             "$_bd_safe/"*)
-                log_warn "cleanup-build-dir: refusing repository ancestor $_bd_safe."
+                log_warn "build-dirs: refusing repository ancestor $_bd_safe."
                 continue
                 ;;
         esac

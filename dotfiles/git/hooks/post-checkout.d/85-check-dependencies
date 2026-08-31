@@ -1,7 +1,8 @@
 #!/bin/sh
-# Warn (never block) when dependency lockfiles change across a checkout or
-# merge, so you remember to re-run your package manager.
-# Shared by post-checkout and post-merge (post-merge.d/85 is a symlink here).
+# Warn (never block) when dependency lockfiles change across a checkout,
+# merge, or rewrite, so you remember to re-run your package manager.
+# Shared by post-checkout, post-merge and post-rewrite; the post-merge.d and
+# post-rewrite.d entries are symlinks to this one.
 
 . "$HOOKS_DIR/core/lib.sh"
 
@@ -15,6 +16,15 @@ case "$HOOK_NAME" in
     post-merge)
         # args: <is_squash>; compare the pre-merge HEAD to the current HEAD.
         old="ORIG_HEAD"
+        new="HEAD"
+        ;;
+    post-rewrite)
+        # args: <rewrite-type> ...; stdin lists the rewritten commits as
+        # "<old-sha> <new-sha>" pairs, the original branch tip last, so the
+        # last line's old sha is what the tree looked like before the rewrite.
+        # ORIG_HEAD is not usable here: `git commit --amend` leaves nothing
+        # behind, and an earlier merge would leave it pointing elsewhere.
+        old=$(awk 'END { print $1 }')
         new="HEAD"
         ;;
     *)

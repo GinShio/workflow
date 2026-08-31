@@ -21,25 +21,48 @@ fi
 MACHETE_FILE="$GIT_COMMON_DIR/machete"
 [ -f "$MACHETE_FILE" ] || exit 0
 
-# Collect deleted branches from stdin: <old-value> <new-value> <ref-name>.
-deleted_branches=""
+# Collect deletions and creations from stdin: <old-value> <new-value> <ref-name>.
+# Git applies a branch rename as a zero-update of the old name plus a create
+# of the new name at the same commit, both inside this one transaction; treat
+# that pair as a rename, not a deletion, so a renamed branch keeps its stack
+# entry and its build directory.
+deletions=""   # one "<branch> <old-sha>" pair per line
+creations=""   # one new sha per line
 while read -r old_val new_val ref_name; do
-    [ "$new_val" = "$NULL_SHA" ] || continue
     case "$ref_name" in
-        refs/heads/*)
-            deleted_branches="${deleted_branches:+$deleted_branches }${ref_name#refs/heads/}"
-            ;;
+        refs/heads/*) ;;
+        *) continue ;;
     esac
+    if [ "$new_val" = "$NULL_SHA" ]; then
+        deletions="$deletions${ref_name#refs/heads/} $old_val
+"
+    else
+        creations="$creations$new_val
+"
+    fi
 done
+
+deleted_branches=""
+while read -r _branch _old; do
+    [ -n "$_branch" ] || continue
+    case "$creations" in
+        *"$_old"*) continue ;;   # the sha lives on under a new name: a rename
+    esac
+    deleted_branches="${deleted_branches:+$deleted_branches }$_branch"
+done <<_REFS_EOF
+$deletions
+_REFS_EOF
 [ -n "$deleted_branches" ] || exit 0
 
 # Preferred path: let the native tool own the tree edit. `wits stack tree rm`
 # removes each branch and splices its children up to the parent (identical
 # semantics to the awk fallback), and stays the single source of truth for the
-# machete format. Word-splitting is intentional to pass one arg per branch.
-if command -v wits >/dev/null 2>&1; then
-    # shellcheck disable=SC2086
-    wits stack tree rm $deleted_branches
+# machete format. Word-splitting is intentional to pass one arg per branch. A
+# wits failure leaves the file untouched, so fall through to the rewrite below
+# rather than silently dropping the cleanup.
+# shellcheck disable=SC2086
+if command -v wits >/dev/null 2>&1 &&
+   wits stack tree rm $deleted_branches; then
     exit 0
 fi
 

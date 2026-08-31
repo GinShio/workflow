@@ -15,6 +15,8 @@
 #   - on a detached HEAD — no branch, so no ID to read;
 #   - and never twice — a message that already carries the ID is left as is.
 
+cfg_bool wits.hooks.prepare-commit-msg.issue-tracker-enable || exit 0
+
 msg_file="$1"
 
 # A rebase replays commits that already have their prefix (and reword edits an
