@@ -22,9 +22,3 @@ remote = 'codeberg'
 url = 'codeberg.org'
 hostname = 'codeberg.org'
 port = 22
-
-[variables.ssh.bitbucket]
-remote = 'bitbucket'
-url = 'bitbucket.org'
-hostname = 'altssh.bitbucket.org'
-port = 443
