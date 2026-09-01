@@ -326,8 +326,8 @@ mod tests {
         let env = environment();
         let ctx = Value::from(());
         assert_eq!(
-            one(&env, "{{ 'VK_TEST_shader_widget' | sha256(64) }}", &ctx).unwrap(),
-            "e000175bc1d"
+            one(&env, "{{ 'VK_TEST_shader_widget' | sha256(7) }}", &ctx).unwrap(),
+            "546a53e"
         );
         assert!(one(&env, "{{ 'x' | sha256(65) }}", &ctx).is_err());
     }
