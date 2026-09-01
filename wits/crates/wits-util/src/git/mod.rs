@@ -95,6 +95,13 @@ impl Repository {
         // cwd and make a `git` we run against another worktree operate on the
         // wrong one (notably `git submodule`, which then dies with "cannot be
         // used without a working tree"). Scrubbing them is a no-op when unset.
+        //
+        // Every invocation goes through here, including the reads: a `git
+        // status` run with a leaked `GIT_DIR` pairs the caller's index with our
+        // working tree and calls every difference between them an uncommitted
+        // change. The trigger is easy to miss, because git only exports
+        // `GIT_DIR` for an alias when the git dir is not a plain `.git` — so it
+        // never happens from a main worktree and always does from a linked one.
         for var in GIT_LOCATION_ENV {
             cmd.env_remove(*var);
         }

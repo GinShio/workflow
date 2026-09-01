@@ -346,6 +346,70 @@ fn switch_moves_an_existing_worktree() {
     assert_eq!(branch_of(&wt), "feat", "and buries nothing");
 }
 
+/// `wits` is routinely reached as a `git` alias (`git review …`, `git stack …`),
+/// and from a *linked* worktree git exports `GIT_DIR` pinned to that worktree —
+/// it only omits it when the git dir is a plain `.git`, which is why this never
+/// shows up from a main worktree. Left in place it overrides the `current_dir`
+/// every read runs against, so the dirty-tree guard would pair the **caller's**
+/// index with the **target's** files and refuse the move over work that lives
+/// somewhere else entirely.
+#[test]
+fn an_inherited_git_dir_never_decides_whether_a_worktree_is_dirty() {
+    let fx = Fixture::new(&["caller", "target", "landing", "elsewhere"]);
+    fx.ok(&["worktree", "create", "caller"]);
+    fx.ok(&["worktree", "create", "target"]);
+    let caller = fx.path("work.caller");
+    let target = fx.path("work.target");
+
+    let branch_of = |dir: &Path| {
+        let out = Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(dir)
+            .envs(hermetic_git())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    // Exactly what git's alias dispatch hands us, and only from here: the caller
+    // is a linked worktree, so its git dir is `<common>/worktrees/<id>`.
+    let git_dir = fx.repo.join(".git/worktrees/work.caller");
+    assert!(git_dir.is_dir(), "the caller is a linked worktree");
+    let switch = |rev: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_wits"))
+            .args(["worktree", "switch", rev, target.to_str().unwrap()])
+            .current_dir(&caller)
+            .envs(hermetic_git())
+            .env("GIT_DIR", &git_dir)
+            .output()
+            .unwrap();
+        Out {
+            success: out.status.success(),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
+    };
+    // Uncommitted work in the caller, none in the target. Staged, so the caller's
+    // *index* is what differs from the target's files — the pairing a leaked
+    // `GIT_DIR` produces, and the one an unstaged edit would not.
+    std::fs::write(caller.join("root"), "the caller's own work").unwrap();
+    git(&caller, &["add", "root"]);
+
+    let moved = switch("landing");
+    assert!(moved.success, "stderr: {}", moved.stderr);
+    assert_eq!(branch_of(&target), "landing");
+
+    // …and the guard still reads the target, so its own dirt refuses the move.
+    std::fs::write(target.join("root"), "uncommitted").unwrap();
+    let refused = switch("elsewhere");
+    assert!(!refused.success);
+    assert!(
+        refused.stderr.contains("uncommitted changes"),
+        "{}",
+        refused.stderr
+    );
+    assert_eq!(branch_of(&target), "landing", "and buries nothing");
+}
+
 /// A slug replaces path separators, so a `feature/x` branch still names one
 /// directory instead of burying the worktree a level down.
 #[test]

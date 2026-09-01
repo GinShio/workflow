@@ -378,24 +378,13 @@ impl Repository {
     /// one, where the broader [`is_dirty`](Self::is_dirty) — which feeds the
     /// auto-stash and the reclaim guards — must count it.
     pub fn is_dirty_tracked(&self) -> bool {
-        let result = crate::process::Command::new("git")
-            .args([
-                "status",
-                "--porcelain",
-                "--untracked-files=no",
-                "--ignore-submodules=all",
-            ])
-            .current_dir(self.path())
-            .force_run()
-            .exec();
-        match &result {
-            Ok(r) => eprintln!(
-                "DEBUG raw exit={} stdout={:?} stderr={:?}",
-                r.exit_code, r.stdout, r.stderr
-            ),
-            Err(e) => eprintln!("DEBUG raw err={e}"),
-        }
-        result.map(|r| !r.stdout.is_empty()).unwrap_or(false)
+        self.query(&[
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+            "--ignore-submodules=all",
+        ])
+        .is_some()
     }
 
     /// What is uncommitted in the working tree, split the way a person would
