@@ -8,6 +8,8 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::io::Write as _;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -101,14 +103,87 @@ pub fn load_topology(repo: &Repository) -> anyhow::Result<Topology> {
 
 /// Persist the forest back to the machete file. A local-state mutation, so it
 /// honours dry-run rather than silently rewriting the file underneath a `-n`.
+///
+/// The write lands through a sibling temp file and an atomic rename, so a
+/// reader that holds no lock (`cat`, an older hook) sees either the old forest
+/// or the new one, never a truncated one. An existing file's mode is kept, so
+/// a save can never tighten or loosen it.
 pub fn save_topology(repo: &Repository, topology: &Topology) -> anyhow::Result<()> {
     let path = machete_path(repo).ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
     if wits_log::is_dry_run() {
         wits_log::dry_run(&format!("write {}", path.display()));
         return Ok(());
     }
-    fs::write(&path, topology.render())?;
+    let dir = path.parent().expect("the machete path always has a parent");
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".machete.")
+        .rand_bytes(6)
+        .tempfile_in(dir)
+        .context("creating the machete temp file")?;
+    tmp.write_all(topology.render().as_bytes())
+        .context("writing the machete forest")?;
+    let mode = fs::metadata(&path)
+        .map(|meta| meta.permissions())
+        .unwrap_or_else(|_| fs::Permissions::from_mode(0o644));
+    tmp.as_file().set_permissions(mode)?;
+    tmp.persist(&path)
+        .map_err(|err| err.error)
+        .context("moving the machete temp file into place")?;
     Ok(())
+}
+
+/// An exclusive advisory lock over the machete file, held across one
+/// load-edit-save cycle.
+///
+/// The file has several writers — `tree rm`/`mv`/`prune`, `anno`, `slice` —
+/// and the `reference-transaction` hook drives one of them from another
+/// process, so two read-modify-write cycles can overlap and lose an edit. The
+/// lock is a sidecar `<machete>.lock` file held under an exclusive `flock`
+/// (std's `File::lock`): the kernel drops it if a holder dies, so it cannot go
+/// stale, and the save itself lands atomically on top. Readers without the
+/// lock stay safe — the atomic rename means they see the old forest or the new
+/// one, never a torn one — so only the mutating verbs lock.
+///
+/// Guard the whole cycle, not just the save: locking the write alone would
+/// still let a stale load overwrite the winner of a race.
+pub struct MacheteLock {
+    // Holding the open descriptor *is* holding the lock; dropping it — or the
+    // process exiting — releases. Nothing reads or writes through it.
+    _file: Option<fs::File>,
+}
+
+impl MacheteLock {
+    /// Take the lock for one load-edit-save cycle. Under `--dry-run` nothing is
+    /// written, so no lock is taken and no lock file is created.
+    pub fn acquire(repo: &Repository) -> anyhow::Result<Self> {
+        if wits_log::is_dry_run() {
+            return Ok(Self { _file: None });
+        }
+        let path = machete_lock_path(repo)?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("opening {} (the machete lock)", path.display()))?;
+        file.lock().with_context(|| {
+            format!(
+                "waiting for {} (another stack edit holds it)",
+                path.display()
+            )
+        })?;
+        Ok(Self { _file: Some(file) })
+    }
+}
+
+/// The sidecar lock file: the machete path with `.lock` appended, so it lives
+/// beside the forest in the same (common git) directory.
+fn machete_lock_path(repo: &Repository) -> anyhow::Result<PathBuf> {
+    let mut path = machete_path(repo)
+        .ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?
+        .into_os_string();
+    path.push(".lock");
+    Ok(PathBuf::from(path))
 }
 
 /// Resolve the base branch. The authoritative source is the future `project`
@@ -329,6 +404,73 @@ mod tests {
     /// file the repository holds. Writing to the plain git dir instead gives every
     /// worktree its own invisible stack and loses it with `git worktree remove` — and
     /// for a bare-backed repo that is the whole file.
+    /// The save is an atomic rename: the file's mode survives it, and no temp
+    /// file is left behind for a reader to stumble over.
+    #[test]
+    fn a_save_preserves_the_file_mode_and_leaves_no_temp_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        wits_util::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .force_run()
+            .exec()
+            .unwrap();
+        let repo = Repository::new(dir.path());
+        let git_dir = repo.git_dir().unwrap();
+        let path = git_dir.join("machete");
+
+        save_topology(&repo, &Topology::parse("main\n    feat\n")).unwrap();
+        assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o644);
+
+        // A hand-set mode survives the next save, and the content is the new one.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        save_topology(&repo, &Topology::parse("main\n")).unwrap();
+        assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(load_topology(&repo).unwrap().parent("feat"), None);
+
+        let leftovers = std::fs::read_dir(git_dir)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".machete.")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
+    }
+
+    /// Two handles on the same repository cannot hold the machete lock at once:
+    /// a second descriptor's `try_lock` is denied while the guard lives, and
+    /// granted once it drops. (flock is per open file description, so this is
+    /// exactly the exclusion another *process* would face.)
+    #[test]
+    fn the_machete_lock_is_exclusive_and_self_releasing() {
+        let dir = tempfile::tempdir().unwrap();
+        wits_util::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .force_run()
+            .exec()
+            .unwrap();
+        let repo = Repository::new(dir.path());
+        let lock_path = repo.git_dir().unwrap().join("machete.lock");
+
+        let guard = MacheteLock::acquire(&repo).unwrap();
+        let probe = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        // Held by the guard: a second descriptor's try is denied (WouldBlock)…
+        assert!(probe.try_lock().is_err());
+        drop(guard);
+        // …and granted once it drops.
+        assert!(probe.try_lock().is_ok());
+        probe.unlock().unwrap();
+    }
+
     #[test]
     fn the_forest_is_shared_by_every_worktree_of_a_repository() {
         let tmp = tempfile::tempdir().unwrap();

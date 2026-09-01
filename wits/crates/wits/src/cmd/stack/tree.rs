@@ -29,6 +29,7 @@ pub fn run(repo: &Repository, action: &TreeAction) -> anyhow::Result<()> {
 /// sibling included) keeps its node; only genuinely deleted refs are pruned.
 fn prune(repo: &Repository) -> anyhow::Result<()> {
     let base = resolution::base_branch(repo)?;
+    let _lock = resolution::MacheteLock::acquire(repo)?;
     let mut topology = resolution::load_topology(repo)?;
     if topology.is_empty() {
         log::info!("no stack to prune");
@@ -59,40 +60,54 @@ fn prune(repo: &Repository) -> anyhow::Result<()> {
 
 fn rm(repo: &Repository, args: &RmArgs) -> anyhow::Result<()> {
     let base = resolution::base_branch(repo)?;
-    let mut topology = resolution::load_topology(repo)?;
-    let mut changed = false;
     let mut failures = 0usize;
+    let mut deletions = Vec::new();
 
-    for branch in &args.branches {
-        if *branch == base {
-            log::warn!("refusing to remove the base branch '{branch}'");
-            continue;
-        }
-        if !topology.contains(branch) {
-            log::warn!("{branch}: not in the stack");
-            continue;
-        }
-        let parent = topology.parent(branch).unwrap_or(base.as_str()).to_owned();
-        if topology.remove(branch) {
-            changed = true;
-            log::info!("removed {branch} from the stack (children reattached to {parent})");
-        }
-        if args.delete {
-            match repo.delete_branch(branch, args.force) {
-                Ok(()) => log::info!("deleted branch {branch}"),
-                // A requested branch delete that failed is a real failure, not a
-                // warning to shrug off — count it so the command exits non-zero,
-                // matching the other verbs' contract (the stack edit still saves).
-                Err(e) => {
-                    failures += 1;
-                    log::warn!("could not delete branch {branch}: {e}");
-                }
+    {
+        let _lock = resolution::MacheteLock::acquire(repo)?;
+        let mut topology = resolution::load_topology(repo)?;
+        let mut changed = false;
+
+        for branch in &args.branches {
+            if *branch == base {
+                log::warn!("refusing to remove the base branch '{branch}'");
+                continue;
             }
+            if !topology.contains(branch) {
+                log::warn!("{branch}: not in the stack");
+                continue;
+            }
+            let parent = topology.parent(branch).unwrap_or(base.as_str()).to_owned();
+            if topology.remove(branch) {
+                changed = true;
+                log::info!("removed {branch} from the stack (children reattached to {parent})");
+            }
+            if args.delete {
+                deletions.push(branch.clone());
+            }
+        }
+
+        if changed {
+            resolution::save_topology(repo, &topology)?;
         }
     }
 
-    if changed {
-        resolution::save_topology(repo, &topology)?;
+    // The git branch deletions run with the lock released: they fire the
+    // reference-transaction hook, whose own `tree rm` would otherwise block on
+    // this process's lock until git — waiting on the hook — times out. Saving
+    // the stack edit first also means a failed branch delete can never leave
+    // the file stale behind gone refs.
+    for branch in &deletions {
+        match repo.delete_branch(branch, args.force) {
+            Ok(()) => log::info!("deleted branch {branch}"),
+            // A requested branch delete that failed is a real failure, not a
+            // warning to shrug off — count it so the command exits non-zero,
+            // matching the other verbs' contract.
+            Err(e) => {
+                failures += 1;
+                log::warn!("could not delete branch {branch}: {e}");
+            }
+        }
     }
     fail_if_any(failures)
 }
@@ -120,6 +135,7 @@ fn mv(repo: &Repository, args: &MvArgs) -> anyhow::Result<()> {
         anyhow::bail!("parent '{onto}' is neither the base branch nor an existing branch");
     }
 
+    let _lock = resolution::MacheteLock::acquire(repo)?;
     let mut topology = resolution::load_topology(repo)?;
     topology.ensure(onto);
     topology.ensure(branch);

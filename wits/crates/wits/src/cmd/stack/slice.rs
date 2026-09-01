@@ -54,7 +54,7 @@ pub fn run(repo: &Repository, base: Option<&str>) -> anyhow::Result<()> {
     // a branch already in the stack is pre-filled active (preserved in place), a
     // branch that merely points here is offered commented, and a commit with no
     // branch gets a commented slug.
-    let mut topology = resolution::load_topology(repo)?;
+    let topology = resolution::load_topology(repo)?;
     let branches_at = branches_by_commit(repo);
     let todo = build_todo(&commits, &prefix, &topology, &branches_at);
 
@@ -115,8 +115,12 @@ pub fn run(repo: &Repository, base: Option<&str>) -> anyhow::Result<()> {
     }
 
     // Lay the discovered branches down as a linear chain on the base, leaving any
-    // unrelated stacks in the file untouched. (The rebase doesn't touch machete,
-    // so the topology loaded above is still current.)
+    // unrelated stacks in the file untouched. The rebase ran for a while and the
+    // forest may have changed underneath it (a branch deleted in another
+    // terminal, the reference-transaction hook pruning), so the chain applies to
+    // a fresh load under the machete lock, not to the pre-rebase snapshot.
+    let _lock = resolution::MacheteLock::acquire(repo)?;
+    let mut topology = resolution::load_topology(repo)?;
     topology.ensure(&base);
     let mut parent = base.clone();
     for branch in &branches {

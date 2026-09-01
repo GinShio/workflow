@@ -20,7 +20,7 @@ const HEADER: &str = "<!-- wits stack: generated navigation, do not edit below -
 const FOOTER: &str = "<!-- wits stack: end navigation -->";
 
 pub fn run(repo: &Repository, scope: &ScopeArgs) -> anyhow::Result<()> {
-    let mut plan = resolution::plan_scoped(repo, scope)?;
+    let plan = resolution::plan_scoped(repo, scope)?;
 
     if plan.standalone {
         log::info!("standalone branch: a lone MR has nothing to navigate, skipping");
@@ -43,18 +43,24 @@ pub fn run(repo: &Repository, scope: &ScopeArgs) -> anyhow::Result<()> {
     }
 
     // Cache discovered numbers into the machete annotations so later runs (and a
-    // human reading the file) can see them without another round-trip.
+    // human reading the file) can see them without another round-trip. The plan
+    // was built before the network round-trip, so the update applies to a
+    // freshly loaded forest under the machete lock: whatever else changed in
+    // the meantime is carried through, not overwritten with a stale snapshot.
+    let _lock = resolution::MacheteLock::acquire(repo)?;
+    let mut topology = resolution::load_topology(repo)?;
     let mut annotations_changed = false;
     for (branch, mr) in &mrs {
         let annotation = format!("{noun} {}", mr.display);
-        if plan.topology.annotation(branch) != Some(annotation.as_str()) {
-            plan.topology.set_annotation(branch, annotation);
+        if topology.annotation(branch) != Some(annotation.as_str()) {
+            topology.set_annotation(branch, annotation);
             annotations_changed = true;
         }
     }
     if annotations_changed {
-        resolution::save_topology(repo, &plan.topology)?;
+        resolution::save_topology(repo, &topology)?;
     }
+    drop(_lock);
 
     // Build the new description for each MR whose body actually changes.
     let mut updates: Vec<(String, String, String, String)> = Vec::new();
