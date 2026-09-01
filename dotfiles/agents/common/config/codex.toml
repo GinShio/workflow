@@ -9,5 +9,5 @@ approvals_reviewer     = "user"
 name         = "CODEX API Vendor"
 base_url     = "{{@@ agents.vendor[agents.vendors['codex']].url @@}}"
 api_key      = "{{@@ agents.vendor[agents.vendors['codex']].key @@}}"
-http_headers = { "Ocp-Apim-Subscription-Key" = "{{@@ agents.key[agents.vendors['codex']].key @@}}" }
+http_headers = { "Ocp-Apim-Subscription-Key" = "{{@@ agents.vendor[agents.vendors['codex']].key @@}}" }
 wire_api     = "responses"
