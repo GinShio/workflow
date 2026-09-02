@@ -29,5 +29,5 @@ fi
 # `-a ''` starts the daemon when none is listening; without it emacsclient
 # exits at once on a cold boot and takes the freshly created session with it.
 if ! tmux has-session -t editor 2>/dev/null; then
-    tmux new-session -d -s editor -c "$HOME" emacsclient -nw -a ''
+    tmux new-session -d -s editor -c "$HOME" 'emacsc -nw'
 fi
