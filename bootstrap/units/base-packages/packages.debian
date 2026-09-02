@@ -1,0 +1,42 @@
+# Core utilities and shell
+bat
+dash
+fd-find
+figlet
+fish
+flatpak
+fzf
+git
+git-doc
+git-lfs
+moreutils
+neofetch
+pandoc
+patchelf
+ripgrep
+tmux
+zstd
+
+# Archives and compression
+7zip
+lz4
+unzip
+zip
+
+# Network
+cifs-utils
+curl
+privoxy
+proxychains4
+sshpass
+wget
+
+# System
+cpuinfo
+
+# Fonts
+fonts-noto-cjk
+fonts-noto-color-emoji
+fonts-font-awesome
+fonts-wqy-zenhei
+fonts-wqy-microhei

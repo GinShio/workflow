@@ -1,0 +1,31 @@
+#!/bin/sh
+# Runs as root: `root: yes` escalates the whole unit. `whoami` would therefore
+# be root, so the account to modify comes from BOOTSTRAP_USER, which the
+# engine captured before escalating.
+
+GROUPS_WANTED='kvm libvirt render video'
+_add=''
+
+# A group only exists once whatever provides it is installed, and this unit
+# does not require every one of those. Naming a missing group would fail the
+# whole `usermod`, so the absent ones are reported and dropped rather than
+# silencing the command's exit status.
+for _group in $GROUPS_WANTED; do
+    if getent group "$_group" >/dev/null 2>&1; then
+        _add="$_add,$_group"
+    else
+        printf 'Group %s does not exist on this system; skipping it.\n' "$_group"
+    fi
+done
+
+if [ -z "$_add" ]; then
+    printf 'None of the wanted groups exist; nothing to do.\n'
+    exit 0
+fi
+
+usermod -aG "${_add#,}" "$BOOTSTRAP_USER"
+printf 'Added %s to%s.\n' "$BOOTSTRAP_USER" "$(printf '%s' "$_add" | tr ',' ' ')"
+
+# Group membership is read at login, so the shell that ran this does not have
+# it yet.
+printf 'Log out and back in for the new group membership to take effect.\n'

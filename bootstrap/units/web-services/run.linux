@@ -1,0 +1,31 @@
+#!/bin/sh
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+
+systemctl daemon-reload
+
+_failed=''
+for _svc in nginx.service fail2ban.service; do
+    if ! systemctl list-unit-files "$_svc" | grep -q "$_svc"; then
+        printf 'Service %s is not installed; skipping it.\n' "$_svc"
+        continue
+    fi
+    systemctl enable --now "$_svc" || _failed="$_failed $_svc"
+done
+
+# Debian calls it ssh.service and most others sshd.service. Restart rather
+# than enable: it is already running (this is a remote machine) and the point
+# is to pick up a replaced configuration.
+for _svc in sshd.service ssh.service; do
+    if systemctl is-active --quiet "$_svc" ||
+            systemctl is-enabled --quiet "$_svc" 2>/dev/null; then
+        printf 'Restarting %s...\n' "$_svc"
+        systemctl restart "$_svc" || _failed="$_failed $_svc"
+        break
+    fi
+done
+
+if [ -n "$_failed" ]; then
+    printf 'Failed:%s\n' "$_failed" >&2
+    exit 1
+fi

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+
+printf 'Setting hostname to %s...\n' "$BOOTSTRAP_HOSTNAME"
+hostnamectl set-hostname "$BOOTSTRAP_HOSTNAME"

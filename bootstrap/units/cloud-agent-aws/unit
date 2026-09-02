@@ -1,0 +1,5 @@
+kind: action
+capabilities: vps-hygiene
+when: vps:aws
+root: yes
+unless: ! systemctl list-unit-files amazon-ssm-agent.service 2>/dev/null | grep -q amazon-ssm-agent

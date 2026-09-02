@@ -1,0 +1,15 @@
+# Firmware and DRM
+kernel-firmware-amdgpu
+libdrm_amdgpu1
+libdrm_amdgpu1-32bit
+
+# Vulkan driver
+libvulkan_radeon
+libvulkan_radeon-32bit
+
+# X driver
+xf86-video-amdgpu
+
+# Monitoring
+radeontop
+radeontop-lang

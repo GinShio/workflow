@@ -1,0 +1,21 @@
+# Web server and certificates
+nginx
+certbot
+
+# Fetching and tunnelling
+curl
+socat
+wget
+
+# Intrusion prevention
+fail2ban
+
+# Version control
+git
+
+# Rootless containers. uidmap provides the subuid tooling and
+# dbus-user-session the session bus podman's user services need.
+podman
+podman-compose
+uidmap
+dbus-user-session

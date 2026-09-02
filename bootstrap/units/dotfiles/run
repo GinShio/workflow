@@ -1,0 +1,234 @@
+#!/bin/sh
+# Decrypt what this run has keys for, compile every host's Dotdrop config,
+# then install the two planes for this host.
+#
+# The system plane escalates from inside this unit rather than the unit being
+# `root: yes` wholesale: generate, transcrypt and the user plane all have to
+# run as the invoking user, and only the final install needs privilege. The
+# engine escalates whole units, so a unit split this way has to do it itself.
+
+# The repository this unit is part of, and deliberately not overridable: the
+# engine already resolved it through its own symlinks, so a second way to name
+# it would only be a second way to name the wrong one.
+DOTFILES_ROOT_PATH="$BOOTSTRAP_ROOT"
+if [ ! -f "$DOTFILES_ROOT_PATH/dotfiles.toml" ]; then
+    printf 'Error: no dotfiles repository at %s (no dotfiles.toml)\n' \
+        "$DOTFILES_ROOT_PATH" >&2
+    exit 1
+fi
+
+command -v wits >/dev/null 2>&1 || {
+    printf 'Error: wits is not on PATH (%s).\n' "$PATH" >&2
+    exit 1
+}
+command -v dotdrop >/dev/null 2>&1 || {
+    printf 'Error: dotdrop is not on PATH (%s).\n' "$PATH" >&2
+    exit 1
+}
+WITS_BIN=$(command -v wits)
+DOTDROP_BIN=$(command -v dotdrop)
+
+TMPDIR_DOT=$(mktemp -d) || exit 1
+trap 'rm -rf "$TMPDIR_DOT"' EXIT
+
+CONTEXTS_FILE="$TMPDIR_DOT/contexts"
+CATALOG_FILE="$TMPDIR_DOT/catalog"
+: > "$CONTEXTS_FILE"
+
+lower() { printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]'; }
+upper() { printf '%s\n' "$1" | tr '[:lower:]' '[:upper:]'; }
+
+add_context() {
+    [ -n "$1" ] || return 0
+    grep -qxF "$1" "$CONTEXTS_FILE" 2>/dev/null && return 0
+    printf '%s\n' "$1" >> "$CONTEXTS_FILE"
+}
+
+context_password() {
+    printenv "WITS_TRANSCRYPT_$(upper "$1")_PASSWORD" 2>/dev/null || true
+}
+
+# Every overlay this run has a key for. `generate` compiles every host, so a
+# fragment still locked under another machine's overlay fails the whole run —
+# they all have to be decrypted, not just this machine's.
+collect_contexts() {
+    add_context "$BOOTSTRAP_PROFILE"
+    _env="$TMPDIR_DOT/env"
+    env > "$_env"
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        _name=${_line%%=*}
+        case "$_name" in
+            WITS_TRANSCRYPT_*_PASSWORD)
+                _rest=${_name#WITS_TRANSCRYPT_}
+                add_context "$(lower "${_rest%_PASSWORD}")"
+                ;;
+        esac
+    done < "$_env"
+}
+
+# Point git at wits transcrypt for one overlay, then re-smudge every path that
+# overlay's filter owns.
+configure_transcrypt() {
+    _ctx="$1"
+    _pw=$(context_password "$_ctx")
+    if [ -z "$_pw" ]; then
+        printf 'No credentials for overlay %s; leaving those files encrypted.\n' \
+            "$_ctx"
+        return 0
+    fi
+
+    _filter="transcrypt-${_ctx}"
+    printf 'Configuring encryption for overlay %s...\n' "$_ctx"
+
+    git config --local -- "filter.${_filter}.clean" \
+        "$WITS_BIN transcrypt -C ${_ctx} clean %f"
+    git config --local -- "filter.${_filter}.smudge" \
+        "$WITS_BIN transcrypt -C ${_ctx} smudge %f"
+    git config --local -- "filter.${_filter}.required" true
+    git config --local -- "diff.${_filter}.textconv" \
+        "$WITS_BIN transcrypt -C ${_ctx} textconv"
+    git config --local -- "wits.transcrypt.${_ctx}.password" "$_pw"
+    for _key in cipher digest kdf iterations; do
+        _val=$(printenv "WITS_TRANSCRYPT_$(upper "$_ctx")_$(upper "$_key")" \
+            2>/dev/null || true)
+        if [ -n "$_val" ]; then
+            git config --local -- "wits.transcrypt.${_ctx}.${_key}" "$_val"
+        fi
+    done
+
+    # The working tree still holds ciphertext checked out before the filter
+    # existed. Deleting and re-checking-out those paths is what runs them
+    # through the smudge filter that now exists.
+    _attrs="$TMPDIR_DOT/attrs.${_ctx}"
+    _paths="$TMPDIR_DOT/paths.${_ctx}"
+    git ls-files | git check-attr --stdin filter > "$_attrs"
+    : > "$_paths"
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        case "$_line" in
+            *": filter: ${_filter}")
+                printf '%s\n' "${_line%: filter: ${_filter}}" >> "$_paths"
+                ;;
+        esac
+    done < "$_attrs"
+
+    if [ -s "$_paths" ]; then
+        while IFS= read -r _f || [ -n "$_f" ]; do
+            [ -n "$_f" ] || continue
+            rm -f -- "$_f"
+        done < "$_paths"
+        git checkout --pathspec-from-file="$_paths"
+    fi
+}
+
+# `wits dotfiles check` prints one `plane host N unit(s) path` line per
+# entrypoint. The host is whatever the registry entry named, which is also
+# what the `hostname` unit set the machine to — so unlike the old module there
+# is nothing to guess and no fallback chain.
+resolve_host() {
+    _want=$BOOTSTRAP_HOSTNAME
+    while read -r _plane _host _count _label _path; do
+        [ "$_label" = "unit(s)" ] || continue
+        [ "$_plane" = user ] || continue
+        if [ "$_host" = "$_want" ]; then
+            printf '%s\n' "$_host"
+            return 0
+        fi
+    done < "$CATALOG_FILE"
+
+    printf 'Error: no Dotdrop host named %s.\n' "$_want" >&2
+    printf 'Declared hosts:\n' >&2
+    while read -r _plane _host _count _label _path; do
+        [ "$_label" = "unit(s)" ] || continue
+        [ "$_plane" = user ] || continue
+        printf '  %s\n' "$_host" >&2
+    done < "$CATALOG_FILE"
+    printf 'The registry entry names this host; align it with hosts.toml.\n' >&2
+    return 1
+}
+
+install_plane() {
+    _plane="$1"
+    _host="$2"
+    _path=''
+    while read -r _p _h _count _label _cfg; do
+        [ "$_label" = "unit(s)" ] || continue
+        if [ "$_p" = "$_plane" ] && [ "$_h" = "$_host" ]; then
+            _path="$_cfg"
+            break
+        fi
+    done < "$CATALOG_FILE"
+
+    if [ -z "$_path" ]; then
+        printf 'Host %s has no %s plane; skipping it.\n' "$_host" "$_plane"
+        return 0
+    fi
+
+    _cfg="$DOTFILES_ROOT_PATH/$_path"
+    if [ ! -f "$_cfg" ]; then
+        printf 'Error: generated config %s is missing.\n' "$_cfg" >&2
+        return 1
+    fi
+
+    printf 'Installing the %s plane from %s (profile %s)...\n' \
+        "$_plane" "$_path" "$_host"
+    if [ "$_plane" = system ]; then
+        # HOME is passed explicitly because sudo resolves `~` to root's home,
+        # which would scatter rendered templates through /root.
+        sudo -AE env "HOME=$HOME" "PATH=$PATH" \
+            "$DOTDROP_BIN" install -f -c "$_cfg" -p "$_host"
+    else
+        "$DOTDROP_BIN" install -f -c "$_cfg" -p "$_host"
+    fi
+}
+
+# Generated entrypoints and bundles are ignored local artifacts that may hold
+# rendered private overlay values, so neither an ambient umask nor an older
+# generation may leave them group- or world-readable.
+GENERATED_DIR="$DOTFILES_ROOT_PATH/dotfiles/dotdrop"
+harden_generated() {
+    if [ -d "$GENERATED_DIR/bundle" ]; then
+        find "$GENERATED_DIR/bundle" -type d -exec chmod 700 {} +
+        find "$GENERATED_DIR/bundle" -type f -exec chmod 600 {} +
+    fi
+    # An unmatched glob expands to the pattern itself, which is the normal
+    # state on a first bootstrap. Skipping it must not become the loop's exit
+    # status, or `set -e` would end the unit here.
+    for _generated in "$GENERATED_DIR"/user.*.toml "$GENERATED_DIR"/system.*.toml; do
+        [ -f "$_generated" ] || continue
+        chmod 600 "$_generated"
+    done
+}
+
+collect_contexts
+
+(
+    cd "$DOTFILES_ROOT_PATH"
+    if [ -s "$CONTEXTS_FILE" ]; then
+        while IFS= read -r _ctx || [ -n "$_ctx" ]; do
+            [ -n "$_ctx" ] || continue
+            configure_transcrypt "$_ctx"
+        done < "$CONTEXTS_FILE"
+    fi
+)
+
+harden_generated
+printf 'Generating Dotdrop configs...\n'
+# Scoped to generate alone: a process-wide umask would also apply to the
+# directories dotdrop creates during the system plane's sudo install.
+(
+    umask 077
+    "$WITS_BIN" dotfiles generate --root "$DOTFILES_ROOT_PATH"
+)
+harden_generated
+
+"$WITS_BIN" dotfiles check --root "$DOTFILES_ROOT_PATH" > "$CATALOG_FILE"
+cat "$CATALOG_FILE"
+
+HOST=$(resolve_host)
+printf 'Deploying host %s (overlay %s).\n' "$HOST" "$BOOTSTRAP_PROFILE"
+
+(
+    cd "$DOTFILES_ROOT_PATH"
+    install_plane user "$HOST"
+    install_plane system "$HOST"
+)

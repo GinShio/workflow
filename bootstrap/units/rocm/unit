@@ -1,0 +1,7 @@
+# The ROCm compute stack. Distinct from `amdgpu`: having the card is a fact,
+# wanting several gigabytes of compiler and math libraries is a choice.
+kind: packages
+capabilities: gpu-compute
+requires: rocm-repo
+when: gpu:amd
+root: yes

@@ -1,0 +1,28 @@
+# The distribution's own idea of a development baseline.
+build-essential
+
+# Build helpers and generators
+bison
+chrpath
+dwarves
+flex
+graphviz
+re2c
+xmlto
+libxslt1-dev
+
+# Version control
+git
+git-doc
+git-lfs
+
+# Linting and data
+shellcheck
+sqlite3
+
+# Static site generator
+hugo
+
+# Lua
+lua5.4
+liblua5.4-dev

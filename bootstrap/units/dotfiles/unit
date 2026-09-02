@@ -1,0 +1,8 @@
+# Compile the dotfiles manifests with wits and deploy them with dotdrop.
+#
+# Requires `wits` (the compiler) and `pipx-apps` (which brings dotdrop). No
+# `unless`: dotdrop decides per file what needs writing, so the only honest
+# probe is running it, and re-entry costs one generate plus one install.
+kind: action
+capabilities: develop
+requires: wits, pipx-apps, dirs

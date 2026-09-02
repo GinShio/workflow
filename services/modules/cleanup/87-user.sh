@@ -1,5 +1,5 @@
 #!/bin/sh
-#@tags: domain:cleanup, type:nightly, scope:user
+#@tags: domain:cleanup, type:nightly
 set -u
 
 _cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}"

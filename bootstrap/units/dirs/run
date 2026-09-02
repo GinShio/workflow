@@ -1,0 +1,8 @@
+#!/bin/sh
+mkdir -p \
+    "$HOME/Projects" \
+    "$HOME/.local/bin" \
+    "$HOME/.local/lib64" \
+    "$HOME/.local/share" \
+    "$HOME/.local/share/applications" \
+    "$HOME/.local/share/fonts"

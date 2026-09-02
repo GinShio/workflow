@@ -1,0 +1,4 @@
+kind: action
+capabilities: web-server
+root: yes
+unless: sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q bbr

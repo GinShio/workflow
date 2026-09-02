@@ -1,0 +1,6 @@
+# Baidu Cloud, gated on a directory for the same reason as
+# `cloud-agent-huawei`: `scripts/detect_vps.sh` cannot name this provider.
+kind: action
+capabilities: vps-hygiene
+root: yes
+unless: [ ! -d /opt/bcm ]

@@ -1,0 +1,11 @@
+# The registry entry names what this machine should be called. An entry with
+# no `hostname` leaves the machine's own name alone, which is why the probe
+# treats an empty value as already satisfied.
+#
+# Deliberately not gated on `workstation`, unlike the rest of the baseline:
+# an entry that names a hostname means it, whatever the machine is for, and
+# one that does not is satisfied here anyway.
+kind: action
+requires: repos
+root: yes
+unless: [ -z "$BOOTSTRAP_HOSTNAME" ] || [ "$(hostname)" = "$BOOTSTRAP_HOSTNAME" ]

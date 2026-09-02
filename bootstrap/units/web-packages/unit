@@ -1,0 +1,4 @@
+kind: packages
+capabilities: web-server
+requires: repos
+root: yes

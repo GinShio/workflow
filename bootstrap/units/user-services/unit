@@ -1,0 +1,9 @@
+# The user services whose unit files the `dotfiles` unit deploys, which is why
+# it requires it — enabling them before deployment would find nothing.
+#
+# `linger` too: without it the user's systemd instance stops at logout and the
+# timers never fire.
+kind: action
+capabilities: develop
+requires: dotfiles, linger
+optional: systemctl

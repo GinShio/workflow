@@ -1,0 +1,5 @@
+# A family rather than a name: the contexts a run can decrypt are whichever
+# ones it carries a password for, and the unit derives that set by reading the
+# environment itself. `_CIPHER`, `_DIGEST`, `_KDF` and `_ITERATIONS` are
+# accepted beside `_PASSWORD` for a context that does not use the defaults.
+WITS_TRANSCRYPT_*_PASSWORD: one per transcrypt context this run should decrypt

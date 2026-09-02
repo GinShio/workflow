@@ -1,0 +1,13 @@
+#!/bin/sh
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+#
+# `--non-interactive` for the reason `packages.sh` passes it to every zypper
+# call: a refresh that stops to ask about a repository's signing key would
+# hang a run nobody is watching.
+#
+# Only the index. Bringing the system to the current snapshot is `zypper dup`,
+# a separate decision that `repos` makes for a workstation and nothing makes
+# for a rented host.
+
+zypper --non-interactive refresh

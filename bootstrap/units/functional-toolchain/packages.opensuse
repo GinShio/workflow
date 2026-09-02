@@ -1,0 +1,13 @@
+# Erlang and Elixir
+elixir
+elixir-doc
+elixir-hex
+erlang
+erlang-doc
+
+# Haskell
+ghc
+ghc-doc
+ghc-manual
+ghc-prof
+tree-sitter-haskell

@@ -1,0 +1,25 @@
+#!/bin/sh
+# Switch congestion control to BBR and the default queue discipline to CAKE.
+#
+# The "already enabled" early exit that used to open this script is now the
+# unit's `unless`, so reaching here means it is not enabled yet.
+#
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+
+modprobe tcp_bbr
+printf 'tcp_bbr\n' > /etc/modules-load.d/bbr.conf
+
+cat > /etc/sysctl.d/99-bbr.conf <<EOF
+net.core.default_qdisc=cake
+net.ipv4.tcp_congestion_control=bbr
+EOF
+
+sysctl --system
+
+# BBR needs a 4.9+ kernel. Verifying rather than trusting the write means the
+# unit fails here instead of reporting success and leaving the host on cubic.
+if ! sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
+    printf 'BBR did not take effect; kernel is %s.\n' "$(uname -r)" >&2
+    exit 1
+fi

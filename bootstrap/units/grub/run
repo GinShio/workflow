@@ -1,0 +1,40 @@
+#!/bin/sh
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+#
+# Regenerating grub.cfg is deliberately not done here: the command differs per
+# distribution (`grub2-mkconfig -o ...` against `update-grub`) and the target
+# path differs per firmware. The drop-in takes effect at the next regeneration
+# the distribution's own tooling performs.
+
+if [ ! -f /etc/default/grub ]; then
+    printf 'No /etc/default/grub on this system; nothing to patch.\n'
+    exit 0
+fi
+
+# The marker is what `unless` looks for, so it has to be written even if the
+# body below ever changes.
+#
+# The appended block is sourced by grub's own shell, so every `$` that belongs
+# to it rather than to this heredoc is escaped. The awk filter is what keeps a
+# drop-in from executing arbitrary code: only `NAME=value` lines survive into
+# the file that gets sourced.
+cat >> /etc/default/grub <<'EOF'
+# DOTFILES_BRINGUP_GRUB_CONFIG
+# Safe include of /etc/default/grub.d/*.conf
+if [ -d /etc/default/grub.d ]; then
+  for _f in /etc/default/grub.d/*.conf; do
+    [ -r "$_f" ] || continue
+    _tmp=$(mktemp /tmp/grub-dropin.XXXXXX) || continue
+    awk '/^[A-Z_][A-Z0-9_]*[[:space:]]*=/{print}' "$_f" > "$_tmp"
+    if [ -s "$_tmp" ]; then
+      # shellcheck disable=SC1090 disable=SC1091
+      . "$_tmp"
+    fi
+    rm -f "$_tmp"
+  done
+  unset _f _tmp
+fi
+EOF
+
+printf 'Patched /etc/default/grub for drop-in support.\n'

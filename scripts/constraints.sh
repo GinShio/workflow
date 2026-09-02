@@ -1,20 +1,20 @@
 #!/bin/sh
 #
-# Shared execution constraints for bootstrap and recurring service modules.
+# Execution constraints for the recurring service modules.
 # Callers provide the detected CURRENT_* values and a callback for the
-# runner-specific namespaces (usage/vps or power/schedule).
+# scheduling namespaces (power/schedule).
 
 constraint_validate_tag() {
     _cvt_tag=$1
 
     case "$_cvt_tag" in
-        domain:?*|type:?*|scope:?*|usage:?*)
+        domain:?*|type:?*)
             return 0
             ;;
         state:enabled|state:disabled)
             return 0
             ;;
-        os:?*|gpu:?*|cpu:?*|de:?*|dep:?*|vps:?*)
+        os:?*|gpu:?*|cpu:?*|de:?*|dep:?*)
             return 0
             ;;
         hw:laptop|power:ac|power:battery|power:any)
@@ -145,7 +145,7 @@ constraints_match_file() {
             state:disabled)
                 return 1
                 ;;
-            state:enabled|domain:*|type:*|scope:*)
+            state:enabled|domain:*|type:*)
                 ;;
             os:*)
                 _cmf_os_seen=1
@@ -156,7 +156,7 @@ constraints_match_file() {
             gpu:*|cpu:*|de:*|hw:*|dep:*)
                 constraint_match_system_tag "$_cmf_tag" || return 1
                 ;;
-            usage:*|vps:*|power:*|schedule:*)
+            power:*|schedule:*)
                 "$_cmf_callback" "$_cmf_tag" "$_cmf_file"
                 _cmf_status=$?
                 case "$_cmf_status" in

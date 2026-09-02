@@ -1,0 +1,4 @@
+# The directories later units and the deployed configuration write into.
+kind: action
+capabilities: develop
+unless: [ -d "$HOME/.local/bin" ] && [ -d "$HOME/Projects" ] && [ -d "$HOME/.local/share/fonts" ]

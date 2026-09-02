@@ -1,0 +1,9 @@
+# `pipx ensurepath` is deliberately not run: it edits the shell rc files that
+# the `dotfiles` unit then overwrites, so it never survived. The run's own PATH
+# already carries ~/.local/bin, and the deployed shell config is what carries
+# it afterwards.
+kind: packages
+manager: pipx
+capabilities: develop
+requires: python-toolchain
+optional: pipx

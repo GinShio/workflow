@@ -1,0 +1,27 @@
+#!/bin/sh
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+
+systemctl daemon-reload
+
+SERVICES='
+    sshd
+    systemd-tmpfiles-clean
+'
+
+_failed=''
+for _svc in $SERVICES; do
+    # A unit file only exists once whatever provides it is installed, and this
+    # unit does not require every provider. An absent service is reported and
+    # dropped; one that exists and will not enable is a failure.
+    if ! systemctl list-unit-files "$_svc*" | grep -q "$_svc"; then
+        printf 'Service %s is not installed; skipping it.\n' "$_svc"
+        continue
+    fi
+    systemctl enable --now "$_svc" || _failed="$_failed $_svc"
+done
+
+if [ -n "$_failed" ]; then
+    printf 'Failed to enable:%s\n' "$_failed" >&2
+    exit 1
+fi

@@ -1,0 +1,8 @@
+# The baseline services a workstation wants. A server's are in
+# `web-services`, which also restarts sshd to pick up a replaced config —
+# something this unit must not do to the connection it is running over.
+kind: action
+capabilities: workstation
+requires: base-packages
+optional: systemctl
+root: yes

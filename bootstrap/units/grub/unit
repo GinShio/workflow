@@ -1,0 +1,12 @@
+# Teach /etc/default/grub to read drop-ins from /etc/default/grub.d, so the
+# dotfiles can ship GRUB settings as files instead of patching a distribution
+# file.
+#
+# The old module gated this on `dep:grub` — a command that exists on neither
+# openSUSE (`grub2-mkconfig`) nor Debian (`update-grub`), so it silently never
+# ran on either. The real precondition is the config file, and the script
+# tests for that itself.
+kind: action
+capabilities: workstation
+root: yes
+unless: grep -qF '# DOTFILES_BRINGUP_GRUB_CONFIG' /etc/default/grub 2>/dev/null

@@ -1,0 +1,4 @@
+kind: packages
+capabilities: desktop
+requires: repos
+root: yes

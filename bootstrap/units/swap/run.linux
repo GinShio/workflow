@@ -1,0 +1,73 @@
+#!/bin/sh
+# A swapfile sized at twice RAM, floored at 4 GiB.
+#
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+
+FSTAB_ENTRY="/swapfile                                  none       swap  defaults,pri=10  0  0"
+
+if grep -q '/swapfile' /etc/fstab; then
+    printf 'Swapfile already declared in /etc/fstab.\n'
+    exit 0
+fi
+
+# Every step below is only safe to abandon if the ones before it are undone:
+# a file created but never entered in fstab is wasted disk, and an fstab entry
+# without a formatted file fails the next boot. So the rollback tracks how far
+# it got and unwinds in reverse.
+_swap_created=0
+_fstab_added=0
+
+rollback_swap() {
+    _status=$?
+    trap - EXIT HUP INT TERM
+    if [ "$_status" -ne 0 ]; then
+        if [ "$_fstab_added" -eq 1 ]; then
+            _fstab_tmp=$(mktemp) || _fstab_tmp=
+            if [ -n "$_fstab_tmp" ]; then
+                grep -Fvx "$FSTAB_ENTRY" /etc/fstab > "$_fstab_tmp" || true
+                install -m 0644 "$_fstab_tmp" /etc/fstab || true
+                rm -f "$_fstab_tmp"
+            fi
+        fi
+        # Deleting a file the kernel is still swapping to would corrupt live
+        # memory, so an active swap that will not turn off keeps its file.
+        if awk '$1 == "/swapfile" { found = 1 } END { exit !found }' /proc/swaps &&
+                ! swapoff /swapfile; then
+            printf 'Warning: /swapfile is still active; keeping the file.\n' >&2
+            _swap_created=0
+        fi
+        if [ "$_swap_created" -eq 1 ]; then
+            rm -f /swapfile || true
+        fi
+    fi
+    exit "$_status"
+}
+trap rollback_swap EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# shellcheck source=../../../scripts/detect.sh
+. "$BOOTSTRAP_SCRIPTS/detect.sh"
+
+_mem_mb=$(detect_memory_mb 2>/dev/null || echo 2048)
+_swap_gib=$(printf '%s\n' "$_mem_mb" | awk '{print int($1 / 1024) * 2}')
+[ "$_swap_gib" -lt 4 ] && _swap_gib=4
+
+printf 'Setting up a %s GiB swapfile at /swapfile...\n' "$_swap_gib"
+
+# An existing file that fstab does not mention is someone else's: it could be
+# in use by a mechanism this script does not know about.
+if [ -e /swapfile ]; then
+    printf 'Error: /swapfile exists but is not in /etc/fstab; refusing to overwrite it.\n' >&2
+    exit 1
+fi
+
+_swap_created=1
+dd if=/dev/zero of=/swapfile bs=4MiB count=$(( _swap_gib * 256 )) status=progress
+chmod 0600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+_fstab_added=1
+printf '%s\n' "$FSTAB_ENTRY" >> /etc/fstab

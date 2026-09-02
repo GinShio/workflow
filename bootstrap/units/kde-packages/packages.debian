@@ -1,0 +1,11 @@
+# Input method
+fcitx5
+fcitx5-rime
+
+# Applications
+filelight
+freerdp3-wayland
+kdeconnect
+krdc
+krfb
+partitionmanager

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+#
+# Only the index. Upgrading what is already installed is a separate decision
+# that `repos` makes for a workstation and nothing makes for a rented host.
+
+apt-get update

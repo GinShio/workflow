@@ -1,0 +1,28 @@
+# The package index every install below resolves its names against.
+#
+# Split out of `repos`, which is two concerns: replacing the installer's
+# sources with chosen mirrors, which only a machine someone sits at wants, and
+# having a current index, which every machine that installs anything needs.
+# Both were gated on `workstation`, so a rented host installed nginx against
+# whatever index its provider's image happened to carry — empty on most cloud
+# images, months old on the rest.
+#
+# No capability, no `when`, and one payload per system package manager the
+# tree knows: no registry entry would ever want a stale index, and neither
+# platform should be covered by accident of what the other's `repos` script
+# happens to do. pipx, cargo and flatpak need no equivalent — each resolves
+# against its remote as it installs and keeps no local index to go stale.
+#
+# No `requires: repos`: standing on its own is the entire point of the split.
+#
+# `unless: false` is this vocabulary's way of saying "never already
+# satisfied". There is nothing honest to probe — a current index is what this
+# unit *does*, and every cheaper answer is a freshness window nobody chose —
+# while an action unit with *no* probe is state-cached after its first
+# success, which would refresh the index once in a machine's life. So it runs
+# every time. That is redundant only on a run where `repos` ran too; on every
+# run after that `repos` is itself `cached`, and this is the only thing left
+# keeping the index current.
+kind: action
+root: yes
+unless: false

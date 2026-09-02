@@ -1,0 +1,33 @@
+#!/bin/sh
+# Replace the installer's repositories with mirrors, then bring the system to
+# the current snapshot.
+#
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+#
+# `rr --all` before `ar` leaves a window in which the machine has no
+# repositories at all. It is narrow and the following commands close it, but a
+# crash inside it leaves a system where every later unit fails to resolve
+# anything; the recovery is to re-run this unit, which is why it must stay
+# safe to re-run.
+
+zypper rr --all
+
+zypper ar -fcg https://download.opensuse.org/tumbleweed/repo/oss openSUSE:oss
+zypper ar -fcg https://download.opensuse.org/tumbleweed/repo/non-oss openSUSE:non-oss
+
+# NJU mirrors
+zypper ar -fcg https://mirror.nju.edu.cn/packman/suse/openSUSE_Tumbleweed NJU:packman
+
+# Extras
+zypper ar -fcg obs://Virtualization openSUSE:Virtualization
+zypper ar -fcg https://download.opensuse.org/repositories/devel:/tools:/compiler/openSUSE_Factory openSUSE:compiler
+
+zypper ref
+zypper dup -y --allow-vendor-change
+
+# Packages the distribution installs that this machine does not want, and a
+# lock so a later `dup` does not pull them back in. Removal is allowed to fail:
+# on a fresh install some were never there.
+zypper remove -u -y valkey mariadb mariadb-client akonadi gitk || true
+zypper al cmake-gui git-gui akonadi gitk

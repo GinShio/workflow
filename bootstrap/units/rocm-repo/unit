@@ -1,0 +1,13 @@
+# openSUSE ships ROCm from an OBS repository, which has to exist before `rocm`
+# can resolve. Debian has no equivalent set here, so `rocm` has no
+# `packages.debian` and both units report a platform skip there.
+#
+# The probe is there for the same reason as `kde-repo`'s: `zypper ar` refuses
+# a URI it already has, so without it, forcing this unit alone would fail on
+# the duplicate.
+kind: action
+capabilities: gpu-compute
+requires: repos
+when: gpu:amd
+root: yes
+unless: zypper lr 2>/dev/null | grep -qi 'rocm'

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+
+zypper ar -fcg obs://KDE:Extra openSUSE:kDE:Extra
+zypper ref
+
+# The new repository can supersede packages the base repositories provide, so
+# the vendor change has to be allowed for the switch to actually happen.
+zypper dup -y --allow-vendor-change

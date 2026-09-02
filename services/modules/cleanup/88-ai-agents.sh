@@ -1,5 +1,5 @@
 #!/bin/sh
-#@tags: domain:cleanup, type:nightly, scope:user, schedule:weekly
+#@tags: domain:cleanup, type:nightly, schedule:weekly
 set -u
 
 # ============================ Claude Code ============================

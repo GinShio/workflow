@@ -1,0 +1,5 @@
+kind: packages
+manager: flatpak
+capabilities: desktop
+requires: flathub
+optional: flatpak

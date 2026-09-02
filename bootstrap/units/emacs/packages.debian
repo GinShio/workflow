@@ -1,0 +1,6 @@
+emacs-gtk
+emacs-nox
+
+# vterm builds its module against these at first use.
+libtool
+libvterm-dev

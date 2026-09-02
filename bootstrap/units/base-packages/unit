@@ -1,0 +1,7 @@
+# The utilities a machine someone sits at wants: a shell, CJK fonts, a
+# torrent client. A server has its own baseline in `web-packages` and must not
+# inherit this one.
+kind: packages
+capabilities: workstation
+requires: repos
+root: yes

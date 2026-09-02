@@ -1,0 +1,34 @@
+#!/bin/sh
+# The tree this repository carries, and deliberately not overridable: building
+# a different checkout is what a worktree is for, not what an environment
+# variable pointing this unit elsewhere is for.
+WITS_SOURCE_DIR="$BOOTSTRAP_ROOT/wits"
+
+if [ ! -f "$WITS_SOURCE_DIR/meson.build" ]; then
+    printf 'Error: no wits source tree at %s\n' "$WITS_SOURCE_DIR" >&2
+    exit 1
+fi
+
+printf 'Building wits from %s...\n' "$WITS_SOURCE_DIR"
+(
+    cd "$WITS_SOURCE_DIR"
+
+    # `--reconfigure` fails against a directory meson has never set up, and
+    # plain setup fails against one it has, so which to use depends on whether
+    # a previous build is there. This is what makes the unit re-runnable
+    # against a half-finished build tree.
+    if [ -f _build/meson-private/coredata.dat ]; then
+        meson setup _build . --reconfigure -Dbuildtype=release \
+            --prefix "$HOME/.local"
+    else
+        meson setup _build . -Dbuildtype=release --prefix "$HOME/.local"
+    fi
+
+    meson compile -C _build
+    meson install -C _build
+)
+
+# Writes the applet symlinks wits dispatches through. Run via the absolute
+# path because a shell that resolved `wits` before this unit ran would have
+# cached its absence.
+"$HOME/.local/bin/wits" __applets >/dev/null

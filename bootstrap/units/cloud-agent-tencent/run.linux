@@ -1,0 +1,28 @@
+#!/bin/sh
+# Remove Tencent Cloud's agents: Stargate, YunJing and the Barad monitor.
+#
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+#
+# Each uninstaller is allowed to fail: any given image carries some subset of
+# them.
+
+for _uninstall in \
+        /usr/local/qcloud/stargate/admin/uninstall.sh \
+        /usr/local/qcloud/YunJing/uninst.sh \
+        /usr/local/qcloud/monitor/barad/admin/uninstall.sh; do
+    [ -f "$_uninstall" ] && "$_uninstall" || true
+done
+
+systemctl stop tat_agent 2>/dev/null || true
+systemctl disable tat_agent 2>/dev/null || true
+rm -f /etc/systemd/system/tat_agent.service
+
+rm -rf /usr/local/qcloud
+
+# The uninstallers do not reliably stop what they installed.
+for _proc in tat_agent barad_agent sgagent ydservice; do
+    pkill -9 -x "$_proc" || true
+done
+
+systemctl daemon-reload

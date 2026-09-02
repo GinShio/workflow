@@ -1,0 +1,10 @@
+# What issuing this host's certificate reads.
+#
+# `VPS_ADMIN_EMAIL` is optional because the script has a deliberate answer for
+# its absence — configure renewal, issue nothing, print the command to run by
+# hand — and the point of declaring it here is that a run says so at the top
+# rather than in the middle.
+VPS_DOMAIN_NAME: the name the certificate is issued for
+VPS_ADMIN_EMAIL?: unset issues nothing; certbot only gets its renewal hooks
+DNS_PROVIDER?: set to issue a wildcard over DNS-01; unset means HTTP-01, apex only
+DNS_API_TOKEN?: credentials for DNS_PROVIDER, once one is named

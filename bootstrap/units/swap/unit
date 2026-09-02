@@ -1,0 +1,9 @@
+# The "already configured" test lives inside each script rather than in
+# `unless`, because the two platforms look for different things: Linux for a
+# `/swapfile` entry, FreeBSD for `file=/usr/swap0`. One shell fragment loose
+# enough to cover both would also match a swap *partition*, which is a
+# different answer to a different question.
+kind: action
+capabilities: workstation
+requires: repos
+root: yes

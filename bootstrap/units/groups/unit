@@ -1,0 +1,10 @@
+# Device access without root: `kvm` and `libvirt` for virtual machines,
+# `render` and `video` for the GPU that graphics and compute work needs.
+#
+# `run.linux` because `getent` and `usermod` are the Linux spelling; a
+# FreeBSD machine reports a platform skip rather than a failure.
+kind: action
+capabilities: develop
+requires: repos
+root: yes
+unless: for g in kvm libvirt render video; do getent group "$g" >/dev/null 2>&1 || continue; id -nG "$BOOTSTRAP_USER" | tr ' ' '\n' | grep -qx "$g" || exit 1; done

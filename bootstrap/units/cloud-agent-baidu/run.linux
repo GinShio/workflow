@@ -1,0 +1,15 @@
+#!/bin/sh
+# Remove Baidu Cloud's BCM agent.
+#
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+
+systemctl stop bcm-agent 2>/dev/null || true
+systemctl disable bcm-agent 2>/dev/null || true
+
+if [ -f /opt/bcm/uninstall.sh ]; then
+    /opt/bcm/uninstall.sh || true
+fi
+
+rm -rf /opt/bcm
+systemctl daemon-reload

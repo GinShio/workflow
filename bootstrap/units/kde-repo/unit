@@ -1,0 +1,14 @@
+# openSUSE keeps the extra Plasma packages in their own OBS repository, so it
+# has to exist before `kde-packages` can resolve. Debian needs no equivalent,
+# which is why there is no `run.debian` and the unit reports a platform skip
+# there rather than pretending to do something.
+#
+# `zypper ar` refuses a URI it already has, under any alias, so re-adding is a
+# failure rather than a no-op. The probe is what makes this unit safe to force
+# on its own — without it, forcing this without also forcing `repos` (which
+# clears every repository first) would fail on the duplicate.
+kind: action
+capabilities: kde
+requires: repos
+root: yes
+unless: zypper lr 2>/dev/null | grep -qi 'kde:extra'

@@ -1,0 +1,4 @@
+kind: packages
+capabilities: virtualization
+requires: repos
+root: yes

@@ -1,0 +1,30 @@
+#!/bin/sh
+systemctl --user daemon-reload
+
+SERVICES='
+    nightly-script.timer
+    emacs.service
+    develop-autostart.service
+    podman.service
+    aria2.service
+    qbittorrent-nox.service
+'
+
+_failed=''
+for _svc in $SERVICES; do
+    # Some of these come from the deployed configuration and some from
+    # packages this machine's capabilities may not have installed. An absent
+    # one is reported and dropped; one that exists and will not enable is a
+    # failure.
+    if ! systemctl --user list-unit-files "$_svc" >/dev/null 2>&1 ||
+            ! systemctl --user list-unit-files "$_svc" | grep -q "$_svc"; then
+        printf 'User service %s is not installed; skipping it.\n' "$_svc"
+        continue
+    fi
+    systemctl --user enable --now "$_svc" || _failed="$_failed $_svc"
+done
+
+if [ -n "$_failed" ]; then
+    printf 'Failed to enable:%s\n' "$_failed" >&2
+    exit 1
+fi

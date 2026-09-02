@@ -1,0 +1,4 @@
+# AMD work workstation: graphics and compute development on openSUSE.
+hostname: Khronos3D-russell-openSUSE
+capabilities: workstation, develop, desktop, kde, virtualization, gpu-graphics, gpu-compute
+profile: khronos3d

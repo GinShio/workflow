@@ -1,0 +1,8 @@
+# Huawei Cloud, gated on a directory rather than on `when: vps:huawei`,
+# because `scripts/detect_vps.sh` cannot name this provider — its DMI strings
+# do not identify it. The presence of the agent's own install root is the only
+# evidence available, which is exactly what `unless` is for.
+kind: action
+capabilities: vps-hygiene
+root: yes
+unless: [ ! -d /usr/local/hostguard ]

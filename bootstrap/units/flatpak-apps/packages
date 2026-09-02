@@ -1,0 +1,4 @@
+# Application IDs, not distribution package names, so this list is the same on
+# every platform and needs no suffix.
+com.discordapp.Discord
+com.visualstudio.code

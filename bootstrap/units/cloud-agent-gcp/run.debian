@@ -1,0 +1,11 @@
+#!/bin/sh
+# Remove Google Cloud's OS Config agent.
+#
+# `run.debian` rather than `run.linux`: the purge below is apt's. Runs as
+# root, so nothing here says `sudo`.
+
+systemctl stop google-osconfig-agent 2>/dev/null || true
+systemctl disable google-osconfig-agent 2>/dev/null || true
+apt-get purge -y google-osconfig-agent 2>/dev/null || true
+
+systemctl daemon-reload

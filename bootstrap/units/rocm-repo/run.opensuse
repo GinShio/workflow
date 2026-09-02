@@ -1,0 +1,6 @@
+#!/bin/sh
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+
+zypper ar -fcg obs://science:GPU:ROCm openSUSE:ROCm
+zypper ref

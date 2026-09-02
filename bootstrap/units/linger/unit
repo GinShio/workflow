@@ -1,0 +1,9 @@
+# Keep the user's systemd instance running when they are not logged in, which
+# is what lets the user services `user-services` enables actually run.
+#
+# `optional: loginctl` rather than a hard requirement: a machine without
+# systemd has nothing to linger.
+kind: action
+capabilities: workstation
+optional: loginctl
+unless: loginctl show-user "$(id -un)" 2>/dev/null | grep -q '^Linger=yes'

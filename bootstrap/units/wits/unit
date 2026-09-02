@@ -1,0 +1,13 @@
+# Build and install wits from the tree this repository carries.
+#
+# This is the unit that makes bootstrap unable to depend on wits: wits does not
+# exist on the machine until here, and getting here needed a C++ toolchain,
+# meson, ninja and cargo. Anything upstream of this point has to work with a
+# POSIX shell and nothing else.
+#
+# No `unless`: whether an installed binary matches this source tree is not
+# something a cheap probe can answer, so re-entry leans on the state record,
+# which the content digest invalidates when the wits sources change.
+kind: action
+capabilities: develop
+requires: cpp-toolchain, rust-toolchain

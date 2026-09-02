@@ -1,0 +1,76 @@
+#!/bin/sh
+# A swapfile sized at twice RAM, floored at 4 GiB.
+#
+# FreeBSD swaps to a memory disk backed by a file rather than to the file
+# directly, so the fstab entry names `md99` and carries the file as an option.
+#
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+
+SWAPFILE=/usr/swap0
+FSTAB_ENTRY="md99	none	swap	sw,file=$SWAPFILE,late	0	0"
+
+if grep -Fq "file=$SWAPFILE" /etc/fstab; then
+    printf 'Swapfile already declared in /etc/fstab.\n'
+    exit 0
+fi
+
+# See the Linux script: each step is only safe to abandon if the ones before
+# it are undone, so the rollback tracks how far it got.
+_swap_created=0
+_fstab_added=0
+
+rollback_swap() {
+    _status=$?
+    trap - EXIT HUP INT TERM
+    if [ "$_status" -ne 0 ]; then
+        if [ "$_fstab_added" -eq 1 ]; then
+            _fstab_tmp=$(mktemp) || _fstab_tmp=
+            if [ -n "$_fstab_tmp" ]; then
+                grep -Fvx "$FSTAB_ENTRY" /etc/fstab > "$_fstab_tmp" || true
+                install -m 0644 "$_fstab_tmp" /etc/fstab || true
+                rm -f "$_fstab_tmp"
+            fi
+        fi
+        if swapinfo -k 2>/dev/null |
+                awk '$1 == "/dev/md99" { found = 1 } END { exit !found }' &&
+                ! swapoff /dev/md99; then
+            printf 'Warning: /dev/md99 is still active; keeping %s.\n' \
+                "$SWAPFILE" >&2
+            _swap_created=0
+        fi
+        if [ "$_swap_created" -eq 1 ]; then
+            rm -f "$SWAPFILE" || true
+        fi
+    fi
+    exit "$_status"
+}
+trap rollback_swap EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# shellcheck source=../../../scripts/detect.sh
+. "$BOOTSTRAP_SCRIPTS/detect.sh"
+
+_mem_mb=$(detect_memory_mb 2>/dev/null || echo 2048)
+_swap_gib=$(printf '%s\n' "$_mem_mb" | awk '{print int($1 / 1024) * 2}')
+[ "$_swap_gib" -lt 4 ] && _swap_gib=4
+
+printf 'Setting up a %s GiB swapfile at %s...\n' "$_swap_gib" "$SWAPFILE"
+
+if [ -e "$SWAPFILE" ]; then
+    printf 'Error: %s exists but is not in /etc/fstab; refusing to overwrite it.\n' \
+        "$SWAPFILE" >&2
+    exit 1
+fi
+
+_swap_created=1
+dd if=/dev/zero of="$SWAPFILE" bs=1m count=$(( _swap_gib * 1024 )) status=progress
+chmod 0600 "$SWAPFILE"
+_fstab_added=1
+printf '%s\n' "$FSTAB_ENTRY" >> /etc/fstab
+
+# `-aL` attaches the late entries, which is what the `late` option above
+# defers this one to.
+swapon -aL

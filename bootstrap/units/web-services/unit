@@ -1,0 +1,11 @@
+# Enable the web-facing services and pick up the sshd configuration the
+# deployed dotfiles may have replaced.
+#
+# The old tree had this twice — `vps/services/10-login.sh` and
+# `vps/services/90-web.sh` both enabled nginx, and the ordering numbers were
+# the only thing telling them apart. One unit now.
+kind: action
+capabilities: web-server
+requires: web-packages
+optional: systemctl
+root: yes

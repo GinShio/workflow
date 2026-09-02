@@ -1,0 +1,6 @@
+# Index the .desktop files the deployed configuration and the Flatpaks put
+# there, so the launcher can find them without a re-login.
+kind: action
+capabilities: desktop
+requires: dotfiles, flatpak-apps
+optional: update-desktop-database

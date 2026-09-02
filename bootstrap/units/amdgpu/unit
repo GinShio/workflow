@@ -1,0 +1,11 @@
+# Firmware and userspace drivers for an AMD GPU. No capability gates this:
+# having the card is the whole reason to want it. The ROCm compute stack is a
+# separate choice and lives in `rocm`.
+#
+# This widens what the old tree did — it scoped this to the workstation
+# usage — so a rented host with a passed-through AMD GPU now gets its driver.
+# A host without the card is unaffected, because the fact does not hold.
+kind: packages
+requires: repos
+when: gpu:amd
+root: yes

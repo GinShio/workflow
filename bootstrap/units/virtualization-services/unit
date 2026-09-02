@@ -1,0 +1,5 @@
+kind: action
+capabilities: virtualization
+requires: virtualization-packages
+optional: systemctl
+root: yes

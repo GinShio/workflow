@@ -1,0 +1,11 @@
+# Fisher plus the plugins the deployed fish configuration expects, and the
+# Tide prompt configured non-interactively.
+#
+# Requires `dotfiles` because Tide writes its answers into fish's universal
+# variables, and a later dotdrop deployment of the fish config would be the
+# thing that overwrote them.
+kind: action
+capabilities: develop
+requires: dotfiles
+optional: fish
+unless: [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/fish/functions/fisher.fish" ]

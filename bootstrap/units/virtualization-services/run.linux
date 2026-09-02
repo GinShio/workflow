@@ -1,0 +1,33 @@
+#!/bin/sh
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+
+systemctl daemon-reload
+
+SERVICES='
+    libvirtd
+    virtlockd
+    virtlogd
+    lxc-net
+'
+
+_failed=''
+for _svc in $SERVICES; do
+    if ! systemctl list-unit-files "$_svc*" | grep -q "$_svc"; then
+        printf 'Service %s is not installed; skipping it.\n' "$_svc"
+        continue
+    fi
+    systemctl enable --now "$_svc" || _failed="$_failed $_svc"
+done
+
+# The default NAT network exists but is not marked to start at boot until
+# something says so.
+if command -v virsh >/dev/null 2>&1; then
+    virsh net-autostart default || \
+        printf 'Could not autostart the default libvirt network.\n' >&2
+fi
+
+if [ -n "$_failed" ]; then
+    printf 'Failed to enable:%s\n' "$_failed" >&2
+    exit 1
+fi

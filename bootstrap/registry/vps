@@ -1,0 +1,9 @@
+# A Debian web host. Generic on purpose: these are interchangeable and
+# short-lived, so they share one entry rather than each earning a file.
+#
+# No `hostname`, which means leave the machine's own name alone — the provider
+# already gave it one that its DNS and its console agree on.
+#
+# No `profile`, which means no dotfiles: nothing here deploys a user
+# environment.
+capabilities: web-server, vps-hygiene

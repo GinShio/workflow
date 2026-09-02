@@ -1,0 +1,29 @@
+#!/bin/sh
+# Replace the installer's sources with mirrors, enable i386 for the multiarch
+# `:i386` selectors later units ask for, then bring the system up to date.
+#
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+
+apt install -y apt-transport-https ca-certificates
+
+# VERSION_CODENAME names the suite in every line below, so the sources follow
+# the release the machine is actually on rather than a pinned one.
+# shellcheck disable=SC1091
+. /etc/os-release
+
+cat > /etc/apt/sources.list <<EOF
+deb https://mirrors.shanghaitech.edu.cn/debian/ ${VERSION_CODENAME} main contrib non-free non-free-firmware
+deb https://mirrors.shanghaitech.edu.cn/debian/ ${VERSION_CODENAME}-updates main contrib non-free non-free-firmware
+deb https://mirrors.shanghaitech.edu.cn/debian/ ${VERSION_CODENAME}-backports main contrib non-free non-free-firmware
+deb https://mirrors.shanghaitech.edu.cn/debian-security ${VERSION_CODENAME}-security main contrib non-free non-free-firmware
+EOF
+
+dpkg --add-architecture i386
+apt update
+apt dist-upgrade -y
+
+# Packages the installer brings that this machine does not want. Removal is
+# allowed to fail: on a fresh install some were never there.
+apt purge -y akonadi-server mariadb-common mariadb-server mariadb-client redis || true
+apt-mark hold akonadiconsole

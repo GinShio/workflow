@@ -1,0 +1,39 @@
+#!/bin/sh
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+#
+# Reaching here means DNS_PROVIDER is set, since that is the unit's `unless`.
+
+if [ -z "${DNS_API_TOKEN:-}" ]; then
+    printf 'Error: DNS_PROVIDER is set but DNS_API_TOKEN is not.\n' >&2
+    exit 1
+fi
+
+# The value becomes part of a package name and of a plugin flag, so anything
+# outside this alphabet could reach apt or certbot as something other than a
+# provider name.
+case "$DNS_PROVIDER" in
+    *[!a-z0-9-]*)
+        printf 'Error: DNS_PROVIDER must be lowercase letters, digits or "-".\n' >&2
+        exit 1
+        ;;
+esac
+
+printf 'Installing the certbot DNS plugin for %s...\n' "$DNS_PROVIDER"
+
+# Two providers have no Debian package and no plugin under certbot's own
+# naming, so they come from PyPI and from git respectively.
+case "$DNS_PROVIDER" in
+    aliyun)
+        apt-get install -y python3-pip
+        python3 -m pip install --break-system-packages certbot-dns-aliyun
+        ;;
+    dnspod|tencent)
+        apt-get install -y python3-pip
+        python3 -m pip install --break-system-packages \
+            git+https://github.com/tengattack/certbot-dns-dnspod.git
+        ;;
+    *)
+        apt-get install -y "python3-certbot-dns-$DNS_PROVIDER"
+        ;;
+esac

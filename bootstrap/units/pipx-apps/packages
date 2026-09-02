@@ -1,0 +1,8 @@
+# Python names, identical on every platform, so no suffix.
+#
+# `dotdrop` is what the `dotfiles` unit deploys with, which is why that unit
+# requires this one.
+dotdrop
+iree-base-compiler[onnx]
+pyright
+trash-cli

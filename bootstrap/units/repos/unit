@@ -1,0 +1,8 @@
+# Gated on `workstation`, not unconditional. A rented host already has
+# sources its provider picked for its own network, and replacing them with
+# mirrors chosen for a machine on a desk is the wrong answer there. The old
+# tree said the same thing by scoping this to `usage:common`, which only the
+# workstation usage matched.
+kind: action
+capabilities: workstation
+root: yes

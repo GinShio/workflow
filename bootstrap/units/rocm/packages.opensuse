@@ -1,0 +1,34 @@
+# Runtime and HIP
+rocm-hip
+rocm-hip-devel
+hipcc
+libhip*
+
+# Compiler
+rocm-clang
+rocm-clang-devel
+rocm-clang-libs
+rocm-clang-runtime-devel
+rocm-device-libs
+rocm-libc++-devel
+rocm-lld
+rocm-llvm
+rocm-llvm-devel
+rocm-llvm-libs
+rocm-llvm-static
+
+# Build support
+rocm-cmake
+rocm-compilersupport-macros
+
+# Math libraries
+librocalution*
+librocblas*
+librocfft*
+librocm-core*
+
+# Tooling
+amdsmi
+rocminfo
+rocm-smi
+roctracer

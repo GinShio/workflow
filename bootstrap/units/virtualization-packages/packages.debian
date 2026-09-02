@@ -1,0 +1,21 @@
+# Libvirt
+libvirt-clients
+libvirt-daemon-system
+libvirt-dbus
+virtinst
+
+# QEMU, including the user-mode emulation `cross-toolchain` output runs under
+qemu-system
+qemu-user
+qemu-user-static
+qemu-utils
+
+# Networking
+bridge-utils
+
+# Containers
+buildah
+crun
+lxc
+podman
+podman-docker

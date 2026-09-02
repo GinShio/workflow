@@ -1,0 +1,4 @@
+# Personal workstation.
+hostname: ginshio-openSUSE-strix
+capabilities: workstation, develop, desktop, kde, virtualization, gpu-graphics
+profile: personal

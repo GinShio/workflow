@@ -1,0 +1,9 @@
+# Graphics and compute *development* headers: X11, Wayland, Mesa, Vulkan,
+# SPIR-V, OpenCL. Both conditions have to hold — the machine has to want a
+# graphics development environment (`gpu-graphics`) and it has to actually
+# have a GPU to run any of it against (`gpu:any`).
+kind: packages
+capabilities: gpu-graphics
+requires: cpp-toolchain
+when: gpu:any
+root: yes

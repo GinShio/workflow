@@ -1,0 +1,29 @@
+# The distribution's own KVM baseline.
+@pattern kvm_tools
+
+# Libvirt
+libvirt
+libvirt-daemon-lxc
+libvirt-dbus
+libvirt-doc
+
+# QEMU, including the user-mode emulation `cross-toolchain` output runs under
+qemu
+qemu-arm
+qemu-doc
+qemu-extra
+qemu-lang
+qemu-linux-user
+qemu-ppc
+qemu-vhost-user-gpu
+qemu-x86
+
+# Containers
+buildah
+crun
+crun-vm
+libcgroup-tools
+lxc
+lxd
+podman
+podman-docker

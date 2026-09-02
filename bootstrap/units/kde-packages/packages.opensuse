@@ -1,0 +1,25 @@
+# Qt and Frameworks development
+@pattern devel_qt6 devel_kde_frameworks6
+libplasma6-devel
+
+# Input method
+fcitx5
+fcitx5-rime
+
+# Applications
+filelight
+filelight-lang
+freerdp-wayland
+kdeconnect-kde
+kdeconnect-kde-lang
+krdc
+krdc-lang
+krfb
+krfb-lang
+kvantum-manager
+kvantum-manager-lang
+partitionmanager
+partitionmanager-lang
+
+# Unlock the wallet at login
+pam_kwallet6

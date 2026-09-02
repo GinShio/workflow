@@ -1,0 +1,8 @@
+# Firmware and DRM. The firmware lives in `non-free-firmware`, which the
+# `repos` unit enables.
+firmware-amd-graphics
+libdrm-amdgpu1
+libdrm-amdgpu1:i386
+
+# Monitoring
+radeontop

@@ -1,0 +1,146 @@
+#!/bin/sh
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+
+if [ -z "${VPS_DOMAIN_NAME:-}" ]; then
+    printf 'Error: VPS_DOMAIN_NAME is not set.\n' >&2
+    exit 1
+fi
+
+issue_certificate() {
+    if [ -z "${VPS_ADMIN_EMAIL:-}" ]; then
+        printf 'VPS_ADMIN_EMAIL is not set; skipping issuance.\n'
+        printf 'Issue it later with:\n'
+        printf '  certbot certonly --standalone -d %s\n' "$VPS_DOMAIN_NAME"
+        return 0
+    fi
+
+    if [ -z "${DNS_PROVIDER:-}" ]; then
+        # HTTP-01 can only issue the apex name; a wildcard needs DNS-01.
+        # nginx has to release port 80 for the duration, which the hooks do.
+        printf 'Issuing via HTTP-01 for %s (no wildcard).\n' "$VPS_DOMAIN_NAME"
+        certbot certonly \
+            --standalone \
+            -d "$VPS_DOMAIN_NAME" \
+            --non-interactive \
+            --agree-tos \
+            --pre-hook 'systemctl stop nginx.service' \
+            --post-hook 'systemctl start nginx.service' \
+            -m "$VPS_ADMIN_EMAIL" || {
+            printf 'Error: standalone issuance failed; is port 80 reachable?\n' >&2
+            return 1
+        }
+        return 0
+    fi
+
+    if [ -z "${DNS_API_TOKEN:-}" ]; then
+        printf 'Error: DNS_PROVIDER is set but DNS_API_TOKEN is not.\n' >&2
+        return 1
+    fi
+    case "$DNS_PROVIDER" in
+        *[!a-z0-9-]*)
+            printf 'Error: DNS_PROVIDER must be lowercase letters, digits or "-".\n' >&2
+            return 1
+            ;;
+    esac
+
+    mkdir -p /root/.secrets/certbot
+    chmod 700 /root/.secrets/certbot
+    _cred="/root/.secrets/certbot/${DNS_PROVIDER}.ini"
+
+    # Each plugin reads a different key name out of the credentials file, and
+    # two of them pack two secrets into one token with their own separator.
+    case "$DNS_PROVIDER" in
+        aliyun)
+            case "$DNS_API_TOKEN" in
+                ?*:?*) ;;
+                *)
+                    printf 'Error: Aliyun needs AccessKeyID:AccessKeySecret.\n' >&2
+                    return 1
+                    ;;
+            esac
+            _plugin=dns-aliyun
+            {
+                printf 'dns_aliyun_access_key = %s\n' "${DNS_API_TOKEN%:*}"
+                printf 'dns_aliyun_access_key_secret = %s\n' "${DNS_API_TOKEN#*:}"
+            } > "$_cred"
+            ;;
+        dnspod|tencent)
+            case "$DNS_API_TOKEN" in
+                ?*,?*) ;;
+                *)
+                    printf 'Error: DNSPod needs API_ID,API_Token.\n' >&2
+                    return 1
+                    ;;
+            esac
+            _plugin=dns-dnspod
+            {
+                printf 'dns_dnspod_api_id = %s\n' "${DNS_API_TOKEN%,*}"
+                printf 'dns_dnspod_api_token = %s\n' "${DNS_API_TOKEN#*,}"
+            } > "$_cred"
+            ;;
+        cloudflare)
+            _plugin=dns-cloudflare
+            printf 'dns_cloudflare_api_token = %s\n' "$DNS_API_TOKEN" > "$_cred"
+            ;;
+        *)
+            _plugin="dns-$DNS_PROVIDER"
+            printf 'dns_%s_api_token = %s\n' \
+                "$DNS_PROVIDER" "$DNS_API_TOKEN" > "$_cred"
+            ;;
+    esac
+    chmod 600 "$_cred"
+
+    printf 'Issuing a wildcard via DNS-01 with %s.\n' "$DNS_PROVIDER"
+    certbot certonly \
+        --authenticator "$_plugin" \
+        --"$_plugin"-credentials "$_cred" \
+        -d "$VPS_DOMAIN_NAME" \
+        -d "*.$VPS_DOMAIN_NAME" \
+        --non-interactive \
+        --agree-tos \
+        -m "$VPS_ADMIN_EMAIL" || {
+        printf 'Error: DNS-01 issuance with %s failed.\n' "$DNS_PROVIDER" >&2
+        return 1
+    }
+}
+
+if [ -d "/etc/letsencrypt/live/$VPS_DOMAIN_NAME" ]; then
+    printf 'Certificate for %s already exists.\n' "$VPS_DOMAIN_NAME"
+else
+    issue_certificate || exit 1
+fi
+
+printf 'Configuring renewal hooks...\n'
+mkdir -p /etc/letsencrypt/renewal-hooks/deploy \
+         /etc/letsencrypt/renewal-hooks/pre \
+         /etc/letsencrypt/renewal-hooks/post
+
+# Reload on every successful renewal, whatever authenticator produced it.
+cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh <<'EOF'
+#!/bin/sh
+systemctl reload nginx.service
+EOF
+chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+
+# Standalone certificates persist their pre/post hooks in their own renewal
+# configuration. The old global hooks are removed because they had no lineage
+# variable and so could not tell which authenticator was renewing: certbot
+# exports RENEWAL_LINEAGE to deploy hooks only.
+rm -f /etc/letsencrypt/renewal-hooks/pre/stop-nginx-if-standalone.sh
+rm -f /etc/letsencrypt/renewal-hooks/post/start-nginx-if-standalone.sh
+
+# A standalone lineage issued before that change carries no hooks of its own
+# and has just lost the global ones, so its next unattended renewal would fail
+# against an nginx still holding port 80. certbot writes [renewalparams] as
+# the final section of a renewal file, so appending lands inside it.
+for _renewal in /etc/letsencrypt/renewal/*.conf; do
+    [ -f "$_renewal" ] || continue
+    grep -q '^authenticator = standalone' "$_renewal" || continue
+    grep -q '^pre_hook = ' "$_renewal" && continue
+    printf 'pre_hook = systemctl stop nginx.service\n' >> "$_renewal"
+    printf 'post_hook = systemctl start nginx.service\n' >> "$_renewal"
+    printf 'Adopted standalone renewal hooks into %s\n' "$_renewal"
+done
+
+systemctl enable --now certbot.timer

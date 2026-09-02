@@ -1,0 +1,5 @@
+# The remote every Flatpak in `flatpak-apps` comes from.
+kind: action
+capabilities: desktop
+optional: flatpak
+unless: flatpak remotes 2>/dev/null | grep -q '^flathub'

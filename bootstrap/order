@@ -1,0 +1,107 @@
+# The order units are considered in, stated rather than derived.
+#
+# Filenames do not carry it and no graph computes it. A unit's `requires`
+# exists so a failure can name what it took down, and it is checked against
+# this file: a unit requiring something listed below it is an error, which is
+# what makes writing this by hand safe.
+#
+# Selection narrows this list; it never reorders it. Insert a unit where it
+# belongs and nothing else moves.
+
+# ---------------------------------------------------------------- foundation
+# Nothing installable resolves before the repositories exist.
+repos
+
+# Remove the provider's agents before installing anything, so their package
+# manager hooks and monitoring are gone first.
+cloud-agent-alibaba
+cloud-agent-aws
+cloud-agent-gcp
+cloud-agent-oracle
+cloud-agent-tencent
+cloud-agent-huawei
+cloud-agent-baidu
+
+# After the removals above, which need no index, and after `repos`, which may
+# replace the sources this refreshes. Before the first install below, which is
+# the whole reason it is here.
+package-index
+
+# --------------------------------------------------------------- base system
+base-packages
+hostname
+swap
+grub
+linger
+
+# ------------------------------------------------------------------ hardware
+# Drivers before anything that builds or links against them.
+amdgpu
+
+# -------------------------------------------------------- development system
+# `develop-tools` first: it brings the distribution's own build baseline that
+# every toolchain below assumes.
+develop-tools
+cpp-toolchain
+python-toolchain
+rust-toolchain
+zig-toolchain
+jvm-toolchain
+node-toolchain
+functional-toolchain
+tex
+emacs
+
+# Cross compilers need the native toolchain they sit beside.
+cross-toolchain
+
+# Graphics and compute development headers, after the C++ toolchain they are
+# used from.
+gpu-graphics
+rocm-repo
+rocm
+
+# --------------------------------------------------------------- workstation
+desktop-packages
+kde-repo
+kde-packages
+virtualization-packages
+
+# Device access, once the packages that create those groups are installed.
+groups
+
+# ------------------------------------------------------------------- web host
+web-packages
+certbot-dns
+
+# ---------------------------------------------------------- user environment
+# `dirs` before anything that writes into ~/.local, and the language package
+# managers before the tools that consume what they install.
+dirs
+flathub
+flatpak-apps
+pipx-apps
+cargo-apps
+deno-apps
+
+# wits is built here, from the toolchain above. Everything before this point
+# runs without it — that is the constraint the whole design is shaped by.
+wits
+
+# Deploying the configuration needs wits to compile it and dotdrop to install
+# it, so it comes after both.
+dotfiles
+
+# These consume what `dotfiles` deployed: fish reads its config, the user
+# services read their unit files.
+fish
+desktop-db
+
+# ------------------------------------------------------------------ services
+# Last, so every unit file and every binary they reference already exists.
+system-services
+virtualization-services
+user-services
+web-services
+certbot
+bbr
