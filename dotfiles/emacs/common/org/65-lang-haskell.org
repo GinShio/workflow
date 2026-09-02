@@ -1,4 +1,4 @@
-#+GINSHIO_MODULE: enabled
+#+GINSHIO_MODULE: disabled
 
 * Haskell
 

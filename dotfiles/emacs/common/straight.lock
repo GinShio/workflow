@@ -26,8 +26,6 @@
  ("f.el" . "931b6d0667fe03e7bf1c6c282d6d8d7006143c52")
  ("git-modes" . "f291a4cc4a8b02a25d5cf93b4ab6af29e6f060d9")
  ("gnu-elpa-mirror" . "6390a0b5e8ff9fbbb7f108ac8d4221b72a6415b1")
- ("haskell-mode" . "781e4669a0e0917fa8c532371cbfb1eb5b03b645")
- ("haskell-ts-mode" . "bf143ee8382f09e0a68d775d80445065f32929c3")
  ("hl-todo" . "527d545b8c2f36243194cbe4a8d0e6ac9d50e6a7")
  ("ht.el" . "1c49aad1c820c86f7ee35bf9fff8429502f60fef")
  ("jsonrpc" . "d8143c52679eaeebcca26dd41e015dc73d167b49")
