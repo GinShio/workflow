@@ -290,22 +290,6 @@ corfu 默認也會在 minibuffer 裏啓用。那本來是給沒有 vertico 的�
 (setq tab-always-indent 'complete)
 #+end_src
 
-corfu 的彈出框是 child frame，終端下根本不存在——不裝下面這個，終端裏的補全菜單就是
-不出現，而且不報錯。[[https://codeberg.org/akib/emacs-corfu-terminal][corfu-terminal]] 用覆蓋層畫同樣的東西。
-
-它雖然是全局模式，卻會在每次畫 popup 時查看當前 frame。默認的
-~corfu-terminal-disable-on-gui~ 讓圖形 frame 繼續使用 Corfu 的 child frame，終端 frame
-才使用 popon；因此混合 GUI/TTY daemon 只需要把模式永久打開。
-
-#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-minibuffer.el"
-(use-package corfu-terminal
-  :straight (corfu-terminal :host codeberg :repo "akib/emacs-corfu-terminal")
-  :after corfu
-  :demand t
-  :config
-  (corfu-terminal-mode 1))
-#+end_src
-
 ** 圖標
 
 一列候選項如果只有名字，你要讀完整個標識符才知道它是函數、變量、宏還是類型。那個信息

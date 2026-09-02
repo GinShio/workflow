@@ -257,8 +257,7 @@ Corfu 自動在輸入兩個字符後彈出，候選項由 Eglot、major mode 與
 | ~M-g~         | 候選項定義位置                          |
 | ~C-g~         | 關閉 popup                              |
 
-圖形 frame 使用 child frame；TTY frame 由 corfu-terminal 畫 popup。同一 daemon 混用 GUI
-與終端不需切換模式。手動觸發仍是 major mode 的 ~completion-at-point~；可用
+同一 daemon 混用 GUI 與終端不需切換模式。手動觸發仍是 major mode 的 ~completion-at-point~；可用
 ~M-x completion-at-point~。
 
 語言服務器的候選項可以帶參數：選中 ~emplace_back~ 之後插入的是
@@ -266,8 +265,7 @@ Corfu 自動在輸入兩個字符後彈出，候選項由 Eglot、major mode 與
 個。展開由 yasnippet 負責，但這份配置一個 snippet 都不放——模板全部由服務器供給，所以
 沒有觸發詞要記，也沒有模板庫要維護。理由見 [[file:org/55-lsp.org][lsp 模塊]]。
 
-上游文檔：[[https://github.com/minad/corfu][Corfu]]、[[https://github.com/minad/cape][Cape]]、
-[[https://codeberg.org/akib/emacs-corfu-terminal][corfu-terminal]]。
+上游文檔：[[https://github.com/minad/corfu][Corfu]]、[[https://github.com/minad/cape][Cape]]。
 
 * 窗口、項目與 layout
 
