@@ -67,7 +67,7 @@ straight from the subcommand list, so a new built-in earns its symlink for free.
 When `foo` is not a built-in, `wits foo` execs a `wits-foo` executable found on
 `$PATH` — the convention git and cargo use. A plugin is therefore any executable
 named `wits-<name>`, in any language; an in-tree Rust plugin can additionally
-depend on `wits-util` to reuse the process/git/config/template floor rather than
+depend on `wits-util` to reuse the process/git/config/jinja floor rather than
 reinventing it. `wits help` lists the built-ins plus the plugins it discovers on
 `$PATH`. The full contract is in [Writing a wits plugin](docs/plugins.rst).
 

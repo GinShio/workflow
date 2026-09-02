@@ -60,9 +60,12 @@ whose binary is named ``wits-<name>``, and depend on ``wits-util``:
    clap.workspace = true
 
 Add it to the workspace ``members`` in the root ``Cargo.toml``. Now
-``wits_util::{process, git, config, template, ...}`` are all available — the same
-subprocess/dry-run discipline, config-tree discovery, and template engine the
-core commands use. Extend the workspace's ``meson.build`` to build and install
+``wits_util::{process, git, config, jinja, ...}`` are all available — the same
+subprocess/dry-run discipline, config-tree discovery, and Jinja dialect the core
+commands use. A plugin that renders text takes ``jinja::shared()``, or
+``jinja::environment()`` if it adds filters of its own; one that resolves a
+config whose values reference each other wants ``project::context::Ctx``
+instead. Extend the workspace's ``meson.build`` to build and install
 the plugin binary the same way ``wits`` is, so ``meson install`` ships it
 alongside ``wits``.
 

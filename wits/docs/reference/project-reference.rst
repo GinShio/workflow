@@ -466,25 +466,35 @@ Templates
 
 Config values are templated. Config format is TOML only.
 
-``{{ path }}`` substitution
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``{{ … }}`` substitution
+~~~~~~~~~~~~~~~~~~~~~~~~
 
-Dotted lookup over the context (tables by key, arrays by integer index). A
-value that is a single whole-string placeholder returns the **typed** value (a
-list or integer survives); an embedded placeholder is stringified
-(``true``/``false`` lowercase, integers decimal). Resolution is lazy and
-recursive with cycle detection.
+The engine is Jinja (`MiniJinja
+<https://docs.rs/minijinja/>`_), the same one the scaffold plugin generates
+text with. Dotted lookup over the context (tables by attribute, arrays by
+integer index). A value that is a single whole-string ``{{ … }}`` is evaluated
+as an expression and returns the **typed** result (a list or integer
+survives); anything else renders to a string. Resolution is lazy and recursive
+with cycle detection.
 
-``[[ expr ]]`` expressions
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+A key holding a ``-`` must be subscripted, because ``repos.my-repo`` parses as
+a subtraction::
 
-A minimal numeric expression, e.g.
-``LINK_JOBS = "[[ max(1, system.mem.gb // 4) ]]"``.
+   install_dir = "{{ repos['my-repo'].workdir }}"
 
-* Operators: ``+ - * / // %`` over int/float; comparisons ``== != < <= > >=``.
-* Functions: ``min``, ``max``, ``int``, ``float``, ``str``, ``bool``.
-* **Not** supported: ``**``, bitwise ops, ``and``/``or``/``not``, ternary,
-  arbitrary names, list/dict literals. (Conditions are ``applies_when``.)
+Expressions
+~~~~~~~~~~~
+
+The full Jinja expression language, e.g.
+``LINK_JOBS = "{{ [1, system.mem.gb // 4] | max }}"``.
+
+* Operators: ``+ - * / // %`` over int/float; comparisons ``== != < <= > >=``;
+  ``and``/``or``/``not``; the ``a if c else b`` ternary.
+* Filters: Jinja's built-ins (``min``, ``max``, ``int``, ``float``, ``string``,
+  ``join``, ``default``, …) plus ``prefix``, ``suffix``, ``strip_prefix``,
+  ``pad`` and ``required``, and the ``fail('…')`` function.
+* Statements (``{% if %}``, ``{% for %}``) work too, though a condition that
+  selects a whole config layer belongs in ``applies_when`` rather than here.
 
 Context variables
 ~~~~~~~~~~~~~~~~~

@@ -10,9 +10,9 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 
-use crate::template::Value;
+use minijinja::Value;
 
-use super::context::Ctx;
+use super::context::{from_toml, Ctx};
 use super::model::{Profile, RawToolchain, Toolchain};
 use super::workspace::{ProjectData, Workspace};
 
@@ -53,17 +53,17 @@ pub(crate) fn resolve_toolchain(
         }
     };
     let list = |ctx: &Ctx, xs: &[String]| -> Result<Vec<String>> {
-        xs.iter().map(|x| ctx.render(x)).collect()
+        Ok(xs.iter().map(|x| ctx.render(x)).collect::<Result<_, _>>()?)
     };
     let environment = raw
         .environment
         .iter()
-        .map(|(k, v)| Ok((k.clone(), ctx.render_value(&Value::from(v))?)))
+        .map(|(k, v)| Ok((k.clone(), ctx.render_value(&from_toml(v))?)))
         .collect::<Result<Vec<_>>>()?;
     let definitions = raw
         .definitions
         .iter()
-        .map(|(k, v)| Ok((k.clone(), ctx.engine().resolve(&Value::from(v))?)))
+        .map(|(k, v)| Ok((k.clone(), ctx.resolve(&from_toml(v))?)))
         .collect::<Result<Vec<_>>>()?;
 
     let tc = Toolchain {
@@ -86,9 +86,9 @@ pub(crate) fn resolve_toolchain(
 
     // Expose toolchain.* so config can reference {{toolchain.cc}} etc.
     let mut m = BTreeMap::new();
-    m.insert("name".into(), Value::str(&name));
+    m.insert("name".to_owned(), Value::from(name.clone()));
     let put = |m: &mut BTreeMap<String, Value>, k: &str, v: &Option<String>| {
-        m.insert(k.into(), Value::str(v.clone().unwrap_or_default()));
+        m.insert(k.to_owned(), Value::from(v.clone().unwrap_or_default()));
     };
     put(&mut m, "cc", &tc.cc);
     put(&mut m, "cxx", &tc.cxx);
@@ -99,10 +99,13 @@ pub(crate) fn resolve_toolchain(
     put(&mut m, "strip", &tc.strip);
     put(&mut m, "linker", &tc.linker);
     put(&mut m, "launcher", &tc.launcher);
-    m.insert("c_flags".into(), Value::str(tc.c_flags.join(" ")));
-    m.insert("cxx_flags".into(), Value::str(tc.cxx_flags.join(" ")));
-    m.insert("link_flags".into(), Value::str(tc.link_flags.join(" ")));
-    ctx.set("toolchain", Value::Map(m));
+    m.insert("c_flags".to_owned(), Value::from(tc.c_flags.join(" ")));
+    m.insert("cxx_flags".to_owned(), Value::from(tc.cxx_flags.join(" ")));
+    m.insert(
+        "link_flags".to_owned(),
+        Value::from(tc.link_flags.join(" ")),
+    );
+    ctx.set("toolchain", Value::from(m));
 
     Ok(tc)
 }

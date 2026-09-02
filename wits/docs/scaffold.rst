@@ -448,7 +448,9 @@ never reorders existing text.
 Filters
 ~~~~~~~
 
-In addition to Jinja's built-ins:
+In addition to Jinja's built-ins. Everything but ``extension_tag`` and
+``sha256`` comes from the shared dialect in ``wits_util::jinja``, so a
+project config may use those too:
 
 .. list-table::
    :header-rows: 1

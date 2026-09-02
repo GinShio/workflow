@@ -845,7 +845,7 @@ worktree_dir = "{}"
 from = "comp:review"
 anchor = "main"
 build_dir = "{{repos.main.workdir}}/target/component-review"
-install_dir = "{{repos.component-review.workdir}}"
+install_dir = "{{repos['component-review'].workdir}}"
 "#,
     );
     std::fs::write(&host_config, body).unwrap();

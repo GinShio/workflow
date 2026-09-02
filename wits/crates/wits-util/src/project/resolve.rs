@@ -17,9 +17,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use crate::git::Repository;
-use crate::template::{Engine, TemplateError, Value};
+use minijinja::Value;
 
-use super::context::{self, apply_def_map, apply_env_map, fold_env, resolve_args, Ctx};
+use super::context::{
+    self, apply_def_map, apply_env_map, fold_env, insert_path, resolve_args, Bindings, Ctx,
+    TemplateError,
+};
 use super::model::{infer_kind, BranchStrategy, BuildSystem, LogicalConfig, Profile, Toolchain};
 use super::presets::{applied_presets, resolve_preset_into};
 use super::toolchain::{resolve_toolchain, select_toolchain};
@@ -202,26 +205,26 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
         let primary = repo_primary_path(ws, project, name)?;
         ctx.set(
             &format!("repos.{name}.path"),
-            Value::str(primary.display().to_string()),
+            Value::from(primary.display().to_string()),
         );
         if name == &focus {
-            ctx.set("repo.path", Value::str(primary.display().to_string()));
+            ctx.set("repo.path", Value::from(primary.display().to_string()));
         }
     }
     if let Some(branch) = &branch {
-        ctx.set("branch.raw", Value::str(&branch.raw));
-        ctx.set("branch.slug", Value::str(&branch.slug));
+        ctx.set("branch.raw", Value::from(&branch.raw));
+        ctx.set("branch.slug", Value::from(&branch.slug));
     }
-    ctx.set("build_type", Value::str(&build_type));
+    ctx.set("build_type", Value::from(&build_type));
     if let Some(gen) = &generator {
-        ctx.set("generator", Value::str(gen));
+        ctx.set("generator", Value::from(gen));
     }
     // CLI-registered `--spec K=V` values, as the `spec.*` namespace. Only what
     // was passed is bound, so a template that references an unsupplied
     // `{{spec.X}}` fails loudly (the engine errors on an unknown path, §6.1) —
     // the "must be specified to be used" contract, enforced rather than guessed.
     for (key, value) in &profile.specs {
-        ctx.set(&format!("spec.{key}"), Value::str(value));
+        ctx.set(&format!("spec.{key}"), Value::from(value));
     }
 
     // Resolve the toolchain against the base context and expose it as toolchain.*.
@@ -258,7 +261,7 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
         };
         ctx.set(
             &format!("repos.{name}.workdir"),
-            Value::str(dir.display().to_string()),
+            Value::from(dir.display().to_string()),
         );
         work_dirs.insert(name.clone(), dir);
     }
@@ -510,11 +513,11 @@ fn resolve_declared_worktree_dir(
     };
     scoped.set("repo", repo_value(owner, &owner_repo));
     let primary = repo_primary_path(ws, owner, &owner_repo)?;
-    scoped.set("repo.path", Value::str(primary.display().to_string()));
+    scoped.set("repo.path", Value::from(primary.display().to_string()));
     let rendered = match scoped.render(tpl) {
         Ok(path) => path,
         Err(error) if branch.is_none() && missing_branch_binding(&error) => return Ok(None),
-        Err(error) => return Err(error),
+        Err(error) => return Err(error.into()),
     };
     Ok(Some(anchor_worktree_path(
         ws,
@@ -524,11 +527,10 @@ fn resolve_declared_worktree_dir(
     )?))
 }
 
-fn missing_branch_binding(error: &anyhow::Error) -> bool {
+fn missing_branch_binding(error: &TemplateError) -> bool {
     matches!(
-        error.downcast_ref::<TemplateError>(),
-        Some(TemplateError::UnknownPath(path))
-            if path == "branch" || path.starts_with("branch.")
+        error,
+        TemplateError::UnknownPath(path) if path == "branch" || path.starts_with("branch.")
     )
 }
 
@@ -582,10 +584,10 @@ fn template_owner<'a>(
 
 /// A context able to resolve one repo's branch-keyed path templates: its project's
 /// per-repo namespace plus the `branch.*` bindings a `worktree_dir` needs.
-fn branch_root(ws: &Workspace, project: &ProjectData, repo_name: &str, branch: &str) -> Value {
+fn branch_root(ws: &Workspace, project: &ProjectData, repo_name: &str, branch: &str) -> Bindings {
     let mut root = context_for_repo(ws, project, repo_name);
-    root.insert_path("branch.raw", Value::str(branch));
-    root.insert_path("branch.slug", Value::str(path_slug(branch)));
+    insert_path(&mut root, "branch.raw", Value::from(branch));
+    insert_path(&mut root, "branch.slug", Value::from(path_slug(branch)));
     root
 }
 
@@ -847,43 +849,32 @@ pub fn bootstrap_worktree_dir(
         .worktree_dir
         .as_deref()
         .with_context(|| format!("repo '{repo_name}' has no worktree_dir"))?;
-    let rendered =
-        Engine::new(branch_root(ws, project, repo_name, branch)).resolve_str(template)?;
-    let main_worktree = match rendered {
-        Value::Str(path) => anchor_worktree_path(ws, project, repo_name, expand_tilde(&path))?,
-        other => bail!("worktree_dir for repo '{repo_name}' resolved to a non-string: {other:?}"),
-    };
+    let rendered = Ctx::new(branch_root(ws, project, repo_name, branch))
+        .render_path(template)
+        .with_context(|| format!("resolving worktree_dir for repo '{repo_name}'"))?;
+    let main_worktree = anchor_worktree_path(ws, project, repo_name, expand_tilde(&rendered))?;
 
     if let Some(template) = repo.bootstrap_worktree_dir.as_deref() {
-        let engine = Engine::new(context_for_repo(ws, project, repo_name));
-        let rendered = engine.resolve_str(template).with_context(|| {
+        let rendered = Ctx::new(context_for_repo(ws, project, repo_name))
+            .render_path(template)
+            .with_context(|| {
+                format!(
+                    "resolving bootstrap_worktree_dir for repo '{repo_name}' \
+                     (it must not reference branch.*)"
+                )
+            })?;
+        let path = expand_tilde(&rendered);
+        if path.is_absolute() {
+            return Ok(path);
+        }
+        let parent = main_worktree.parent().with_context(|| {
             format!(
-                "resolving bootstrap_worktree_dir for repo '{repo_name}' \
-                 (it must not reference branch.*)"
+                "worktree_dir {} has no parent for relative bootstrap_worktree_dir {}",
+                main_worktree.display(),
+                path.display()
             )
         })?;
-        return match rendered {
-            Value::Str(path) => {
-                let path = expand_tilde(&path);
-                if path.is_absolute() {
-                    Ok(path)
-                } else {
-                    let parent = main_worktree.parent().with_context(|| {
-                        format!(
-                            "worktree_dir {} has no parent for relative \
-                             bootstrap_worktree_dir {}",
-                            main_worktree.display(),
-                            path.display()
-                        )
-                    })?;
-                    Ok(parent.join(path))
-                }
-            }
-            other => bail!(
-                "bootstrap_worktree_dir for repo '{repo_name}' resolved to a non-string: \
-                 {other:?}"
-            ),
-        };
+        return Ok(parent.join(path));
     }
     Ok(main_worktree)
 }
@@ -908,15 +899,15 @@ mod tests {
     impl ToolchainInjector for MockInjector {
         fn apply_toolchain(&self, tc: &Toolchain, cfg: &mut LogicalConfig) {
             if let Some(cc) = &tc.cc {
-                cfg.set_definition("MOCK_CC", Value::Str(cc.clone()));
+                cfg.set_definition("MOCK_CC", Value::from(cc.clone()));
             }
         }
     }
 
     #[test]
     fn detached_worktree_fallback_only_ignores_the_missing_branch_namespace() {
-        let branch: anyhow::Error = TemplateError::UnknownPath("branch.slug".into()).into();
-        let typo: anyhow::Error = TemplateError::UnknownPath("brnach.slug".into()).into();
+        let branch = TemplateError::UnknownPath("branch.slug".into());
+        let typo = TemplateError::UnknownPath("brnach.slug".into());
         assert!(missing_branch_binding(&branch));
         assert!(!missing_branch_binding(&typo));
     }
@@ -1312,8 +1303,10 @@ mod tests {
                 .map(|(_, v)| v.clone())
                 .unwrap()
         };
-        assert!(matches!(def("ORG_FLAG"), Value::Bool(false)));
-        assert!(matches!(def("ORG_COUNT"), Value::Int(8)));
+        // Inherited definitions keep their TOML type, which is what lets a backend
+        // emit `ORG_FLAG` as a boolean rather than the string "false".
+        assert_eq!(def("ORG_FLAG"), Value::from(false));
+        assert_eq!(def("ORG_COUNT"), Value::from(8));
     }
 
     /// A project may name an org that no file declares. That is not fatal today

@@ -24,7 +24,7 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use clap::Args;
 
-use wits_util::template::Engine;
+use wits_util::project::context::Ctx;
 
 use wits_util::git::{self, Repository, RestoreGuard};
 use wits_util::project::model::{infer_kind, BranchStrategy, Kind, RawRepo};
@@ -175,7 +175,7 @@ fn repo_order(project: &ProjectData) -> Vec<String> {
 
 fn clone_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Repository) -> Result<()> {
     let repo = &project.repos[name];
-    let engine = Engine::new(resolve::context_for_repo(ws, project, name));
+    let ctx = Ctx::new(resolve::context_for_repo(ws, project, name));
     let strategy = BranchStrategy::parse(repo.branch_strategy.as_deref())?;
 
     // A clone override owns repository creation. The default clone shape follows
@@ -183,7 +183,7 @@ fn clone_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Repositor
     // worktree/hybrid create a bare common repository and an explicit bootstrap
     // checkout for main.
     if let Some(action) = repo.hooks.clone.as_ref() {
-        run_hook(&engine, None, action, "clone")?;
+        run_hook(&ctx, None, action, "clone")?;
     } else if strategy.is_bare_backed() {
         clone_bare_repo(ws, project, name, git)?;
     } else {
@@ -209,7 +209,7 @@ fn clone_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Repositor
     // off; for the other two this is idempotent.
     apply_skip(&checkout, name, repo)?;
     run_hook_opt(
-        &engine,
+        &ctx,
         Some(checkout.path()),
         repo.hooks.post_clone.as_ref(),
         "post_clone",
@@ -306,7 +306,7 @@ fn clone_bare_repo(
 
 fn update_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Repository) -> Result<()> {
     let repo = &project.repos[name];
-    let engine = Engine::new(resolve::context_for_repo(ws, project, name));
+    let ctx = Ctx::new(resolve::context_for_repo(ws, project, name));
 
     // Two different questions, which used to be one and so were answered wrongly
     // for a bare-backed repo.
@@ -354,20 +354,20 @@ fn update_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Reposito
         .unwrap_or_else(|| git.path());
 
     run_hook_opt(
-        &engine,
+        &ctx,
         Some(hook_cwd),
         repo.hooks.pre_update.as_ref(),
         "pre_update",
     )?;
 
     if let Some(action) = repo.hooks.update.as_ref() {
-        run_hook(&engine, Some(hook_cwd), action, "update")?;
+        run_hook(&ctx, Some(hook_cwd), action, "update")?;
     } else {
         default_update(project, name, git, holding.as_ref(), workdir.as_ref(), repo)?;
     }
 
     run_hook_opt(
-        &engine,
+        &ctx,
         Some(hook_cwd),
         repo.hooks.post_update.as_ref(),
         "post_update",
@@ -470,14 +470,9 @@ fn ensure_remotes(git: &Repository, repo: &RawRepo) -> Result<()> {
     Ok(())
 }
 
-fn run_hook_opt(
-    engine: &Engine,
-    cwd: Option<&Path>,
-    hook: Option<&String>,
-    phase: &str,
-) -> Result<()> {
+fn run_hook_opt(ctx: &Ctx, cwd: Option<&Path>, hook: Option<&String>, phase: &str) -> Result<()> {
     match hook {
-        Some(cmd) => run_hook(engine, cwd, cmd, phase),
+        Some(cmd) => run_hook(ctx, cwd, cmd, phase),
         None => Ok(()),
     }
 }
@@ -486,14 +481,13 @@ fn run_hook_opt(
 /// `None` inherits the process's, which is where a `clone` override runs since
 /// the repo path does not exist yet. `post_clone` and every update-phase hook
 /// run in the repo path itself. A non-zero exit fails fast.
-fn run_hook(engine: &Engine, cwd: Option<&Path>, command: &str, phase: &str) -> Result<()> {
-    let rendered = engine
+fn run_hook(ctx: &Ctx, cwd: Option<&Path>, command: &str, phase: &str) -> Result<()> {
+    let rendered = ctx
         .resolve_str(command)
         .with_context(|| format!("resolving {phase} hook"))?;
-    let script = match rendered {
-        wits_util::template::Value::Str(s) => s,
-        other => format!("{other:?}"),
-    };
+    // A hook is a shell script, so whatever it resolved to has to become one line
+    // of text; only a whole-expression hook could arrive as anything else.
+    let script = rendered.to_string();
     log::info!("hook {phase}: {script}");
     let mut cmd = wits_util::process::Command::new("sh");
     cmd.args(["-c".to_string(), script]);

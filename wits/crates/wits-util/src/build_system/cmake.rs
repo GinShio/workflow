@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::template::Value;
+use minijinja::Value;
 
 use crate::project::model::{LogicalConfig, Toolchain};
 use crate::project::resolve::ToolchainInjector;
@@ -18,7 +18,7 @@ impl ToolchainInjector for Cmake {
         // is set here — only native definitions and the verbatim pass-through.
         let def = |cfg: &mut LogicalConfig, key: &str, val: &Option<String>| {
             if let Some(v) = val {
-                cfg.set_definition(key, Value::Str(v.clone()));
+                cfg.set_definition(key, Value::from(v.clone()));
             }
         };
         def(cfg, "CMAKE_C_COMPILER", &tc.cc);
@@ -29,14 +29,14 @@ impl ToolchainInjector for Cmake {
         def(cfg, "CMAKE_STRIP", &tc.strip);
 
         if let Some(launcher) = &tc.launcher {
-            cfg.set_definition("CMAKE_C_COMPILER_LAUNCHER", Value::Str(launcher.clone()));
-            cfg.set_definition("CMAKE_CXX_COMPILER_LAUNCHER", Value::Str(launcher.clone()));
+            cfg.set_definition("CMAKE_C_COMPILER_LAUNCHER", Value::from(launcher.clone()));
+            cfg.set_definition("CMAKE_CXX_COMPILER_LAUNCHER", Value::from(launcher.clone()));
         }
         if !tc.c_flags.is_empty() {
-            cfg.set_definition("CMAKE_C_FLAGS", Value::Str(tc.c_flags.join(" ")));
+            cfg.set_definition("CMAKE_C_FLAGS", Value::from(tc.c_flags.join(" ")));
         }
         if !tc.cxx_flags.is_empty() {
-            cfg.set_definition("CMAKE_CXX_FLAGS", Value::Str(tc.cxx_flags.join(" ")));
+            cfg.set_definition("CMAKE_CXX_FLAGS", Value::from(tc.cxx_flags.join(" ")));
         }
         // A linker choice reaches cmake as a link flag; `-fuse-ld` is what both
         // gcc and clang understand, and it composes with any declared link_flags.
@@ -47,14 +47,14 @@ impl ToolchainInjector for Cmake {
         if !link_flags.is_empty() {
             let joined = link_flags.join(" ");
             for key in ["CMAKE_EXE_LINKER_FLAGS", "CMAKE_SHARED_LINKER_FLAGS"] {
-                cfg.set_definition(key, Value::Str(joined.clone()));
+                cfg.set_definition(key, Value::from(joined.clone()));
             }
         }
 
         // A compile-commands database is nearly always wanted (editors, clangd);
         // it is a default, so a preset/CLI override still wins.
         if !cfg.has_definition("CMAKE_EXPORT_COMPILE_COMMANDS") {
-            cfg.set_definition("CMAKE_EXPORT_COMPILE_COMMANDS", Value::Bool(true));
+            cfg.set_definition("CMAKE_EXPORT_COMPILE_COMMANDS", Value::from(true));
         }
 
         apply_passthrough(tc, cfg);

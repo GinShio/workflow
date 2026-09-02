@@ -143,31 +143,42 @@ build step) — is shown by default, and only ``debug`` is gated behind
 ``--verbose``. Getting that gate wrong once made every command silent on
 success; it is now pinned by a test.
 
-Template — a small ``{{ }}`` / ``[[ ]]`` engine with no domain knowledge
-------------------------------------------------------------------------
+Template — one Jinja dialect, and the config resolver that uses it
+------------------------------------------------------------------
 
-Project config is full of values that reference other values — a ``build_dir``
-built from ``{{repos.main.workdir}}`` and ``{{build_type}}``, an environment
-entry computed from another. Rather than bake that into the project layer, the
-substitution engine is a floor primitive that knows nothing about projects: it
-resolves ``{{ dotted.path }}`` lookups and ``[[ arithmetic ]]`` expressions
-against an opaque value tree. The project layer supplies the tree; the engine
-answers lookups. The scaffold plugin does *not* use this engine — it generates
-text and needs real loops and conditionals, so it gets a Jinja engine instead
-(``minijinja``). Config resolution does not.
+There is exactly one template engine in the tree: Jinja, via ``minijinja``. The
+scaffold plugin generates text and needs loops and conditionals; project config
+mostly needs dotted lookups. Those were once two engines, which meant two
+dialects to learn and two sets of edge cases to know. ``wits_util::jinja`` now
+defines the single dialect — strict undefined behaviour, exact trailing bytes,
+and a handful of shared filters — and the scaffold extends that base with the
+two filters only a Vulkan/SPIR-V catalogue needs.
 
-Two decisions carry the weight. Resolution is **lazy** — a context entry may
-itself be a template that references another — so the order entries appear in a
-map never matters; each is resolved on demand and memoised. And because
-laziness invites loops, the engine keeps a path stack and turns a self-reference
-cycle into a hard error rather than a stack overflow. Unknown paths and type
+That module decides nothing else, which is why it is floor. The interesting
+part is one level up. Project config is full of values that reference other
+values — a ``build_dir`` built from ``{{repos.main.workdir}}`` and
+``{{build_type}}``, an environment entry computed from another — and Jinja
+renders a *finished* context, so something has to bridge the two. That bridge
+is a project-config policy, not a property of the language, so it lives with
+the config it serves, as ``project::context::Ctx``.
+
+``Ctx`` resolves **by dotted path, on demand**: asked for a template, it
+discovers which paths that template reads, resolves each of them recursively,
+and hands Jinja a context holding only those. So the order entries appear in a
+map never matters, and each path is resolved once and memoised. Because
+laziness invites loops, it keeps a path stack and turns a self-reference cycle
+into a hard error rather than a stack overflow. Unknown paths and type
 mismatches are likewise hard failures, so a typo surfaces at resolution instead
 of silently rendering empty.
 
-The ``[[ … ]]`` expressions are deliberately tiny: ``+ - * / // %``,
-comparisons, and the functions ``min max int float str bool``. Anything bigger
-belongs in the project layer's structured ``applies_when`` blocks, not in an
-ad-hoc expression language.
+Resolving on demand is not only an optimisation. The context carries the whole
+process environment, so resolving everything up front would run Jinja over
+every environment variable — expensive, and fatal the first time one of them
+happens to contain a brace.
+
+Jinja's grammar costs one thing: a key holding a ``-`` has to be subscripted,
+``{{ repos['my-repo'].workdir }}``, since ``repos.my-repo`` parses as a
+subtraction. Repo names take hyphens often enough to be worth knowing up front.
 
 Time — one clock, and the age a user writes at it
 -------------------------------------------------

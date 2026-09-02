@@ -29,8 +29,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
+use super::context::Ctx;
 use crate::git::Repository;
-use crate::template::{Engine, Value};
 
 use super::model::{
     infer_kind, is_nested, parse_borrow, BranchStrategy, Kind, RawFile, RawPreset, RawProject,
@@ -199,26 +199,20 @@ impl Workspace {
                         project.key()
                     );
                 }
-                let engine = Engine::new(super::context::context_for_repo(self, project, name));
-                let rendered = engine.resolve_str(template).with_context(|| {
+                let ctx = Ctx::new(super::context::context_for_repo(self, project, name));
+                let rendered = ctx.render_path(template).with_context(|| {
                     format!(
                         "project '{}', repo '{name}': resolving bootstrap_worktree_dir \
                          (it must not reference branch.*)",
                         project.key()
                     )
                 })?;
-                match rendered {
-                    Value::Str(path) if !path.trim().is_empty() => {}
-                    Value::Str(_) => bail!(
+                if rendered.trim().is_empty() {
+                    bail!(
                         "project '{}', repo '{name}': bootstrap_worktree_dir resolves to an \
                          empty path",
                         project.key()
-                    ),
-                    other => bail!(
-                        "project '{}', repo '{name}': bootstrap_worktree_dir resolved to a \
-                         non-string: {other:?}",
-                        project.key()
-                    ),
+                    );
                 }
             }
         }
@@ -467,11 +461,7 @@ fn render_path_template(
     project_org: Option<&str>,
 ) -> Result<String> {
     let root = super::context::path_context(project_name, project_org);
-    let engine = Engine::new(root);
-    match engine.resolve_str(tpl)? {
-        Value::Str(s) => Ok(s),
-        other => anyhow::bail!("path template {tpl:?} resolved to a non-string: {other:?}"),
-    }
+    Ok(Ctx::new(root).render_path(tpl)?)
 }
 
 pub fn expand_tilde(path: &str) -> PathBuf {

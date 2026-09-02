@@ -13,6 +13,7 @@ path = "src/lib.rs"
 anyhow.workspace = true
 thiserror.workspace = true
 log.workspace = true
+minijinja.workspace = true
 ureq.workspace = true
 serde.workspace = true
 serde_json.workspace = true

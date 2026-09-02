@@ -1,22 +1,18 @@
-//! The template engine, and the one contract it enforces.
+//! The scaffold's dialect of the shared template engine.
 //!
 //! Every string a catalogue holds is a template, so the engine is shared rather
 //! than owned by whichever stage happens to render first: a target's tree root is
 //! resolved before any edit is planned, and both go through here.
 //!
-//! ## Why a real Jinja and not `wits_util::template`
+//! The dialect is [`wits_util::jinja`], the same one project config resolves
+//! against, so a template reads the same wherever it is written. What this module
+//! adds is the two filters only a Vulkan/SPIR-V catalogue needs, and the checks
+//! that make a catalogue's mistakes legible.
 //!
-//! The shared template engine resolves a *config context*: dotted paths, and
-//! expressions only as a whole value. It has no iteration, which generated text
-//! needs. Growing loops into the config resolver to serve one plugin would have
-//! been the wrong place for them, so text generation gets a real Jinja engine.
-//!
-//! ## Undefined paths are errors
-//!
-//! A misspelled path must not splice an empty hole into generated source.
-//! MiniJinja therefore runs in strict mode. Modeled collections are always
-//! published, using an empty list when they contain no entries, so strictness
-//! distinguishes an empty collection from an unknown path.
+//! Strict undefined behaviour comes from that shared environment. What follows
+//! from it here is that modeled collections are always published, using an empty
+//! list when they contain no entries, so strictness distinguishes an empty
+//! collection from an unknown path.
 //!
 //! Variables receive an earlier, more actionable check: a `var.*` must have a
 //! default under `[target.vars]` or arrive as `--var`.
@@ -24,61 +20,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Result};
-use minijinja::{Environment, Error, ErrorKind, UndefinedBehavior, Value};
+use minijinja::{Environment, Error, ErrorKind, Value};
 use sha2::{Digest, Sha256};
 
-/// The engine, with the filters catalogues need beyond Jinja's built-ins.
+/// The shared dialect, plus the filters only a specification catalogue needs.
 pub fn environment() -> Environment<'static> {
-    let mut env = Environment::new();
-    env.set_undefined_behavior(UndefinedBehavior::Strict);
-    // Jinja strips one trailing newline from a template by default, which would
-    // quietly break the verbatim-body contract: a rule whose body is a line list
-    // would emit its last line unterminated and run into the text below it. The
-    // bodies here are exact bytes, not prose, so that behaviour is off.
-    env.set_keep_trailing_newline(true);
-    // Built-in `join` concatenates, but generated lists often need each element
-    // prefixed or suffixed first.
-    env.add_filter(
-        "prefix",
-        |values: Vec<String>, with: String| -> Vec<String> {
-            values
-                .into_iter()
-                .map(|value| format!("{with}{value}"))
-                .collect()
-        },
-    );
-    env.add_filter(
-        "suffix",
-        |values: Vec<String>, with: String| -> Vec<String> {
-            values
-                .into_iter()
-                .map(|value| format!("{value}{with}"))
-                .collect()
-        },
-    );
-    // Jinja's `replace` has no occurrence limit; generated identifiers sometimes
-    // need one leading prefix removed and no other occurrence touched.
-    env.add_filter("strip_prefix", |value: String, prefix: String| -> String {
-        value.strip_prefix(&prefix).unwrap_or(&value).to_owned()
-    });
-    // Padding must never truncate: fitting a column cannot be allowed to corrupt
-    // an entry.
-    env.add_filter("pad", |value: String, width: usize| -> String {
-        let mut padded = value;
-        while padded.chars().count() < width {
-            padded.push(' ');
-        }
-        padded
-    });
+    let mut env = wits_util::jinja::environment();
     env.add_filter("extension_tag", extension_tag);
     env.add_filter("sha256", sha256_prefix);
-    env.add_filter("required", required_value);
-    env.add_function(
-        "fail",
-        |message: String| -> std::result::Result<String, Error> {
-            Err(Error::new(ErrorKind::InvalidOperation, message))
-        },
-    );
     env
 }
 
@@ -143,13 +92,6 @@ fn sha256_prefix(value: String, length: usize) -> std::result::Result<String, Er
     }
     let digest = format!("{:x}", Sha256::digest(value.as_bytes()));
     Ok(digest[..length].to_owned())
-}
-
-fn required_value(value: Value, message: String) -> std::result::Result<Value, Error> {
-    if value.is_undefined() {
-        return Err(Error::new(ErrorKind::InvalidOperation, message));
-    }
-    Ok(value)
 }
 
 /// Render one template against one context.
@@ -267,41 +209,6 @@ mod tests {
     }
 
     #[test]
-    fn pad_fills_to_the_column_and_never_truncates() {
-        let env = environment();
-        let ctx = Value::from(());
-        assert_eq!(one(&env, "[{{ 'ab' | pad(4) }}]", &ctx).unwrap(), "[ab  ]");
-        assert_eq!(
-            one(&env, "[{{ 'abcdef' | pad(4) }}]", &ctx).unwrap(),
-            "[abcdef]"
-        );
-    }
-
-    #[test]
-    fn prefix_and_join_build_a_list_initialiser() {
-        let env = environment();
-        let ctx = Value::from_serialize(BTreeMap::from([("xs", vec!["A", "B"])]));
-        assert_eq!(
-            one(&env, "{{ xs | prefix('K') | join(', ') }}", &ctx).unwrap(),
-            "KA, KB"
-        );
-    }
-
-    #[test]
-    fn strip_prefix_drops_only_a_leading_match() {
-        let env = environment();
-        let ctx = Value::from(());
-        assert_eq!(
-            one(&env, "{{ 'OpOpFoo' | strip_prefix('Op') }}", &ctx).unwrap(),
-            "OpFoo"
-        );
-        assert_eq!(
-            one(&env, "{{ 'Foo' | strip_prefix('Op') }}", &ctx).unwrap(),
-            "Foo"
-        );
-    }
-
-    #[test]
     fn extension_tags_have_a_stable_three_character_shape() {
         let env = environment();
         let ctx = Value::from(());
@@ -330,27 +237,6 @@ mod tests {
             "546a53e"
         );
         assert!(one(&env, "{{ 'x' | sha256(65) }}", &ctx).is_err());
-    }
-
-    #[test]
-    fn required_turns_an_optional_path_into_an_error() {
-        let env = environment();
-        let ctx = Value::from(());
-        assert!(one(
-            &env,
-            "{{ missing | required('supply missing in the overlay') }}",
-            &ctx
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn fail_stops_a_template_with_its_message() {
-        let env = environment();
-        let err = one(&env, "{{ fail('bad metadata') }}", &Value::from(()))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("bad metadata"), "got: {err}");
     }
 
     #[test]
@@ -391,17 +277,6 @@ mod tests {
         // buried in whichever body happened to mention the name first.
         let env = environment();
         assert!(require_vars(&env, &["{{ var.tree | default('/t') }}"], &defined(&[])).is_err());
-    }
-
-    #[test]
-    fn unknown_paths_fail_but_known_empty_collections_render() {
-        let env = environment();
-        let ctx = Value::from_serialize(BTreeMap::from([(
-            "spv",
-            BTreeMap::from([("operations", Vec::<String>::new())]),
-        )]));
-        assert_eq!(one(&env, "{{ spv.operations }}", &ctx).unwrap(), "[]");
-        assert!(one(&env, "{{ spv.no_such_collection }}", &ctx).is_err());
     }
 
     #[test]

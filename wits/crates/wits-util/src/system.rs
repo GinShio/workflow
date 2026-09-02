@@ -14,10 +14,18 @@
 //! sensible default (`unknown`, `0`, `none`, `false`) rather than failing. The
 //! result is cached for the process, since nothing here changes during a run.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
-use crate::template::Value;
+use minijinja::Value;
+
+/// One subtree, from `(name, value)` pairs. MiniJinja converts a `BTreeMap`
+/// directly, but every node here is written as a pair list, so the conversion
+/// is named once instead of wrapping each of them.
+fn map<const N: usize>(entries: [(&str, Value); N]) -> Value {
+    Value::from(BTreeMap::from(entries))
+}
 
 /// The host facts tree, built once and reused for the rest of the process.
 pub fn facts() -> Value {
@@ -26,17 +34,17 @@ pub fn facts() -> Value {
 }
 
 fn build() -> Value {
-    Value::map([
+    map([
         ("os", os_facts()),
         ("cpu", cpu_facts()),
         ("mem", mem_facts()),
         ("gpu", gpu_facts()),
         ("distro", distro_facts()),
         ("power", power_facts()),
-        ("hostname", Value::str(hostname())),
-        ("desktop", Value::str(desktop())),
-        ("display", Value::str(display_server())),
-        ("virt", Value::str(virt())),
+        ("hostname", Value::from(hostname())),
+        ("desktop", Value::from(desktop())),
+        ("display", Value::from(display_server())),
+        ("virt", Value::from(virt())),
     ])
 }
 
@@ -45,15 +53,15 @@ fn build() -> Value {
 fn os_facts() -> Value {
     let release = kernel_release();
     let (major, minor, patch) = parse_kernel(&release);
-    Value::map([
-        ("name", Value::str(std::env::consts::OS)),
+    map([
+        ("name", Value::from(std::env::consts::OS)),
         (
             "kernel",
-            Value::map([
-                ("release", Value::str(release)),
-                ("major", Value::Int(major)),
-                ("minor", Value::Int(minor)),
-                ("patch", Value::Int(patch)),
+            map([
+                ("release", Value::from(release)),
+                ("major", Value::from(major)),
+                ("minor", Value::from(minor)),
+                ("patch", Value::from(patch)),
             ]),
         ),
     ])
@@ -82,10 +90,10 @@ fn parse_kernel(release: &str) -> (i64, i64, i64) {
 // -- cpu ----------------------------------------------------------------------
 
 fn cpu_facts() -> Value {
-    Value::map([
-        ("count", Value::Int(cpu_count())),
-        ("vendor", Value::str(cpu_vendor())),
-        ("arch", Value::str(arch())),
+    map([
+        ("count", Value::from(cpu_count())),
+        ("vendor", Value::from(cpu_vendor())),
+        ("arch", Value::from(arch())),
     ])
 }
 
@@ -154,7 +162,7 @@ fn cpu_vendor() -> String {
 fn mem_facts() -> Value {
     let mb = total_memory_mb().unwrap_or(0);
     let gb = if mb > 0 { (mb / 1024).max(1) } else { 0 };
-    Value::map([("mb", Value::Int(mb)), ("gb", Value::Int(gb))])
+    map([("mb", Value::from(mb)), ("gb", Value::from(gb))])
 }
 
 /// Total physical memory in MiB, or `None` where the platform has no cheap query.
@@ -202,12 +210,9 @@ fn total_memory_mb() -> Option<i64> {
 
 fn gpu_facts() -> Value {
     let list = gpu_vendors();
-    Value::map([
-        ("count", Value::Int(list.len() as i64)),
-        (
-            "list",
-            Value::List(list.into_iter().map(Value::Str).collect()),
-        ),
+    map([
+        ("count", Value::from(list.len() as i64)),
+        ("list", Value::from(list)),
     ])
 }
 
@@ -269,10 +274,10 @@ fn distro_facts() -> Value {
             }
         }
     }
-    Value::map([
-        ("id", Value::str(fallback(id, "unknown"))),
-        ("name", Value::str(fallback(name, "unknown"))),
-        ("version", Value::str(version)),
+    map([
+        ("id", Value::from(fallback(id, "unknown"))),
+        ("name", Value::from(fallback(name, "unknown"))),
+        ("version", Value::from(version)),
     ])
 }
 
@@ -289,9 +294,9 @@ fn normalize_distro(id: &str) -> String {
 
 fn power_facts() -> Value {
     let laptop = is_laptop();
-    Value::map([
-        ("laptop", Value::Bool(laptop)),
-        ("ac", Value::Bool(is_on_ac(laptop))),
+    map([
+        ("laptop", Value::from(laptop)),
+        ("ac", Value::from(is_on_ac(laptop))),
     ])
 }
 
@@ -456,6 +461,17 @@ fn fallback(value: String, default: &str) -> String {
 mod tests {
     use super::*;
 
+    use minijinja::value::ValueKind;
+
+    /// A dotted lookup over the facts tree using nothing but `Value`'s own walk.
+    /// The project resolver answers the same paths, but a floor module must not
+    /// reach up into a subsystem to test itself.
+    fn get(root: &Value, path: &str) -> Option<Value> {
+        path.split('.').try_fold(root.clone(), |current, part| {
+            current.get_attr(part).ok().filter(|v| !v.is_undefined())
+        })
+    }
+
     #[test]
     fn parses_kernel_release() {
         assert_eq!(parse_kernel("6.6.10-arch1-1"), (6, 6, 10));
@@ -480,27 +496,16 @@ mod tests {
 
     #[test]
     fn facts_tree_has_the_core_shape() {
-        let f = facts();
-        // Intermediate nodes are subtrees; leaves are scalars.
-        let cpu = get(&f, "cpu.count").expect("cpu.count present");
-        assert!(matches!(cpu, Value::Int(n) if *n >= 1));
-        assert!(matches!(get(&f, "os.name"), Some(Value::Str(_))));
-        assert!(matches!(get(&f, "gpu.list"), Some(Value::List(_))));
-        // An intermediate path is a map, an absent one is None.
-        assert!(matches!(get(&f, "cpu"), Some(Value::Map(_))));
-        assert!(get(&f, "cpu.nonesuch").is_none());
-    }
+        let facts = facts();
+        let kind = |path: &str| get(&facts, path).map(|v| v.kind());
 
-    /// Test-only dotted lookup mirroring the CLI's, so the shape assertions above
-    /// exercise real paths.
-    fn get<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
-        let mut cur = v;
-        for part in path.split('.') {
-            match cur {
-                Value::Map(m) => cur = m.get(part)?,
-                _ => return None,
-            }
-        }
-        Some(cur)
+        // Intermediate nodes are subtrees; leaves are scalars.
+        let cpus = get(&facts, "cpu.count").expect("cpu.count present");
+        assert!(cpus.as_i64().is_some_and(|n| n >= 1));
+        assert_eq!(kind("os.name"), Some(ValueKind::String));
+        assert_eq!(kind("gpu.list"), Some(ValueKind::Seq));
+        // An intermediate path is a map, an absent one resolves to nothing.
+        assert_eq!(kind("cpu"), Some(ValueKind::Map));
+        assert_eq!(kind("cpu.nonesuch"), None);
     }
 }

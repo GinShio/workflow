@@ -884,31 +884,46 @@ predictable, and easy to validate ahead of time.
 Templates, Profile, and path resolution
 ---------------------------------------
 
-Template engine (minimal)
-~~~~~~~~~~~~~~~~~~~~~~~~~
+Template engine (Jinja)
+~~~~~~~~~~~~~~~~~~~~~~~
 
-Config is **TOML only**. The engine is a zero-domain ``{{ }}`` / ``[[ ]]``
-evaluator, reusable and unit-testable in isolation:
+Config is **TOML only**. The dialect is the tree-wide one from
+``wits_util::jinja`` (MiniJinja in strict mode); the resolver over it is
+``project::context::Ctx``:
 
-* **``{{ path.to.var }}``** — dotted lookup over the context (tables by key,
-  arrays by integer index). A whole-string single placeholder returns the
-  **typed** value (a list or int survives); an embedded placeholder is
-  stringified. Resolution is lazy and recursive with memoisation and cycle
-  detection, so one ``environment`` entry referencing another simply resolves
-  on demand — no separate dependency-map or topological-sort pass is needed.
-* **``[[ … ]]``** — a *minimal* numeric expression, kept for real needs like
-  ``LINK_JOBS = "[[ max(1, system.mem.gb // 4) ]]"``. Scope: ``+ - * / // %``
-  over int/float, comparisons, and the functions
-  ``min max int float str bool``. It is **not** a general expression
-  language — no ``**``/bitops, no ``and``/``or``, no ternary, no arbitrary
-  names, no list/dict literals. Arbitrary conditions are handled by
-  ``applies_when``, not here.
+* **``{{ path.to.var }}``** — dotted lookup over the context (tables by
+  attribute, arrays by integer index). A whole-string single ``{{ … }}`` is
+  evaluated as an expression and keeps its **type** (a list or int survives);
+  anything else renders to a string. Resolution is lazy and recursive with
+  memoisation and cycle detection, so one ``environment`` entry referencing
+  another simply resolves on demand — no separate dependency-map or
+  topological-sort pass is needed.
+* **Expressions and statements** are whatever Jinja offers, so
+  ``LINK_JOBS = "{{ [1, system.mem.gb // 4] | max }}"`` needs no sublanguage of
+  its own. Selecting a whole config layer is still ``applies_when``: that is a
+  structured match the resolver can reason about, not a rendered string.
+
+Only the resolver's *laziness* is ours, and that is why it sits in the project
+layer rather than beside the dialect. Jinja renders a finished context; it has
+no notion of a context entry that is itself a template, which project config
+leans on constantly. So ``Ctx`` walks dotted paths on demand — it asks a parsed
+template which paths it reads, resolves each of those through the same memo and
+cycle stack, and hands Jinja a context of just those. That also keeps the
+unknown-path error naming the path, which Jinja's strict mode does not.
+
+On demand, not up front: the context carries the whole process environment, so
+eager resolution would run Jinja over every environment variable and fail on
+the first one containing a brace.
 
 Error semantics: every failure is a hard error — unknown path, cycle, type
 mismatch, division by zero. The context is **always fully populated**
 (optional values like ``upstream`` are filled with their fallback at assembly
 time), so a missing path always means a real mistake, never a silent empty
 string.
+
+One incompatibility is worth naming: a key holding a ``-`` must be
+subscripted (``{{ repos['my-repo'].workdir }}``), because Jinja parses
+``repos.my-repo`` as a subtraction.
 
 Context variables
 ~~~~~~~~~~~~~~~~~

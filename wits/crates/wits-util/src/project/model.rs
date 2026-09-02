@@ -463,7 +463,7 @@ pub struct Toolchain {
     pub cxx_flags: Vec<String>,
     pub link_flags: Vec<String>,
     pub environment: Vec<(String, String)>,
-    pub definitions: Vec<(String, crate::template::Value)>,
+    pub definitions: Vec<(String, minijinja::Value)>,
 }
 
 /// The accumulated, resolved build configuration produced by the pipeline (§5).
@@ -472,7 +472,7 @@ pub struct Toolchain {
 #[derive(Debug, Clone, Default)]
 pub struct LogicalConfig {
     pub environment: Vec<(String, String)>,
-    pub definitions: Vec<(String, crate::template::Value)>,
+    pub definitions: Vec<(String, minijinja::Value)>,
     pub extra_config_args: Vec<String>,
     pub extra_build_args: Vec<String>,
     pub extra_install_args: Vec<String>,
@@ -493,7 +493,7 @@ impl LogicalConfig {
             .map(|(_, v)| v.as_str())
     }
 
-    pub fn set_definition(&mut self, key: impl Into<String>, value: crate::template::Value) {
+    pub fn set_definition(&mut self, key: impl Into<String>, value: minijinja::Value) {
         set_kv(&mut self.definitions, key.into(), value);
     }
 

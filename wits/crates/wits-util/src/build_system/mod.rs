@@ -24,7 +24,8 @@ mod meson;
 
 use std::path::{Path, PathBuf};
 
-use crate::template::Value;
+use minijinja::value::ValueKind;
+use minijinja::Value;
 
 use crate::project::model::{BuildSystem, LogicalConfig, Toolchain};
 use crate::project::resolve::ToolchainInjector;
@@ -147,23 +148,22 @@ fn apply_passthrough(tc: &Toolchain, cfg: &mut LogicalConfig) {
 }
 
 /// Render a definition value for a cmake `-D` flag (`KEY:TYPE=VALUE`).
+///
+/// The type tag is what makes carrying resolved definitions as typed values worth
+/// it: a boolean has to reach cmake as `BOOL`, or a cache entry that a
+/// `CMakeLists.txt` tests with `if()` arrives as the string "true".
 fn cmake_definition(key: &str, value: &Value) -> String {
-    match value {
-        Value::Bool(b) => format!("{key}:BOOL={}", if *b { "ON" } else { "OFF" }),
-        Value::Int(n) => format!("{key}:STRING={n}"),
-        Value::Float(f) => format!("{key}:STRING={f}"),
-        Value::Str(s) => format!("{key}:STRING={s}"),
+    match value.kind() {
+        ValueKind::Bool => format!("{key}:BOOL={}", if value.is_true() { "ON" } else { "OFF" }),
+        ValueKind::Number | ValueKind::String => format!("{key}:STRING={value}"),
         _ => format!("{key}:STRING="),
     }
 }
 
 /// Render a definition value for a meson `-D` option (`key=value`).
 fn meson_definition(key: &str, value: &Value) -> String {
-    let v = match value {
-        Value::Bool(b) => b.to_string(),
-        Value::Int(n) => n.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::Str(s) => s.clone(),
+    let v = match value.kind() {
+        ValueKind::Bool | ValueKind::Number | ValueKind::String => value.to_string(),
         _ => String::new(),
     };
     format!("{key}={v}")
