@@ -1,0 +1,45 @@
+#!/bin/sh
+# <name> <release tarball>
+#
+# The URL spells the version twice and differently, so it is pinned whole rather
+# than assembled from a version field: one line to read, one line to change.
+SCRIPTS='
+karousel https://github.com/peterfajdiga/karousel/releases/download/v0.17/karousel_0_17.tar.gz
+'
+
+_tmp=$(mktemp -d)
+trap 'rm -rf "$_tmp"' EXIT INT TERM
+
+_failed=''
+while read -r _name _url; do
+    [ -n "$_name" ] || continue
+
+    _archive="$_tmp/$_name.tar.gz"
+    if ! curl -fsSL -o "$_archive" "$_url"; then
+        printf 'Failed to download %s from %s\n' "$_name" "$_url" >&2
+        _failed="$_failed $_name"
+        continue
+    fi
+
+    # `--install` refuses a package that is already there and `--upgrade` is the
+    # only one that replaces it, so which applies depends on what this machine
+    # already carries. The listing prints a header line before the names, which
+    # is why the match is anchored.
+    if kpackagetool6 --type=KWin/Script --list 2>/dev/null |
+            grep -qx "$_name"; then
+        _mode=--upgrade
+    else
+        _mode=--install
+    fi
+
+    if ! kpackagetool6 --type=KWin/Script "$_mode" "$_archive"; then
+        _failed="$_failed $_name"
+    fi
+done <<EOF
+$SCRIPTS
+EOF
+
+if [ -n "$_failed" ]; then
+    printf 'Failed to install:%s\n' "$_failed" >&2
+    exit 1
+fi

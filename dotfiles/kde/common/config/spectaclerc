@@ -1,0 +1,7 @@
+[Annotations]
+annotationToolType=10
+textFont=Noto Sans,26,-1,0,400,0,0,0,0,0,0,0,0,0,0,1
+textFontColor=255,255,255
+
+[GuiConfig]
+captureMode=0

@@ -1,0 +1,10 @@
+[PlasmaRunnerManager]
+migrated=true
+
+[Plugins]
+krunner_dictionaryEnabled=false
+krunner_powerdevilEnabled=false
+krunner_recentdocumentsEnabled=false
+
+[Plugins][Favorites]
+plugins=krunner_services,krunner_systemsettings

@@ -32,12 +32,12 @@ workdir = '/var/lib/dotdrop'
 ccache_remote_enabled = false
 
 [hosts.'ginshio-openSUSE-strix']
-capabilities = ['develop', 'desktop']
+capabilities = ['develop', 'desktop', 'kde']
 overlays = ['common', 'personal']
 planes = ['user', 'system']
 
 [hosts.'Khronos3D-russell-openSUSE']
-capabilities = ['develop', 'desktop']
+capabilities = ['develop', 'desktop', 'kde']
 overlays = ['common', 'khronos3d']
 planes = ['user', 'system']
 

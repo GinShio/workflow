@@ -1,0 +1,5 @@
+[AC][Display]
+UseProfileSpecificDisplayBrightness=true
+
+[AC][SuspendAndShutdown]
+AutoSuspendAction=0

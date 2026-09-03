@@ -1,0 +1,47 @@
+# Plasma has no export: it rewrites these files from a live session, so the
+# content under `common/` is a redacted copy taken by `scripts/kde-capture.sh`
+# rather than something authored here. That script also states what is left out.
+#
+# Four installs rather than one because settings and the assets they name live
+# in different trees — a color scheme kdeglobals selects has to exist under
+# ~/.local/share/color-schemes or the reference dangles and Plasma falls back.
+
+[[install]]
+id = 'kde-config'
+dst = '~/.config/'
+path = 'config'
+capabilities = ['kde']
+planes = ['user']
+actions = ['kwin-reconfigure']
+
+[[install]]
+id = 'kde-defaults'
+dst = '~/.config/kdedefaults/'
+path = 'kdedefaults'
+capabilities = ['kde']
+planes = ['user']
+
+[[install]]
+id = 'kde-color-schemes'
+dst = '~/.local/share/color-schemes/'
+path = 'color-schemes'
+capabilities = ['kde']
+planes = ['user']
+
+[[install]]
+id = 'kde-konsole'
+dst = '~/.local/share/konsole/'
+path = 'konsole'
+capabilities = ['kde']
+planes = ['user']
+
+# KWin rereads kwinrc on request, which is what lets a karousel gap or an effect
+# toggle land without a re-login. It is the only part of this module that can:
+# global shortcuts and the panel are read once when the session starts, so those
+# wait for the next login rather than being forced with a restart that would
+# take the running session down with them.
+#
+# Guarded because deploying also happens from a TTY and on a machine whose first
+# Plasma session has not started yet, where there is no KWin to talk to.
+[actions]
+kwin-reconfigure = 'qdbus6 org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true'

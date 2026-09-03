@@ -1,0 +1,15 @@
+# The KWin scripts no distribution packages. They ship as release tarballs, so
+# there is nothing for zypper or apt to resolve and the alternative is
+# installing them by hand through the Plasma GUI on every new machine.
+#
+# Before `dotfiles`, because the configuration that enables them is deployed
+# there: a script KWin cannot find is a setting that silently does nothing.
+#
+# No `unless`. A probe could read the installed package's metadata, but only by
+# repeating the version the payload already pins, and two copies of a version
+# drift. The state record is keyed on this unit's content instead, so bumping a
+# URL is what makes the next run reinstall.
+kind: action
+capabilities: kde
+requires: kde-packages, dirs
+optional: kpackagetool6

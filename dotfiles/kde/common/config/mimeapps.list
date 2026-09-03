@@ -1,0 +1,22 @@
+[Added Associations]
+text/x-c++hdr=org.kde.kate.desktop;org.qt-project.qtcreator.desktop;emacsclient.desktop;emacs.desktop;com.visualstudio.code.desktop;
+text/x-c++src=org.kde.kate.desktop;org.qt-project.qtcreator.desktop;emacsclient.desktop;emacs.desktop;com.visualstudio.code.desktop;
+text/x-chdr=org.kde.kate.desktop;emacsclient.desktop;emacs.desktop;com.visualstudio.code.desktop;
+text/x-cmake=org.kde.kate.desktop;com.visualstudio.code.desktop;emacsclient.desktop;emacs.desktop;
+text/x-objc++src=org.kde.kate.desktop;org.qt-project.qtcreator.desktop;emacsclient.desktop;emacs.desktop;com.visualstudio.code.desktop;
+x-scheme-handler/mailto=thunderbird.desktop;
+
+[Default Applications]
+text/x-c++hdr=org.kde.kate.desktop;
+text/x-c++src=org.kde.kate.desktop;
+text/x-chdr=org.kde.kate.desktop;
+text/x-cmake=org.kde.kate.desktop;
+text/x-objc++src=org.kde.kate.desktop;
+x-scheme-handler/mailto=thunderbird.desktop;
+
+[Removed Associations]
+text/x-c++hdr=libreoffice-writer.desktop;okularApplication_txt.desktop;
+text/x-c++src=libreoffice-writer.desktop;okularApplication_txt.desktop;
+text/x-chdr=libreoffice-writer.desktop;okularApplication_txt.desktop;
+text/x-cmake=libreoffice-writer.desktop;okularApplication_txt.desktop;
+text/x-objc++src=okularApplication_txt.desktop;libreoffice-writer.desktop;

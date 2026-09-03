@@ -84,6 +84,10 @@ pipx-apps
 cargo-apps
 deno-apps
 
+# Unpackaged KWin scripts, after `dirs` makes ~/.local/share and before
+# `dotfiles` deploys the kwinrc that enables them.
+kwin-scripts
+
 # wits is built here, from the toolchain above. Everything before this point
 # runs without it — that is the constraint the whole design is shaped by.
 wits

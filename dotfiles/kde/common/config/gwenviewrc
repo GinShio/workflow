@@ -1,0 +1,11 @@
+[Crop]
+CropAdvancedSettingsEnabled=true
+CropRatioHeight=1
+CropRatioIndex=1
+CropRatioWidth=1
+
+[General]
+SideBarPage=operations
+
+[SideBar]
+IsVisible ViewMode=true

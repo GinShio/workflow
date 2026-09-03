@@ -1,0 +1,6 @@
+[PlasmaViews][Panel 50]
+floating=1
+shell=org.kde.plasma.desktop
+
+[PlasmaViews][Panel 50][Defaults]
+thickness=36

@@ -1,0 +1,16 @@
+MenuBar=Disabled
+
+[Desktop Entry]
+DefaultProfile=GinShio.profile
+
+[General]
+ConfigVersion=1
+
+[MemorySettings]
+MemoryLimitValue=2048
+
+[Shortcut Schemes]
+Current Scheme=Default
+
+[UiSettings]
+ColorScheme=DraculaPurple

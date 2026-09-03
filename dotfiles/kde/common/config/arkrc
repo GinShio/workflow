@@ -1,0 +1,9 @@
+[General]
+LockSidebar=true
+ShowSidebar=true
+
+[MainWindow]
+StatusBar=Disabled
+
+[Viewer]
+StatusBar=Disabled
