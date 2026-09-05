@@ -42,3 +42,61 @@ capabilities = ['develop']
 requires_overlays = ['khronos3d']
 planes = ['user']
 chmod = '600'
+
+# --- pi ----------------------------------------------------------------------
+# pi reads its agent directory from $PI_CODING_AGENT_DIR (exported by
+# environment.d), so everything below lives under ~/.config/pi/agent/. The
+# agent directory also auto-discovers skills/, prompts/ and AGENTS.md, which
+# is what the resources entries rely on.
+
+[[install]]
+id = 'agents-pi-settings'
+dst = '~/.config/pi/agent/settings.json'
+path = 'config/pi.json'
+capabilities = ['develop']
+requires_overlays = ['personal']
+planes = ['user']
+
+[[install]]
+id = 'agents-pi-auth'
+dst = '~/.config/pi/agent/auth.json'
+path = 'config/pi-auth.json'
+capabilities = ['develop']
+requires_overlays = ['personal']
+planes = ['user']
+chmod = '600'
+
+[[install]]
+id = 'agents-pi-agent-md'
+dst = '~/.config/pi/agent/AGENTS.md'
+path = 'prompts/AGENTS.md'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-pi-agents'
+dst = '~/.config/pi/agent/agents/'
+path = 'prompts/agents'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-pi-craft'
+dst = '~/.config/pi/agent/craft/'
+path = 'prompts/craft'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-pi-skills'
+dst = '~/.config/pi/agent/skills/'
+path = 'prompts/skills'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-pi-prompts'
+dst = '~/.config/pi/agent/prompts/'
+path = 'prompts/pi'
+capabilities = ['develop']
+planes = ['user']

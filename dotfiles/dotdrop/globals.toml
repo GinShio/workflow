@@ -19,6 +19,7 @@ sccache_conf = "{{@@ sysenv.xdg_config_home @@}}/sccache/config"
 sccache_cache_zstd_level = 5
 gnupghome = "{{@@ sysenv.xdg_config_home @@}}/gnupg"
 lesshistfile = "{{@@ sysenv.xdg_cache_home @@}}/history_less"
+pi_coding_agent_dir = "{{@@ sysenv.xdg_config_home @@}}/pi/agent"
 pythonpycacheprefix = "{{@@ sysenv.xdg_cache_home @@}}/python"
 pythonstartup = "{{@@ sysenv.xdg_config_home @@}}/python/startup.py"
 pythonuserbase = "{{@@ sysenv.xdg_data_home @@}}/python"

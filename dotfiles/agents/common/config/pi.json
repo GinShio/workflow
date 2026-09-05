@@ -1,0 +1,41 @@
+{%@@ set pi_vendor = agents.vendors['pi'] @@%}
+{%@@ set m = agents.model[pi_vendor] @@%}
+{
+  "theme": "dark",
+
+  "defaultProvider": "{{@@ pi_vendor @@}}",
+  "defaultModel": "{{@@ m.default @@}}",
+  "defaultThinkingLevel": "max",
+  "enabledModels": {{@@ [m.default, m.turing, m.wintermute, m.neuromancer] | unique | list | tojson @@}},
+
+  "sessionDir": "{{@@ sysenv.xdg_state_home @@}}/pi/sessions",
+
+  "defaultProjectTrust": "ask",
+  "enableInstallTelemetry": false,
+
+  "quietStartup": true,
+  "collapseChangelog": true,
+  "hideThinkingBlock": false,
+  "showCacheMissNotices": true,
+  "autocompleteMaxVisible": 10,
+
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 16384,
+    "keepRecentTokens": 20000
+  },
+
+  "retry": {
+    "enabled": true,
+    "maxRetries": 3,
+    "baseDelayMs": 2000,
+    "provider": {
+      "maxRetries": 0,
+      "maxRetryDelayMs": 60000
+    }
+  },
+
+  "warnings": {
+    "anthropicExtraUsage": true
+  }
+}

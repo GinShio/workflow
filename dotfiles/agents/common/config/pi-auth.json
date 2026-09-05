@@ -1,0 +1,6 @@
+{
+  "{{@@ agents.vendors['pi'] @@}}": {
+    "type": "api_key",
+    "key": "{{@@ agents.vendor[agents.vendors['pi']].key @@}}"
+  }
+}
