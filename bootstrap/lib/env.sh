@@ -84,7 +84,7 @@ env_validate() {
 # change within a run and this is decided before it starts. So a *required*
 # name on a unit whose `unless` reads the environment would be demanded even
 # where that unit is already satisfied — declare such a name optional and
-# keep the relation in the script, the way `certbot-dns` keeps "a token is
+# keep the relation in the script, the way `certbot` keeps "a token is
 # needed once a provider is named".
 env_table() {
     # Globbing off for the same reason a selector file is read with it off: a

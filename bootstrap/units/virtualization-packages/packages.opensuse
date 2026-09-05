@@ -7,7 +7,7 @@ libvirt-daemon-lxc
 libvirt-dbus
 libvirt-doc
 
-# QEMU, including the user-mode emulation `cross-toolchain` output runs under
+# QEMU, including the user-mode emulation `develop-packages` cross-compiler output runs under
 qemu
 qemu-arm
 qemu-doc

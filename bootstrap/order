@@ -12,15 +12,10 @@
 # Nothing installable resolves before the repositories exist.
 repos
 
-# Remove the provider's agents before installing anything, so their package
-# manager hooks and monitoring are gone first.
-cloud-agent-alibaba
-cloud-agent-aws
-cloud-agent-gcp
-cloud-agent-oracle
-cloud-agent-tencent
-cloud-agent-huawei
-cloud-agent-baidu
+# Remove the providers' agents before installing anything, so their package
+# manager hooks and monitoring are gone first. One unit: which agents a
+# machine carries is something it probes for itself, not a machine choice.
+cloud-agents
 
 # After the removals above, which need no index, and after `repos`, which may
 # replace the sources this refreshes. Before the first install below, which is
@@ -32,28 +27,16 @@ base-packages
 hostname
 swap
 grub
-linger
 
 # ------------------------------------------------------------------ hardware
 # Drivers before anything that builds or links against them.
 amdgpu
 
 # -------------------------------------------------------- development system
-# `develop-tools` first: it brings the distribution's own build baseline that
-# every toolchain below assumes.
-develop-tools
-cpp-toolchain
-python-toolchain
-rust-toolchain
-zig-toolchain
-jvm-toolchain
-node-toolchain
-functional-toolchain
-tex
-emacs
-
-# Cross compilers need the native toolchain they sit beside.
-cross-toolchain
+# One unit: every `develop` machine installs the same set — the capability
+# never distinguished the toolchains — and one transaction is what a single
+# package-manager invocation resolves anyway.
+develop-packages
 
 # Graphics and compute development headers, after the C++ toolchain they are
 # used from.
@@ -72,7 +55,6 @@ groups
 
 # ------------------------------------------------------------------- web host
 web-packages
-certbot-dns
 
 # ---------------------------------------------------------- user environment
 # `dirs` before anything that writes into ~/.local, and the language package
@@ -82,7 +64,6 @@ flathub
 flatpak-apps
 pipx-apps
 cargo-apps
-deno-apps
 
 # wits is built here, from the toolchain above. Everything before this point
 # runs without it — that is the constraint the whole design is shaped by.
@@ -92,8 +73,10 @@ wits
 # it, so it comes after both.
 dotfiles
 
-# These consume what `dotfiles` deployed: fish reads its config, the user
-# services read their unit files.
+# These consume what `dotfiles` deployed: pnpm-apps reads the pnpm
+# configuration (the global bin directory and the build-script allowlist),
+# fish reads its config, the user services read their unit files.
+pnpm-apps
 fish
 desktop-db
 

@@ -1,0 +1,18 @@
+# Everything a `develop` machine installs through the system package manager,
+# in one unit: the distribution's build baseline, the language toolchains,
+# TeX, Emacs and the cross compilers.
+#
+# One unit because the capability never distinguished them — every registry
+# entry with `develop` installed all eleven predecessors — and because a
+# single zypper or apt invocation is one transaction either way. What the
+# split did provide, the engine still provides per selector: exact names are
+# diffed against the installed set one by one, and a failed batch is retried
+# one selector at a time, so one bad name is reported as one bad name.
+#
+# The `# --- section ---` banners keep the predecessors' lists and their
+# comments findable; `git blame` on a name still lands on the line that
+# added it.
+kind: packages
+capabilities: develop
+requires: repos
+root: yes

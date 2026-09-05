@@ -1,0 +1,4 @@
+kind: action
+capabilities: vps-hygiene
+root: yes
+unless: [ ! -d /usr/local/aegis ] && [ ! -d /usr/local/cloudmonitor ] && [ ! -d /opt/bcm ] && [ ! -d /usr/local/hostguard ] && [ ! -d /usr/local/qcloud ] && ! systemctl list-unit-files amazon-ssm-agent.service 2>/dev/null | grep -q amazon-ssm-agent && ! systemctl list-unit-files google-osconfig-agent.service 2>/dev/null | grep -q google-osconfig-agent && ! systemctl list-unit-files oracle-cloud-agent.service 2>/dev/null | grep -q oracle-cloud-agent

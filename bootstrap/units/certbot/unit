@@ -1,4 +1,7 @@
 # Issue this host's certificate and make unattended renewal reload nginx.
+# The DNS plugin a wildcard challenge needs is installed here too — it was
+# `certbot-dns`, which existed only to run when `DNS_PROVIDER` was set, a
+# condition this script already owns.
 #
 # No `unless`: the renewal hooks below have to be reconciled on every run —
 # they carry a migration for lineages issued before the hooks moved into the
@@ -6,5 +9,5 @@
 # this unit is responsible for. The certificate issuance guards itself.
 kind: action
 capabilities: web-server
-requires: web-packages, certbot-dns, web-services
+requires: web-packages, web-services
 root: yes

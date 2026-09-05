@@ -4,6 +4,6 @@
 # have a GPU to run any of it against (`gpu:any`).
 kind: packages
 capabilities: gpu-graphics
-requires: cpp-toolchain
+requires: develop-packages
 when: gpu:any
 root: yes

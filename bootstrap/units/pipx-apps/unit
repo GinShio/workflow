@@ -5,5 +5,5 @@
 kind: packages
 manager: pipx
 capabilities: develop
-requires: python-toolchain
+requires: develop-packages
 optional: pipx

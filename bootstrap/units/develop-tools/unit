@@ -1,4 +1,0 @@
-kind: packages
-capabilities: develop
-requires: repos
-root: yes

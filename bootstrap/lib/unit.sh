@@ -229,8 +229,8 @@ unit_selection() {
 # when it is, or the reason it is not.
 #
 # Asked immediately before the unit runs, not during selection, because the
-# answer changes *within* a run: `deno-apps` needs a `deno` that
-# `node-toolchain` installs a few units earlier. Deciding it upfront would
+# answer changes *within* a run: `pnpm-apps` needs a `pnpm` that
+# `develop-packages` installs a few units earlier. Deciding it upfront would
 # skip every unit whose tool this run is about to provide — which is what the
 # tag runner's `dep:` avoided by testing lazily too.
 unit_available() {

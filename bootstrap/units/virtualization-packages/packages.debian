@@ -4,7 +4,7 @@ libvirt-daemon-system
 libvirt-dbus
 virtinst
 
-# QEMU, including the user-mode emulation `cross-toolchain` output runs under
+# QEMU, including the user-mode emulation `develop-packages` cross-compiler output runs under
 qemu-system
 qemu-user
 qemu-user-static

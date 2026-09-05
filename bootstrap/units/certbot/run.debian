@@ -105,6 +105,50 @@ issue_certificate() {
     }
 }
 
+# The certbot DNS plugin for whichever provider hosts this machine's zone.
+# Needed only for a DNS-01 challenge — the only way to get a wildcard — but
+# needed for unattended renewal too, so it is installed whenever a provider
+# is named, existing certificate or not.
+install_dns_plugin() {
+    if [ -z "${DNS_API_TOKEN:-}" ]; then
+        printf 'Error: DNS_PROVIDER is set but DNS_API_TOKEN is not.\n' >&2
+        return 1
+    fi
+
+    # The value becomes part of a package name and of a plugin flag, so anything
+    # outside this alphabet could reach apt or certbot as something other than a
+    # provider name.
+    case "$DNS_PROVIDER" in
+        *[!a-z0-9-]*)
+            printf 'Error: DNS_PROVIDER must be lowercase letters, digits or "-".\n' >&2
+            return 1
+            ;;
+    esac
+
+    printf 'Installing the certbot DNS plugin for %s...\n' "$DNS_PROVIDER"
+
+    # Two providers have no Debian package and no plugin under certbot's own
+    # naming, so they come from PyPI and from git respectively.
+    case "$DNS_PROVIDER" in
+        aliyun)
+            apt-get install -y python3-pip
+            python3 -m pip install --break-system-packages certbot-dns-aliyun
+            ;;
+        dnspod|tencent)
+            apt-get install -y python3-pip
+            python3 -m pip install --break-system-packages \
+                git+https://github.com/tengattack/certbot-dns-dnspod.git
+            ;;
+        *)
+            apt-get install -y "python3-certbot-dns-$DNS_PROVIDER"
+            ;;
+    esac
+}
+
+if [ -n "${DNS_PROVIDER:-}" ]; then
+    install_dns_plugin || exit 1
+fi
+
 if [ -d "/etc/letsencrypt/live/$VPS_DOMAIN_NAME" ]; then
     printf 'Certificate for %s already exists.\n' "$VPS_DOMAIN_NAME"
 else

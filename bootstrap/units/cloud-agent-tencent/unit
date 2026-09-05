@@ -1,5 +1,0 @@
-kind: action
-capabilities: vps-hygiene
-when: vps:tencent
-root: yes
-unless: [ ! -d /usr/local/qcloud ]

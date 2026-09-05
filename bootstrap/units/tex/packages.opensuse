@@ -1,4 +1,0 @@
-# The whole distribution. A glob, so the engine cannot diff it against what is
-# installed and leans on the state record instead — which is the right trade
-# for a set this large and this stable.
-texlive-*

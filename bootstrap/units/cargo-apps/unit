@@ -1,5 +1,5 @@
 kind: packages
 manager: cargo
 capabilities: develop
-requires: rust-toolchain
+requires: develop-packages
 optional: cargo

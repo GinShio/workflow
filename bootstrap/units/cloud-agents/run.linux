@@ -1,0 +1,119 @@
+# Remove the cloud providers' monitoring and management agents.
+#
+# One unit, not one per provider: which agents a machine carries is a fact
+# the unit probes for itself — and two of the providers (Baidu, Huawei) are
+# ones `scripts/detect_vps.sh` cannot name at all, so their per-provider
+# units could never have had a `when` anyway. The composite `unless` is the
+# union of the old per-unit probes: it is satisfied exactly when nothing is
+# left, which is the state this unit exists to produce.
+#
+# Runs as root: `root: yes` escalates the whole unit, so nothing here says
+# `sudo`.
+#
+# Each provider's removal tolerates its own failures — the agents ship
+# several generations of uninstaller and any given image carries some subset
+# of them. What must succeed is that nothing is left running, which the
+# process kills and the final daemon-reload assure.
+
+remove_alibaba() {
+    printf 'Removing Alibaba Cloud agents...\n'
+    systemctl stop aliyun.service 2>/dev/null || true
+    systemctl disable aliyun.service 2>/dev/null || true
+
+    if [ -d /usr/local/aegis ]; then
+        find /usr/local/aegis -name 'uninstall.sh' -exec {} \; 2>/dev/null || true
+        find /usr/local/aegis -name 'AliYunDunUpdate.sh' -exec {} uninstall \; \
+            2>/dev/null || true
+    fi
+
+    if [ -f /usr/local/cloudmonitor/CmsGoAgent.linux-amd64 ]; then
+        /usr/local/cloudmonitor/CmsGoAgent.linux-amd64 stop 2>/dev/null || true
+        /usr/local/cloudmonitor/CmsGoAgent.linux-amd64 uninstall 2>/dev/null || true
+    fi
+
+    rm -rf /usr/local/aegis /usr/local/cloudmonitor
+    rm -f /usr/sbin/aliyun-service /lib/systemd/system/aliyun.service
+
+    # The uninstallers do not reliably stop what they installed.
+    pkill -9 -f aliyun-service || true
+    pkill -9 -f AliYunDun || true
+    pkill -9 -f AliYunDunUpdate || true
+}
+
+remove_aws() {
+    printf 'Removing the AWS Systems Manager agent...\n'
+    systemctl stop amazon-ssm-agent 2>/dev/null || true
+    systemctl disable amazon-ssm-agent 2>/dev/null || true
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get purge -y amazon-ssm-agent 2>/dev/null || true
+    fi
+}
+
+remove_baidu() {
+    printf 'Removing the Baidu Cloud BCM agent...\n'
+    systemctl stop bcm-agent 2>/dev/null || true
+    systemctl disable bcm-agent 2>/dev/null || true
+
+    if [ -f /opt/bcm/uninstall.sh ]; then
+        /opt/bcm/uninstall.sh || true
+    fi
+
+    rm -rf /opt/bcm
+}
+
+remove_gcp() {
+    printf 'Removing the Google Cloud OS Config agent...\n'
+    systemctl stop google-osconfig-agent 2>/dev/null || true
+    systemctl disable google-osconfig-agent 2>/dev/null || true
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get purge -y google-osconfig-agent 2>/dev/null || true
+    fi
+}
+
+remove_huawei() {
+    printf 'Removing the Huawei Cloud HostGuard agent...\n'
+    systemctl stop hostguard 2>/dev/null || true
+    systemctl disable hostguard 2>/dev/null || true
+
+    if [ -f /usr/local/hostguard/install/scripts/uninstall.sh ]; then
+        /usr/local/hostguard/install/scripts/uninstall.sh || true
+    fi
+
+    rm -rf /usr/local/hostguard
+}
+
+remove_oracle() {
+    printf 'Removing the Oracle Cloud agent...\n'
+    systemctl stop oracle-cloud-agent 2>/dev/null || true
+    systemctl disable oracle-cloud-agent 2>/dev/null || true
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get purge -y oracle-cloud-agent 2>/dev/null || true
+    fi
+}
+
+remove_tencent() {
+    printf 'Removing Tencent Cloud agents...\n'
+    for _uninstall in \
+            /usr/local/qcloud/stargate/admin/uninstall.sh \
+            /usr/local/qcloud/YunJing/uninst.sh \
+            /usr/local/qcloud/monitor/barad/admin/uninstall.sh; do
+        [ -f "$_uninstall" ] && "$_uninstall" || true
+    done
+
+    systemctl stop tat_agent 2>/dev/null || true
+    systemctl disable tat_agent 2>/dev/null || true
+    rm -f /etc/systemd/system/tat_agent.service
+
+    rm -rf /usr/local/qcloud
+
+    # The uninstallers do not reliably stop what they installed.
+    for _proc in tat_agent barad_agent sgagent ydservice; do
+        pkill -9 -x "$_proc" || true
+    done
+}
+
+for _provider in alibaba aws baidu gcp huawei oracle tencent; do
+    "remove_$_provider"
+done
+
+systemctl daemon-reload

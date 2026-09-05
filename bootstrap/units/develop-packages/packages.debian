@@ -1,0 +1,215 @@
+# --- distribution baseline
+# The distribution's own idea of a development baseline.
+build-essential
+
+# Build helpers and generators
+bison
+chrpath
+dwarves
+flex
+graphviz
+re2c
+xmlto
+libxslt1-dev
+
+# Version control
+git
+git-doc
+git-lfs
+
+# Linting and data
+shellcheck
+sqlite3
+
+# Static site generator
+hugo
+
+# Lua
+lua5.4
+liblua5.4-dev
+
+# --- C and C++
+# Compilers
+clang
+clang-format
+clang-tidy
+clang-tools
+clangd
+libclang-dev
+gcc
+gcc-multilib
+g++
+g++-multilib
+llvm
+llvm-dev
+
+# Linkers
+binutils
+lld
+mold
+
+# Debuggers and coverage
+gcovr
+gdb
+lcov
+lldb
+
+# Build systems
+cmake
+meson
+ninja-build
+
+# Compilation caches
+ccache
+sccache
+
+# Package manager and docs
+conan
+doxygen
+iwyu
+
+# Libraries - core
+libboost1.81-all-dev
+libc++-dev
+libc++abi-dev
+libcaca-dev
+libcaca-dev:i386
+libcli11-dev
+libelf-dev
+libelf-dev:i386
+libexpat1-dev
+libexpat1-dev:i386
+libssl-dev
+libssl-dev:i386
+libunwind-14-dev
+libunwind-14-dev:i386
+libxml2-dev
+libxml2-dev:i386
+libzip-dev
+libzip-dev:i386
+libzstd-dev
+libzstd-dev:i386
+
+# Libraries - other
+libnanomsg-dev
+libncurses5-dev
+libpciaccess-dev
+libpciaccess-dev:i386
+libpoco-dev
+libreadline-dev
+libreadline-dev:i386
+libspdlog-dev
+libspdlog-dev:i386
+libstb-dev
+libtinyobjloader-dev
+libudev-dev
+libudev-dev:i386
+libz3-dev
+zlib1g-dev
+
+# --- Python
+# Interpreter and environment tooling
+python3
+python3-dev
+python3-doc
+python3-pip
+python3-pip-whl
+python3-pipx
+python3-ruff
+python3-virtualenv
+
+# Numeric and model formats
+libonnx-dev
+python3-numpy
+python3-numpy-dev
+python3-onnx
+python3-sympy
+
+# Build and packaging
+python3-distutils-extra
+python3-packaging
+python3-setuptools
+python3-u-msgpack
+
+# Libraries
+python3-astunparse
+python3-cryptography
+python3-cryptography-vectors
+python3-filelock
+python3-fsspec
+python3-jinja2
+python3-lxml
+python3-lz4
+python3-mako
+python3-psutil
+python3-pybind11
+python3-pyelftools
+python3-pygit2
+python3-pylint
+python3-pytest
+python3-requests
+python3-ruamel.yaml
+python3-sphinx
+python3-typing-extensions
+python3-yaml
+
+# --- Rust
+cargo
+rust-all
+librust-bindgen-dev
+
+# --- Zig
+zig
+
+# --- JVM
+openjdk-21-jdk
+openjdk-21-jre
+openjdk-21-source
+
+# --- Node
+nodejs
+npm
+yarnpkg
+
+# --- functional languages
+# Erlang and Elixir
+elixir
+erlang
+
+# Haskell
+ghc
+ghc-doc
+ghc-prof
+
+# --- TeX
+texlive-full
+
+# --- Emacs
+emacs-gtk
+emacs-nox
+
+# vterm builds its module against these at first use.
+libtool
+libvterm-dev
+
+# --- cross compilers
+# Debian names these `<tool>-<arch>-linux-gnu` rather than `cross-<arch>-*`.
+#
+# Big-endian ppc64 is absent here and present on openSUSE: Debian's port is
+# not in the standard mirrors. ppc64el below is the little-endian one, which
+# is what `cross-ppc64le-*` corresponds to.
+binutils-aarch64-linux-gnu
+gcc-aarch64-linux-gnu
+libc6-dev-arm64-cross
+binutils-arm-linux-gnueabihf
+gcc-arm-linux-gnueabihf
+libc6-dev-armhf-cross
+binutils-powerpc64le-linux-gnu
+gcc-powerpc64le-linux-gnu
+libc6-dev-ppc64el-cross
+binutils-riscv64-linux-gnu
+gcc-riscv64-linux-gnu
+libc6-dev-riscv64-cross
+binutils-s390x-linux-gnu
+gcc-s390x-linux-gnu
+libc6-dev-s390x-cross

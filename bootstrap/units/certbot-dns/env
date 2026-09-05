@@ -1,7 +1,0 @@
-# Reaching this unit at all means `DNS_PROVIDER` is set — that is its
-# `unless` — so both names are declared optional rather than required. The
-# gate runs before any probe does, and demanding a token from every host doing
-# HTTP-01 would be wrong. That a provider without a token is an error stays in
-# the script, where the relation between the two is visible.
-DNS_PROVIDER?: which provider hosts this machine's zone; unset skips this unit
-DNS_API_TOKEN?: credentials for DNS_PROVIDER; the unit fails without it

@@ -1,8 +1,0 @@
-emacs
-emacs-nox
-emacs-x11
-
-# vterm builds its module against these at first use.
-libtool
-libvterm-devel
-libvterm-tools

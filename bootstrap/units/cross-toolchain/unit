@@ -1,7 +1,0 @@
-# Cross compilers. Gated on `develop` rather than `virtualization`: building
-# for another architecture is a development concern, and the QEMU user-mode
-# emulation that runs the result comes with `virtualization-packages`.
-kind: packages
-capabilities: develop
-requires: cpp-toolchain
-root: yes

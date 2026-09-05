@@ -1,0 +1,244 @@
+# --- distribution baseline
+# The distribution's own idea of a development baseline.
+@pattern devel_basis
+
+# Build helpers and generators
+bison
+chrpath
+dwarves
+flex
+graphviz
+imake
+re2c
+xmlto
+libxslt-tools
+
+# Version control
+git
+git-delta
+git-doc
+git-lfs
+
+# Linting and data
+ShellCheck
+sqlite3
+
+# Static site generator
+hugo
+
+# Grammar runtime the editor modules load at runtime
+tree-sitter
+
+# Lua
+lua
+lua-devel
+
+# --- C and C++
+# The distribution's own C/C++ baseline.
+@pattern devel_C_C++
+
+# Compilers
+clang
+clang-devel
+clang-doc
+clang-extract
+clang-tools
+gcc
+gcc-32bit
+gcc-c++
+gcc-c++-32bit
+gcc-info
+llvm
+llvm-devel
+llvm-doc
+llvm-opt-viewer
+
+# Linkers
+lld
+mold
+wild
+
+# Debuggers and coverage
+gcovr
+gdb
+lcov
+lldb
+
+# Build systems
+cmake
+kf6-extra-cmake-modules
+meson
+ninja
+
+# Compilation caches
+ccache
+sccache
+
+# Package manager and docs
+conan
+doxygen
+include-what-you-use
+
+# Grammars
+tree-sitter-c
+tree-sitter-cpp
+tree-sitter-meson
+tree-sitter-tablegen
+
+# Libraries - core
+cli11-devel
+eigen3-devel
+eigen3-doc
+libboost_*-devel
+libc++-devel
+libc++abi-devel
+libcaca-devel
+libelf-devel
+libelf-devel-32bit
+libexpat-devel
+libexpat-devel-32bit
+libopenssl-devel
+libopenssl-devel-32bit
+libpciaccess-devel
+libstdc++-devel
+libstdc++-devel-32bit
+libunwind-devel
+libxml2-devel
+libxml2-devel-32bit
+libzstd-devel
+libzstd-devel-32bit
+
+# Libraries - other
+nanomsg-devel
+ncurses-devel
+ncurses-devel-32bit
+poco-devel
+readline-devel
+readline-devel-32bit
+spdlog-devel
+stb-devel
+tinyobjloader-devel
+z3-devel
+zlib-ng-compat-devel
+
+# --- Python
+# Interpreter and environment tooling
+python3
+python3-devel
+python3-doc
+python3-pipx
+python3-ruff
+python3-virtualenv
+tree-sitter-python
+
+# Numeric and model formats
+libonnx
+onnx-devel
+python3-numpy
+python3-numpy-devel
+python3-onnx
+python3-sympy
+
+# Build and packaging
+python3-distutils-extra
+python3-packaging
+python3-setuptools
+python3-u-msgpack-python
+
+# Libraries
+python3-astunparse
+python3-cryptography
+python3-cryptography-vectors
+python3-filelock
+python3-fsspec
+python3-Jinja2
+python3-lit
+python3-lxml
+python3-lz4
+python3-Mako
+python3-psutil
+python3-pybind11
+python3-pybind11-devel
+python3-pyelftools
+python3-pygit2
+python3-pylint
+python3-pytest
+python3-PyYAML
+python3-requests
+python3-ruamel.yaml
+python3-Sphinx
+python3-typing_extensions
+
+# --- Rust
+cargo
+rust
+rust-bindgen
+tree-sitter-rust
+
+# --- Zig
+zig
+zig-libs
+zls
+tree-sitter-zig
+
+# --- JVM
+java-21-openjdk
+java-21-openjdk-devel
+java-25-openjdk
+java-25-openjdk-devel
+
+# --- Node
+nodejs-common
+pnpm
+typescript
+
+# --- functional languages
+# Erlang and Elixir
+elixir
+elixir-doc
+elixir-hex
+erlang
+erlang-doc
+
+# Haskell
+ghc
+ghc-doc
+ghc-manual
+ghc-prof
+tree-sitter-haskell
+
+# --- TeX
+# The whole distribution. A glob, so the engine cannot diff it against what is
+# installed and leans on the state record instead — which is the right trade
+# for a set this large and this stable.
+texlive-*
+
+# --- Emacs
+emacs
+emacs-nox
+emacs-x11
+
+# vterm builds its module against these at first use.
+libtool
+libvterm-devel
+libvterm-tools
+
+# --- cross compilers
+cross-aarch64-binutils
+cross-aarch64-gcc14
+cross-aarch64-linux-glibc-devel
+cross-arm-binutils
+cross-arm-gcc14
+cross-arm-linux-glibc-devel
+cross-ppc64-binutils
+cross-ppc64-gcc14
+cross-ppc64-linux-glibc-devel
+cross-ppc64le-binutils
+cross-ppc64le-gcc14
+cross-ppc64le-linux-glibc-devel
+cross-riscv64-binutils
+cross-riscv64-gcc14
+cross-riscv64-linux-glibc-devel
+cross-s390x-binutils
+cross-s390x-gcc14
+cross-s390x-linux-glibc-devel

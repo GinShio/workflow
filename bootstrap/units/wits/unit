@@ -10,4 +10,4 @@
 # which the content digest invalidates when the wits sources change.
 kind: action
 capabilities: develop
-requires: cpp-toolchain, rust-toolchain
+requires: develop-packages

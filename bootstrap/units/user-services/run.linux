@@ -1,4 +1,9 @@
 #!/bin/sh
+# Linger keeps the user's systemd instance running when nobody is logged in,
+# which is what lets the services below actually run. `loginctl` is declared
+# optional: a machine without systemd has nothing to linger or enable.
+loginctl enable-linger "$(id -un)"
+
 systemctl --user daemon-reload
 
 SERVICES='

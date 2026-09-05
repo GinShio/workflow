@@ -1,6 +1,0 @@
-nodejs-common
-pnpm
-typescript
-
-# The runtime `deno-apps` installs its packages with.
-deno

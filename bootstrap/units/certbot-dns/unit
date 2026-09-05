@@ -1,8 +1,0 @@
-# The certbot DNS plugin for whichever provider hosts this machine's zone.
-# Needed only for a DNS-01 challenge, which is the only way to get a wildcard
-# certificate; a host doing HTTP-01 skips it by leaving DNS_PROVIDER unset.
-kind: action
-capabilities: web-server
-requires: web-packages
-root: yes
-unless: [ -z "${DNS_PROVIDER:-}" ]

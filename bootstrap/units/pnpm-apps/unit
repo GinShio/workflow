@@ -1,0 +1,13 @@
+# An action rather than `kind: packages`, because pnpm derives the shims it
+# writes from each package's own metadata: there is no mapping from
+# `@openai/codex` back to the command it produced, so the engine has nothing
+# to diff against. The script installs unconditionally, which pnpm treats as
+# an upgrade in place.
+#
+# Requires `dotfiles` — a working global install reads the pnpm configuration
+# that unit deploys: without it the shims land outside PATH. The script
+# checks for the config rather than trusting the ordering.
+kind: action
+capabilities: develop
+requires: develop-packages, dotfiles
+optional: pnpm

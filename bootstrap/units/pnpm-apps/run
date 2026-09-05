@@ -1,0 +1,34 @@
+#!/bin/sh
+# Agent CLIs published to npm, installed with pnpm so they run under node
+# rather than a bundled runtime.
+
+# The configuration `dotfiles` deployed is a precondition, not a nicety: it
+# points the global bin directory at ~/.local/bin. Fail here rather than
+# install shims the run cannot see afterwards.
+_pnpm_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pnpm"
+if [ ! -f "$_pnpm_dir/config.yaml" ]; then
+    printf 'Error: no pnpm configuration at %s/config.yaml.\n' "$_pnpm_dir" >&2
+    printf 'This unit runs after `dotfiles`; its absence means that unit\n' >&2
+    printf 'did not deploy.\n' >&2
+    exit 1
+fi
+
+PACKAGES='
+    @anthropic-ai/claude-code
+    @openai/codex
+    @earendil-works/pi-coding-agent
+'
+
+_failed=''
+for _pkg in $PACKAGES; do
+    # shellcheck disable=SC2086
+    if ! pnpm add -g --allow-build="$_pkg" "$_pkg"; then
+        _failed="$_failed $_pkg"
+    fi
+done
+
+# One package failing must not hide the others, and must not read as success.
+if [ -n "$_failed" ]; then
+    printf 'Failed to install:%s\n' "$_failed" >&2
+    exit 1
+fi

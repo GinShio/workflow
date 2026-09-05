@@ -1,5 +1,0 @@
-kind: action
-capabilities: vps-hygiene
-when: vps:alibaba
-root: yes
-unless: [ ! -d /usr/local/aegis ] && [ ! -d /usr/local/cloudmonitor ]

@@ -1,5 +1,0 @@
-kind: action
-capabilities: vps-hygiene
-when: vps:oracle
-root: yes
-unless: ! systemctl list-unit-files oracle-cloud-agent.service 2>/dev/null | grep -q oracle-cloud-agent

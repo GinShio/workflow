@@ -1,5 +1,0 @@
-kind: action
-capabilities: vps-hygiene
-when: vps:gcp
-root: yes
-unless: ! systemctl list-unit-files google-osconfig-agent.service 2>/dev/null | grep -q google-osconfig-agent

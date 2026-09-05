@@ -168,8 +168,8 @@ skip:
   fails loudly.
 
 `optional` is evaluated immediately before the unit runs, not during
-selection, because the answer changes within a run: `deno-apps` needs a `deno`
-that `node-toolchain` installs a few units earlier.
+selection, because the answer changes within a run: `pnpm-apps` needs a `pnpm`
+that `develop-packages` installs a few units earlier.
 
 ## What a run must be given
 
@@ -203,10 +203,10 @@ demanding the token that produced it would make an idempotent re-run harder
 than the first run was.
 
 Because the check runs before any probe does, a name is declared *required*
-only when the unit needs it whenever it runs at all. `certbot-dns` runs only
-where `DNS_PROVIDER` is set, and a host doing HTTP-01 must not be asked for a
-token it has no use for, so both of its names are optional and "a provider
-without a token is an error" stays in its script.
+only when the unit needs it whenever it runs at all. `certbot`'s DNS names
+are optional: a host doing HTTP-01 must not be asked for a token it has no
+use for, and "a provider without a token is an error" stays in its script,
+because that is where a provider is actually named.
 
 `apply -n <target>` prints the whole contract for one target and says which
 names are set. A real run prints the optional ones it was not given, because

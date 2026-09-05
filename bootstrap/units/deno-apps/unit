@@ -1,9 +1,0 @@
-# An action rather than `kind: packages`, because deno installs a *binary*
-# whose name it derives from the package's own metadata: there is no mapping
-# from `@openai/codex` back to the command it produced, so the engine has
-# nothing to diff against. The script installs unconditionally, which deno
-# treats as an overwrite.
-kind: action
-capabilities: develop
-requires: node-toolchain
-optional: deno
