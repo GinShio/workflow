@@ -6,7 +6,7 @@ Description=Beancount Container
 ContainerName=beancount
 Exec=--port {{@@ beancount.port @@}} /data/main.beancount
 Image=docker.io/thekevjames/fava:latest
-Volume={{@@ env['HOME'] @@}}/cyber/blog/ledger:/data
+Volume={{@@ projects.script_dir @@}}/secret/personal/ledger:/data
 PublishPort={{@@ beancount.port @@}}:{{@@ beancount.port @@}}
 Network=host
 Environment=PUID=0
