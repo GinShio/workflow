@@ -5,6 +5,7 @@
 PACKAGES='
     @anthropic-ai/claude-code
     @openai/codex
+    @earendil-works/pi-coding-agent
 '
 
 _failed=''
