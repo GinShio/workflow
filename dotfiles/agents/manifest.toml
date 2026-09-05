@@ -1,73 +1,129 @@
-# --- cursor -----------------------------------------------------------------
+# --- claude-code -------------------------------------------------------------
 
 [[install]]
-id = 'agents-cursor-prompts'
-dst = '~/.cursor/'
-path = 'prompts'
+id = 'agents-claude-agreement'
+dst = '~/.claude/CLAUDE.md'
+path = 'prompts/AGENTS.md'
 capabilities = ['develop']
 planes = ['user']
 
-# --- claude-code ------------------------------------------------------------
+[[install]]
+id = 'agents-claude-agents'
+dst = '~/.claude/agents/'
+path = 'prompts/agents'
+capabilities = ['develop']
+planes = ['user']
 
 [[install]]
-id = 'agents-claude-prompts'
-dst = '~/.claude/'
-path = 'prompts'
+id = 'agents-claude-commands'
+dst = '~/.claude/commands'
+path = 'claude/commands'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-claude-craft'
+dst = '~/.claude/craft/'
+path = 'prompts/craft'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-claude-skills'
+dst = '~/.claude/skills/'
+path = 'prompts/skills'
 capabilities = ['develop']
 planes = ['user']
 
 [[install]]
 id = 'agents-claude-settings'
 dst = '~/.claude.json'
-path = 'config/claude.json'
+path = 'claude/claude.json'
 capabilities = ['develop']
 requires_overlays = ['personal']
 planes = ['user']
 chmod = '600'
 
-# --- codex ------------------------------------------------------------------
+# --- codex -------------------------------------------------------------------
 
 [[install]]
-id = 'agents-codex-prompts'
-dst = '~/.codex/'
-path = 'prompts'
+id = 'agents-codex-agreement'
+dst = '~/.codex/AGENTS.md'
+path = 'prompts/AGENTS.md'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-codex-agents'
+dst = '~/.codex/agents/'
+path = 'prompts/agents'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-codex-craft'
+dst = '~/.codex/craft/'
+path = 'prompts/craft'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-codex-skills'
+dst = '~/.codex/skills/'
+path = 'prompts/skills'
 capabilities = ['develop']
 planes = ['user']
 
 [[install]]
 id = 'agents-codex-settings'
 dst = '~/.codex/config.toml'
-path = 'config/codex.toml'
+path = 'codex/config.toml'
 capabilities = ['develop']
 requires_overlays = ['khronos3d']
 planes = ['user']
 chmod = '600'
 
+# --- cursor ------------------------------------------------------------------
+
+[[install]]
+id = 'agents-cursor-agreement'
+dst = '~/.cursor/AGENTS.md'
+path = 'prompts/AGENTS.md'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-cursor-agents'
+dst = '~/.cursor/agents/'
+path = 'prompts/agents'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-cursor-commands'
+dst = '~/.cursor/commands/'
+path = 'prompts/commands'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-cursor-craft'
+dst = '~/.cursor/craft/'
+path = 'prompts/craft'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-cursor-skills'
+dst = '~/.cursor/skills/'
+path = 'prompts/skills'
+capabilities = ['develop']
+planes = ['user']
+
 # --- pi ----------------------------------------------------------------------
-# pi reads its agent directory from $PI_CODING_AGENT_DIR (exported by
-# environment.d), so everything below lives under ~/.config/pi/agent/. The
-# agent directory also auto-discovers skills/, prompts/ and AGENTS.md, which
-# is what the resources entries rely on.
 
 [[install]]
-id = 'agents-pi-settings'
-dst = '~/.config/pi/agent/settings.json'
-path = 'config/pi.json'
-capabilities = ['develop']
-requires_overlays = ['personal']
-planes = ['user']
-
-[[install]]
-id = 'agents-pi-auth'
-dst = '~/.config/pi/agent/auth.json'
-path = 'config/pi-auth.json'
-capabilities = ['develop']
-requires_overlays = ['personal']
-planes = ['user']
-chmod = '600'
-
-[[install]]
-id = 'agents-pi-agent-md'
+id = 'agents-pi-agreement'
 dst = '~/.config/pi/agent/AGENTS.md'
 path = 'prompts/AGENTS.md'
 capabilities = ['develop']
@@ -95,8 +151,20 @@ capabilities = ['develop']
 planes = ['user']
 
 [[install]]
-id = 'agents-pi-prompts'
-dst = '~/.config/pi/agent/prompts/'
-path = 'prompts/pi'
+id = 'agents-pi-research'
+dst = '~/.config/pi/agent/prompts'
+path = 'prompts/commands'
 capabilities = ['develop']
 planes = ['user']
+
+[[install]]
+id = 'agents-pi-settings'
+dst = '~/.config/pi/agent'
+path = 'pi'
+capabilities = ['develop']
+requires_overlays = ['personal']
+planes = ['user']
+actions = ['pi-packages-install']
+
+[actions]
+pi-packages-install = 'pi update --extensions'

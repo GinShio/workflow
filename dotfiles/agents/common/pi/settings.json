@@ -1,6 +1,11 @@
 {%@@ set pi_vendor = agents.vendors['pi'] @@%}
 {%@@ set m = agents.model[pi_vendor] @@%}
 {
+  "packages": [
+    "npm:@juicesharp/rpiv-ask-user-question",
+    "npm:@juicesharp/rpiv-web-tools"
+  ],
+
   "theme": "dark",
 
   "defaultProvider": "{{@@ pi_vendor @@}}",
@@ -18,12 +23,6 @@
   "hideThinkingBlock": false,
   "showCacheMissNotices": true,
   "autocompleteMaxVisible": 10,
-
-  "compaction": {
-    "enabled": true,
-    "reserveTokens": 16384,
-    "keepRecentTokens": 20000
-  },
 
   "retry": {
     "enabled": true,
