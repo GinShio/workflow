@@ -9,4 +9,14 @@ if status is-interactive
     source {{@@ _dotfile_abs_dst @@}}/create_abbrs.fish
     source {{@@ _dotfile_abs_dst @@}}/functions/__ginshio_login_envvars.fish
     source {{@@ _dotfile_abs_dst @@}}/functions/__ginshio_zswap-statistics.fish
+
+    if type -q direnv
+        direnv hook fish | source
+    end
+    if type -q zoxide
+        zoxide init fish | source
+    end
+    if type -q atuin
+        atuin init fish | source
+    end
 end

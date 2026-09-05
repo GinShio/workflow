@@ -17,6 +17,16 @@ if type -q batcat; and not type -q bat
 end
 
 # ============================================================================
+# Directory listings (eza)
+# ============================================================================
+if type -q eza
+    abbr -a ls "eza --group-directories-first --icons=auto"
+    abbr -a ll "eza -l --header --git --group-directories-first --icons=auto"
+    abbr -a la "eza -la --header --git --group-directories-first --icons=auto"
+    abbr -a lt "eza --tree --level=2 --group-directories-first --icons=auto"
+end
+
+# ============================================================================
 # Package Management Functions
 # ============================================================================
 

@@ -1,0 +1,25 @@
+# -*- mode: toml; coding: utf-8; indent-tabs-mode: nil; -*-
+# The file name matters: atuin reads only config.toml here (its
+# get_config_path hardcodes it) — the older atuin.toml name is silently
+# ignored, and a missing file makes atuin generate its own defaults.
+
+# Local mode: history stays on this machine. Whether to sync — and against
+# which server (atuin's hosted endpoint or a self-hosted one) — is an open
+# decision; auto_sync=false keeps sync off even if an account ever exists,
+# and `atuin sync` remains available by hand. update_check=false completes
+# the mode: without sync or the update check, atuin makes no network
+# requests of its own.
+
+# enter_accept=true: Enter executes the selected command. The binary default
+# is false, but atuin's own shipped config sets true ("new user" behaviour);
+# we pin it explicitly because this file replaces that shipped config.
+auto_sync = false
+update_check = false
+enter_accept = true
+
+# atuin honours XDG for config and data, but defaults its logs to
+# ~/.atuin/logs (a hard-coded top-level dotdir). State home is where the
+# spec puts logs; xdg_state_home is defined in dotdrop globals and exported
+# by systemd user-environment.d.
+[logs]
+dir = "{{@@ sysenv.xdg_state_home @@}}/atuin/logs"

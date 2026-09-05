@@ -1,0 +1,6 @@
+[[install]]
+id = 'atuin'
+dst = '~/.config/atuin/'
+path = '.'
+capabilities = ['develop']
+planes = ['user']

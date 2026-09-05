@@ -242,3 +242,9 @@ cross-riscv64-linux-glibc-devel
 cross-s390x-binutils
 cross-s390x-gcc14
 cross-s390x-linux-glibc-devel
+
+# --- shell ergonomics
+atuin
+direnv
+eza
+zoxide

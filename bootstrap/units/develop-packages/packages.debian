@@ -213,3 +213,9 @@ libc6-dev-riscv64-cross
 binutils-s390x-linux-gnu
 gcc-s390x-linux-gnu
 libc6-dev-s390x-cross
+
+# --- shell ergonomics
+atuin
+direnv
+eza
+zoxide
