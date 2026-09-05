@@ -1,0 +1,22 @@
+# Node toolchain configuration: pnpm and npm.
+#
+# deno has no global config file; its environment (DENO_INSTALL_ROOT) is
+# injected through the systemd module's user-environment.d, so it
+# deliberately has no install entry here.
+#
+# pnpm credentials (~/.config/pnpm/auth.ini, the JSR token) are deliberately
+# unmanaged: they must not enter the repository in plaintext.
+
+[[install]]
+id = 'node-pnpm'
+dst = '~/.config/pnpm/'
+path = 'pnpm'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'node-npm'
+dst = '~/.config/npm/'
+path = 'npm'
+capabilities = ['develop']
+planes = ['user']

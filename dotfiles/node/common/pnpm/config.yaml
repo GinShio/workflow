@@ -1,0 +1,8 @@
+# -*- mode: yaml; coding: utf-8; indent-tabs-mode: nil; -*-
+# pnpm global configuration. Paths are rendered by Dotdrop from the sysenv
+# variables so they follow XDG on every host.
+
+globalDir: {{@@ sysenv.xdg_data_home @@}}/pnpm
+globalBinDir: {{@@ sysenv.xdg_bin_home @@}}
+stateDir: {{@@ sysenv.xdg_state_home @@}}/pnpm
+cacheDir: {{@@ sysenv.xdg_cache_home @@}}/pnpm

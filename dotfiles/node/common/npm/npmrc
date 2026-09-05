@@ -1,0 +1,9 @@
+# -*- mode: conf; coding: utf-8; indent-tabs-mode: nil; -*-
+# npm user configuration. npm does not look in $XDG_CONFIG_HOME/npm on its
+# own: NPM_CONFIG_USERCONFIG (injected by environment.d from the globals'
+# npm_config_userconfig) points npm at this file. pnpm ignores that
+# variable, which is what keeps the two tools' configuration apart.
+
+# Global installs land where the XDG bin dir is already on PATH.
+prefix={{@@ env['HOME'] @@}}/.local
+cache={{@@ sysenv.xdg_cache_home @@}}/npm
