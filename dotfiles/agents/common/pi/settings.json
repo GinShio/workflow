@@ -3,8 +3,14 @@
 {
   "packages": [
     "npm:@juicesharp/rpiv-ask-user-question",
-    "npm:@juicesharp/rpiv-web-tools"
+    "npm:@juicesharp/rpiv-web-tools",
+    "npm:pi-workspace-history",
+    "npm:@tintinweb/pi-subagents"
   ],
+
+  "workspaceHistory": {
+    "storageDir": "{{@@ sysenv.xdg_state_home @@}}/pi/workspace-history"
+  },
 
   "theme": "dark",
 

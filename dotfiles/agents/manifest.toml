@@ -127,13 +127,6 @@ capabilities = ['develop']
 planes = ['user']
 
 [[install]]
-id = 'agents-pi-agents'
-dst = '~/.config/pi/agent/agents/'
-path = 'prompts/agents'
-capabilities = ['develop']
-planes = ['user']
-
-[[install]]
 id = 'agents-pi-craft'
 dst = '~/.config/pi/agent/craft/'
 path = 'prompts/craft'
