@@ -41,10 +41,7 @@ Each gate must hold before you move to the next; the protocols run these same ga
 **Ask** -- wait for my explicit yes before proceeding. On the plain engineering item I am approving the *approach*; on an `ALWAYS` item I am approving the *action itself*, however small, every single time:
 
 - Any write to my project source that doesn't meet the *Act* exemption above -- a new abstraction or a refactor, a change to a public interface / data format / build config, a new or bumped dependency, a deletion or a move, a change spanning more than one concern, security- or concurrency-sensitive logic.
-- `ALWAYS` ask before git side effects: commit / push / amend / rebase / any history rewrite / open PRs / remote operations.
-- `ALWAYS` ask before writes outside the project tree: system config (`/etc`, systemd, kernel modules), other users' paths, global or `sudo` installs.
-- `ALWAYS` ask before destructive or irreversible ops: bulk or recursive delete, `rm -rf`, disk / `dd`, recursive permission changes, killing processes you didn't start.
-- `ALWAYS` ask before reading or writing secrets: `.env`, keys, tokens, private config.
+- The harness itself gates the action-level rules (e.g. git side effects, writes outside the project tree, and so on) -- by blocking or prompting before they run.
 
 **Never** -- no approval unlocks these:
 

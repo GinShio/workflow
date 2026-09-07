@@ -1,0 +1,177 @@
+{
+	"readAllowlist": [
+		"/usr/include", "/usr/src", "/usr/lib", "/usr/share", "/proc", "/sys",
+		"/usr/bin", "/usr/sbin", "/usr/local/bin", "/bin", "/sbin",
+		"/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/tty",
+		"/dev/zero", "/dev/urandom", "/dev/random",
+		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/claude",
+		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/codex",
+		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/cursor",
+		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/pi"
+	],
+	"writeExemptPrefixes": [
+		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/claude",
+		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/codex",
+		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/cursor",
+		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/pi",
+		"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"
+	],
+	"classes": [
+		{
+			"id": "git-metadata",
+			"action": "deny",
+			"reason": "Deleting git metadata (.git) destroys repository history and cannot be undone. Never remove it — a recursive wipe of the repo root counts too.",
+			"bash": [
+				"\\brm\\s+[^;&|]*\\.git\\b",
+				"\\brm\\s+[^;&|]*-\\w*[rf][^;&|]*\\s[\"']?\\.{1,2}/?[\"']?(\\s|$)"
+			]
+		},
+		{
+			"id": "secret-files",
+			"action": "ask",
+			"reason": "This path holds secrets. Reading or writing it needs the user's explicit approval — and its contents must never be echoed into chat, logs, or commits.",
+			"secretNames": {
+				"segments": [".ssh", ".gnupg", ".aws", ".kube"],
+				"names": [".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ed25519", "id_ecdsa", "auth.json", "credentials.json", "credentials*.json", "*.token", ".netrc", ".npmrc", ".pypirc", "secrets*"]
+			}
+		},
+		{
+			"id": "git-side-effects",
+			"action": "ask",
+			"reason": "Git side effects (commit, push, pull, history or remote changes) need the user's explicit approval. State what you intend to change and wait — do not retry.",
+			"bash": [
+				"\\bgit\\s+[^;&|]*\\b(push|pull|commit|merge|rebase|cherry-pick|revert)(?![.\\w-])",
+				"\\bgit\\s+[^;&|]*\\bremote\\s+(add|rename|remove|rm|set-url|set-head|prune)\\b",
+				"\\bgit\\s+[^;&|]*--amend\\b",
+				"\\bgit\\s+[^;&|]*\\breset\\b[^;&|]*--hard\\b",
+				"\\bgit\\s+[^;&|]*\\bclean(?![.\\w-])",
+				"\\bgit\\s+[^;&|]*\\bfilter-(branch|repo)(?![.\\w-])",
+				"\\bgit\\s+[^;&|]*\\breplace(?![.\\w-])",
+				"\\b(gh|glab)\\s+(pr|mr|repo|release)\\b[^;&|]*\\b(create|merge|close|delete|edit|submit)\\b"
+			]
+		},
+		{
+			"id": "destructive-ops",
+			"action": "ask",
+			"reason": "Destructive or irreversible operation needs the user's explicit approval. State exactly what it destroys and wait.",
+			"bash": [
+				"\\bdd\\b[^;&|]*\\bof=",
+				"\\bmkfs(\\.\\w+)?\\b",
+				"\\b(shutdown|reboot|halt|poweroff)\\b",
+				"\\binit\\s+[06]\\b",
+				"\\b(chmod|chown)\\b[^;&|]*\\s(-R|--recursive)\\b",
+				"\\b(pkill|killall)\\b",
+				"\\bkill\\b\\s+-[69]\\b"
+			]
+		},
+		{
+			"id": "destructive-rm",
+			"action": "ask",
+			"reason": "Recursive or forced deletion outside the session workspace needs the user's explicit approval (inside the workspace, git is the recovery path — user policy). State exactly what it destroys and wait.",
+			"bash": [
+				"\\brm\\s+[^;&|]*-\\w*[rf]"
+			],
+			"bashScope": "external"
+		},
+		{
+			"id": "package-uninstall",
+			"action": "deny",
+			"reason": "Package removal is forbidden for agents — uninstalling is never automated. Present the removal and let the user run it.",
+			"bash": [
+				"\\b(apt|apt-get)\\s+(remove|purge|autoremove)\\b",
+				"\\bdnf\\s+(remove|erase|autoremove)\\b",
+				"\\bzypper\\s+(remove|rm)\\b",
+				"\\bpacman\\s+[^;&|]*(-[A-Za-z]*R|--remove)",
+				"\\b(yay|paru|pikaur)\\s+[^;&|]*(-[A-Za-z]*R|--remove)",
+				"\\bapk\\s+del\\b",
+				"\\bemerge\\b[^;&|]*(--unmerge|--depclean|--deselect)\\b",
+				"\\bpip3?\\s+uninstall\\b",
+				"\\buv\\s+(pip\\s+)?(uninstall|remove)\\b",
+				"\\buv\\s+tool\\s+uninstall\\b",
+				"\\bpipx\\s+uninstall\\b",
+				"\\b(npm|pnpm|bun)\\s+(uninstall|remove|rm)\\b",
+				"\\byarn\\s+remove\\b",
+				"\\bcargo\\s+(uninstall|remove)\\b",
+				"\\bgem\\s+uninstall\\b",
+				"\\bbrew\\s+(uninstall|remove)\\b",
+				"\\bsnap\\s+remove\\b",
+				"\\bflatpak\\s+(uninstall|remove)\\b",
+				"\\bconda\\s+(remove|uninstall)\\b",
+				"\\bmamba\\s+(remove|uninstall)\\b",
+				"\\bnix-env\\s+[^;&|]*-[A-Za-z]*e\\b",
+				"\\bnix\\s+profile\\s+(remove|uninstall)\\b",
+				"\\bdeno\\s+(uninstall|remove)\\b"
+			]
+		},
+		{
+			"id": "package-install",
+			"action": "ask",
+			"reason": "Installing or upgrading packages (system, user, or project) changes the dependency set and needs the user's explicit approval.",
+			"bash": [
+				"\\b(apt|apt-get)\\s+(install|upgrade|full-upgrade|dist-upgrade)\\b",
+				"\\bdnf\\s+(install|upgrade|update|downgrade|reinstall)\\b",
+				"\\bzypper\\s+(install|in|up|update|dup)\\b",
+				"\\bpacman\\s+[^;&|]*(-[A-Za-z]*S(?!s)|--sync)",
+				"\\b(yay|paru|pikaur)\\s+[^;&|]*(-[A-Za-z]*S(?!s)|--sync)",
+				"\\bapk\\s+add\\b",
+				"\\bemerge\\b",
+				"\\bpip3?\\s+(install|upgrade)\\b",
+				"\\buv\\s+(pip\\s+)?(install|add|upgrade)\\b",
+				"\\buv\\s+tool\\s+(install|upgrade|reinstall)\\b",
+				"\\bpipx\\s+(install|upgrade|reinstall)\\b",
+				"\\b(npm|pnpm|bun)\\s+(install|i|ci|add|update)\\b",
+				"\\byarn\\s+(add|install|upgrade|update)\\b",
+				"\\bcargo\\s+(install|add)\\b",
+				"\\bgem\\s+(install|update|upgrade)\\b",
+				"\\bbrew\\s+(install|upgrade|reinstall)\\b",
+				"\\bsnap\\s+(install|refresh)\\b",
+				"\\bflatpak\\s+(install|update)\\b",
+				"\\bconda\\s+(install|update|upgrade)\\b",
+				"\\bmamba\\s+(install|update|upgrade)\\b",
+				"\\bgo\\s+install\\b",
+				"\\bnix-env\\s+[^;&|]*-\\w*i",
+				"\\bnix\\s+profile\\s+(install|upgrade)\\b",
+				"\\bdeno\\s+(install|add|update)\\b"
+			]
+		},
+		{
+			"id": "system-privileged",
+			"action": "ask",
+			"reason": "Privilege escalation (sudo, doas) needs the user's explicit approval.",
+			"bash": [
+				"\\bsudo\\b",
+				"\\bdoas\\b"
+			]
+		},
+		{
+			"id": "test-deletion",
+			"action": "ask",
+			"reason": "Removing tests outside the session workspace needs the user's explicit approval — tests are never removed or skipped to make a suite pass (inside the workspace, git is the recovery path — user policy).",
+			"bash": [
+				"\\b(git\\s+)?rm\\b[^;&|]*(__tests__|/tests?/|\\.test\\.|\\.spec\\.|_test\\.[a-z]+|test_[^/\\s]*\\.py)"
+			],
+			"bashScope": "external"
+		},
+		{
+			"id": "tree-external-write",
+			"action": "ask",
+			"reason": "Writing outside the session workspace (its git tree) needs the user's explicit approval; the per-agent scratch dirs under $XDG_RUNTIME_DIR are exempt. State the target and why the workspace cannot hold it.",
+			"pathKind": "write",
+			"outside": "project"
+		},
+		{
+			"id": "read-scope",
+			"action": "ask",
+			"reason": "Reading outside the session workspace (its git tree), ~/Projects, and the agents' own config dirs needs the user's explicit approval (pinned system trees and the per-agent scratch dirs are exempt). State what you need from it.",
+			"pathKind": "read",
+			"allowPrefixes": [
+				"~/Projects",
+				"~/.agents",
+				"~/.claude", "~/.claude.json",
+				"~/.codex",
+				"~/.cursor",
+				"~/.config/pi"
+			]
+		}
+	]
+}

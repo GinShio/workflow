@@ -1,0 +1,33 @@
+{
+	"version": 1,
+	"hooks": {
+		"beforeShellExecution": [
+			{
+				"command": "deno run -q --no-check --allow-read=$HOME/.cursor/hooks,$HOME --allow-sys=homedir $HOME/.cursor/hooks/guard.ts",
+				"timeout": 15,
+				"failClosed": true
+			}
+		],
+		"beforeMCPExecution": [
+			{
+				"command": "deno run -q --no-check --allow-read=$HOME/.cursor/hooks,$HOME --allow-sys=homedir $HOME/.cursor/hooks/guard.ts",
+				"timeout": 15,
+				"failClosed": true
+			}
+		],
+		"beforeReadFile": [
+			{
+				"command": "deno run -q --no-check --allow-read=$HOME/.cursor/hooks,$HOME --allow-sys=homedir $HOME/.cursor/hooks/guard.ts",
+				"timeout": 15,
+				"failClosed": true
+			}
+		],
+		"preToolUse": [
+			{
+				"command": "deno run -q --no-check --allow-read=$HOME/.cursor/hooks,$HOME --allow-sys=homedir $HOME/.cursor/hooks/guard.ts",
+				"timeout": 15,
+				"failClosed": true
+			}
+		]
+	}
+}

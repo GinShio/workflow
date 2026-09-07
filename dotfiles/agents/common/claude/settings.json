@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|Read|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "deno run -q --no-check --allow-read=$HOME/.claude/hooks,$HOME --allow-sys=homedir $HOME/.claude/hooks/guard.ts",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

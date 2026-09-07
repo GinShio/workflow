@@ -55,6 +55,27 @@ requires_overlays = ['personal']
 planes = ['user']
 chmod = '600'
 
+[[install]]
+id = 'agents-claude-hooks-core'
+dst = '~/.claude/hooks/'
+path = 'hooks'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-claude-hooks-guard'
+dst = '~/.claude/hooks/guard.ts'
+path = 'claude/hooks/guard.ts'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-claude-settings-hooks'
+dst = '~/.claude/settings.json'
+path = 'claude/settings.json'
+capabilities = ['develop']
+planes = ['user']
+
 # --- codex -------------------------------------------------------------------
 
 [[install]]
@@ -87,6 +108,27 @@ requires_overlays = ['khronos3d']
 planes = ['user']
 chmod = '600'
 
+[[install]]
+id = 'agents-codex-hooks-core'
+dst = '~/.codex/hooks/'
+path = 'hooks'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-codex-hooks-guard'
+dst = '~/.codex/hooks/guard.ts'
+path = 'codex/hooks/guard.ts'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-codex-hooks-json'
+dst = '~/.codex/hooks.json'
+path = 'codex/hooks.json'
+capabilities = ['develop']
+planes = ['user']
+
 # --- cursor ------------------------------------------------------------------
 
 [[install]]
@@ -114,6 +156,27 @@ planes = ['user']
 id = 'agents-cursor-craft'
 dst = '~/.cursor/craft/'
 path = 'prompts/craft'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-cursor-hooks-core'
+dst = '~/.cursor/hooks/'
+path = 'hooks'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-cursor-hooks-guard'
+dst = '~/.cursor/hooks/guard.ts'
+path = 'cursor/hooks/guard.ts'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
+id = 'agents-cursor-hooks-json'
+dst = '~/.cursor/hooks.json'
+path = 'cursor/hooks.json'
 capabilities = ['develop']
 planes = ['user']
 
@@ -148,6 +211,13 @@ capabilities = ['develop']
 requires_overlays = ['personal']
 planes = ['user']
 actions = ['pi-packages-install']
+
+[[install]]
+id = 'agents-pi-hooks-core'
+dst = '~/.config/pi/agent/hooks/'
+path = 'hooks'
+capabilities = ['develop']
+planes = ['user']
 
 [actions]
 pi-packages-install = 'pi update --extensions'
