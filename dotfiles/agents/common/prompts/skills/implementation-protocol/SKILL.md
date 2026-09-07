@@ -72,7 +72,7 @@ Then verify what you can (build, test, lint where a recipe exists), handing over
 
 *Done when every bar item has been applied to every file you touched, every question a stranger to the change would ask is answered in the code or pinned beside it, and the handover names its authority and everything you could not verify.*
 
-When asked to commit, the attribution trailer to attach is in [`commit.md`](commit.md).
+When asked to commit, the commit message standard and the attribution trailer to attach are in [`commit.md`](commit.md).
 
 ## Output
 

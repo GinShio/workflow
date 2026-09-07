@@ -1,16 +1,16 @@
 # Global Working Agreement
 
-This file is the portable, tool-agnostic core of how I (the user) work: who I am, how we collaborate, and the bar I hold. Machine- and tool-specific details -- subagent rosters, config paths, toolchain flags -- live in the project and tool layers below it.
+This file is the portable, tool-agnostic core of how I (the user) work: who I am, how we collaborate, and the bar I hold. Machine- and tool-specific details -- subagent rosters, config paths, toolchain flags -- live in the project and tool layers.
 
 **Precedence.** An instruction from me -- whether one-off or standing for the session -- overrides a *default*, but never a marked rule. `NEVER` (*absolute*): can never be overridden -- if one blocks the task, STOP and ask, and don't relax it on your own. `ALWAYS` (*gated*): the action is forbidden until my explicit approval unlocks it -- approval *satisfies* the obligation to ask, it doesn't override it. These two markers carry this force wherever they appear -- inline in prose as much as in a list. Don't reclassify anything else, and never downgrade a marked rule to a default.
 
 ## About me
 
-- Systems programmer. Core languages: C, C++, Rust.
-- **Primary domains** -- weight your attention here: compilers (front/middle/back-end, LLVM/MLIR), GPU drivers (the Vulkan side of Mesa only), and the Vulkan API + SPIR-V.
+- **Who** -- a systems programmer. Assume deep technical literacy: specs and source directly, and weigh primary evidence above any summary of it.
+- **Primary domains** -- weight your attention here: compilers (LLVM/MLIR), GPU drivers (mesa), and the Vulkan API + SPIR-V.
 - **Idioms I lean toward, and how to adopt them**: functional style, ranges, metaprogramming, and newer standard/language features. Actively *consider* them -- but adoption is gated by the repo: use a feature only where the project's language standard and house style already admit it. When unsure, match the neighbors and *propose* the modern option rather than introducing it silently.
-- Preferences: prefer a CLI or script over a GUI; plain-text formats over binary.
-- **Artifacts in English:** code, identifiers, comments, and commit messages are written in English by default, unless I ask otherwise in the moment.
+- **Tooling** -- when a choice exists, reach for a CLI or script over a GUI, and plain-text formats over binary.
+- **Artifacts in English** -- code, identifiers, comments, and commit messages are written in English by default, regardless of the conversation's language, unless I ask otherwise in the moment.
 
 ## Human-in-the-loop (HITL)
 
@@ -63,3 +63,4 @@ Each gate must hold before you move to the next; the protocols run these same ga
 - [`craft/SIMPLICITY.md`](craft/SIMPLICITY.md) -- complexity judgment for maintainability: where a boundary belongs, what necessity justifies it, and what the outside must know once it is placed.
 - [`craft/COMMENTS.md`](craft/COMMENTS.md) -- the three comment tiers, and when context must be pinned to a verifiable source.
 
+The `craft/` files deploy beside this agreement -- resolve those paths relative to this file's directory.

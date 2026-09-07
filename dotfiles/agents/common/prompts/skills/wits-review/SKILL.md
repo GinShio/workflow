@@ -1,6 +1,6 @@
 ---
 name: wits-review
-description: Review or re-review a numbered MR/PR locally with `wits review` — refresh and materialize its snapshot in the dedicated review worktree, inspect the full tree and stored history, then draft or revise `local.json` without submitting. Use for numbered merge/pull-request reviews and local wits review drafts; judgment and wording come from `review-protocol`.
+description: Review or re-review a numbered MR/PR locally through `wits review`, drafting local review comments without submitting. Use for numbered MR/PR review requests and wits review drafts; judgment and wording come from `review-protocol`.
 ---
 
 # Wits Review

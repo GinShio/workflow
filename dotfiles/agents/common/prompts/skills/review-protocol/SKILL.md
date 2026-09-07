@@ -22,7 +22,7 @@ Review is conversational: share findings, take the user's pushback, re-examine, 
 3. **Rank and calibrate.** Group findings by severity, and order by the bar within each group. Ask of each candidate: would you want the author to change the code for this? A Suggestion earns its place only when it would still be worth saying on an otherwise LGTM patch.
    *Done when every finding carries a severity you would defend out loud, nothing sits in Blocking that you would not actually block on, and a change with no such finding is LGTM.*
 
-4. **Write the review.** Each finding is a short note the author can act on: what is wrong, which way to go. Add an example when the direction isn't obvious from the note — a call that already does it, a type, a return, a `[[path:line]]`. LGTM is one or two sentences: what the change is, and that it meets the bar. Raise an alternative only when it is clearly better, and say what makes it better; raise a performance finding only when you can name the path that makes it matter. Ask about intent only where the surrounding code doesn't answer it. Omit empty severity sections.
+4. **Write the review.** Each finding is a short note the author can act on: what is wrong, which way to go. Add an example when the direction isn't obvious from the note — a call that already does it, a type, a return, a `path:line` reference. LGTM is one or two sentences: what the change is, and that it meets the bar. Raise an alternative only when it is clearly better, and say what makes it better; raise a performance finding only when you can name the path that makes it matter. Ask about intent only where the surrounding code doesn't answer it. Omit empty severity sections.
    *Done when the Summary is LGTM or names what needs attention, and every finding is a short note the author can act on.*
 
 ## Priority and severity
@@ -75,7 +75,7 @@ Include only sections that have content. LGTM is a Summary — and What's Good w
 ### Blocking Issues
 [Must fix before merge.]
 
-1. **[src/lock.c:42]** — Unlock is skipped on this error path; take the same `goto out` as [[src/lock.c:80]].
+1. **[src/lock.c:42]** — Unlock is skipped on this error path; take the same `goto out` as `src/lock.c:80`.
 
 ### Important Issues
 [Should fix. Design problems, significant maintainability defects.]

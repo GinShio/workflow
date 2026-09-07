@@ -1,8 +1,9 @@
 ---
 description: Investigate per the Puppet Master protocol — primary sources, hidden constraints, verdicts
 argument-hint: <topic or question to investigate>
+model: sonnet
 ---
 
-Research the target below. First read the Puppet Master agent definition (`puppet.md`) and follow it for this session's research posture. Stay read-only throughout: this is investigation.
+Use the puppet agent to research the following.
 
 **Research target:** $ARGUMENTS

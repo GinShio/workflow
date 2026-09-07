@@ -1,3 +1,14 @@
+# --- shared skills (codex / cursor / pi) ---------------------------------------------------
+# The cross-tool skills location: Codex, Cursor, and pi all discover ~/.agents/skills/.
+# Claude Code does not -- it keeps its own entry below.
+
+[[install]]
+id = 'agents-skills'
+dst = '~/.agents/skills/'
+path = 'prompts/skills'
+capabilities = ['develop']
+planes = ['user']
+
 # --- claude-code -------------------------------------------------------------
 
 [[install]]
@@ -68,13 +79,6 @@ capabilities = ['develop']
 planes = ['user']
 
 [[install]]
-id = 'agents-codex-skills'
-dst = '~/.codex/skills/'
-path = 'prompts/skills'
-capabilities = ['develop']
-planes = ['user']
-
-[[install]]
 id = 'agents-codex-settings'
 dst = '~/.codex/config.toml'
 path = 'codex/config.toml'
@@ -113,13 +117,6 @@ path = 'prompts/craft'
 capabilities = ['develop']
 planes = ['user']
 
-[[install]]
-id = 'agents-cursor-skills'
-dst = '~/.cursor/skills/'
-path = 'prompts/skills'
-capabilities = ['develop']
-planes = ['user']
-
 # --- pi ----------------------------------------------------------------------
 
 [[install]]
@@ -140,13 +137,6 @@ planes = ['user']
 id = 'agents-pi-craft'
 dst = '~/.config/pi/agent/craft/'
 path = 'prompts/craft'
-capabilities = ['develop']
-planes = ['user']
-
-[[install]]
-id = 'agents-pi-skills'
-dst = '~/.config/pi/agent/skills/'
-path = 'prompts/skills'
 capabilities = ['develop']
 planes = ['user']
 
