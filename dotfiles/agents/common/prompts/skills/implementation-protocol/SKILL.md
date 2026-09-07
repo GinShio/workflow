@@ -30,6 +30,20 @@ Work from an approved design. This is non-negotiable for non-trivial changes.
 
 *Done when every architectural decision the change contains traces back to something the user approved.*
 
+## Plan the work
+
+Multi-phase or multi-file work gets a task plan before the first edit: discrete tasks in execution order, each carrying a **verification criterion** — the concrete check that proves it done, usually a command and the output that counts as green. Record the plan in the harness's task tool where one exists. Work one task at a time, closing each before opening the next. A task you cannot write a criterion for is a design question — take it back to the Design gate instead of implementing through it. A single-file change needs no plan.
+
+*Done when every task names its criterion, and every closed task's criterion has run for real.*
+
+### Closing a task
+
+1. **Run the criterion** — real output seen, not an expected green.
+2. **Boundary re-read** — re-read what the task wrote at the boundaries: each `unsafe` block against the invariant it asserts, each call crossing a language or module boundary, each site marshalling to another representation. Check each against the pattern the surrounding code already uses; where the correct pattern sits ten lines away, a divergent neighbour is a bug, not a style difference.
+3. **Record the residue** — anything the task could not verify goes to the handover's **Not verified**, never dropped silently.
+
+*Done when the criterion's output exists, the boundaries have been re-read against their neighbours, and the residue is written down.*
+
 ## Write the code
 
 1. **Keep changes focused** — one logical change per unit. Refactoring and feature work stay in separate units. Present large changes in reviewable chunks rather than one 500-line diff.
@@ -54,7 +68,7 @@ Apply every item of `craft/QUALITY-BAR.md` to what you wrote, and pre-empt what 
 - **Complexity** — for each boundary you touched, state what the outside must know to use it and name the call sites that hold it (see `craft/SIMPLICITY.md`). If you placed none, say so.
 - **Authority** — which gate authorized this? Either an approved design, or the *Act* exemption it qualified under. If neither holds, you have overrun the loop; stop and say so.
 
-Then verify what you can (build, test, lint where a recipe exists). Prefer checks that are cheap and side-effect-free; leave costly or stateful verification to the user.
+Then verify what you can (build, test, lint where a recipe exists), handing over **evidence, not assertion**: the command with its green output, and every skipped check named as skipped. A green suite is evidence only for defect classes the environment can observe — a driver that skips validation, or an allocator that has not yet reused a freed page, lets broken code pass. For each class the environment cannot see, fall back to the spec or contract text. Prefer checks that are cheap and side-effect-free; leave costly or stateful verification to the user.
 
 *Done when every bar item has been applied to every file you touched, every question a stranger to the change would ask is answered in the code or pinned beside it, and the handover names its authority and everything you could not verify.*
 
@@ -81,6 +95,6 @@ When asked to commit, the attribution trailer to attach is in [`commit.md`](comm
 **What to review:**
 - [areas deserving careful attention — where bugs are most likely]
 
-**Verified:** [what was tested, built, or checked]
+**Verified:** [commands run and their output — pasted; skipped checks named]
 **Not verified:** [what couldn't be checked and why]
 ```
