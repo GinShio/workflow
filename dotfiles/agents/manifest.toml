@@ -219,5 +219,17 @@ path = 'hooks'
 capabilities = ['develop']
 planes = ['user']
 
+# --- per-agent scratch (cross-tool) -----------------------------------------------------------
+
+# The scratch dirs every tool's guard exempts (hooks/rules.json); tmpfiles
+# creates them on the user runtime tmpfs at login.
+
+[[install]]
+id = 'agents-tmpfiles'
+dst = '~/.config/user-tmpfiles.d/'
+path = 'tmpfiles.d'
+capabilities = ['develop']
+planes = ['user']
+
 [actions]
 pi-packages-install = 'pi update --extensions'

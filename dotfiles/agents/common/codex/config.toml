@@ -11,3 +11,8 @@ base_url     = "{{@@ agents.vendor[agents.vendors['codex']].url @@}}"
 api_key      = "{{@@ agents.vendor[agents.vendors['codex']].key @@}}"
 http_headers = { "Ocp-Apim-Subscription-Key" = "{{@@ agents.vendor[agents.vendors['codex']].key @@}}" }
 wire_api     = "responses"
+
+# Agent-spawned commands get the per-agent scratch dir as TMPDIR; codex's own
+# temp files live in ~/.codex/tmp regardless.
+[shell_environment_policy]
+set = { TMPDIR = "{{@@ env['XDG_RUNTIME_DIR'] @@}}/codex" }

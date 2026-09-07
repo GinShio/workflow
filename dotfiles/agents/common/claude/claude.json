@@ -14,7 +14,8 @@
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "{{@@ agents.model[agents.vendors['claude']].wintermute @@}}[1m]",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "{{@@ agents.model[agents.vendors['claude']].neuromancer @@}}[1m]",
     "CLAUDE_CODE_SUBAGENT_MODEL": "{{@@ agents.model[agents.vendors['claude']].subagent @@}}[1m]",
-    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": 1
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": 1,
+    "TMPDIR": "{{@@ env['XDG_RUNTIME_DIR'] @@}}/claude"
   },
   "hasCompletedOnboarding": true
 }
