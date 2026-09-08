@@ -1,3 +1,4 @@
 {
-  "fallbackSubagent": "none"
+  "fallbackSubagent": "none",
+  "workflowsEnabled": false
 }
