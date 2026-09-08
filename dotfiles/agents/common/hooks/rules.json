@@ -16,6 +16,10 @@
 		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/pi",
 		"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"
 	],
+	"unattended": {
+		"timeoutMs": 180000,
+		"allow": []
+	},
 	"classes": [
 		{
 			"id": "git-metadata",
@@ -27,27 +31,145 @@
 			]
 		},
 		{
+			"id": "git-integrate",
+			"action": "deny",
+			"reason": "git pull and merges without --ff-only are forbidden — integrate upstream with git fetch, then git merge --ff-only FETCH_HEAD. A branch that cannot be fast-forwarded has diverged: report it and wait for the user.",
+			"bash": [
+				"{{git}}\\bpull(?![.\\w-])(?![^;&|]*--ff-only)",
+				"{{git}}\\bmerge(?![.\\w-])(?![^;&|]*(?:--ff-only|--abort))"
+			]
+		},
+		{
+			"id": "git-publish",
+			"action": "deny",
+			"reason": "Agents never publish or reconfigure remotes: git push and remote changes are the user's actions. State what you would push or change and wait for them to run it.",
+			"bash": [
+				"{{git}}\\bpush(?![.\\w-])",
+				"{{git}}\\bremote\\s+(add|rename|remove|rm|set-url|set-head|prune)\\b"
+			]
+		},
+		{
+			"id": "registry-publish",
+			"action": "deny",
+			"reason": "Publishing to a registry or image index (npm, cargo, docker, …) is the user's action — agents never publish. State what you would publish and wait for them to run it.",
+			"bash": [
+				"\\b(npm|pnpm|yarn)\\s+publish\\b",
+				"\\bcargo\\s+publish\\b",
+				"\\bgem\\s+push\\b",
+				"\\btwine\\s+upload\\b",
+				"\\bpoetry\\s+publish\\b",
+				"\\b(docker|podman)\\s+push\\b"
+			]
+		},
+		{
+			"id": "git-recovery-destroy",
+			"action": "deny",
+			"reason": "This destroys state git cannot recover: reflog and gc prune destroy git's recovery paths, stash clear discards every stash at once, worktree remove --force destroys uncommitted work. Hand the exact command to the user and wait for them to run it.",
+			"bash": [
+				"{{git}}\\bstash\\s+clear\\b",
+				"{{git}}\\breflog\\s+(expire|delete)\\b",
+				"{{git}}\\bgc\\b[^;&|]*--prune\\b",
+				"{{git}}\\bworktree\\s+remove\\b[^;&|]*(?:--force\\b|\\s-f\\b)"
+			]
+		},
+		{
+			"id": "git-rewrite",
+			"action": "deny",
+			"reason": "History and ref surgery (filter-branch, filter-repo, replace, update-ref) rewrites what every clone depends on and is trivially fat-fingered. Present the exact command and wait for the user to run it.",
+			"bash": [
+				"{{git}}\\bfilter-(branch|repo)(?![.\\w-])",
+				"{{git}}\\breplace(?![.\\w-])",
+				"{{git}}\\bupdate-ref(?![.\\w-])"
+			]
+		},
+		{
+			"id": "secret-dirs",
+			"action": "deny",
+			"reason": "These directories hold credentials and private keys (SSH, GnuPG, cloud, cluster). Access is denied outright — never read, list, or write them, and never echo their contents into chat, logs, or commits.",
+			"secretNames": {
+				"segments": [".ssh", ".gnupg", ".aws", ".kube"]
+			}
+		},
+		{
 			"id": "secret-files",
 			"action": "ask",
-			"reason": "This path holds secrets. Reading or writing it needs the user's explicit approval — and its contents must never be echoed into chat, logs, or commits.",
+			"reason": "This path looks like a secret (.env, key material, credentials). Reading or writing it needs the user's explicit approval — and its contents must never be echoed into chat, logs, or commits. Env-name patterns follow dotenv convention; .env.example-style templates stay readable.",
 			"secretNames": {
-				"segments": [".ssh", ".gnupg", ".aws", ".kube"],
-				"names": [".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ed25519", "id_ecdsa", "auth.json", "credentials.json", "credentials*.json", "*.token", ".netrc", ".npmrc", ".pypirc", "secrets*"]
+				"names": [".env", ".env.local", ".env.*.local", ".env.production", ".env.staging", ".env.development", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ed25519", "id_ecdsa", "auth.json", "credentials.json", "credentials*.json", "*.token", ".netrc", ".npmrc", ".pypirc", "secrets*"]
 			}
+		},
+		{
+			"id": "git-discard",
+			"action": "ask",
+			"reason": "Discarding uncommitted or local-only state is irreversible once gone — git cannot recover it. State exactly what would be discarded and wait.",
+			"bash": [
+				"{{git}}\\brestore(?![.\\w-])",
+				"{{git}}\\bcheckout\\b[^;&|]*\\s--\\s",
+				"{{git}}\\bstash\\s+drop\\b",
+				"{{git}}\\bbranch\\b[^;&|]*\\s-D\\b",
+				"{{git}}\\btag\\s+(-d|--delete)\\b",
+				"{{git}}\\bworktree\\s+remove\\b",
+				"{{git}}\\bsubmodule\\s+(deinit|rm|remove)\\b",
+				"{{git}}\\bswitch\\b[^;&|]*--discard-changes\\b"
+			]
 		},
 		{
 			"id": "git-side-effects",
 			"action": "ask",
-			"reason": "Git side effects (commit, push, pull, history or remote changes) need the user's explicit approval. State what you intend to change and wait — do not retry.",
+			"reason": "Git state changes (commit, rebase, ref updates, worktree rewrites, forge mutations) need the user's explicit approval. State what you intend to change and wait — do not retry.",
 			"bash": [
-				"\\bgit\\s+[^;&|]*\\b(push|pull|commit|merge|rebase|cherry-pick|revert)(?![.\\w-])",
-				"\\bgit\\s+[^;&|]*\\bremote\\s+(add|rename|remove|rm|set-url|set-head|prune)\\b",
-				"\\bgit\\s+[^;&|]*--amend\\b",
-				"\\bgit\\s+[^;&|]*\\breset\\b[^;&|]*--hard\\b",
-				"\\bgit\\s+[^;&|]*\\bclean(?![.\\w-])",
-				"\\bgit\\s+[^;&|]*\\bfilter-(branch|repo)(?![.\\w-])",
-				"\\bgit\\s+[^;&|]*\\breplace(?![.\\w-])",
+				"{{git}}\\bcommit(?![.\\w-])(?![^;&|]*--dry-run)",
+				"{{git}}\\b(?:rebase|cherry-pick)(?![.\\w-])(?![^;&|]*--abort)",
+				"{{git}}\\brevert(?![.\\w-])",
+				"{{git}}\\breset\\b[^;&|]*--hard\\b",
+				"{{git}}\\bclean(?![.\\w-])(?![^;&|]*(?:-n(?![.\\w-])|--dry-run))",
 				"\\b(gh|glab)\\s+(pr|mr|repo|release)\\b[^;&|]*\\b(create|merge|close|delete|edit|submit)\\b"
+			]
+		},
+		{
+			"id": "machine-lifecycle",
+			"action": "deny",
+			"reason": "Powering off, rebooting, or halting the machine is the user's action — agents never change machine power state. If the task needs it, say so and stop.",
+			"bash": [
+				"\\b(shutdown|reboot|halt|poweroff)\\b",
+				"\\binit\\s+[06]\\b"
+			]
+		},
+		{
+			"id": "storage-destructive",
+			"action": "deny",
+			"reason": "Block-device, filesystem, pool, and VM operations destroy data beyond any recovery — never agent work. Hand the exact command to the user and wait for them to run it.",
+			"bash": [
+				"\\bmkfs(?:\\.\\w+)?\\b",
+				"\\bdd\\b[^;&|]*\\bof=/dev/",
+				"\\b(wipefs|blkdiscard)\\b",
+				"\\b(zpool|zfs)\\s+[^;&|]*\\b(destroy|remove)\\b",
+				"\\b(pvremove|vgremove|lvremove)\\b",
+				"\\bmdadm\\b[^;&|]*--zero-superblock\\b",
+				"\\bsgdisk\\b[^;&|]*--zap\\b",
+				"\\bparted\\b[^;&|]*\\b(mklabel|mkfs|rm)\\b",
+				"\\bvirsh\\b[^;&|]*\\b(destroy|undefine|vol-delete|vol-wipe|snapshot-delete|managedsave-remove)\\b"
+			]
+		},
+		{
+			"id": "container-machine",
+			"action": "deny",
+			"reason": "These container operations reach beyond one container or project: system prune sweeps host-wide state (with --volumes, every unused volume), --privileged runs break the host boundary, and compose down -v destroys named volumes. Hand the exact command to the user and wait for them to run it.",
+			"bash": [
+				"\\b(docker|podman|nerdctl)\\b[^;&|]*\\b(?:system\\s+)?prune\\b",
+				"\\b(docker|podman)\\s+compose\\b[^;&|]*\\bdown\\b[^;&|]*\\s(?:-v\\b|--volumes\\b)",
+				"\\bdocker-compose\\b[^;&|]*\\bdown\\b[^;&|]*\\s(?:-v\\b|--volumes\\b)",
+				"\\b(docker|podman|nerdctl)\\b[^;&|]*\\brun\\b[^;&|]*--privileged\\b"
+			]
+		},
+		{
+			"id": "container-destructive",
+			"action": "ask",
+			"reason": "Removing specific containers or images, or tearing down a compose stack, can destroy data — volumes may not survive. State what is deleted and what remains recoverable.",
+			"bash": [
+				"\\b(docker|podman|nerdctl)\\b[^;&|]*\\b(rm|rmi)\\b",
+				"\\b(docker|podman)\\s+compose\\b[^;&|]*\\bdown\\b",
+				"\\bdocker-compose\\b[^;&|]*\\bdown\\b"
 			]
 		},
 		{
@@ -55,10 +177,7 @@
 			"action": "ask",
 			"reason": "Destructive or irreversible operation needs the user's explicit approval. State exactly what it destroys and wait.",
 			"bash": [
-				"\\bdd\\b[^;&|]*\\bof=",
-				"\\bmkfs(\\.\\w+)?\\b",
-				"\\b(shutdown|reboot|halt|poweroff)\\b",
-				"\\binit\\s+[06]\\b",
+				"\\bdd\\b[^;&|]*\\bof=(?!/dev/)",
 				"\\b(chmod|chown)\\b[^;&|]*\\s(-R|--recursive)\\b",
 				"\\b(pkill|killall)\\b",
 				"\\bkill\\b\\s+-[69]\\b"
@@ -67,77 +186,103 @@
 		{
 			"id": "destructive-rm",
 			"action": "ask",
-			"reason": "Recursive or forced deletion outside the session workspace needs the user's explicit approval (inside the workspace, git is the recovery path — user policy). State exactly what it destroys and wait.",
+			"reason": "Recursive or forced deletion (rm -rf, find -delete) outside the session workspace needs the user's explicit approval (inside the workspace, git is the recovery path — user policy). State exactly what it destroys and wait.",
 			"bash": [
-				"\\brm\\s+[^;&|]*-\\w*[rf]"
+				"\\brm\\s+[^;&|]*-\\w*[rf]",
+				"\\bfind\\b[^;&|]*\\s-delete\\b"
 			],
 			"bashScope": "external"
 		},
 		{
-			"id": "package-uninstall",
-			"action": "deny",
-			"reason": "Package removal is forbidden for agents — uninstalling is never automated. Present the removal and let the user run it.",
+			"id": "archive-extract",
+			"action": "ask",
+			"reason": "Extracting an archive writes wherever its entry paths point — and archives fetched from the network are untrusted. State the archive, its origin, and the target directory (prefer a fresh directory, never /).",
 			"bash": [
-				"\\b(apt|apt-get)\\s+(remove|purge|autoremove)\\b",
-				"\\bdnf\\s+(remove|erase|autoremove)\\b",
-				"\\bzypper\\s+(remove|rm)\\b",
-				"\\bpacman\\s+[^;&|]*(-[A-Za-z]*R|--remove)",
-				"\\b(yay|paru|pikaur)\\s+[^;&|]*(-[A-Za-z]*R|--remove)",
-				"\\bapk\\s+del\\b",
-				"\\bemerge\\b[^;&|]*(--unmerge|--depclean|--deselect)\\b",
-				"\\bpip3?\\s+uninstall\\b",
-				"\\buv\\s+(pip\\s+)?(uninstall|remove)\\b",
-				"\\buv\\s+tool\\s+uninstall\\b",
-				"\\bpipx\\s+uninstall\\b",
-				"\\b(npm|pnpm|bun)\\s+(uninstall|remove|rm)\\b",
-				"\\byarn\\s+remove\\b",
-				"\\bcargo\\s+(uninstall|remove)\\b",
-				"\\bgem\\s+uninstall\\b",
-				"\\bbrew\\s+(uninstall|remove)\\b",
-				"\\bsnap\\s+remove\\b",
-				"\\bflatpak\\s+(uninstall|remove)\\b",
-				"\\bconda\\s+(remove|uninstall)\\b",
-				"\\bmamba\\s+(remove|uninstall)\\b",
-				"\\bnix-env\\s+[^;&|]*-[A-Za-z]*e\\b",
-				"\\bnix\\s+profile\\s+(remove|uninstall)\\b",
-				"\\bdeno\\s+(uninstall|remove)\\b"
+				"\\b(?:bsd)?tar\\s+x[zjJvf]*(\\s|$)",
+				"\\b(?:bsd)?tar\\s+[^;&|]*\\s?(-x[zjJvf]*|--extract|--get)\\b",
+				"\\b(unzip|unrar|unar)\\b",
+				"\\b7z\\s+[xe]\\b"
 			]
 		},
 		{
-			"id": "package-install",
-			"action": "ask",
-			"reason": "Installing or upgrading packages (system, user, or project) changes the dependency set and needs the user's explicit approval.",
+			"id": "remote-exec",
+			"action": "deny",
+			"reason": "Never execute content fetched from the network — piping a download into a shell or an unknown executor runs unreviewed code. Download it to a file, inspect it, and propose the install; prefer the distro package manager.",
 			"bash": [
-				"\\b(apt|apt-get)\\s+(install|upgrade|full-upgrade|dist-upgrade)\\b",
-				"\\bdnf\\s+(install|upgrade|update|downgrade|reinstall)\\b",
-				"\\bzypper\\s+(install|in|up|update|dup)\\b",
-				"\\bpacman\\s+[^;&|]*(-[A-Za-z]*S(?!s)|--sync)",
-				"\\b(yay|paru|pikaur)\\s+[^;&|]*(-[A-Za-z]*S(?!s)|--sync)",
-				"\\bapk\\s+add\\b",
+				"\\b(curl|wget)\\b[^;&|]*\\|\\s*(sudo\\s+)?((?:ba|z|da|k|a)?sh|fish|python3?|\\$\\{?[A-Za-z_]\\w*\\}?)\\b",
+				"\\b(source|bash|zsh|dash|ksh|sh|fish)\\s+<\\(\\s*(curl|wget)"
+			]
+		},
+		{
+			"id": "network-transfer",
+			"action": "ask",
+			"reason": "Transferring data over the network needs the user's explicit approval. State the source, the destination, and exactly what moves; never include secrets, credentials, or tokens.",
+			"bash": [
+				"\\b(curl|wget)\\b(?![^;&|]*(localhost|127\\.0\\.0\\.1|::1|\\[::1\\]))",
+				"\\b(gh|glab)\\s+api\\b",
+				"\\brsync\\b[^;&|]*\\S+:",
+				"\\b(scp|sftp)\\b",
+				"\\bssh(?![.\\w-])",
+				"\\b(nc|socat|telnet)\\b"
+			]
+		},
+		{
+			"id": "persistence-change",
+			"action": "ask",
+			"reason": "These commands change what runs on the machine now or at boot. State what changes, why the workspace cannot hold it, and how to revert.",
+			"bash": [
+				"\\bcrontab\\b(?![^;&|]*-l\\b)",
+				"\\bsystemctl\\b[^;&|]*\\b(enable|disable|mask|unmask|link|preset|start|stop|restart|try-restart|reload)\\b"
+			]
+		},
+		{
+			"id": "package-mutate",
+			"action": "deny",
+			"reason": "Package installs and removals are denied, except exact restores from the project's pinned config: npm/pnpm/yarn/bun install or npm ci with flags only (no package arguments, no -g/--global), uv sync, poetry install, and pip/uv pip install -r requirements.txt. Anything else — new dependencies, global or user-level installs, system packages, uninstalls — hand the exact command to the user and wait for them to run it.",
+			"bash": [
+				"\\b(apt|apt-get)\\s+(install|upgrade|full-upgrade|dist-upgrade|remove|purge|autoremove)\\b",
+				"\\bdnf\\s+(install|upgrade|update|downgrade|reinstall|remove|erase|autoremove)\\b",
+				"\\bzypper\\s+(install|in|up|update|dup|remove|rm)\\b",
+				"\\b(pacman|yay|paru|pikaur)\\s+[^;&|]*-[A-Za-z]*(?:S(?!s)|R)",
+				"\\bapk\\s+(add|del)\\b",
 				"\\bemerge\\b",
-				"\\bpip3?\\s+(install|upgrade)\\b",
-				"\\buv\\s+(pip\\s+)?(install|add|upgrade)\\b",
-				"\\buv\\s+tool\\s+(install|upgrade|reinstall)\\b",
-				"\\bpipx\\s+(install|upgrade|reinstall)\\b",
-				"\\b(npm|pnpm|bun)\\s+(install|i|ci|add|update)\\b",
-				"\\byarn\\s+(add|install|upgrade|update)\\b",
-				"\\bcargo\\s+(install|add)\\b",
-				"\\bgem\\s+(install|update|upgrade)\\b",
-				"\\bbrew\\s+(install|upgrade|reinstall)\\b",
-				"\\bsnap\\s+(install|refresh)\\b",
-				"\\bflatpak\\s+(install|update)\\b",
-				"\\bconda\\s+(install|update|upgrade)\\b",
-				"\\bmamba\\s+(install|update|upgrade)\\b",
-				"\\bgo\\s+install\\b",
-				"\\bnix-env\\s+[^;&|]*-\\w*i",
-				"\\bnix\\s+profile\\s+(install|upgrade)\\b",
-				"\\bdeno\\s+(install|add|update)\\b"
+				"\\bbrew\\s+(install|upgrade|reinstall|uninstall|remove)\\b",
+				"\\bsnap\\s+(install|refresh|remove)\\b",
+				"\\bflatpak\\s+(install|update|uninstall|remove)\\b",
+				"\\bpip3?\\s+install\\b(?![^;&|]*\\s(-r|--requirement)\\s)",
+				"\\bpip3?\\s+uninstall\\b",
+				"\\buv\\s+pip\\s+install\\b(?![^;&|]*\\s(-r|--requirement)\\s)",
+				"\\buv\\s+pip\\s+(uninstall|remove)\\b",
+				"\\buv\\s+(add|tool\\s+(install|uninstall|upgrade|reinstall))\\b",
+				"\\bpoetry\\s+(add|remove|update)\\b",
+				"\\b(conda|mamba)\\s+(install|remove|uninstall|update|upgrade)\\b",
+				"\\bgem\\s+(install|uninstall|update|upgrade)\\b",
+				"\\bcargo\\s+(install|uninstall|add|remove)\\b",
+				"\\bgo\\s+(install|get)\\b",
+				"\\bdeno\\s+(install|uninstall|add|remove|update)\\b",
+				"\\b(npm|pnpm|bun)\\s+(install|i|add)\\b[^;&|>]*\\s[a-zA-Z@]",
+				"\\b(npm|pnpm|yarn|bun)\\s+(install|i|add)\\b[^;&|]*\\s(?:-g(?![\\w-])|--global(?![\\w-]))",
+				"\\byarn\\s+global\\s+(add|remove)\\b",
+				"\\byarn\\s+(add|remove)\\b",
+				"\\byarn\\s+install\\b[^;&|>]*\\s[a-zA-Z@]",
+				"\\b(npm|pnpm|bun)\\s+(uninstall|remove|rm)\\b"
+			]
+		},
+		{
+			"id": "package-run",
+			"action": "ask",
+			"reason": "Ephemeral execution (npx, uvx, …) downloads and runs unreviewed code. State the tool, its source, and why a project dependency or an installed tool cannot serve instead.",
+			"bash": [
+				"\\b(npx|bunx|uvx)\\b",
+				"\\b(pnpm|yarn)\\s+dlx\\b",
+				"\\bpipx\\s+run\\b",
+				"\\bnpm\\s+exec\\b"
 			]
 		},
 		{
 			"id": "system-privileged",
-			"action": "ask",
-			"reason": "Privilege escalation (sudo, doas) needs the user's explicit approval.",
+			"action": "deny",
+			"reason": "Privilege escalation (sudo, doas — read-only forms like sudo -l included) is denied: agents never run commands as another user or as root. State the exact command and why it needs privilege; the user runs it themselves.",
 			"bash": [
 				"\\bsudo\\b",
 				"\\bdoas\\b"
