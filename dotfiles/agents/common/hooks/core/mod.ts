@@ -5,6 +5,33 @@
  * match returns null. The core never emits `allow` — allowing is the absence of a
  * verdict, so a guard that fails to match can never waive a rule.
  *
+ * Tier doctrine — how a class earns its action. Two axes decide: blast radius
+ * and recoverability (irreversible? machine-scoped?) against frequency and
+ * reviewability (does agent work legitimately need it often? can the user judge
+ * it from the command line?). Common + recoverable-in-tree is no class at all
+ * (git is the recovery path); rare + irreversible/machine-scoped — or anything
+ * crossing a trust boundary (publish, privilege, secret dirs) — is deny, whose
+ * reason must tell the model to hand the exact command to the user and wait;
+ * everything reviewable-with-one-approval is ask. New classes take this test,
+ * not enumeration instinct; deny reasons carry the handoff sentence.
+ *
+ * The table's `unattended` section is policy annotation, not a verdict: evaluate
+ * merely transcribes `unattended.allow` onto the winning ask verdict, and an
+ * adapter may honor that mark only while its host is unattended — a host state
+ * the core neither knows nor owns. The core still never resolves to allow itself.
+ * Adapters learn attendance from their host: pi from its session mode and hasUI;
+ * the subprocess hooks from AGENTS_UNATTENDED=1 in their environment (an adapter
+ * contract, not a core input).
+ *
+ * Exemption matrix — how paths escape the scope classes (matches evaluate):
+ *   - read intents:  readAllowlist exempts the secret scan and read-scope;
+ *     the project root and the class's allowPrefixes exempt read-scope only.
+ *   - write intents: writeExemptPrefixes exempt the secret scan and
+ *     tree-external-write; the project root exempts tree-external-write only.
+ *   - bashScope "external" classes gate on the project root alone — no prefix
+ *     exemptions. A secret inside the project root still asks: the root does
+ *     not exempt the secret scan, only the scope classes.
+ *
  * Matching is a discipline backstop, not a security sandbox: bash command scanning
  * is heuristic (two-segment absolute-path tokens, redirection and write-verb
  * targets) and can be evaded by an adversarial command. The tools' native
@@ -32,6 +59,13 @@ export interface Verdict {
 	action: "ask" | "deny";
 	rule: string;
 	reason: string;
+	/**
+	 * Transcribed from the table's `unattended.allow` entry for this rule — the
+	 * user's standing configuration, not a core decision. An adapter may approve
+	 * on it only while its host is unattended; attended runs and deny verdicts
+	 * never carry it.
+	 */
+	unattended?: "allow";
 }
 
 export interface MatchContext {
@@ -52,6 +86,11 @@ interface SecretNames {
 	names?: string[];
 }
 
+/**
+ * Path predicates a class may combine; the closed set below is what evaluate
+ * implements one branch per field. A seventh predicate shape is the trigger to
+ * design combinators, not to add an eighth branch.
+ */
 interface RuleClass {
 	id: string;
 	action: "ask" | "deny";
@@ -82,13 +121,47 @@ interface RuleClass {
 	allowPrefixes?: string[];
 }
 
+/** Standing pre-approvals and the ask timeout for unattended hosts. */
+interface UnattendedSection {
+	/**
+	 * Ask dialogs auto-cancel (hence deny) after this many milliseconds; 0 means
+	 * deny without waiting. Non-finite or negative values fail at load.
+	 */
+	timeoutMs?: number;
+	/**
+	 * Rule ids an unattended adapter may approve without a user. Every id must
+	 * name an existing ask-class rule; anything else fails at load.
+	 */
+	allow?: string[];
+}
+
 interface Rules {
 	readAllowlist: string[];
 	writeExemptPrefixes: string[];
+	unattended?: UnattendedSection;
 	classes: (Omit<RuleClass, "bash"> & { bash?: RegExp[] })[];
 }
 
 let cached: Rules | undefined;
+
+/**
+ * Named prefix anchors substitutable into bash patterns as {{name}}. The git
+ * anchor pins the subcommand to the first token after `git` that is not a
+ * flag: flag tokens are absorbed one per repetition (with one value apiece,
+ * recovered by backtracking), so words in a `commit -m "..."` message body
+ * never sit in subcommand position. An unknown anchor fails loudly at load.
+ */
+const BASH_ANCHORS: Record<string, string> = {
+	git: "\\bgit\\s+(?:-\\S+\\s+(?:\\S+\\s+)?)*",
+};
+
+function expandAnchors(pattern: string): string {
+	return pattern.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => {
+		const anchor = BASH_ANCHORS[name];
+		if (!anchor) throw new Error(`rules.json: unknown bash anchor {{${name}}}`);
+		return anchor;
+	});
+}
 
 function loadRules(): Rules {
 	if (cached) return cached;
@@ -97,14 +170,43 @@ function loadRules(): Rules {
 	) as {
 		readAllowlist: string[];
 		writeExemptPrefixes: string[];
+		unattended?: UnattendedSection;
 		classes: RuleClass[];
 	};
+	// The unattended section gates standing pre-approvals, so malformed data fails
+	// loudly here like every other field (bad regexes already throw at compile).
+	// The alternative is silent misdirection: a non-array allow (say a bare
+	// string) would hit String.prototype.includes in evaluate and mark every ask
+	// whose rule id is a substring of it — widening approvals; a typo'd or
+	// deny-class id would silently drop the user's intent.
+	const classById = new Map(raw.classes.map((c) => [c.id, c] as const));
+	if (raw.unattended) {
+		const { allow, timeoutMs } = raw.unattended;
+		if (allow !== undefined) {
+			if (!Array.isArray(allow) || allow.some((id) => typeof id !== "string")) {
+				throw new Error("rules.json: unattended.allow must be an array of rule id strings");
+			}
+			for (const id of allow) {
+				const cls = classById.get(id);
+				if (!cls) {
+					throw new Error(`rules.json: unattended.allow references unknown rule id "${id}"`);
+				}
+				if (cls.action === "deny") {
+					throw new Error(`rules.json: unattended.allow lists "${id}" — deny classes never ask, so they cannot be pre-approved`);
+				}
+			}
+		}
+		if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 0)) {
+			throw new Error("rules.json: unattended.timeoutMs must be a non-negative finite number");
+		}
+	}
 	cached = {
 		readAllowlist: raw.readAllowlist,
 		writeExemptPrefixes: raw.writeExemptPrefixes,
+		unattended: raw.unattended,
 		classes: raw.classes.map((c) => ({
 			...c,
-			bash: c.bash?.map((p) => new RegExp(p)),
+			bash: c.bash?.map((p) => new RegExp(expandAnchors(p))),
 		})),
 	};
 	return cached;
@@ -118,6 +220,7 @@ function loadRules(): Rules {
 function normalizePath(rawPath: string, ctx: MatchContext): string {
 	let p = rawPath.trim().replace(/^["']|["']$/g, "");
 	if (p.startsWith("~/")) p = ctx.home + p.slice(1);
+	else if (p.startsWith("$HOME/")) p = ctx.home + p.slice(5);
 	else if (p === "~") p = ctx.home;
 	if (!p.startsWith("/")) p = `${ctx.cwd}/${p}`;
 	const out: string[] = [];
@@ -186,12 +289,14 @@ function globMatch(pattern: string, s: string): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Absolute-ish path tokens: `~/x` (any depth) and `/x/y` (two or more segments —
- * the depth floor keeps `/regex/` and flag-like tokens out). The leading boundary
- * class excludes word characters so `usr/bin` inside a word never matches.
+ * Absolute-ish path tokens: `~/x` (any depth), `$HOME/x/y` (two or more
+ * segments after the variable — quoted "$HOME/x" keeps the boundary via the
+ * quote), and `/x/y` (two or more segments — the depth floor keeps `/regex/`
+ * and flag-like tokens out). The leading boundary class excludes word
+ * characters so `usr/bin` inside a word never matches.
  */
 const BASH_PATH =
-	/(?:^|[\s=;&|('",)])(~\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._*{}-]+)*|\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._*{}-]+)+)/g;
+	/(?:^|[\s=;&|('",)])(~\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._*{}-]+)*|\$HOME(?:\/[A-Za-z0-9._*{}-]+)+|\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._*{}-]+)+)/g;
 
 /**
  * Redirect targets — `>` and `>>`, with or without a preceding fd number.
@@ -202,7 +307,7 @@ const BASH_PATH =
 const REDIRECT_TARGET = /(?:^|[\s;(&|])\d?>>?\s*("[^"]*"|'[^']*'|[^\s;&|<>()"]+)/g;
 
 const WRITE_VERB =
-	/\b(cp|mv|install|ln|tee|chmod|chown|touch|mkdir|rmdir|rm|truncate|shred)\b/;
+	/\b(cp|mv|install|ln|tee|chmod|chown|touch|mkdir|rmdir|rm|truncate|shred|rsync|tar|unzip)\b/;
 
 function bashReadPaths(command: string): string[] {
 	return [...command.matchAll(BASH_PATH)].map((m) => m[1]);
@@ -287,5 +392,30 @@ export function evaluate(intent: Intent, ctx: MatchContext): Verdict | null {
 	}
 	// deny outranks ask; within a rank, table order (first hit) wins.
 	const deny = verdicts.find((v) => v.action === "deny");
-	return deny ?? verdicts[0] ?? null;
+	const winner = deny ?? verdicts[0];
+	if (!winner) return null;
+	// Transcription only: mark a winning ask whose rule id the table lists in
+	// unattended.allow. deny verdicts and unlisted rules pass through unmarked.
+	if (winner.action === "ask" && rules.unattended?.allow?.includes(winner.rule)) {
+		return { ...winner, unattended: "allow" };
+	}
+	return winner;
+}
+
+export interface UnattendedPolicy {
+	timeoutMs: number;
+	allow: ReadonlySet<string>;
+}
+
+/**
+ * The table's unattended policy with defaults applied: a 180s ask timeout and an
+ * empty allow set when the section or its fields are absent. Malformed table data
+ * fails loudly at load, like every other field here.
+ */
+export function unattendedPolicy(): UnattendedPolicy {
+	const rules = loadRules();
+	return {
+		timeoutMs: rules.unattended?.timeoutMs ?? 180_000,
+		allow: new Set(rules.unattended?.allow ?? []),
+	};
 }

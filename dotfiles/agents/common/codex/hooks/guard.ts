@@ -1,10 +1,23 @@
 /**
  * Codex adapter — PreToolUse only.
  *
- * Codex has no ask verdict: returning one marks the hook failed AND lets the call
- * proceed (fail-open). So every ask degrades to deny+reason — the reason tells the
- * model to present the change and wait for approval. Only deny is ever emitted;
- * no verdict → silent exit 0 (Codex's normal flow). A crash exits 2 — deny.
+ * Codex 0.150.x hooks have no usable ask or allow verdict: the binary rejects
+ * both ("PreToolUse hook returned unsupported permissionDecision:ask/allow"),
+ * and a failed hook is fail-open. So every ask degrades to deny+reason — the
+ * reason tells the model to present the change and wait for approval — except
+ * a verdict the table marked unattended.allow, which passes through silently
+ * to the host's normal approval flow: its permission_mode / approval_policy
+ * own attendance, and the guard neither allows nor blocks there. Only deny is
+ * ever emitted; no verdict → silent exit 0 (Codex's normal flow). A crash
+ * exits 2 — deny.
+ *
+ * Re-verify the degradation against each Codex upgrade: upstream main already
+ * carries ask/allow in its PreToolUse output schema, so a newer Codex may
+ * make real asks (and unattended allows) expressible here.
+ *
+ * Trust: user-layer hooks run only after the TUI trust flow, or
+ * --dangerously-bypass-hook-trust for automation — an untrusted hook is listed
+ * but never run. After deploying, verify the guard actually fires.
  */
 
 import { evaluate, workspaceRoot, type Intent } from "./core/mod.ts"; // paths are written against the deployed layout (~/.codex/hooks/) — guard.ts sits beside core/, not against this repo tree
@@ -35,6 +48,11 @@ async function main() {
 
 	const verdict = evaluate(intent, { cwd, home: homedir(), projectRoot: workspaceRoot(cwd) });
 	if (!verdict) return;
+
+	// A table pre-approval passes through to the host's approval flow, which
+	// owns the decision (see header). Attended, that flow prompts the user;
+	// unattended, its own policy resolves it — either way the guard stays out.
+	if (verdict.action === "ask" && verdict.unattended === "allow") return;
 
 	await Deno.stdout.write(
 		new TextEncoder().encode(
