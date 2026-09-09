@@ -10,8 +10,9 @@
  * reviewability (does agent work legitimately need it often? can the user judge
  * it from the command line?). Common + recoverable-in-tree is no class at all
  * (git is the recovery path); rare + irreversible/machine-scoped — or anything
- * crossing a trust boundary (publish, privilege, secret dirs) — is deny, whose
- * reason must tell the model to hand the exact command to the user and wait;
+ * crossing a trust boundary (publish, privilege, secrets and private stores) —
+ * is deny, whose reason must tell the model to hand the exact command to the
+ * user and wait;
  * everything reviewable-with-one-approval is ask. New classes take this test,
  * not enumeration instinct; deny reasons carry the handoff sentence.
  *
@@ -24,13 +25,19 @@
  * contract, not a core input).
  *
  * Exemption matrix — how paths escape the scope classes (matches evaluate):
- *   - read intents:  readAllowlist exempts the secret scan and read-scope;
- *     the project root and the class's allowPrefixes exempt read-scope only.
- *   - write intents: writeExemptPrefixes exempt the secret scan and
- *     tree-external-write; the project root exempts tree-external-write only.
+ *   - read intents:  readAllowlist exempts the secret scan, read-scope, and
+ *     underPrefixes; the project root and the class's allowPrefixes exempt
+ *     read-scope only.
+ *   - write intents: writeExemptPrefixes exempt the secret scan,
+ *     tree-external-write, and underPrefixes; the project root exempts
+ *     tree-external-write only.
  *   - bashScope "external" classes gate on the project root alone — no prefix
  *     exemptions. A secret inside the project root still asks: the root does
  *     not exempt the secret scan, only the scope classes.
+ *   - underPrefixes classes are the pinned-safe doctrine carried to its third
+ *     use: like readAllowlist under read-scope and writeExemptPrefixes under
+ *     tree-external-write, they keep the scratch dirs exempt from the tmp rule
+ *     even if a deployment ever moved XDG_RUNTIME_DIR beneath /tmp.
  *
  * Matching is a discipline backstop, not a security sandbox: bash command scanning
  * is heuristic (two-segment absolute-path tokens, redirection and write-verb
@@ -88,8 +95,8 @@ interface SecretNames {
 
 /**
  * Path predicates a class may combine; the closed set below is what evaluate
- * implements one branch per field. A seventh predicate shape is the trigger to
- * design combinators, not to add an eighth branch.
+ * implements one branch per field. A further predicate shape is the trigger to
+ * design combinators, not to add another branch.
  */
 interface RuleClass {
 	id: string;
@@ -99,8 +106,11 @@ interface RuleClass {
 	bash?: string[];
 	/** Path predicate: these names mark a secret path (all intents). */
 	secretNames?: SecretNames;
-	/** Path predicate: intent kind the outside-test applies to. */
-	pathKind?: "read" | "write";
+	/**
+	 * Intent kind the path predicates test. The outside-test reads it as a
+	 * plain gate; underPrefixes also accepts "any" (both scanned sets).
+	 */
+	pathKind?: "read" | "write" | "any";
 	/** Path predicate: where the path must sit to match. */
 	outside?: "project";
 	/**
@@ -119,6 +129,15 @@ interface RuleClass {
 	 * any scope rule.
 	 */
 	allowPrefixes?: string[];
+	/**
+	 * Path predicate: intents of `pathKind` match when a scanned path sits under
+	 * one of these roots (`~`-expanded against home, like allowPrefixes). Unlike
+	 * the scope predicates, no class-level exemptions exist — but the pinned-safe
+	 * prefixes still win (readAllowlist for read intents, writeExemptPrefixes for
+	 * write intents), so the scratch dirs can never be caught by a tmp-style
+	 * rule. For "any", each path is tested against its own intent's prefix list.
+	 */
+	underPrefixes?: string[];
 }
 
 /** Standing pre-approvals and the ask timeout for unattended hosts. */
@@ -380,6 +399,23 @@ export function evaluate(intent: Intent, ctx: MatchContext): Verdict | null {
 					!isUnder(p, ctx.projectRoot ?? ctx.cwd) &&
 					!cls.allowPrefixes!.some((a) => isUnder(p, expandPrefix(a, ctx))) &&
 					!rules.readAllowlist.some((a) => isUnder(p, a)),
+			);
+		}
+		if (!hit && cls.underPrefixes) {
+			// Each intent kind is exempted by its own pinned-safe prefix list (see
+			// the exemption matrix); "any" pools both kinds with their lists.
+			const pools: Array<[string[], string[]]> =
+				cls.pathKind === "read"
+					? [[readPaths, rules.readAllowlist]]
+					: cls.pathKind === "write"
+					? [[writePaths, rules.writeExemptPrefixes]]
+					: [[readPaths, rules.readAllowlist], [writePaths, rules.writeExemptPrefixes]];
+			hit = pools.some(([paths, exempt]) =>
+				paths.some(
+					(p) =>
+						!exempt.some((a) => isUnder(p, a)) &&
+						cls.underPrefixes!.some((t) => isUnder(p, expandPrefix(t, ctx))),
+				),
 			);
 		}
 		if (!hit && cls.outside === "project" && cls.pathKind === "write") {

@@ -1,7 +1,9 @@
 {
 	"readAllowlist": [
-		"/usr/include", "/usr/src", "/usr/lib", "/usr/share", "/proc", "/sys",
-		"/usr/bin", "/usr/sbin", "/usr/local/bin", "/bin", "/sbin",
+		"/usr/include", "/usr/src", "/usr/lib", "/usr/lib64", "/usr/share", "/proc", "/sys",
+		"/usr/bin", "/usr/sbin", "/usr/local/bin", "/usr/local/include", "/usr/local/lib",
+		"/usr/local/lib64", "/usr/local/man", "/usr/local/share", "/bin", "/sbin", "/lib", "/lib64",
+		"/etc/os-release",
 		"/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/tty",
 		"/dev/zero", "/dev/urandom", "/dev/random",
 		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/claude",
@@ -97,6 +99,20 @@
 			"secretNames": {
 				"names": [".env", ".env.local", ".env.*.local", ".env.production", ".env.staging", ".env.development", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ed25519", "id_ecdsa", "auth.json", "credentials.json", "credentials*.json", "*.token", ".netrc", ".npmrc", ".pypirc", "secrets*"]
 			}
+		},
+		{
+			"id": "privacy-store",
+			"action": "deny",
+			"reason": "This path holds private state — credential and wallet stores, browser or mail profile data, login tokens, or command and tool history. It is denied outright for both reading and writing, and nothing from it may be echoed into chat, logs, or commits. If the task genuinely needs it, state what and why, and wait for the user.",
+			"pathKind": "any",
+			"underPrefixes": [
+				"~/.config/gnupg",
+				"~/.local/share/kwalletd", "~/.local/share/keyrings",
+				"~/.mozilla", "~/.thunderbird",
+				"~/.steam", "~/.local/share/Steam",
+				"~/.bash_history", "~/.local/share/fish/fish_history", "~/.local/share/atuin", "~/.viminfo",
+				"/etc/ssh", "/etc/sudoers", "/etc/sudoers.d", "/etc/shadow", "/etc/gshadow"
+			]
 		},
 		{
 			"id": "git-discard",
@@ -296,6 +312,13 @@
 				"\\b(git\\s+)?rm\\b[^;&|]*(__tests__|/tests?/|\\.test\\.|\\.spec\\.|_test\\.[a-z]+|test_[^/\\s]*\\.py)"
 			],
 			"bashScope": "external"
+		},
+		{
+			"id": "tmp-dirs",
+			"action": "deny",
+			"reason": "The system shared tmp dirs (/tmp, /var/tmp, /dev/shm) are off-limits to agents: they are shared with every other process on the machine, cleaned up without warning, and denied outright. Use your per-agent scratch dir instead — $XDG_RUNTIME_DIR/<agent>, one of {{@@ env['XDG_RUNTIME_DIR'] @@}}/claude, {{@@ env['XDG_RUNTIME_DIR'] @@}}/codex, {{@@ env['XDG_RUNTIME_DIR'] @@}}/cursor, or {{@@ env['XDG_RUNTIME_DIR'] @@}}/pi (this agent's own dir; the guard exempts it). Redirect the file, output, or download there and continue.",
+			"pathKind": "any",
+			"underPrefixes": ["/tmp", "/var/tmp", "/dev/shm"]
 		},
 		{
 			"id": "tree-external-write",
