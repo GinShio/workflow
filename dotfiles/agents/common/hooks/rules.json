@@ -26,7 +26,7 @@
 		{
 			"id": "git-metadata",
 			"action": "deny",
-			"reason": "Deleting git metadata (.git) destroys repository history and cannot be undone. Never remove it — a recursive wipe of the repo root counts too.",
+			"reason": "Destroys repository history beyond recovery — stop and report if the task seems to require removal.",
 			"bash": [
 				"\\brm\\s+[^;&|]*\\.git\\b",
 				"\\brm\\s+[^;&|]*-\\w*[rf][^;&|]*\\s[\"']?\\.{1,2}/?[\"']?(\\s|$)"
@@ -35,7 +35,7 @@
 		{
 			"id": "git-integrate",
 			"action": "deny",
-			"reason": "git pull and merges without --ff-only are forbidden — integrate upstream with git fetch, then git merge --ff-only FETCH_HEAD. A branch that cannot be fast-forwarded has diverged: report it and wait for the user.",
+			"reason": "Integrate upstream: git fetch, then git merge --ff-only FETCH_HEAD; if it can't fast-forward, report the divergence.",
 			"bash": [
 				"{{git}}\\bpull(?![.\\w-])(?![^;&|]*--ff-only)",
 				"{{git}}\\bmerge(?![.\\w-])(?![^;&|]*(?:--ff-only|--abort))"
@@ -44,7 +44,7 @@
 		{
 			"id": "git-publish",
 			"action": "deny",
-			"reason": "Agents never publish or reconfigure remotes: git push and remote changes are the user's actions. State what you would push or change and wait for them to run it.",
+			"reason": "Publishing and remote changes are the user's actions — hand the exact command to the user and wait for them to run it.",
 			"bash": [
 				"{{git}}\\bpush(?![.\\w-])",
 				"{{git}}\\bremote\\s+(add|rename|remove|rm|set-url|set-head|prune)\\b"
@@ -53,7 +53,7 @@
 		{
 			"id": "registry-publish",
 			"action": "deny",
-			"reason": "Publishing to a registry or image index (npm, cargo, docker, …) is the user's action — agents never publish. State what you would publish and wait for them to run it.",
+			"reason": "Publishing to a registry or image index is the user's action — hand the exact command to the user and wait for them to run it.",
 			"bash": [
 				"\\b(npm|pnpm|yarn)\\s+publish\\b",
 				"\\bcargo\\s+publish\\b",
@@ -66,7 +66,7 @@
 		{
 			"id": "git-recovery-destroy",
 			"action": "deny",
-			"reason": "This destroys state git cannot recover: reflog and gc prune destroy git's recovery paths, stash clear discards every stash at once, worktree remove --force destroys uncommitted work. Hand the exact command to the user and wait for them to run it.",
+			"reason": "Destroys git's recovery paths — unrecoverable afterward; hand the exact command to the user and wait.",
 			"bash": [
 				"{{git}}\\bstash\\s+clear\\b",
 				"{{git}}\\breflog\\s+(expire|delete)\\b",
@@ -77,7 +77,7 @@
 		{
 			"id": "git-rewrite",
 			"action": "deny",
-			"reason": "History and ref surgery (filter-branch, filter-repo, replace, update-ref) rewrites what every clone depends on and is trivially fat-fingered. Present the exact command and wait for the user to run it.",
+			"reason": "Rewrites what every clone depends on — hand the exact command to the user and wait.",
 			"bash": [
 				"{{git}}\\bfilter-(branch|repo)(?![.\\w-])",
 				"{{git}}\\breplace(?![.\\w-])",
@@ -87,7 +87,7 @@
 		{
 			"id": "secret-dirs",
 			"action": "deny",
-			"reason": "These directories hold credentials and private keys (SSH, GnuPG, cloud, cluster). Access is denied outright — never read, list, or write them, and never echo their contents into chat, logs, or commits.",
+			"reason": "Credential and key stores — never read, list, or write them; route anything needing their contents to the user.",
 			"secretNames": {
 				"segments": [".ssh", ".gnupg", ".aws", ".kube"]
 			}
@@ -95,7 +95,7 @@
 		{
 			"id": "secret-files",
 			"action": "ask",
-			"reason": "This path looks like a secret (.env, key material, credentials). Reading or writing it needs the user's explicit approval — and its contents must never be echoed into chat, logs, or commits. Env-name patterns follow dotenv convention; .env.example-style templates stay readable.",
+			"reason": "Path looks like secret material — state why the task needs it.",
 			"secretNames": {
 				"names": [".env", ".env.local", ".env.*.local", ".env.production", ".env.staging", ".env.development", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ed25519", "id_ecdsa", "auth.json", "credentials.json", "credentials*.json", "*.token", ".netrc", ".npmrc", ".pypirc", "secrets*"]
 			}
@@ -103,7 +103,7 @@
 		{
 			"id": "privacy-store",
 			"action": "deny",
-			"reason": "This path holds private state — credential and wallet stores, browser or mail profile data, login tokens, or command and tool history. It is denied outright for both reading and writing, and nothing from it may be echoed into chat, logs, or commits. If the task genuinely needs it, state what and why, and wait for the user.",
+			"reason": "Private state — if the task genuinely needs it, state what and why, and wait for the user.",
 			"pathKind": "any",
 			"underPrefixes": [
 				"~/.config/gnupg",
@@ -117,7 +117,7 @@
 		{
 			"id": "git-discard",
 			"action": "ask",
-			"reason": "Discarding uncommitted or local-only state is irreversible once gone — git cannot recover it. State exactly what would be discarded and wait.",
+			"reason": "Discards uncommitted or local-only state — irrecoverable; state exactly what would be discarded and wait.",
 			"bash": [
 				"{{git}}\\brestore(?![.\\w-])",
 				"{{git}}\\bcheckout\\b[^;&|]*\\s--\\s",
@@ -132,7 +132,7 @@
 		{
 			"id": "git-side-effects",
 			"action": "ask",
-			"reason": "Git state changes (commit, rebase, ref updates, worktree rewrites, forge mutations) need the user's explicit approval. State what you intend to change and wait — do not retry.",
+			"reason": "Repo-state changes — the user's call; state what you intend and wait — a decline is a stop, not a prompt to rephrase.",
 			"bash": [
 				"{{git}}\\bcommit(?![.\\w-])(?![^;&|]*--dry-run)",
 				"{{git}}\\b(?:rebase|cherry-pick)(?![.\\w-])(?![^;&|]*--abort)",
@@ -145,7 +145,7 @@
 		{
 			"id": "machine-lifecycle",
 			"action": "deny",
-			"reason": "Powering off, rebooting, or halting the machine is the user's action — agents never change machine power state. If the task needs it, say so and stop.",
+			"reason": "Machine power state is the user's action — if the task needs it, say so and stop.",
 			"bash": [
 				"\\b(shutdown|reboot|halt|poweroff)\\b",
 				"\\binit\\s+[06]\\b"
@@ -154,7 +154,7 @@
 		{
 			"id": "storage-destructive",
 			"action": "deny",
-			"reason": "Block-device, filesystem, pool, and VM operations destroy data beyond any recovery — never agent work. Hand the exact command to the user and wait for them to run it.",
+			"reason": "Destroys data beyond any recovery — hand the exact command to the user and wait.",
 			"bash": [
 				"\\bmkfs(?:\\.\\w+)?\\b",
 				"\\bdd\\b[^;&|]*\\bof=/dev/",
@@ -170,7 +170,7 @@
 		{
 			"id": "container-machine",
 			"action": "deny",
-			"reason": "These container operations reach beyond one container or project: system prune sweeps host-wide state (with --volumes, every unused volume), --privileged runs break the host boundary, and compose down -v destroys named volumes. Hand the exact command to the user and wait for them to run it.",
+			"reason": "Reaches past the container boundary to the host — hand the exact command to the user and wait.",
 			"bash": [
 				"\\b(docker|podman|nerdctl)\\b[^;&|]*\\b(?:system\\s+)?prune\\b",
 				"\\b(docker|podman)\\s+compose\\b[^;&|]*\\bdown\\b[^;&|]*\\s(?:-v\\b|--volumes\\b)",
@@ -181,7 +181,7 @@
 		{
 			"id": "container-destructive",
 			"action": "ask",
-			"reason": "Removing specific containers or images, or tearing down a compose stack, can destroy data — volumes may not survive. State what is deleted and what remains recoverable.",
+			"reason": "Can destroy data — volumes may not survive; state what is removed and what remains recoverable.",
 			"bash": [
 				"\\b(docker|podman|nerdctl)\\b[^;&|]*\\b(rm|rmi)\\b",
 				"\\b(docker|podman)\\s+compose\\b[^;&|]*\\bdown\\b",
@@ -191,7 +191,7 @@
 		{
 			"id": "destructive-ops",
 			"action": "ask",
-			"reason": "Destructive or irreversible operation needs the user's explicit approval. State exactly what it destroys and wait.",
+			"reason": "Destructive or irreversible — state exactly what it destroys and wait.",
 			"bash": [
 				"\\bdd\\b[^;&|]*\\bof=(?!/dev/)",
 				"\\b(chmod|chown)\\b[^;&|]*\\s(-R|--recursive)\\b",
@@ -202,7 +202,7 @@
 		{
 			"id": "destructive-rm",
 			"action": "ask",
-			"reason": "Recursive or forced deletion (rm -rf, find -delete) outside the session workspace needs the user's explicit approval (inside the workspace, git is the recovery path — user policy). State exactly what it destroys and wait.",
+			"reason": "Irreversible deletion outside the workspace (inside it, git is the recovery path) — state what it deletes and wait.",
 			"bash": [
 				"\\brm\\s+[^;&|]*-\\w*[rf]",
 				"\\bfind\\b[^;&|]*\\s-delete\\b"
@@ -212,7 +212,7 @@
 		{
 			"id": "archive-extract",
 			"action": "ask",
-			"reason": "Extracting an archive writes wherever its entry paths point — and archives fetched from the network are untrusted. State the archive, its origin, and the target directory (prefer a fresh directory, never /).",
+			"reason": "Writes wherever the archive's entry paths point — extract into a fresh directory, never /.",
 			"bash": [
 				"\\b(?:bsd)?tar\\s+x[zjJvf]*(\\s|$)",
 				"\\b(?:bsd)?tar\\s+[^;&|]*\\s?(-x[zjJvf]*|--extract|--get)\\b",
@@ -223,7 +223,7 @@
 		{
 			"id": "remote-exec",
 			"action": "deny",
-			"reason": "Never execute content fetched from the network — piping a download into a shell or an unknown executor runs unreviewed code. Download it to a file, inspect it, and propose the install; prefer the distro package manager.",
+			"reason": "Runs unreviewed code — download, inspect, then propose the install; prefer distro packages.",
 			"bash": [
 				"\\b(curl|wget)\\b[^;&|]*\\|\\s*(sudo\\s+)?((?:ba|z|da|k|a)?sh|fish|python3?|\\$\\{?[A-Za-z_]\\w*\\}?)\\b",
 				"\\b(source|bash|zsh|dash|ksh|sh|fish)\\s+<\\(\\s*(curl|wget)"
@@ -232,7 +232,7 @@
 		{
 			"id": "network-transfer",
 			"action": "ask",
-			"reason": "Transferring data over the network needs the user's explicit approval. State the source, the destination, and exactly what moves; never include secrets, credentials, or tokens.",
+			"reason": "Moves data to another host — state the source, the destination, and exactly what moves.",
 			"bash": [
 				"\\b(curl|wget)\\b(?![^;&|]*(localhost|127\\.0\\.0\\.1|::1|\\[::1\\]))",
 				"\\b(gh|glab)\\s+api\\b",
@@ -245,7 +245,7 @@
 		{
 			"id": "persistence-change",
 			"action": "ask",
-			"reason": "These commands change what runs on the machine now or at boot. State what changes, why the workspace cannot hold it, and how to revert.",
+			"reason": "Changes what runs on this machine, now or at boot — state what changes, why the workspace cannot hold it, and how to revert.",
 			"bash": [
 				"\\bcrontab\\b(?![^;&|]*-l\\b)",
 				"\\bsystemctl\\b[^;&|]*\\b(enable|disable|mask|unmask|link|preset|start|stop|restart|try-restart|reload)\\b"
@@ -254,7 +254,7 @@
 		{
 			"id": "package-mutate",
 			"action": "deny",
-			"reason": "Package installs and removals are denied, except exact restores from the project's pinned config: npm/pnpm/yarn/bun install or npm ci with flags only (no package arguments, no -g/--global), uv sync, poetry install, and pip/uv pip install -r requirements.txt. Anything else — new dependencies, global or user-level installs, system packages, uninstalls — hand the exact command to the user and wait for them to run it.",
+			"reason": "Dependency changes are the user's decision — only exact restores from pinned config pass; anything else, hand the exact command to the user and wait.",
 			"bash": [
 				"\\b(apt|apt-get)\\s+(install|upgrade|full-upgrade|dist-upgrade|remove|purge|autoremove)\\b",
 				"\\bdnf\\s+(install|upgrade|update|downgrade|reinstall|remove|erase|autoremove)\\b",
@@ -287,7 +287,7 @@
 		{
 			"id": "package-run",
 			"action": "ask",
-			"reason": "Ephemeral execution (npx, uvx, …) downloads and runs unreviewed code. State the tool, its source, and why a project dependency or an installed tool cannot serve instead.",
+			"reason": "Downloads and runs unreviewed code — prefer a project dependency or an installed tool.",
 			"bash": [
 				"\\b(npx|bunx|uvx)\\b",
 				"\\b(pnpm|yarn)\\s+dlx\\b",
@@ -298,7 +298,7 @@
 		{
 			"id": "system-privileged",
 			"action": "deny",
-			"reason": "Privilege escalation (sudo, doas — read-only forms like sudo -l included) is denied: agents never run commands as another user or as root. State the exact command and why it needs privilege; the user runs it themselves.",
+			"reason": "Agents never run commands as another user or root — state the exact command and why it needs privilege; the user runs it themselves.",
 			"bash": [
 				"\\bsudo\\b",
 				"\\bdoas\\b"
@@ -307,7 +307,7 @@
 		{
 			"id": "test-deletion",
 			"action": "ask",
-			"reason": "Removing tests outside the session workspace needs the user's explicit approval — tests are never removed or skipped to make a suite pass (inside the workspace, git is the recovery path — user policy).",
+			"reason": "Tests are the suite's contract — deleting them is never the fix.",
 			"bash": [
 				"\\b(git\\s+)?rm\\b[^;&|]*(__tests__|/tests?/|\\.test\\.|\\.spec\\.|_test\\.[a-z]+|test_[^/\\s]*\\.py)"
 			],
@@ -316,21 +316,21 @@
 		{
 			"id": "tmp-dirs",
 			"action": "deny",
-			"reason": "The system shared tmp dirs (/tmp, /var/tmp, /dev/shm) are off-limits to agents: they are shared with every other process on the machine, cleaned up without warning, and denied outright. Use your per-agent scratch dir instead — $XDG_RUNTIME_DIR/<agent>, one of {{@@ env['XDG_RUNTIME_DIR'] @@}}/claude, {{@@ env['XDG_RUNTIME_DIR'] @@}}/codex, {{@@ env['XDG_RUNTIME_DIR'] @@}}/cursor, or {{@@ env['XDG_RUNTIME_DIR'] @@}}/pi (this agent's own dir; the guard exempts it). Redirect the file, output, or download there and continue.",
+			"reason": "Shared with every process on the machine — put scratch in $TMPDIR instead.",
 			"pathKind": "any",
 			"underPrefixes": ["/tmp", "/var/tmp", "/dev/shm"]
 		},
 		{
 			"id": "tree-external-write",
 			"action": "ask",
-			"reason": "Writing outside the session workspace (its git tree) needs the user's explicit approval; the per-agent scratch dirs under $XDG_RUNTIME_DIR are exempt. State the target and why the workspace cannot hold it.",
+			"reason": "Outside the workspace — state the target and why it cannot live in the tree.",
 			"pathKind": "write",
 			"outside": "project"
 		},
 		{
 			"id": "read-scope",
 			"action": "ask",
-			"reason": "Reading outside the session workspace (its git tree), ~/Projects, and the agents' own config dirs needs the user's explicit approval (pinned system trees and the per-agent scratch dirs are exempt). State what you need from it.",
+			"reason": "Outside the agreed read scope — state what you need from it.",
 			"pathKind": "read",
 			"allowPrefixes": [
 				"~/Projects",

@@ -11,10 +11,8 @@
  * it from the command line?). Common + recoverable-in-tree is no class at all
  * (git is the recovery path); rare + irreversible/machine-scoped — or anything
  * crossing a trust boundary (publish, privilege, secrets and private stores) —
- * is deny, whose reason must tell the model to hand the exact command to the
- * user and wait;
- * everything reviewable-with-one-approval is ask. New classes take this test,
- * not enumeration instinct; deny reasons carry the handoff sentence.
+ * is deny; everything reviewable-with-one-approval is ask. New classes take
+ * this test, not enumeration instinct.
  *
  * The table's `unattended` section is policy annotation, not a verdict: evaluate
  * merely transcribes `unattended.allow` onto the winning ask verdict, and an
@@ -31,9 +29,11 @@
  *   - write intents: writeExemptPrefixes exempt the secret scan,
  *     tree-external-write, and underPrefixes; the project root exempts
  *     tree-external-write only.
- *   - bashScope "external" classes gate on the project root alone — no prefix
- *     exemptions. A secret inside the project root still asks: the root does
- *     not exempt the secret scan, only the scope classes.
+ *   - bashScope "external" classes gate on the project root plus the
+ *     write-exempt prefixes: the scratch dirs count as interior (per-agent,
+ *     wiped at session end — the same footing the workspace holds through
+ *     git). A secret inside the project root still asks: the root does not
+ *     exempt the secret scan, only the scope classes.
  *   - underPrefixes classes are the pinned-safe doctrine carried to its third
  *     use: like readAllowlist under read-scope and writeExemptPrefixes under
  *     tree-external-write, they keep the scratch dirs exempt from the tmp rule
@@ -115,11 +115,12 @@ interface RuleClass {
 	outside?: "project";
 	/**
 	 * Bash-class scope: "external" gates the class on the command referencing
-	 * at least one path token outside the session workspace (its write/read
-	 * target tokens, already scanned). Classes without it apply wherever the
-	 * text matches. Heuristic: a token-less command (`rm -rf *`) counts as
-	 * interior — glob-only targets are opaque to the scanner in both
-	 * directions.
+	 * at least one path token outside the session workspace or the write-exempt
+	 * prefixes (the per-agent scratch dirs — same footing as the workspace).
+	 * Tokens are the command's write/read targets, already scanned. Classes
+	 * without it apply wherever the text matches. Heuristic: a token-less
+	 * command (`rm -rf *`) counts as interior — glob-only targets are opaque to
+	 * the scanner in both directions.
 	 */
 	bashScope?: "external";
 	/**
@@ -383,8 +384,15 @@ export function evaluate(intent: Intent, ctx: MatchContext): Verdict | null {
 		if (command && cls.bash) {
 			if (cls.bashScope === "external") {
 				const root = ctx.projectRoot ?? ctx.cwd;
+				// Scratch dirs are interior like the workspace: per-agent, wiped at
+				// session end, nothing git tracks — deletion there is no more
+				// irrecoverable than the in-tree deletion this class already allows.
+				// The read allowlist is deliberately absent: pinned-safe READS (say
+				// /usr/share) are not thereby deletable.
+				const interior = (p: string) =>
+					isUnder(p, root) || rules.writeExemptPrefixes.some((a) => isUnder(p, a));
 				hit =
-					[...writePaths, ...readPaths].some((p) => !isUnder(p, root)) &&
+					[...writePaths, ...readPaths].some((p) => !interior(p)) &&
 					cls.bash.some((re) => re.test(command));
 			} else {
 				hit = cls.bash.some((re) => re.test(command));
