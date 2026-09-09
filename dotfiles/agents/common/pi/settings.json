@@ -22,6 +22,9 @@
   "sessionDir": "{{@@ sysenv.xdg_state_home @@}}/pi/sessions",
 
   "defaultProjectTrust": "ask",
+
+  "shellCommandPrefix": "export TMPDIR={{@@ env['XDG_RUNTIME_DIR'] @@}}/pi",
+
   "enableInstallTelemetry": false,
 
   "quietStartup": true,
