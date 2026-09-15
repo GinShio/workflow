@@ -255,6 +255,13 @@ impl Repository {
         self.query(&["remote", "get-url", name])
     }
 
+    /// Every remote this repository has, in git's own (alphabetical) order.
+    pub fn remote_names(&self) -> Vec<String> {
+        self.query(&["remote"])
+            .map(|s| s.lines().map(str::to_owned).collect())
+            .unwrap_or_default()
+    }
+
     /// Every local branch mapped to its tip commit. This is the content
     /// source-of-truth: whatever a branch points at here is what gets pushed.
     pub fn branch_tips(&self) -> HashMap<String, String> {

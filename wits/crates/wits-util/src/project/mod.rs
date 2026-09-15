@@ -19,6 +19,7 @@
 pub mod context;
 pub mod model;
 mod presets;
+pub mod remotes;
 pub mod resolve;
 pub mod skip;
 mod toolchain;

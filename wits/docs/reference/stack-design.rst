@@ -61,7 +61,7 @@ succeeds but an MR update fails you want to know *which* step you were in and
 to re-run only that step. The three remote verbs map cleanly onto three
 distinct intents::
 
-   wits stack sync      [scope]   # push branches to origin (git only; no forge)
+   wits stack sync      [scope]   # push to the origin role (git only; no forge)
    wits stack submit    [scope]   # reconcile MRs: create missing, fix drifted bases
    wits stack anno      [scope]   # rewrite MR descriptions with stack navigation
    wits stack decorate  [branch]  # add labels/assignees/reviewers to an MR (additive)
@@ -202,9 +202,14 @@ scope.
 Base branch resolution
 ~~~~~~~~~~~~~~~~~~~~~~
 
-In order: the ``project`` subcommand → the upstream/origin remote's default
-branch (its remote HEAD) → first existing of ``main``/``master``/``trunk``.
-Resolved once per run.
+In order: the ``project`` subcommand → the **merge target's** default branch
+(its remote HEAD) → first existing of ``main``/``master``/``trunk``. Resolved
+once per run.
+
+Only the merge target is consulted, not both remotes in turn. An MR at the root
+of the tree targets the base branch *in the repository it merges into*, so the
+push side's default branch answers a different question; asking it as a fallback
+was only ever a way to paper over an unresolved merge target.
 
 The right source of truth is the future ``project`` subcommand: given a
 checkout's source path it will answer "what project is this, and what is its
@@ -268,12 +273,22 @@ Two remotes carry distinct meaning and we make both first-class:
 
 * **``origin``** — where we have push rights and where branches go. Also the
   *head* side of an MR.
-* **``upstream``** — the fork source; the MR's **merge target**. When absent,
-  it collapses to ``origin`` (you are working directly on the repo you'll
-  merge into).
+* **``upstream``** — the fork source; the MR's **merge target**. When nothing
+  holds it, it collapses to ``origin`` (you are working directly on the repo
+  you'll merge into).
 
-The forge to talk to is determined by the **upstream** URL (that is where the
-MR lives). When origin and upstream differ, the MR crosses a fork:
+These are **roles**, not necessarily remote names. Which local remote holds each
+is resolved before the verbs run — from the project's config file when one
+declares this checkout, and otherwise from the remote names, since ``origin``
+and ``upstream`` are privileged names as well as roles. The rationale, including
+why nothing is written into the repository to record the mapping, is in
+:ref:`project-design`. What matters here is that the verbs receive the answer
+resolved once and never re-derive it: a remote name is a fact about the
+checkout, not about the stack.
+
+The forge to talk to is determined by the **upstream** role's URL (that is where
+the MR lives). When the two roles resolve to different owners, the MR crosses a
+fork:
 GitHub/Gitea express that with an ``origin_owner:branch`` head, while GitLab
 needs its cross-project dance (create on the source project with a numeric
 ``target_project_id``; the MR then lives in the target, where reads and edits

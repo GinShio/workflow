@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use wits_util::git::Repository;
 use wits_util::log as wits_log;
+use wits_util::remote::RemoteRoles;
 
 use super::topology::Topology;
 
@@ -191,11 +192,15 @@ fn machete_lock_path(repo: &Repository) -> anyhow::Result<PathBuf> {
 /// then to whichever conventional trunk name actually exists locally. There is
 /// no config override on purpose — the answer should come from project identity,
 /// not a hand-maintained setting (see the design doc, §5.1).
-pub fn base_branch(repo: &Repository) -> anyhow::Result<String> {
-    for remote in ["upstream", "origin"] {
-        if let Some(branch) = repo.remote_default_branch(remote) {
-            return Ok(branch);
-        }
+pub fn base_branch(repo: &Repository, roles: &RemoteRoles) -> anyhow::Result<String> {
+    // An MR at the root of the tree targets the base branch *in the repository it
+    // merges into*. Only that one remote is consulted — the push side's default
+    // branch answers a different question.
+    if let Some(branch) = roles
+        .merge_target()
+        .and_then(|r| repo.remote_default_branch(r))
+    {
+        return Ok(branch);
     }
     for candidate in ["main", "master", "trunk"] {
         if repo.rev_parse(candidate).is_some() {
@@ -207,8 +212,13 @@ pub fn base_branch(repo: &Repository) -> anyhow::Result<String> {
 
 /// Build the plan for this invocation. `current` is the checked-out branch
 /// (`None` on a detached HEAD); `all` widens the scope to every recorded stack.
-pub fn plan(repo: &Repository, current: Option<&str>, all: bool) -> anyhow::Result<StackPlan> {
-    let base_branch = base_branch(repo)?;
+pub fn plan(
+    repo: &Repository,
+    roles: &RemoteRoles,
+    current: Option<&str>,
+    all: bool,
+) -> anyhow::Result<StackPlan> {
+    let base_branch = base_branch(repo, roles)?;
     let topology = load_topology(repo)?;
     select(topology, base_branch, current, all)
 }
@@ -244,9 +254,13 @@ impl<'a> Scope<'a> {
 /// clap), and — when given explicitly — must name a real branch (a live local
 /// ref, or one recorded in the file) so a typo cannot masquerade as an empty
 /// synthetic stack.
-pub fn plan_scoped(repo: &Repository, scope: &super::ScopeArgs) -> anyhow::Result<StackPlan> {
+pub fn plan_scoped(
+    repo: &Repository,
+    roles: &RemoteRoles,
+    scope: &super::ScopeArgs,
+) -> anyhow::Result<StackPlan> {
     match Scope::from_args(scope) {
-        Scope::All => plan(repo, None, true),
+        Scope::All => plan(repo, roles, None, true),
         Scope::Branch(branch) => {
             let known = repo.rev_parse(branch).is_some() || load_topology(repo)?.contains(branch);
             if !known {
@@ -254,9 +268,9 @@ pub fn plan_scoped(repo: &Repository, scope: &super::ScopeArgs) -> anyhow::Resul
                     "no such branch '{branch}': not a local branch and not recorded in .git/machete"
                 );
             }
-            plan(repo, Some(branch), false)
+            plan(repo, roles, Some(branch), false)
         }
-        Scope::Current => plan(repo, repo.current_branch().as_deref(), false),
+        Scope::Current => plan(repo, roles, repo.current_branch().as_deref(), false),
     }
 }
 

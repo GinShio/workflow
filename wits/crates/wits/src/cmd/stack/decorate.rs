@@ -15,10 +15,11 @@
 use wits_util::forge::Attributes;
 use wits_util::git::Repository;
 use wits_util::log as wits_log;
+use wits_util::remote::RemoteRoles;
 
 use super::{fail_if_any, find_open_mrs, map_parallel, resolution, DecorateArgs, ForgeSession};
 
-pub fn run(repo: &Repository, args: &DecorateArgs) -> anyhow::Result<()> {
+pub fn run(repo: &Repository, roles: &RemoteRoles, args: &DecorateArgs) -> anyhow::Result<()> {
     let attrs = Attributes {
         labels: args.labels.clone(),
         assignees: args.assignees.clone(),
@@ -27,13 +28,13 @@ pub fn run(repo: &Repository, args: &DecorateArgs) -> anyhow::Result<()> {
     if attrs.is_empty() {
         anyhow::bail!("nothing to set: pass at least one --label / --assignee / --reviewer");
     }
-    let branches = target_branches(repo, args)?;
+    let branches = target_branches(repo, roles, args)?;
     if branches.is_empty() {
         log::info!("no branches in scope");
         return Ok(());
     }
 
-    let session = ForgeSession::open(repo)?;
+    let session = ForgeSession::open(repo, roles)?;
     let noun = session.noun;
 
     // Find the open MRs (shared with `anno`), then apply attributes to each in
@@ -67,10 +68,14 @@ pub fn run(repo: &Repository, args: &DecorateArgs) -> anyhow::Result<()> {
 
 /// One branch (the named one, or the current) by default; the whole in-scope
 /// stack under `--all`.
-fn target_branches(repo: &Repository, args: &DecorateArgs) -> anyhow::Result<Vec<String>> {
+fn target_branches(
+    repo: &Repository,
+    roles: &RemoteRoles,
+    args: &DecorateArgs,
+) -> anyhow::Result<Vec<String>> {
     if args.all {
         let current = repo.current_branch();
-        return Ok(resolution::plan(repo, current.as_deref(), true)?.selected);
+        return Ok(resolution::plan(repo, roles, current.as_deref(), true)?.selected);
     }
     let branch = match &args.branch {
         Some(b) => b.clone(),

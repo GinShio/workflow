@@ -83,23 +83,33 @@ Or supply it through the environment, which always works and is handy on CI:
 ``sync`` needs no token (it only pushes); ``submit``, ``anno``, and
 ``decorate`` do.
 
-**Remotes: ``origin`` and ``upstream``.** ``wits stack`` reads two remotes by
-role:
+**Remotes: the ``origin`` and ``upstream`` roles.** ``wits stack`` reads two
+remotes by role:
 
 * **``origin``** — where it pushes, and the source side of every MR. You need
   push rights here.
 * **``upstream``** — the repository MRs merge *into*. Set this when you work on
-  a fork; leave it unset when you push and merge in the same repo (then
-  ``origin`` plays both parts).
+  a fork; leave it unset when you push and merge in the same repo (then the
+  ``origin`` holder plays both parts).
+
+In a repository ``wits project`` does not know about, the roles come straight
+from the remote **names** — so the conventional setup needs no configuration at
+all:
 
 .. code-block:: sh
 
    git remote add origin   git@github.com:me/project.git
    git remote add upstream git@github.com:acme/project.git   # only if you forked
 
+In a declared project the roles come from its config file instead, which is
+what lets the remotes be named anything you like (see
+:ref:`project-reference`). Either way ``stack`` asks the same question and
+never needs telling twice.
+
 The forge (GitHub / GitLab / Gitea / Forgejo / Codeberg) is detected from the
-**upstream** URL — or ``origin`` when there is no upstream. A self-hosted
-instance behind a custom domain can be named explicitly:
+**upstream** role's URL — or the ``origin`` holder's when nothing holds
+``upstream``. A self-hosted instance behind a custom domain can be named
+explicitly:
 
 .. code-block:: sh
 
@@ -161,7 +171,7 @@ After reworking your commits:
 
 .. code-block:: sh
 
-   wits stack sync       # push every branch in the stack to origin
+   wits stack sync       # push every branch in the stack to the origin remote
    wits stack submit     # open MRs that don't exist; fix bases that moved
    wits stack anno       # refresh the navigation block in each MR description
 
@@ -378,7 +388,8 @@ How it resolves things
 ----------------------
 
 The short version: the **base branch** comes from the merge target's remote
-HEAD (``upstream``, else ``origin``), then ``main``/``master``/``trunk``; each
+HEAD (the ``upstream`` role's holder, else ``origin``'s), then
+``main``/``master``/``trunk``; each
 **MR's base** is its parent in the machete file (or the base branch at a
 root); **cross-fork** MRs work on all platforms (GitHub / Gitea via an
 ``origin-owner:branch`` head, GitLab via its cross-project API). The full
@@ -399,7 +410,8 @@ Troubleshooting
    * - ``could not detect the forge for host '…'``
      - Self-hosted behind a custom domain: set ``wits.forge.<host>.service``.
    * - ``submit`` fails to create an MR (*head not found* or similar)
-     - The branch is not on ``origin`` yet — run ``wits stack sync`` first.
+     - The branch is not on the ``origin`` remote yet — run ``wits stack sync``
+       first.
    * - A closed MR is not reopened
      - Intended: a closed/merged MR at the current commit is left alone. Pass
        ``--force`` to recreate.

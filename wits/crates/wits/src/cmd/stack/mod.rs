@@ -23,6 +23,8 @@ use clap::{Args, Subcommand, ValueEnum};
 
 use wits_util::forge::{self, Forge, MergeRequest, Remotes, StateFilter};
 use wits_util::git::Repository;
+use wits_util::project::remotes;
+use wits_util::remote::RemoteRoles;
 
 /// How many forge/push operations run at once. Stacks are small and the work is
 /// network-bound, so a modest fixed width keeps us from opening a connection per
@@ -170,14 +172,20 @@ pub struct SliceArgs {
 pub fn run(args: &StackArgs) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
     let repo = Repository::new(&cwd);
+    // Resolved once for the whole invocation, and threaded rather than re-derived:
+    // every verb here asks which remote holds a role at least twice (a base branch
+    // and a push, say), and two answers that could differ mid-command is a bug
+    // waiting to happen. Reading the registry costs a few milliseconds, so the
+    // reason to do it once is atomicity, not speed.
+    let roles = remotes::for_checkout(&repo)?;
 
     match &args.action {
-        StackAction::Sync(s) => sync::run(&repo, s),
-        StackAction::Submit(s) => submit::run(&repo, s),
-        StackAction::Anno(s) => anno::run(&repo, s),
-        StackAction::Decorate(d) => decorate::run(&repo, d),
-        StackAction::Slice(s) => slice::run(&repo, s.base.as_deref()),
-        StackAction::Tree(t) => tree::run(&repo, &t.action),
+        StackAction::Sync(s) => sync::run(&repo, &roles, s),
+        StackAction::Submit(s) => submit::run(&repo, &roles, s),
+        StackAction::Anno(s) => anno::run(&repo, &roles, s),
+        StackAction::Decorate(d) => decorate::run(&repo, &roles, d),
+        StackAction::Slice(s) => slice::run(&repo, &roles, s.base.as_deref()),
+        StackAction::Tree(t) => tree::run(&repo, &roles, &t.action),
     }
 }
 
@@ -227,8 +235,8 @@ pub(crate) struct ForgeSession {
 }
 
 impl ForgeSession {
-    pub(crate) fn open(repo: &Repository) -> anyhow::Result<Self> {
-        let remotes = Remotes::resolve(repo);
+    pub(crate) fn open(repo: &Repository, roles: &RemoteRoles) -> anyhow::Result<Self> {
+        let remotes = Remotes::resolve(repo, roles);
         let forge = forge::detect(repo, &remotes)?;
         let noun = forge.noun();
         Ok(Self { forge, noun })

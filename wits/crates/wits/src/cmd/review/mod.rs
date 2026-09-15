@@ -30,6 +30,8 @@ use clap::{Args, Subcommand};
 
 use wits_util::forge::{self, Forge, RemoteInfo, Remotes};
 use wits_util::git::Repository;
+use wits_util::project::remotes;
+use wits_util::remote::RemoteRoles;
 
 use store::Store;
 
@@ -268,15 +270,14 @@ pub(crate) struct ReviewCtx {
 }
 
 pub(crate) fn local(repo: &Repository) -> Result<ReviewCtx> {
-    let remotes = Remotes::resolve(repo);
-    local_from_remotes(repo, &remotes)
+    let roles = remotes::for_checkout(repo)?;
+    local_from_remotes(repo, &Remotes::resolve(repo, &roles))
 }
 
 fn local_from_remotes(repo: &Repository, remotes: &Remotes) -> Result<ReviewCtx> {
-    let target = remotes
-        .target()
-        .cloned()
-        .context("no 'origin' or 'upstream' remote to derive the forge from")?;
+    let target = remotes.target.clone().context(
+        "no remote holds the origin or upstream role, so there is no repository to review against",
+    )?;
     let store = Store::open(repo, &target)?;
     Ok(ReviewCtx {
         repo: repo.clone(),
@@ -290,17 +291,21 @@ fn local_from_remotes(repo: &Repository, remotes: &Remotes) -> Result<ReviewCtx>
 /// reported here.
 pub(crate) struct Online {
     pub local: ReviewCtx,
-    pub remotes: Remotes,
+    /// The roles as *local remote names*, which is what fetching an MR's refs
+    /// needs: `git fetch` takes neither a host nor an owner. The identity behind
+    /// the merge target is [`ReviewCtx::target`], which is what keys the store.
+    pub roles: RemoteRoles,
     pub forge: Box<dyn Forge>,
 }
 
 pub(crate) fn online(repo: &Repository) -> Result<Online> {
-    let remotes = Remotes::resolve(repo);
+    let roles = remotes::for_checkout(repo)?;
+    let remotes = Remotes::resolve(repo, &roles);
     let forge = forge::detect(repo, &remotes)?;
     let local = local_from_remotes(repo, &remotes)?;
     Ok(Online {
         local,
-        remotes,
+        roles,
         forge,
     })
 }

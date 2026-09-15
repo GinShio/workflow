@@ -503,12 +503,26 @@ pub fn repo_value(project: &ProjectData, name: &str) -> Value {
         .repo_abs_path(name)
         .map(|p| p.display().to_string())
         .unwrap_or_default();
-    let origin = repo.remotes.origin.clone().unwrap_or_default();
-    let upstream = repo
+    // Keyed by remote name, with no role shortcuts alongside. A `repo.origin`
+    // would have to mean "the origin *role*'s URL", which is a different thing
+    // from the remote named `origin` the moment a free name holds that role — and
+    // a template that reads one while meaning the other fails silently in the
+    // worst way, by rendering a plausible wrong URL.
+    let remotes: BTreeMap<&str, Value> = repo
         .remotes
-        .upstream
-        .clone()
-        .unwrap_or_else(|| origin.clone());
+        .iter()
+        .map(|(name, remote)| {
+            let value = Value::from(BTreeMap::from([
+                ("url", Value::from(remote.url.clone())),
+                (
+                    "role",
+                    Value::from(remote.role.map(|r| r.as_str()).unwrap_or_default()),
+                ),
+                ("mirrors", Value::from(remote.mirrors.clone())),
+            ]));
+            (name.as_str(), value)
+        })
+        .collect();
     Value::from(BTreeMap::from([
         ("name", Value::from(name)),
         ("path", Value::from(abs)),
@@ -521,9 +535,7 @@ pub fn repo_value(project: &ProjectData, name: &str) -> Value {
             "anchor",
             Value::from(repo.anchor.clone().unwrap_or_default()),
         ),
-        ("origin", Value::from(origin)),
-        ("upstream", Value::from(upstream)),
-        ("mirrors", Value::from(repo.remotes.mirrors.clone())),
+        ("remotes", Value::from(remotes)),
     ]))
 }
 

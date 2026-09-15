@@ -14,6 +14,7 @@
 
 use crate::git::Repository;
 use crate::process::Command;
+use crate::remote::RemoteRoles;
 
 /// A git hosting service. `Unknown` is a first-class outcome, not a failure: a
 /// self-hosted instance behind a custom domain parses fine, and the forge layer
@@ -190,42 +191,50 @@ pub fn parse_url(url: &str) -> Option<RemoteInfo> {
     })
 }
 
-/// The two remotes that carry meaning for a stack, resolved once from the repo.
+/// The identities behind a checkout's two roles, parsed once.
 ///
-/// `origin` is where we push and the head side of every MR; `upstream` is the
-/// merge target when we are working on a fork. The whole point of naming the
-/// roles is that the rest of the tool never has to re-derive "which remote does
-/// the MR go against" — it asks [`target`](Remotes::target).
+/// Which local remote holds each role is [`RemoteRoles`]' answer, not this type's:
+/// the roles arrive resolved so that a checkout naming its remotes `fdo` and
+/// `myfork` reaches the forge layer the same way a conventional one does. What is
+/// added here is the *identity* behind each — host, owner, repo — which is what
+/// decides the forge to call and whether an MR crosses a fork.
 #[derive(Debug, Clone)]
 pub struct Remotes {
+    /// The push side's identity, and the head owner of a cross-fork MR.
     pub origin: Option<RemoteInfo>,
-    pub upstream: Option<RemoteInfo>,
+    /// The identity of the repository MRs merge into, which is also the forge that
+    /// hosts them. Already carries [`RemoteRoles::merge_target`]'s fallback, so it
+    /// is populated whenever *either* role is held.
+    pub target: Option<RemoteInfo>,
 }
 
 impl Remotes {
-    pub fn resolve(repo: &Repository) -> Self {
-        let parse_remote = |name: &str| repo.remote_url(name).and_then(|u| parse_url(&u));
+    /// Parse the URLs behind the roles in force for `repo`.
+    ///
+    /// A role whose remote has no parseable `owner/repo` URL lands as `None`, which
+    /// is the same outcome as an unheld role — either way there is no forge to
+    /// derive, and [`super::detect`] reports it.
+    pub fn resolve(repo: &Repository, roles: &RemoteRoles) -> Self {
+        let identity = |name: Option<&str>| {
+            name.and_then(|n| repo.remote_url(n))
+                .and_then(|u| parse_url(&u))
+        };
         Self {
-            origin: parse_remote("origin"),
-            upstream: parse_remote("upstream"),
+            origin: identity(roles.origin()),
+            target: identity(roles.merge_target()),
         }
     }
 
-    /// The repo an MR merges into: upstream when we forked, otherwise origin.
-    pub fn target(&self) -> Option<&RemoteInfo> {
-        self.upstream.as_ref().or(self.origin.as_ref())
-    }
-
     /// The owner of the branch we push, needed to express a cross-fork MR head
-    /// as `owner:branch`. `None` when origin couldn't be parsed.
+    /// as `owner:branch`. `None` when the push side couldn't be parsed.
     pub fn head_owner(&self) -> Option<&str> {
         self.origin.as_ref().map(|r| r.owner.as_str())
     }
 
-    /// Whether the MR crosses a fork boundary (origin and target differ in
-    /// owner), which is what decides the `owner:branch` head form.
+    /// Whether the MR crosses a fork boundary (push and merge target differ in
+    /// owner or host), which is what decides the `owner:branch` head form.
     pub fn is_cross_fork(&self) -> bool {
-        match (self.origin.as_ref(), self.target()) {
+        match (self.origin.as_ref(), self.target.as_ref()) {
             (Some(o), Some(t)) => o.owner != t.owner || o.host != t.host,
             _ => false,
         }

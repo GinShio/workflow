@@ -428,10 +428,12 @@ Updating
 
 ``update`` is safe by default: if you are on a feature branch, it fast-forwards
 the main branch's ref *without* checking it out — nothing is stashed or
-switched, and a sparse checkout is never expanded. It also ensures your
-declared remotes exist (adding missing ones and mirror push-URLs) but never
-rewrites URLs you set yourself. Repos borrowed with ``from`` are left to the
-project that owns them unless you ask for them, and a repo whose declared
+switched, and a sparse checkout is never expanded. It also brings the remotes
+you declared into line with the file — creating what is missing and correcting
+what has drifted — while leaving any remote your config does not mention
+completely alone, and fetches every one of them so the extras stay usable. Only
+the merge target's fetch can fail the run. Repos borrowed with ``from`` are left
+to the project that owns them unless you ask for them, and a repo whose declared
 ``skip`` is not in force is a hard error rather than a refresh.
 
 Inspecting and validating

@@ -253,11 +253,101 @@ impl Repository {
         )
     }
 
-    pub fn ensure_remote(&self, name: &str, url: &str) -> Result<(), GitError> {
-        if self.remote_url(name).is_none() {
+    /// Bring remote `name` to exactly `url` and `push_urls`, creating it if absent.
+    ///
+    /// **Convergent, not additive**: every write is a *set*, so the repository this
+    /// leaves behind depends only on the arguments, never on how many times it has
+    /// run. That is a stronger property than a correct guard around an `--add`,
+    /// and it is the point. Push URLs used to be appended behind an equality check
+    /// against `git remote get-url`, whose output `url.*.insteadOf` rewrites — so
+    /// the check could not match the declared string and every run added the URL
+    /// again, growing the list without bound. A set has no such failure mode: the
+    /// list ends up the length of `push_urls` however wrong any comparison is.
+    ///
+    /// `push_urls` is the whole intended set, including the remote's own URL where
+    /// it belongs — git stops defaulting `push` to the fetch URL once any push URL
+    /// exists, so a set that omits it would silently stop pushing there. An empty
+    /// slice means "no push URLs at all", which is what leaves that default alone.
+    ///
+    /// The fetch refspec is *repaired* rather than converged, because it is not
+    /// ours to dictate: a user may have added refspecs of their own, and a config
+    /// file that declares only URLs makes no claim about them. See
+    /// [`ensure_fetch_refspec`](Self::ensure_fetch_refspec).
+    ///
+    /// # Returns
+    ///
+    /// Whether the remote was **re-pointed** — an existing remote whose URL this
+    /// call changed. Its `refs/remotes/<name>/*` still describe the *previous*
+    /// repository, and nothing else prunes them; trunk and base-branch detection
+    /// read that namespace, so leaving them unattended would have those answer from
+    /// a repository the remote no longer names, silently and plausibly. The caller
+    /// therefore owes a `git fetch --prune <name>`.
+    ///
+    /// Repairing it that way rather than deleting the refs here is deliberate.
+    /// Deleting first leaves a window in which the refs are gone and the fetch that
+    /// was to replace them may fail — and a branch whose tracking ref vanishes
+    /// reads as `%(upstream:track)` = `gone`, which is exactly the state
+    /// `wits worktree prune` reclaims worktrees for. A prune-fetch instead keeps
+    /// every ref the new repository also has, and only drops the ones it lacks.
+    pub fn reconcile_remote(
+        &self,
+        name: &str,
+        url: &str,
+        push_urls: &[String],
+    ) -> Result<bool, GitError> {
+        // `git config`, never `git remote get-url`, for the reason in the doc
+        // comment above and in [`Repository::get_config_all`].
+        let url_key = format!("remote.{name}.url");
+        let current = self.get_config_all(&url_key);
+
+        let repointed = if current.is_empty() {
             self.stream(&format!("add remote {name}"), &["remote", "add", name, url])?;
+            // A remote that did not exist has no stale tracking refs to prune; its
+            // namespace is empty until the first fetch either way.
+            false
+        } else if current.as_slice() != [url.to_owned()] {
+            // `--replace-all` rather than `git remote set-url`, which rewrites only
+            // the first of several values and so could not settle a remote that had
+            // somehow accumulated more than one.
+            self.capture(
+                format!("point remote {name} at {url}"),
+                &["config", "--replace-all", &url_key, url],
+                false,
+            )?;
+            true
+        } else {
+            false
+        };
+
+        self.ensure_fetch_refspec(name)?;
+        self.set_push_urls(name, push_urls)?;
+        Ok(repointed)
+    }
+
+    /// Make `remote.<name>.pushurl` hold exactly `urls`, in order.
+    fn set_push_urls(&self, name: &str, urls: &[String]) -> Result<(), GitError> {
+        let key = format!("remote.{name}.pushurl");
+        let current = self.get_config_all(&key);
+        if current.as_slice() == urls {
+            return Ok(());
         }
-        self.ensure_fetch_refspec(name)
+        if !current.is_empty() {
+            // Guarded because `--unset-all` exits non-zero on a key that is not
+            // there, which is not a failure worth reporting.
+            self.capture(
+                format!("clear push urls of {name}"),
+                &["config", "--unset-all", &key],
+                false,
+            )?;
+        }
+        for url in urls {
+            self.capture(
+                format!("add push url to {name}"),
+                &["config", "--add", &key, url],
+                false,
+            )?;
+        }
+        Ok(())
     }
 
     /// Make sure `name` maps the remote's branches into remote-tracking refs.
@@ -293,21 +383,6 @@ impl Repository {
             ],
             false,
         )
-    }
-
-    pub fn ensure_push_url(&self, name: &str, url: &str) -> Result<(), GitError> {
-        // Compare against the *raw* configured push URLs (`git config`), never
-        // `git remote get-url`, whose output is rewritten by `url.*.insteadOf`.
-        // An exact-string guard on the rewritten form never matches the declared
-        // URL, so every run re-`--add`s it — the runaway pile of push URLs.
-        let configured = self.get_config_all(&format!("remote.{name}.pushurl"));
-        if !configured.iter().any(|u| u == url) {
-            self.stream(
-                &format!("add push url to {name}"),
-                &["remote", "set-url", "--add", "--push", name, url],
-            )?;
-        }
-        Ok(())
     }
 
     pub fn submodule_update(&self, paths: &[String], init: bool) -> Result<(), GitError> {
@@ -527,6 +602,129 @@ impl Drop for RestoreGuard<'_> {
 mod tests {
     use super::*;
 
+    fn git(dir: &Path, args: &[&str]) {
+        Command::new("git")
+            .args(args.iter().copied())
+            .current_dir(dir)
+            .force_run()
+            .exec()
+            .unwrap();
+    }
+
+    /// Reconciling the same declaration twice must leave the same repository.
+    ///
+    /// Driven with a `url.*.insteadOf` rewrite in force, because that is what broke
+    /// the additive version this replaced: it compared the declared URL against
+    /// `git remote get-url`, which reports the *rewritten* form, so the comparison
+    /// could never match and every run appended the push URL again. The assertion
+    /// is on the resulting list, not on the comparison — a set-valued write is
+    /// stable however the reading goes.
+    #[test]
+    fn reconcile_is_idempotent_under_url_rewrites() {
+        // `reconcile_remote` writes through the dry-run-honouring paths, so a
+        // sibling test flipping the global flag would turn every write here into a
+        // preview and the assertions into nonsense.
+        let _guard = crate::log::test_flag_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        git(dir, &["init", "-q", "-b", "main", "."]);
+        // The rewrite that made the old equality check unmatchable.
+        git(
+            dir,
+            &["config", "url.https://example.com/.insteadOf", "short:"],
+        );
+
+        let repo = Repository::new(dir);
+        let url = "short:me/app.git".to_owned();
+        let mirrors = vec![url.clone(), "short:me/mirror.git".to_owned()];
+
+        for _ in 0..3 {
+            repo.reconcile_remote("origin", &url, &mirrors).unwrap();
+            assert_eq!(repo.get_config_all("remote.origin.url"), vec![url.clone()]);
+            assert_eq!(repo.get_config_all("remote.origin.pushurl"), mirrors);
+        }
+    }
+
+    /// Dropping every mirror must take the push URLs with it. An additive
+    /// reconciler could only ever grow the list, so a declaration walked back left
+    /// pushes still fanning out to a mirror the config no longer mentions.
+    #[test]
+    fn reconcile_removes_push_urls_a_declaration_no_longer_asks_for() {
+        let _guard = crate::log::test_flag_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        git(dir, &["init", "-q", "-b", "main", "."]);
+        let repo = Repository::new(dir);
+        let url = "https://example.com/me/app.git".to_owned();
+
+        repo.reconcile_remote("origin", &url, &[url.clone(), "https://m/1.git".into()])
+            .unwrap();
+        assert_eq!(repo.get_config_all("remote.origin.pushurl").len(), 2);
+
+        repo.reconcile_remote("origin", &url, &[]).unwrap();
+        assert!(repo.get_config_all("remote.origin.pushurl").is_empty());
+    }
+
+    /// A repoint must be *reported*, because the stale tracking refs it leaves
+    /// behind are the caller's to prune-fetch away, and only a repoint owes that.
+    ///
+    /// The refs are deliberately still there on return: deleting them here would
+    /// leave a window where they are gone and the replacing fetch may fail, and a
+    /// branch whose tracking ref vanishes reads as `gone` — the state
+    /// `wits worktree prune` reclaims worktrees for.
+    #[test]
+    fn a_repoint_is_reported_and_leaves_the_stale_refs_for_the_caller() {
+        let _guard = crate::log::test_flag_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        git(dir, &["init", "-q", "-b", "main", "."]);
+        let repo = Repository::new(dir);
+
+        // Creating a remote is not a repoint: there is nothing stale to prune.
+        assert!(!repo
+            .reconcile_remote("origin", "https://example.com/a.git", &[])
+            .unwrap());
+        // Stand in for what a fetch would have left behind. Identity comes through
+        // `-c` so the test does not depend on the developer's global git config,
+        // and `core.hooksPath` is neutralised so a globally-installed commit hook
+        // cannot fire here.
+        git(
+            dir,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@e.com",
+                "-c",
+                "core.hooksPath=/nonexistent-wits-test-hooks",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "c1",
+            ],
+        );
+        let head = repo.rev_parse("HEAD").unwrap();
+        repo.update_ref("refs/remotes/origin/main", &head).unwrap();
+        assert!(!repo.refs_under("refs/remotes/origin/").is_empty());
+
+        assert!(
+            repo.reconcile_remote("origin", "https://example.com/b.git", &[])
+                .unwrap(),
+            "a URL change must report itself as a repoint"
+        );
+        assert_eq!(
+            repo.refs_under("refs/remotes/origin/").len(),
+            1,
+            "the stale refs are the caller's to prune-fetch, not ours to delete"
+        );
+
+        // A reconcile that changes nothing owes no prune-fetch.
+        assert!(!repo
+            .reconcile_remote("origin", "https://example.com/b.git", &[])
+            .unwrap());
+    }
+
     /// Borrowing a submodule's objects from a reference store must leave the new
     /// clone with an `alternates` file pointing at that store — the "no
     /// re-download" guarantee `review checkout --submodules` relies on.
@@ -737,7 +935,8 @@ pub fn init_bare_host(url: &str, remote: &str, dir: &Path, branch: &str) -> Resu
     }
 
     let repo = Repository::new(dir);
-    repo.ensure_remote(remote, url)?;
+    // A remote created a line above cannot be a repoint, so there is no prune to owe.
+    repo.reconcile_remote(remote, url, &[])?;
     // Tags come along because they are how a source tree names its releases, and
     // a host that has the branches but not the tags cannot answer `git describe`.
     repo.fetch(&["--tags", remote])?;
@@ -767,6 +966,12 @@ pub fn init_bare_host(url: &str, remote: &str, dir: &Path, branch: &str) -> Resu
 /// checkout borrowing it on equal terms.
 ///
 /// A free function because there is no repository at `dir` yet to hang it off.
+///
+/// The `origin` here is **not** the [`crate::remote::Role::Origin`] role and takes
+/// no part in role resolution: a reference store is an object cache we own, with
+/// exactly one place to fetch from and no user-facing remotes at all. Naming it
+/// after git's own clone default keeps it recognisable to anyone who opens the
+/// store by hand, and nothing reads a role from it.
 pub fn clone_reference_store(url: &str, dir: &Path) -> Result<(), GitError> {
     if crate::log::is_dry_run() {
         crate::log::dry_run(&format!("git clone --bare {url} {}", dir.display()));
@@ -880,6 +1085,10 @@ where
 /// full copy of its own. `upstream` overrides the cloned-from URL, for a store
 /// copied out of a *worktree's* administrative directory — a path that will not
 /// outlive the worktree, where the submodule's real remote will.
+///
+/// Neither name here belongs to the role vocabulary in [`crate::remote`]: the
+/// parameter is simply "the URL to point at", and the remote it writes is the
+/// store's single fetch source, as [`clone_reference_store`] explains.
 fn seal_store(store: &Repository, upstream: Option<&str>) -> Result<(), GitError> {
     let path = store.path().display().to_string();
     for (key, value) in [

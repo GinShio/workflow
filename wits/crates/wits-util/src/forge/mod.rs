@@ -234,13 +234,20 @@ pub trait Forge: Send + Sync {
 /// Pick and configure the forge for this checkout, or explain why we can't.
 ///
 /// The merge target decides everything: the platform we talk to is the one
-/// hosting `upstream` (or `origin` when there is no fork). Service detection from
-/// the hostname can be overridden per host for self-hosted instances, and a
-/// token must resolve or there is nothing to authenticate with.
+/// hosting the `upstream` role (or `origin` when there is no fork). Service
+/// detection from the hostname can be overridden per host for self-hosted
+/// instances, and a token must resolve or there is nothing to authenticate with.
 pub fn detect(repo: &Repository, remotes: &Remotes) -> anyhow::Result<Box<dyn Forge>> {
+    // Names roles rather than remotes: in a declared project the holders may be
+    // called anything, so "add an `upstream` remote" would be wrong advice.
     let target = remotes
-        .target()
-        .ok_or_else(|| anyhow::anyhow!("no 'origin' or 'upstream' remote to derive a forge from"))?
+        .target
+        .as_ref()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no remote holds the origin or upstream role, so there is no forge to derive"
+            )
+        })?
         .clone();
 
     // A host override lets a self-hosted GitLab/Gitea behind a custom domain

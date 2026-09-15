@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use wits_util::forge::{Forge, MrState, NewMr};
 use wits_util::git::Repository;
 use wits_util::log as wits_log;
+use wits_util::remote::RemoteRoles;
 
 use super::{fail_if_any, map_parallel, resolution, ForgeSession, SubmitArgs, TitleSource};
 
@@ -26,14 +27,14 @@ enum Decision {
     SkipClosed(String),
 }
 
-pub fn run(repo: &Repository, args: &SubmitArgs) -> anyhow::Result<()> {
-    let plan = resolution::plan_scoped(repo, &args.scope)?;
+pub fn run(repo: &Repository, roles: &RemoteRoles, args: &SubmitArgs) -> anyhow::Result<()> {
+    let plan = resolution::plan_scoped(repo, roles, &args.scope)?;
     if plan.selected.is_empty() {
         log::info!("no branches in scope");
         return Ok(());
     }
 
-    let session = ForgeSession::open(repo)?;
+    let session = ForgeSession::open(repo, roles)?;
     let (forge, noun) = (&session.forge, session.noun);
     let tips = repo.branch_tips();
 

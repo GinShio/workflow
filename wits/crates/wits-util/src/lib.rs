@@ -9,9 +9,10 @@
 //!
 //! The modules are flat on purpose. There is still a rough gradient — `config`,
 //! `crypto`, `git`, `jinja`, `log`, `process`, `time` are the thin floor;
-//! `build_system`, `forge`, `project`, `worktree` are subsystems with real domain
-//! logic — but they sit side by side so a consumer names `wits_util::process` or
-//! `wits_util::forge` directly, without a grouping layer in between.
+//! `build_system`, `forge`, `project`, `remote`, `worktree` are subsystems with
+//! real domain logic — but they sit side by side so a consumer names
+//! `wits_util::process` or `wits_util::forge` directly, without a grouping layer
+//! in between.
 //!
 //! The gradient is a real line, not a label. `jinja` is on the floor because it
 //! defines a language and decides nothing; resolving a *config* against it — where
@@ -22,6 +23,14 @@
 //! `config` folds in the single-setting `Resolver` (both answer "where does this
 //! come from?"), and the git-remote parsing that feeds forge detection lives in
 //! `forge::remote` (re-exported from `forge`), beside the forge it serves.
+//!
+//! Two modules say "remote" and mean different halves of the word. [`remote`]
+//! owns what a remote *is to us* — the `origin`/`upstream` role vocabulary and
+//! which local remote holds each — and depends only on `git`, so `forge` can take
+//! a resolved mapping without knowing the project registry exists. `forge::remote`
+//! owns what a remote *URL says* — host, owner, repo, and therefore which forge to
+//! call. Resolving roles from a *user's declaration* is neither, and lives with
+//! the declaration, in [`project::remotes`].
 
 pub mod build_system;
 pub mod config;
@@ -32,6 +41,7 @@ pub mod jinja;
 pub mod log;
 pub mod process;
 pub mod project;
+pub mod remote;
 pub mod system;
 pub mod time;
 pub mod worktree;

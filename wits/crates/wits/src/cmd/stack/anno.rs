@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use wits_util::forge::MergeRequest;
 use wits_util::git::Repository;
 use wits_util::log as wits_log;
+use wits_util::remote::RemoteRoles;
 
 use super::topology::Topology;
 use super::{fail_if_any, find_open_mrs, map_parallel, resolution, ForgeSession, ScopeArgs};
@@ -19,8 +20,8 @@ use super::{fail_if_any, find_open_mrs, map_parallel, resolution, ForgeSession, 
 const HEADER: &str = "<!-- wits stack: generated navigation, do not edit below -->";
 const FOOTER: &str = "<!-- wits stack: end navigation -->";
 
-pub fn run(repo: &Repository, scope: &ScopeArgs) -> anyhow::Result<()> {
-    let plan = resolution::plan_scoped(repo, scope)?;
+pub fn run(repo: &Repository, roles: &RemoteRoles, scope: &ScopeArgs) -> anyhow::Result<()> {
+    let plan = resolution::plan_scoped(repo, roles, scope)?;
 
     if plan.standalone {
         log::info!("standalone branch: a lone MR has nothing to navigate, skipping");
@@ -31,7 +32,7 @@ pub fn run(repo: &Repository, scope: &ScopeArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let session = ForgeSession::open(repo)?;
+    let session = ForgeSession::open(repo, roles)?;
     let noun = session.noun;
 
     // Discover the open MR for each branch up front; everything else is local.

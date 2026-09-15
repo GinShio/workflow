@@ -21,11 +21,12 @@ use std::os::unix::fs::PermissionsExt;
 
 use wits_util::git::{Commit, Repository};
 use wits_util::process::Command;
+use wits_util::remote::RemoteRoles;
 
 use super::resolution;
 use super::topology::Topology;
 
-pub fn run(repo: &Repository, base: Option<&str>) -> anyhow::Result<()> {
+pub fn run(repo: &Repository, roles: &RemoteRoles, base: Option<&str>) -> anyhow::Result<()> {
     // `slice` is driven by an interactive `git rebase -i`; there is nothing to
     // preview and no safe way to run it non-interactively, so under `-n` it does
     // nothing rather than write temp files and then misreport an empty result.
@@ -38,7 +39,7 @@ pub fn run(repo: &Repository, base: Option<&str>) -> anyhow::Result<()> {
 
     let base = match base {
         Some(b) => b.to_owned(),
-        None => resolution::base_branch(repo)?,
+        None => resolution::base_branch(repo, roles)?,
     };
 
     let commits = repo.commits(&format!("{base}..HEAD"));

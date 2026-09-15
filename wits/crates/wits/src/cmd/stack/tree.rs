@@ -12,14 +12,15 @@
 //! and moves are refused if they would form a cycle.
 
 use wits_util::git::Repository;
+use wits_util::remote::RemoteRoles;
 
 use super::{fail_if_any, resolution, MvArgs, RmArgs, TreeAction};
 
-pub fn run(repo: &Repository, action: &TreeAction) -> anyhow::Result<()> {
+pub fn run(repo: &Repository, roles: &RemoteRoles, action: &TreeAction) -> anyhow::Result<()> {
     match action {
-        TreeAction::Prune => prune(repo),
-        TreeAction::Rm(args) => rm(repo, args),
-        TreeAction::Mv(args) => mv(repo, args),
+        TreeAction::Prune => prune(repo, roles),
+        TreeAction::Rm(args) => rm(repo, roles, args),
+        TreeAction::Mv(args) => mv(repo, roles, args),
     }
 }
 
@@ -27,8 +28,8 @@ pub fn run(repo: &Repository, action: &TreeAction) -> anyhow::Result<()> {
 /// locally. This is the automation-friendly cleanup — it needs no branch names,
 /// is idempotent, and is safe because a branch that still exists (a live fork
 /// sibling included) keeps its node; only genuinely deleted refs are pruned.
-fn prune(repo: &Repository) -> anyhow::Result<()> {
-    let base = resolution::base_branch(repo)?;
+fn prune(repo: &Repository, roles: &RemoteRoles) -> anyhow::Result<()> {
+    let base = resolution::base_branch(repo, roles)?;
     let _lock = resolution::MacheteLock::acquire(repo)?;
     let mut topology = resolution::load_topology(repo)?;
     if topology.is_empty() {
@@ -58,8 +59,8 @@ fn prune(repo: &Repository) -> anyhow::Result<()> {
     resolution::save_topology(repo, &topology)
 }
 
-fn rm(repo: &Repository, args: &RmArgs) -> anyhow::Result<()> {
-    let base = resolution::base_branch(repo)?;
+fn rm(repo: &Repository, roles: &RemoteRoles, args: &RmArgs) -> anyhow::Result<()> {
+    let base = resolution::base_branch(repo, roles)?;
     let mut failures = 0usize;
     let mut deletions = Vec::new();
 
@@ -112,8 +113,8 @@ fn rm(repo: &Repository, args: &RmArgs) -> anyhow::Result<()> {
     fail_if_any(failures)
 }
 
-fn mv(repo: &Repository, args: &MvArgs) -> anyhow::Result<()> {
-    let base = resolution::base_branch(repo)?;
+fn mv(repo: &Repository, roles: &RemoteRoles, args: &MvArgs) -> anyhow::Result<()> {
+    let base = resolution::base_branch(repo, roles)?;
     let branch = &args.branch;
     let onto = &args.onto;
 

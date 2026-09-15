@@ -504,7 +504,8 @@ Context variables
    project.{ name, org, focus }
    repo.*                     # the *current* repo (focus repo in project scope;
                               #   the repo itself in a repo-scoped field like a hook)
-     { name, path, kind, main_branch, anchor, origin, upstream, mirrors }
+     { name, path, kind, main_branch, anchor }
+     remotes.<name>.{ url, role, mirrors }   # keyed by remote name
    repos.<name>.*             # any repo by explicit name; same fields as repo.*
    org.environment.<K>        # org entry; inherited, and nameable here too
    org.definitions.<K>        # org entry; inherited, and nameable here too
@@ -525,8 +526,12 @@ Context variables
 * An explicit ``build --detach`` does not bind ``branch.*``. References
   therefore fail hard unless the corresponding path is replaced by
   ``--build-dir`` / ``--install-dir``.
-* ``repo.upstream`` falls back to ``repo.origin`` when no upstream is
-  declared.
+* Remotes are exposed **only** by name, as ``repo.remotes.<name>.*``. There is
+  deliberately no ``repo.origin``: it would have to mean "the origin *role*'s
+  URL", which stops being the remote named ``origin`` the moment a free name
+  holds that role — and a template reading one while meaning the other would
+  render a plausible wrong URL rather than fail. ``role`` is the empty string
+  for a remote that holds none.
 * ``spec.*`` holds only what ``--spec K=V`` supplied on the command line, so
   a template referencing ``{{spec.mr}}`` fails loudly unless the caller
   passes it — never guessed or defaulted.
@@ -726,15 +731,65 @@ nested ``path`` with ``main_branch`` → ``submodule``; nested without
 Remotes
 ^^^^^^^
 
-``[repos.<name>.remotes]`` — ``origin`` (string, the push target / fork),
-``upstream`` (string, the **sync source**), ``mirrors`` (list of extra push
-URLs on origin). The **sync source** = ``upstream`` if declared, else
-``origin``; it is what ``clone`` and ``update`` fetch from and fast-forward
-``main`` against. When an ``upstream`` is declared, ``origin`` is **never
-fetched or cloned** — so a fork that does not yet exist on the server is fine
-(it is only added as a push target). Reconciliation is additive only: missing
-remotes/mirror push-URLs are added; existing URLs are never modified or
-removed; unmentioned remotes are untouched.
+``[repos.<name>.remotes]`` is a table keyed by **git remote name**, with any
+number of entries under any names. Each value is either a URL string or a
+table:
+
+.. list-table::
+   :widths: 14 86
+   :header-rows: 1
+
+   * - Key
+     - Meaning
+   * - ``url``
+     - The fetch URL. Required. ``name = "<url>"`` is shorthand for a table
+       carrying only this.
+   * - ``role``
+     - ``origin`` or ``upstream``. Omit for a remote *named* after a role,
+       whose name already says it; required for any other name that is to hold
+       one. A remote with no role is created and kept fetched, and consulted by
+       nothing — yours to use by hand.
+   * - ``mirrors``
+     - Extra push URLs, so one push fans out. An attribute, not a role — any
+       number of remotes may each fan out. Unrelated to ``git clone --mirror``.
+
+**Two roles, which are also two privileged names.** ``origin`` is the push
+target (and the head owner of a cross-fork MR); ``upstream`` is the **merge
+target** — the repository ``main`` fast-forwards against, which forge to talk
+to, and where MRs merge. A remote named ``origin`` or ``upstream`` holds that
+role implicitly.
+
+The **merge target** = the ``upstream`` holder if there is one, else the
+``origin`` holder. There is no fallback the other way: a checkout with a merge
+target and no push target is a valid read-only state, and push-side commands
+report the absence rather than pushing at the repository they merge into.
+
+**Fetching is not a role question.** ``update`` fetches every declared remote,
+the merge target first and fatally (``main`` follows it), each other one
+best-effort — so a fork that does not yet exist on the server is fine, and so is
+a mirror that is down. Only ``clone`` still reads a fetch source off a role, and
+only because it must name exactly one repository: the merge target, being the
+one certain to exist.
+
+Rejected at load: a remote named after one role that declares the other, and
+two remotes holding one role (implicit and explicit holders counted together).
+
+**Reconciliation converges the declared names and touches nothing else.** For a
+remote the file mentions, its fetch URL and its whole push-URL set are made to
+match the declaration — corrected and replaced, not merely added to, so walking
+a declaration back works and repeated runs cannot accumulate. A remote the file
+does not mention is left exactly as it was, never pruned. Re-pointing a remote
+at a different URL immediately re-fetches it with ``--prune``, since its
+``refs/remotes/<name>/*`` would otherwise keep answering for the previous
+repository; that is the only place ``update`` prunes. The fetch refspec is
+repaired if missing and never overwritten.
+
+**Roles are never written into the repository.** They are read from this file,
+or — in a checkout no project declares, and in a declared repo that assigns no
+role — from the privileged remote names. That second fallback is all-or-nothing:
+a declaration naming any holder has answered for both roles. If the project
+registry cannot be loaded at all, role-dependent commands fail rather than
+falling back.
 
 Hooks
 ^^^^^
@@ -919,12 +974,13 @@ tree it did not build means deleting content.
 
 For each repo (parents before nested; subtrees do no git work):
 
-The **sync source** = ``upstream`` if declared, else ``origin``.
+The **merge target** = the ``upstream`` role's holder if there is one, else the
+``origin`` role's holder.
 
-* **Missing path → clone**: in-place defaults to ``git clone`` from the sync
-  source; worktree/hybrid build a **tracking bare host** — ``git init --bare``,
+* **Missing path → clone**: in-place defaults to ``git clone`` from the merge
+  target; worktree/hybrid build a **tracking bare host** — ``git init --bare``,
   ``git remote add``, ``git fetch --tags``, then ``main_branch`` created from
-  ``<sync>/<main_branch>`` as the repository's symbolic HEAD — and add the
+  ``<target>/<main_branch>`` as the repository's symbolic HEAD — and add the
   configured bootstrap worktree on it. Deliberately not ``git clone --bare``,
   which copies every remote branch into ``refs/heads``, writes no fetch
   refspec, and publishes no ``origin/HEAD``. The mask lands before anything is
@@ -933,10 +989,13 @@ The **sync source** = ``upstream`` if declared, else ``origin``.
   ``post_clone`` runs in the checkout, and ``skip`` is verified again. A
   ``clone`` override runs in the current directory, owns both repository and
   bootstrap creation, and gets the mask applied after the fact (deinit covered
-  submodules, then write). Cloning names the fetched remote after the sync
-  source, so tracking an ``upstream`` leaves ``origin`` free for a fork.
-* **Existing → update**: ensure remotes (additive — including a fetch refspec
-  for a remote that has none, which is how a repository cloned with
+  submodules, then write). Cloning names the fetched remote after the merge
+  target, because a clone must name exactly one repository and that is the one
+  certain to exist; the rest are added next and their first fetch is
+  best-effort.
+* **Existing → update**: ensure remotes (reconcile every declared remote, then
+  prune-fetch each one that was re-pointed; including a fetch refspec for a
+  remote that has none, which is how a repository cloned with
   ``git clone --bare`` is repaired) → ``pre_update`` → action →
   ``post_update`` (cwd = conventional checkout, bare main worktree, or bare
   path when that worktree is absent).
@@ -944,15 +1003,16 @@ The **sync source** = ``upstream`` if declared, else ``origin``.
 Default update action — how ``main`` advances turns on **whether any checkout
 holds it**, not on whether the repository is bare:
 
+Every declared remote is fetched first — the merge target fatally, each other
+one best-effort and without ``--prune`` — then:
+
 * A checkout holds ``main_branch`` (the repository's own working tree, or the
-  linked worktree holding it): ``git fetch <sync>`` then ``git merge --ff-only
-  <sync>/<main_branch>`` there.
-* Nothing holds it: after the same plain ``git fetch <sync>`` (the refspec
-  ``ensure_remotes`` has just guaranteed makes it meaningful), advance the
-  local branch ref with ``git update-ref``, refusing anything that is not a
-  fast-forward. No working tree is touched and no sparse checkout is
-  expanded; nested repo lifecycle work is skipped until a main worktree
-  exists again.
+  linked worktree holding it): ``git merge --ff-only <target>/<main_branch>``
+  there.
+* Nothing holds it: advance the local branch ref with ``git update-ref``,
+  refusing anything that is not a fast-forward. No working tree is touched and
+  no sparse checkout is expanded; nested repo lifecycle work is skipped until a
+  main worktree exists again.
 * Declared submodule repos advance via their own lifecycle; undeclared nested
   submodules are refreshed with ``git submodule update --recursive -- <materialised
   paths>`` (no ``--init``; ``--init`` happens only on clone or worktree

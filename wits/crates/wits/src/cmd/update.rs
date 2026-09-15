@@ -28,6 +28,7 @@ use wits_util::project::context::Ctx;
 
 use wits_util::git::{self, Repository, RestoreGuard};
 use wits_util::project::model::{infer_kind, BranchStrategy, Kind, RawRepo};
+use wits_util::project::remotes;
 use wits_util::project::resolve;
 use wits_util::project::resolve_target;
 use wits_util::project::skip;
@@ -220,15 +221,25 @@ fn clone_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Repositor
     Ok(())
 }
 
+/// The URL to clone from and the remote name to file it under: the merge target.
+///
+/// A clone has to name exactly one repository, and the merge target is the one
+/// certain to exist — a fork holding only the `origin` role may not have been
+/// created on the server yet. The remaining declared remotes are added by
+/// [`ensure_remotes`] straight afterwards, and their first fetch is best-effort
+/// (see [`default_update`]), so the not-yet-created fork still costs nothing.
 fn clone_source(repo: &RawRepo) -> Result<(&str, &str)> {
-    match (
-        repo.remotes.upstream.as_deref(),
-        repo.remotes.origin.as_deref(),
-    ) {
-        (Some(upstream), _) => Ok((upstream, "upstream")),
-        (None, Some(origin)) => Ok((origin, "origin")),
-        (None, None) => bail!("cannot clone: no [remotes] origin or upstream declared"),
-    }
+    let roles = remotes::roles_of(repo);
+    let target = roles
+        .merge_target()
+        .context("cannot clone: no [remotes] entry holds the origin or upstream role")?;
+    // Re-borrowed from the map so both halves outlive the `RemoteRoles` temporary.
+    // `remotes::roles_of` only ever names a key of this map, so the entry is there.
+    let (name, remote) = repo
+        .remotes
+        .get_key_value(target)
+        .expect("a resolved role names a declared remote");
+    Ok((remote.url.as_str(), name.as_str()))
 }
 
 fn clone_in_place_repo(repo: &RawRepo, git: &Repository) -> Result<()> {
@@ -387,30 +398,51 @@ fn default_update(
         .main_branch
         .as_deref()
         .context("own-git repo has no main_branch")?;
-    // The sync source that `main` advances on: `upstream` if declared, else
-    // `origin`. A fork declared as `origin` need not exist — nothing fetches it.
-    let sync = if repo.remotes.upstream.is_some() {
-        "upstream"
-    } else {
-        "origin"
-    };
+    // The remote `main` advances on. Read from the checkout when the declaration
+    // assigns no role at all; see `remotes::roles_in_force` for what that serves
+    // and what it still papers over.
+    let roles = remotes::roles_in_force(repo, git);
+    let target = roles.merge_target().context(
+        "no remote holds the origin or upstream role, and this checkout has none named after one",
+    )?;
 
-    // A plain fetch, because `ensure_remotes` has just guaranteed the refspec that
-    // makes one meaningful: every branch the remote has lands under
-    // `refs/remotes/<sync>/*`, which is what tracking distances and trunk detection
+    // Plain fetches, because `ensure_remotes` has just guaranteed the refspec that
+    // makes one meaningful: every branch a remote has lands under
+    // `refs/remotes/<name>/*`, which is what tracking distances and trunk detection
     // read, and `refs/heads` is left to this repository's own branches.
-    git.fetch(&[sync])?;
+    //
+    // The merge target goes first and its failure is fatal: the fast-forward below
+    // reads `<target>/<main_branch>`, so there is nothing to do without it, and
+    // failing here costs nothing further.
+    git.fetch(&[target])?;
+    // Every other declared remote, so an extra remote is worth declaring at all —
+    // a declared remote you can never `git log` against is just a line of config.
+    // Best-effort, and that asymmetry is what keeps `update` safe to run
+    // unattended: a fork holding only the `origin` role may not have been created
+    // on the server yet, and a repo declaring a mirror that is down must still
+    // update. Nothing below reads these refs, so a miss costs only freshness.
+    //
+    // No `--prune` on purpose. Pruning would start producing `%(upstream:track)` =
+    // `gone` branches, which `wits worktree prune`'s default sweep reclaims
+    // worktrees for — a real change in what `update` means, not a detail of this
+    // one. `ensure_remotes` prunes the one case where the refs are certainly
+    // stale.
+    for name in repo.remotes.keys().filter(|n| n.as_str() != target) {
+        if let Err(e) = git.fetch(&[name.as_str()]) {
+            log::warn!("remote '{name}' could not be fetched ({e})");
+        }
+    }
 
     // How `main` advances turns on **whether any checkout has it**, not on whether
     // the repository is bare. Those were always the same question asked two ways: a
     // conventional clone is itself the checkout holding whichever branch it is on,
     // and a bare-backed repo keeps a checkout per branch.
     match holding {
-        Some(checkout) => checkout.merge_ff_only(&format!("{sync}/{mb}"))?,
+        Some(checkout) => checkout.merge_ff_only(&format!("{target}/{mb}"))?,
         // Nothing has it, so the branch moves as a ref and no working tree is
         // touched — which is exactly how a feature checkout keeps its own branch,
         // and its sparse cone, while `main` catches up underneath.
-        None => git.fast_forward_branch(mb, &format!("{sync}/{mb}"))?,
+        None => git.fast_forward_branch(mb, &format!("{target}/{mb}"))?,
     }
 
     // Submodules follow whichever checkout exists: `main`'s where that is what is
@@ -443,29 +475,33 @@ fn refresh_submodules(project: &ProjectData, name: &str, git: &Repository) -> Re
     Ok(())
 }
 
-/// Additive remote reconciliation (§3.1): add what's missing, never modify.
+/// Make every **declared** remote match its declaration, and touch nothing else.
 ///
-/// "Missing" includes a remote that exists but has no **fetch refspec**, which is
-/// what `git clone --bare` leaves behind and what makes a plain `git fetch` there
-/// update no ref at all. Adding it is how a bare host cloned before this repairs
-/// itself; see [`Repository::ensure_fetch_refspec`].
+/// Two halves of one rule. Over the names the config file mentions, the file wins
+/// outright: a URL that has drifted is corrected, a push-URL set that has drifted
+/// is replaced. Over every other remote the file says nothing, so neither do we —
+/// a remote added by hand is left exactly as it was, not pruned for being
+/// undeclared.
+///
+/// Convergence rather than addition is also what keeps repeated runs honest; the
+/// reasoning is in [`Repository::reconcile_remote`], which does the writing.
+///
+/// A re-pointed remote is prune-fetched here rather than in [`default_update`],
+/// because the repair belongs next to the thing that invalidated the refs: this
+/// runs for every repo, while the default action can be replaced wholesale by a
+/// `hooks.update` override. Best-effort, since the new URL may be unreachable and
+/// a stale tracking namespace is not worth failing an update over — the refs that
+/// remain are merely old, which is the state they were already in.
 fn ensure_remotes(git: &Repository, repo: &RawRepo) -> Result<()> {
-    if let Some(origin) = &repo.remotes.origin {
-        git.ensure_remote("origin", origin)?;
-        // Only touch push URLs when there are mirrors. git pushes to the fetch URL
-        // by default, so with no mirrors there is nothing to add — and adding
-        // origin's own URL as an explicit pushurl would be pointless churn. Once a
-        // mirror makes an explicit pushurl necessary, git stops defaulting push to
-        // the fetch URL, so origin's own URL must be listed alongside the mirrors.
-        if !repo.remotes.mirrors.is_empty() {
-            git.ensure_push_url("origin", origin)?;
-            for mirror in &repo.remotes.mirrors {
-                git.ensure_push_url("origin", mirror)?;
+    for (name, desired) in remotes::desired(repo) {
+        if git.reconcile_remote(&name, &desired.url, &desired.push_urls)? {
+            if let Err(e) = git.fetch(&["--prune", &name]) {
+                log::warn!(
+                    "remote '{name}' now points elsewhere but could not be re-fetched ({e}); \
+                     its remote-tracking refs still describe the previous repository"
+                );
             }
         }
-    }
-    if let Some(upstream) = &repo.remotes.upstream {
-        git.ensure_remote("upstream", upstream)?;
     }
     Ok(())
 }

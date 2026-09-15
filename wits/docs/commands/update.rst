@@ -19,7 +19,7 @@ What it does with each repo
 For each repo in the project, in dependency order (parents before nested):
 
 * **Missing path → clone.** The repo is cloned the first time. In-place
-  defaults to ``git clone`` from the sync source; worktree/hybrid build a
+  defaults to ``git clone`` from the merge target; worktree/hybrid build a
   *tracking bare host* — ``git init --bare``, ``git remote add``,
   ``git fetch --tags``, then ``main_branch`` created from the remote's branch
   as the repository's symbolic HEAD — and add its bootstrap worktree. Deliberately
@@ -27,25 +27,31 @@ For each repo in the project, in dependency order (parents before nested):
   ``refs/heads``, writes no fetch refspec, and publishes no ``origin/HEAD``
   (see :doc:`worktree`). Submodules are initialised, ``skip`` applied, and the
   result verified.
-* **Existing → update.** Remotes are ensured (additive only — including a
-  fetch refspec for a remote that has none, which is how a repository cloned
-  with ``git clone --bare`` is repaired), then the default action runs.
+* **Existing → update.** Declared remotes are reconciled (including a fetch
+  refspec for a remote that has none, which is how a repository cloned with
+  ``git clone --bare`` is repaired), then the default action runs.
 
-The **sync source** is ``upstream`` if declared, else ``origin``. Cloning
-names the fetched remote after the sync source, so tracking an ``upstream``
-leaves ``origin`` free for a fork.
+The **merge target** is whichever remote holds the ``upstream`` role, else
+whichever holds ``origin``. It is what ``main`` follows, which forge is talked
+to, and where MRs merge. Cloning names the fetched remote after it because a
+clone has to name exactly one repository and that is the one certain to exist —
+a fork you have not created on the server yet is fine.
+
+**Every declared remote gets fetched**, so an extra remote is worth declaring
+rather than just ``git remote add``-ing: ``update`` keeps it current and you can
+``git log`` against it. Only the merge target's fetch is fatal, since ``main``
+follows it; every other remote's failure is a warning, which is what lets a
+not-yet-created fork or a mirror that is down pass through unattended.
 
 The default action
 
-* **On ``main_branch``:** ``git fetch <sync>`` then
-  ``git merge --ff-only <sync>/<main_branch>``.
-* **Otherwise:** a ref-only fast-forward — ``git fetch <sync>
-  <main_branch>:<main_branch>`` — which does not check out, does not touch the
-  working tree, and does not expand a sparse checkout.
-* **Bare-backed:** ``git fetch <sync>``, then fast-forward whichever linked
-  worktree holds ``main_branch``; if none remains, advance the local branch
-  ref with ``update-ref``, refusing anything that is not a fast-forward.
-  Nested repo lifecycle work is skipped until a main worktree exists again.
+* **On ``main_branch``:** ``git merge --ff-only <target>/<main_branch>``.
+* **Otherwise:** a ref-only fast-forward, which does not check out, does not
+  touch the working tree, and does not expand a sparse checkout.
+* **Bare-backed:** fast-forward whichever linked worktree holds
+  ``main_branch``; if none remains, advance the local branch ref with
+  ``update-ref``, refusing anything that is not a fast-forward. Nested repo
+  lifecycle work is skipped until a main worktree exists again.
 * Declared submodule repos advance via their own lifecycle; undeclared nested
   submodules are refreshed with ``git submodule update --recursive -- <materialised
   paths>`` — no ``--init``; ``--init`` happens only on clone or worktree
@@ -62,10 +68,19 @@ Three properties make ``update`` safe to run unattended:
   update.
 * **A sparse checkout is never expanded.** The refspec fetch, the ``--ff-only``
   merge, and the limited submodule refresh all honour the cone.
-* **Remotes are additive.** Missing remotes and mirror push-URLs are added;
-  existing URLs are never modified or removed; remotes the config does not
-  mention are untouched. A URL you set by hand is yours, and ``update`` never
-  "corrects" it.
+* **Only declared remotes are touched.** For a remote your config names, its
+  URL and its whole push-URL set are made to match what you declared — so
+  correcting a URL in the file fixes the checkout, and removing a mirror
+  removes it. A remote your config does **not** name is never modified and
+  never pruned: one you added by hand stays yours. Repeated runs converge
+  rather than accumulate, so push URLs cannot pile up.
+
+  Re-pointing a remote at a different URL also re-fetches it right away with
+  ``--prune``, because its ``refs/remotes/<name>/*`` would otherwise keep
+  answering for the repository it used to name. That is the only place
+  ``update`` prunes; the general fetch pass does not, so it never turns your
+  branches into the "upstream gone" state that ``wits worktree prune``
+  reclaims.
 
 Borrowed repos stay with their owner
 ------------------------------------

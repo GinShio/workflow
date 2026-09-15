@@ -204,47 +204,175 @@ Repo model
 A Repo describes one git checkout. A Project may have several; the fields
 below apply to each ``[repos.NAME]``.
 
-Remotes and roles — additive only
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Remotes and roles
+~~~~~~~~~~~~~~~~~
 
-Remotes are declared with **roles**, so commands never guess which remote
-does what:
+A repo may declare **any number of remotes under any names**. Two of those
+names are privileged, because two — and only two — questions about a remote
+have to be answerable for the rest of the toolset to work:
 
-* **``origin``** — the repo we push to (often our fork). It is only the
-  *clone / fetch* source when no ``upstream`` is declared; when an
-  ``upstream`` is present, nothing ever clones or fetches ``origin``, so a
-  fork that does not exist on the server yet is fine — it is merely added as
-  a push target.
-* **``upstream``** — the **sync source**: what ``clone`` and the default
-  ``update`` fetch from and fast-forward ``main`` against. When absent, the
-  sync source falls back to ``origin`` (we do not create a git remote for
-  ``upstream`` in that case).
-* **``mirrors``** — extra *push* URLs attached to ``origin``, so one push
-  fans out.
+* **``origin``** — the remote we push to (often our fork), and whose owner
+  heads a cross-fork MR. Never the merge target: pushing a stack of feature
+  branches at the repository we merge *into* would have ``submit`` open every
+  MR from the target onto itself, so there is deliberately no fallback from
+  ``origin`` to ``upstream``, only the other way.
+* **``upstream``** — the **merge target**: the repository ``main``
+  fast-forwards against, which forge to talk to, and where MRs merge. When
+  nothing holds it, the merge target falls back to whatever holds ``origin``.
 
-The **sync source is a single concept** used consistently — ``upstream`` if
-declared, else ``origin`` — for the clone source, the on-``main``
-fetch+merge, and the off-``main`` ref-only fast-forward. This is what makes
-tracking an upstream while owning a not-yet-created fork work: the fork
-(``origin``) is never fetched.
+**Fetching is not one of those questions.** ``update`` fetches every remote a
+repo declares, so what to fetch is a property of the remote *list*, not of the
+roles — which is what makes an extra remote worth declaring instead of just
+``git remote add``-ing it. Only ``main``'s fast-forward source belongs to the
+merge target.
+
+The initial ``clone`` is the one place a role still picks a fetch source, and
+not because it is one: a clone has to name exactly one repository, and the
+merge target is the one certain to exist. A fork holding only the ``origin``
+role may not have been created on the server yet, which is why the remaining
+remotes are added afterwards and why their first fetch is best-effort.
+
+Those two are **roles**, so commands never guess which remote does what. They
+are also **remote names**: a remote called ``origin`` holds the ``origin``
+role without saying so. Any other name holds a role only by declaring one, and
+a remote that declares none is simply a remote — fetchable by hand, invisible
+to the roles.
 
 .. code-block:: toml
 
    [repos.main.remotes]
+   # Conventional names carry their role implicitly.
    origin   = "git@github.com:me/mesa.git"
    upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
-   mirrors  = ["git@codeberg.org:me/mesa.git"]
+   # A remote with no role at all: created and kept fetched, consulted by
+   # nothing — yours to `git log rocm/main` against.
+   rocm     = "https://github.com/ROCm/mesa.git"
 
-The reconciliation ``update`` performs is deliberately **additive only, never
-modifying**: a declared remote that is missing is added; a declared remote
-that already exists is **left exactly as-is** — its fetch URL is never
-"corrected", and no warning is emitted, because the URL is the user's to own.
-Missing mirror push-URLs are added; existing push-URLs are never removed.
-Remotes the config does not mention are never touched. The one non-obvious
-mechanic worth recording: git stops defaulting ``push`` to the fetch URL once
-*any* push URL is added, so a mirror setup's push-URL list must include the
-origin URL itself (``{origin} ∪ mirrors``) — ``update`` only ever *adds*
-toward that set.
+   # A free name holds a role only by declaring it, and may fan out on push.
+   [repos.main.remotes.fdo]
+   url     = "https://gitlab.freedesktop.org/mesa/mesa.git"
+   role    = "upstream"
+   mirrors = ["git@codeberg.org:me/mesa.git"]
+
+Why the role names double as privileged remote names, rather than being a
+separate vocabulary: it makes the default assignment need no table at all —
+*the role's name is the remote name that holds it*. The price is that a name
+could contradict a declaration, which two load-time rules settle. A remote
+named after one role may not declare the other, and a role may not have two
+holders (counting the implicit holder and the explicit ones together). Both
+are facts of the file, so both fail at load rather than at use.
+
+Neither name is git's. Git privileges ``origin`` only weakly — ``git clone``'s
+default, and the last resort in ``branch.<name>.remote`` — and has no notion of
+``upstream`` at all. This vocabulary is therefore *ours* to define, and to
+revise, without arguing with git.
+
+``mirrors`` is an **attribute, not a role**: extra push URLs so one push fans
+out. A role answers "which remote does X" and so admits one holder; any number
+of remotes may each fan out. (Unrelated to ``git clone --mirror``, which copies
+a whole ref space.)
+
+Reconciliation: declared names converge, the rest are untouched
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Over the names the config file mentions, **the file wins**: a fetch URL that
+has drifted is corrected, and a push-URL set that has drifted is replaced.
+Over every other remote the file says nothing, so neither do we — a remote
+added by hand is left exactly as it was, never pruned for being undeclared.
+That line is what makes "the config is the single source of truth" true without
+making ``update`` destructive.
+
+Every write is a **set, not an append**, and that is a correctness property
+rather than a tidiness one. The previous design appended push URLs behind an
+equality check against ``git remote get-url``, whose output ``url.*.insteadOf``
+rewrites — so the check could not match the declared string, and every run
+added the URL again until the list ran away. A set-valued write has no such
+failure mode: the list ends up the length of the declaration however the
+comparison goes. The same shape is why walking a declaration *back* now works;
+an additive reconciler could only ever grow.
+
+Git stops defaulting ``push`` to the fetch URL once *any* push URL exists, so a
+fan-out set must name the remote's own URL too (``{url} ∪ mirrors``) or pushing
+would reach only the mirrors.
+
+A remote **re-pointed at a different URL** is immediately re-fetched with
+``--prune``. Its ``refs/remotes/<name>/*`` describe the repository it pointed at
+before and nothing else prunes them, while trunk and base-branch detection read
+that namespace — so leaving them unattended would have those answer from a
+repository the remote no longer names, silently and plausibly.
+
+Repairing it by fetching rather than by *deleting* the refs is the part worth
+recording, because deleting was the first design and it was wrong twice over.
+It leaves a window in which the refs are gone and the fetch meant to replace
+them may fail; and a branch whose remote-tracking ref vanishes reads as
+``%(upstream:track)`` = ``gone``, which is precisely the state
+``wits worktree prune`` reclaims worktrees for — so an unlucky ``update`` could
+hand ``prune`` a whole stack of feature worktrees to delete. A prune-fetch has
+neither failure mode: it keeps every ref the new repository also has, and drops
+only the ones it lacks. The fetch itself is best-effort, since an unreachable
+new URL leaves the refs merely *old*, which is the state they were already in.
+
+This is the only place ``update`` prunes. The general fetch pass does not,
+because pruning there would start manufacturing ``gone`` branches as a matter
+of course, and whether ``update`` should mean that is a separate question from
+how a repoint repairs itself.
+
+The fetch refspec is the one thing *repaired* rather than converged. A config
+file that declares URLs makes no claim about refspecs, and a user may have
+added their own; so a missing refspec is written (which is what repairs a
+``git clone --bare``, which writes none) and an existing one is left alone.
+
+Nothing records the roles in the repository
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``update`` writes URLs and push URLs into ``.git/config``. It deliberately does
+**not** write which remote holds which role. That was the tempting design — a
+``wits.remote.upstream`` key, say — and it is wrong for one reason: it would be
+a second copy of an answer the config file already gives, and every read would
+then have to adjudicate the drift between them.
+
+So the declaration is consulted directly, and the consequence is that a
+checkout no project declares must answer some other way. It answers by the
+privileged names — which is exactly what makes them worth privileging. This is
+the whole reason ``wits stack`` and ``wits review`` work in a repository cloned
+by hand: they ask one question ("which remote holds this role?") and it is
+routed to whichever authority owns the checkout.
+
+The routing has **three** outcomes, and collapsing the last two would be a
+correctness bug rather than a shortcut:
+
+* the registry loads and owns this path → the declaration decides;
+* the registry loads and does not own it → the privileged names decide;
+* the registry cannot be read → **an error**. A broken file belonging to some
+  unrelated project must not silently change which remote we push to in a
+  checkout that is perfectly fine. Falling back here would do exactly that, and
+  do it plausibly, since ``origin`` and ``upstream`` usually do exist.
+
+One more wrinkle the routing settles: a declaration that assigns *no* role is
+not the same as a repo with no remotes. A repo may be declared purely for its
+path and build settings — amdllpc's ``repos.review`` is one — and then there
+are real remotes and nothing declared to read. Where the declaration assigns
+nothing, the checkout's own privileged names answer.
+
+That fallback is **all-or-nothing by role-set, not per role**: a declaration
+naming any holder has answered for *both* roles, so a repo declaring only
+``origin`` has no ``upstream`` even if the checkout has a remote called that.
+Merging the two authorities role by role would let a hand-added remote silently
+become a declared project's merge target, which is the drift the
+declaration-is-truth rule exists to prevent.
+
+Where it fires today it gets the right answer only because the remote-less repo
+*shares a checkout* with one that does declare remotes, and that sibling's
+reconcile created a remote literally named ``origin``. Rename such a project's
+remotes to free names and the shared checkout has no privileged name left to
+read. The real missing concept is "two declared repos resolving to one git
+repository" — which nothing models, and which is also why ``update`` today does
+the git half of its work twice for such a pair. Recorded as open, not solved.
+
+Because the roles are resolved rather than stored, they are resolved **once per
+invocation** and passed down. Two answers that could differ between one verb's
+git calls is a bug waiting to happen; re-reading the registry per call would
+also be wasteful, though at a few milliseconds that is the lesser reason.
 
 Main branch
 ~~~~~~~~~~~
@@ -933,7 +1061,8 @@ Context variables
    project.{ name, org, focus }
    repo.*                     # the *current* repo (the focus repo in project scope;
                               #   the repo itself in a repo-scoped field such as a hook)
-     { name, path, kind, main_branch, anchor, origin, upstream, mirrors }
+     { name, path, kind, main_branch, anchor }
+     remotes.<name>.{ url, role, mirrors }   # keyed by remote name; no role shortcuts
    repos.<name>.*             # any repo by explicit name; same fields as repo.*,
                               #   plus its resolved workdir in a full plan
    branch.{ raw, slug }       # raw = the branch name; slug = filesystem-sanitised
@@ -1078,7 +1207,7 @@ because a submodule is just a nested Repo.
              in-place: git clone (--no-checkout when `skip` is declared)
                        + remotes + sparse patterns, then the first checkout
              worktree/hybrid: init --bare + remote add + fetch + main_branch from
-                              <sync>/<main_branch>, then bootstrap main worktree
+                              <target>/<main_branch>, then bootstrap main worktree
              override: current cwd; owns repository + bootstrap creation
            apply `skip` (idempotent for the default shapes — the mask already
                 landed before anything was materialised: in-place before its
@@ -1089,12 +1218,15 @@ because a submodule is just a nested Repo.
        else → verify `skip` in the checkout → ensure-remotes → pre → action → post
               (bare-backed hooks use the main worktree, or bare path if absent)
 
-     where sync = upstream if declared, else origin
+     where target = whatever holds the `upstream` role, else whatever holds `origin`
+     and ensure-remotes = reconcile every declared remote, then for each one it
+                          re-pointed: git fetch --prune <name>   # best-effort
 
    default update action — whether any checkout holds `main` decides, not bareness:
-     git fetch <sync>                                       # refspec ensured above
-     if a checkout holds main:  merge --ff-only <sync>/<main> there
-     else:                      update-ref refs/heads/<main> <sync>/<main>, refusing non-ff
+     git fetch <target>                                     # refspec ensured above; fatal
+     git fetch <each other declared remote>                 # best-effort, no --prune
+     if a checkout holds main:  merge --ff-only <target>/<main> there
+     else:                      update-ref refs/heads/<main> <target>/<main>, refusing non-ff
      then advance declared submodule repos (their own lifecycle), and refresh
           undeclared nested submodules with: git submodule update --recursive -- <materialised paths>
 

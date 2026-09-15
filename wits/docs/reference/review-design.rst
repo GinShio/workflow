@@ -138,7 +138,8 @@ the git-hosting concerns it leans on stay in ``wits_util::forge`` and grow
 there. Concretely:
 
 * **Reuse unchanged:** ``wits_util::forge::remote`` (URL parsing,
-  origin/upstream roles), ``forge::detect`` (which platform, which token), the
+  the identities behind the roles), ``forge::detect`` (which platform, which
+  token), the
   ``Repository`` git floor, the ``log``/``process`` dry-run machinery, and
   ``stack::resolution`` for the "what is a stack" question when reviewing our
   own.

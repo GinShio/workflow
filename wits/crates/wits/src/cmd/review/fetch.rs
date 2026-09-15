@@ -44,12 +44,14 @@ pub fn run(repo: &Repository, args: &super::FetchArgs) -> Result<()> {
 }
 
 /// The git remote name to fetch MR refs from — the merge target.
+///
+/// Infallible by the time we are here: [`super::online`] already failed if no role
+/// resolved to a merge target, so it has a holder.
 fn target_remote(ctx: &Online) -> String {
-    if ctx.remotes.upstream.is_some() {
-        "upstream".to_owned()
-    } else {
-        "origin".to_owned()
-    }
+    ctx.roles
+        .merge_target()
+        .expect("an Online context has a merge target")
+        .to_owned()
 }
 
 /// Re-fetch one MR after a submit, so freshly-posted threads come back.

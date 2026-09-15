@@ -32,8 +32,31 @@ pub struct Root<'a> {
 }
 
 /// Resolve the single config root: `$<env>` (which must exist if set), then the
-/// first existing of `$XDG_CONFIG_HOME/<xdg>` and `$HOME/<home>`.
+/// first existing of `$XDG_CONFIG_HOME/<xdg>` and `$HOME/<home>`. An absent root
+/// is an error; use [`find_root`] where it is a legitimate answer.
 pub fn resolve_root(spec: &Root<'_>) -> Result<PathBuf> {
+    find_root(spec)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "no config root found (looked for {})",
+            default_candidates(spec)
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
+}
+
+/// Like [`resolve_root`], but distinguishing **"no config tree exists"** from
+/// **"the config tree cannot be used"**.
+///
+/// The two are different answers and some callers must act differently on them: a
+/// tool that merely *consults* config where it exists (rather than requiring it)
+/// should treat a machine with none installed as a plain absence, while still
+/// reporting a root that was named and cannot be honoured. So an `$<env>` that
+/// points at a non-directory stays an error — an explicit instruction we cannot
+/// carry out — and only the absence of every default location yields `None`.
+pub fn find_root(spec: &Root<'_>) -> Result<Option<PathBuf>> {
     if let Some(env) = std::env::var_os(spec.env) {
         let path = PathBuf::from(env);
         if !path.is_dir() {
@@ -43,9 +66,15 @@ pub fn resolve_root(spec: &Root<'_>) -> Result<PathBuf> {
                 path.display()
             );
         }
-        return Ok(path);
+        return Ok(Some(path));
     }
+    Ok(default_candidates(spec)
+        .into_iter()
+        .find(|candidate| candidate.is_dir()))
+}
 
+/// The non-env search locations, in precedence order.
+fn default_candidates(spec: &Root<'_>) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
         candidates.push(PathBuf::from(xdg).join(spec.xdg));
@@ -53,19 +82,7 @@ pub fn resolve_root(spec: &Root<'_>) -> Result<PathBuf> {
     if let Some(home) = std::env::var_os("HOME") {
         candidates.push(PathBuf::from(home).join(spec.home));
     }
-    for candidate in &candidates {
-        if candidate.is_dir() {
-            return Ok(candidate.clone());
-        }
-    }
-    bail!(
-        "no config root found (looked for {})",
-        candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
+    candidates
 }
 
 /// Every `*.toml` under `root`, recursively, in sorted order. A `root` that does
@@ -238,6 +255,48 @@ impl<'repo> Resolver<'repo> {
 mod tests {
     use super::*;
     use crate::process::Command;
+
+    const SPEC: Root<'static> = Root {
+        env: "WFTEST_ROOT_ENV",
+        xdg: "wftest/tool",
+        home: ".wftest/tool",
+    };
+
+    /// The distinction [`find_root`] exists for, at all three of its outcomes.
+    /// Guarded and serialised because it moves `HOME`/`XDG_CONFIG_HOME`, which the
+    /// whole process shares.
+    #[test]
+    fn find_root_separates_no_tree_from_an_unusable_one() {
+        let _guard = crate::log::test_flag_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let saved = ["HOME", "XDG_CONFIG_HOME"].map(std::env::var_os);
+        std::env::set_var("HOME", dir.path());
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::remove_var(SPEC.env);
+
+        // No tree anywhere: an absence, not a failure.
+        assert_eq!(find_root(&SPEC).unwrap(), None);
+        // …and `resolve_root`, whose callers require one, still says so.
+        assert!(resolve_root(&SPEC).is_err());
+
+        // A tree at the HOME location is found.
+        let home_root = dir.path().join(SPEC.home);
+        std::fs::create_dir_all(&home_root).unwrap();
+        assert_eq!(find_root(&SPEC).unwrap(), Some(home_root));
+
+        // A root named explicitly but absent is an error either way: an
+        // instruction we cannot carry out must not read as "nothing configured".
+        std::env::set_var(SPEC.env, dir.path().join("nope"));
+        assert!(find_root(&SPEC).is_err());
+        std::env::remove_var(SPEC.env);
+
+        for (key, value) in ["HOME", "XDG_CONFIG_HOME"].iter().zip(saved) {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
 
     #[test]
     fn discovers_toml_recursively_and_sorted() {

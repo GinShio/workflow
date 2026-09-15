@@ -22,8 +22,10 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use serde::de::{self, Deserializer, SeqAccess, Visitor};
+use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
+
+use crate::remote::Role;
 
 /// A whole config file, parsed. Every section is optional so one file may carry
 /// a project, toolchains, and an org at once (§10.2). Unknown keys are rejected
@@ -137,10 +139,7 @@ impl RawRepo {
         if !self.skip.is_empty() {
             out.push("skip");
         }
-        if self.remotes.origin.is_some()
-            || self.remotes.upstream.is_some()
-            || !self.remotes.mirrors.is_empty()
-        {
+        if !self.remotes.is_empty() {
             out.push("remotes");
         }
         if self.hooks != RawHooks::default() {
@@ -198,13 +197,68 @@ pub struct RawHooks {
     pub post_update: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct RawRemotes {
-    pub origin: Option<String>,
-    pub upstream: Option<String>,
-    #[serde(default)]
+/// A repo's remotes, keyed by the git remote name to create. Free-form: the two
+/// privileged names carry a role implicitly, anything else is a plain extra
+/// remote unless it declares a [`role`](RawRemote::role).
+pub type RawRemotes = BTreeMap<String, RawRemote>;
+
+/// One declared remote.
+///
+/// Written either as a bare URL (`origin = "git@…"`) or as a table when it needs
+/// more than that — the same string-or-struct courtesy [`StringList`] extends to
+/// `extends`. The common case, a URL under a conventional name, stays one line.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct RawRemote {
+    pub url: String,
+    /// Which role this remote holds. Omitted for the privileged names, whose name
+    /// already says it; **required** for any other name that is to hold a role,
+    /// since a name is the only signal a bare checkout has (see [`crate::remote`]).
+    pub role: Option<Role>,
+    /// Extra push URLs, so one push fans out to copies of the same repository.
+    ///
+    /// An attribute rather than a role: a role answers "which remote does X" and
+    /// so has at most one holder, while any number of remotes may each fan out.
+    /// Unrelated to `git clone --mirror`, which copies a whole ref space; these
+    /// are only additional push destinations.
     pub mirrors: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for RawRemote {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // The table form, carrying the same `deny_unknown_fields` strictness as
+        // the rest of the file model so a mistyped `mirror` fails loudly.
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Table {
+            url: String,
+            role: Option<Role>,
+            #[serde(default)]
+            mirrors: Vec<String>,
+        }
+
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = RawRemote;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a URL string or a remote table")
+            }
+            fn visit_str<E: de::Error>(self, s: &str) -> Result<RawRemote, E> {
+                Ok(RawRemote {
+                    url: s.to_owned(),
+                    ..Default::default()
+                })
+            }
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<RawRemote, A::Error> {
+                let t = Table::deserialize(de::value::MapAccessDeserializer::new(map))?;
+                Ok(RawRemote {
+                    url: t.url,
+                    role: t.role,
+                    mirrors: t.mirrors,
+                })
+            }
+        }
+        d.deserialize_any(V)
+    }
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -673,9 +727,14 @@ mod tests {
             file.repos["main"].build_dir.as_deref(),
             Some("{{repos.main.workdir}}/_build/{{build_type}}")
         );
+        // A bare URL is the shorthand for a table carrying only `url`.
         assert_eq!(
-            file.repos["main"].remotes.origin.as_deref(),
-            Some("git@github.com:me/hello.git")
+            file.repos["main"].remotes["origin"],
+            RawRemote {
+                url: "git@github.com:me/hello.git".into(),
+                role: None,
+                mirrors: Vec::new(),
+            }
         );
     }
 

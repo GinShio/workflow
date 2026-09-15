@@ -147,6 +147,22 @@ impl Workspace {
         Self::load_from(&root)
     }
 
+    /// Like [`load`](Self::load), but `Ok(None)` when there is no config tree at
+    /// all — for a caller that *consults* the registry where it exists rather than
+    /// requiring one.
+    ///
+    /// A machine with no projects declared is an ordinary state, not a failure:
+    /// `wits stack` and `wits review` work in any git repository, and asking them
+    /// to fail because nobody has written a project file yet would be absurd. What
+    /// stays an error is a config tree that exists and cannot be read, since then
+    /// a declaration *may* be going unseen — see [`super::remotes::for_checkout`].
+    pub fn load_optional() -> Result<Option<Self>> {
+        match crate::config::find_root(&CONFIG_ROOT)? {
+            Some(root) => Self::load_from(&root).map(Some),
+            None => Ok(None),
+        }
+    }
+
     pub fn load_from(root: &Path) -> Result<Self> {
         let mut ws = Workspace {
             projects: BTreeMap::new(),
@@ -322,6 +338,8 @@ impl Workspace {
                 if repo.path.is_none() && repo.from.is_none() {
                     bail!("project '{name}', repo '{repo_name}': needs a 'path' or a 'from'");
                 }
+                super::remotes::validate(repo_name, repo)
+                    .with_context(|| format!("project '{name}'"))?;
             }
             let data = ProjectData {
                 org: project.org.clone(),
@@ -740,8 +758,8 @@ mod tests {
             Some("{{repo.path}}.primary")
         );
         assert_eq!(
-            borrowed.remotes.origin.as_deref(),
-            Some("https://example.invalid/engine.git")
+            borrowed.remotes["origin"].url,
+            "https://example.invalid/engine.git"
         );
         // The component's own `skip` travels; the consumer's stays the consumer's.
         assert_eq!(borrowed.skip, vec!["/bigdata"]);

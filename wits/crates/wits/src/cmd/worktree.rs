@@ -33,6 +33,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 
 use wits_util::git::{Repository, StatusCounts};
+use wits_util::project::remotes;
 use wits_util::time::{age_since, parse_cutoff};
 use wits_util::worktree::{self, Entry, Filter, Inventory};
 
@@ -285,10 +286,11 @@ fn create(repo: &Repository, args: &CreateArgs) -> Result<()> {
 // --- switch -------------------------------------------------------------------
 
 fn switch(repo: &Repository, args: &SwitchArgs) -> Result<()> {
+    let roles = remotes::for_checkout(repo)?;
     require_checkoutable(repo, &args.rev)?;
     let rev = &args.rev.rev;
 
-    let inventory = Inventory::gather(repo);
+    let inventory = Inventory::gather(repo, &roles);
     let entry = match &args.target {
         Some(target) => inventory.resolve(target)?,
         // No target means "the one I am in", which is the only worktree a bare
@@ -341,7 +343,8 @@ fn past_or_planned(past: &'static str, planned: &'static str) -> &'static str {
 // --- info ---------------------------------------------------------------------
 
 fn info(repo: &Repository, args: &InfoArgs) -> Result<()> {
-    let inventory = Inventory::gather(repo);
+    let roles = remotes::for_checkout(repo)?;
+    let inventory = Inventory::gather(repo, &roles);
     let filter = build_filter(&args.select)?;
 
     // A named target is shown whatever its state; otherwise the filter decides,
@@ -631,7 +634,8 @@ fn prune_phrase(entry: &Entry, filter: &Filter, trunk: Option<&str>) -> String {
 // --- prune --------------------------------------------------------------------
 
 fn prune(repo: &Repository, args: &PruneArgs) -> Result<()> {
-    let inventory = Inventory::gather(repo);
+    let roles = remotes::for_checkout(repo)?;
+    let inventory = Inventory::gather(repo, &roles);
 
     // A named worktree is dropped whatever its state — the explicit request. It
     // still refuses to discard uncommitted work without `--force`, and it is an

@@ -114,8 +114,9 @@ Worked examples, on the sample forest above:
 Base resolution and per-branch base
 -----------------------------------
 
-The **base branch** is resolved once: the merge target's remote HEAD
-(``upstream``, else ``origin``), then the first of ``main``/``master``/``trunk``
+The **base branch** is resolved once: the merge target's remote HEAD (the
+``upstream`` role's holder, else ``origin``'s), then the first of
+``main``/``master``/``trunk``
 that exists. (A future ``project`` subcommand will supply it from project
 identity; there is deliberately no config key.) If nothing resolves, that is a
 hard error.
@@ -132,7 +133,8 @@ to list).
 sync
 ----
 
-Push every operable branch that exists locally to ``origin``, with
+Push every operable branch that exists locally to the ``origin`` role's remote,
+with
 ``--force-with-lease``, in parallel. A name in the file with no local ref is a
 stale entry and is skipped rather than pushed. Any push failure makes the
 whole command exit non-zero (after attempting the rest). ``sync`` never
@@ -148,7 +150,8 @@ submit
 Reconcile the MRs to the forest. Two phases: read every branch's MR state in
 parallel, then apply — base corrections fan out, creations run serially (some
 forges race on duplicate detection when siblings are opened at once).
-``submit`` never pushes; a branch must already be on ``origin``, or the forge
+``submit`` never pushes; a branch must already be on the ``origin`` remote, or
+the forge
 refuses to open its MR (reported per-branch, not fatal).
 
 Per branch, with desired base B = its parent:
@@ -475,7 +478,11 @@ Where the logic lives
        ``crates/wits/src/cmd/stack/topology.rs`` (``remove``)
    * - forge primitives + normalized MR + detection
      - ``crates/wits-util/src/forge/``
-   * - remote URL parsing + origin/upstream roles
+   * - the role vocabulary + which remote holds each
+     - ``crates/wits-util/src/remote.rs``
+   * - resolving roles from a declaration, and routing per checkout
+     - ``crates/wits-util/src/project/remotes.rs``
+   * - remote URL parsing + the identities behind the roles
      - ``crates/wits-util/src/forge/remote.rs``
 
 Invariants
