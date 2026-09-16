@@ -1,6 +1,9 @@
 /**
  * Codex adapter — PreToolUse only.
  *
+ * Runs under the host node — the same runtime the agent CLIs themselves need,
+ * so the guard adds no dependency of its own (native TS stripping: node ≥ 22.18).
+ *
  * Codex 0.150.x hooks have no usable ask or allow verdict: the binary rejects
  * both ("PreToolUse hook returned unsupported permissionDecision:ask/allow"),
  * and a failed hook is fail-open. So every ask degrades to deny+reason — the
@@ -22,9 +25,11 @@
 
 import { evaluate, workspaceRoot, type Intent } from "./core/mod.ts"; // paths are written against the deployed layout (~/.codex/hooks/) — guard.ts sits beside core/, not against this repo tree
 import { homedir } from "node:os";
+import { readFileSync, writeSync } from "node:fs";
+import process from "node:process";
 
-async function main() {
-	const raw = await new Response(Deno.stdin.readable).text();
+function main() {
+	const raw = readFileSync(0, "utf8");
 	const event = JSON.parse(raw) as {
 		tool_name?: string;
 		tool_input?: Record<string, string>;
@@ -54,22 +59,21 @@ async function main() {
 	// unattended, its own policy resolves it — either way the guard stays out.
 	if (verdict.action === "ask" && verdict.unattended === "allow") return;
 
-	await Deno.stdout.write(
-		new TextEncoder().encode(
-			JSON.stringify({
-				hookSpecificOutput: {
-					hookEventName: "PreToolUse",
-					permissionDecision: "deny",
-					permissionDecisionReason: `[${verdict.rule}] approval required — present the change to the user and wait. ${verdict.reason}`,
-				},
-			}),
-		),
+	writeSync(
+		1,
+		JSON.stringify({
+			hookSpecificOutput: {
+				hookEventName: "PreToolUse",
+				permissionDecision: "deny",
+				permissionDecisionReason: `[${verdict.rule}] approval required — present the change to the user and wait. ${verdict.reason}`,
+			},
+		}),
 	);
 }
 
 try {
-	await main();
+	main();
 } catch (e) {
 	console.error(`guard failed: ${e}`);
-	Deno.exit(2);
+	process.exit(2);
 }

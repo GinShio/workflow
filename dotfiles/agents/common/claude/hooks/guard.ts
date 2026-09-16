@@ -1,6 +1,9 @@
 /**
  * Claude Code PreToolUse adapter — one event on stdin, one decision JSON on stdout.
  *
+ * Runs under the host node — the same runtime the agent CLIs themselves need,
+ * so the guard adds no dependency of its own (native TS stripping: node ≥ 22.18).
+ *
  * deny → "deny"; ask → "ask" (the native permission prompt); no verdict → silent
  * exit 0, the normal permission flow decides. Unattended runs (AGENTS_UNATTENDED=1
  * in the environment, exported by the launcher when nobody will answer prompts)
@@ -23,6 +26,8 @@
 
 import { evaluate, isUnattended, workspaceRoot, type Intent } from "./core/mod.ts"; // paths are written against the deployed layout (~/.claude/hooks/) — guard.ts sits beside core/, not against this repo tree
 import { homedir } from "node:os";
+import { readFileSync, writeSync } from "node:fs";
+import process from "node:process";
 
 const OUT = new TextEncoder();
 
@@ -43,8 +48,8 @@ function isForeignHost(event: { cursor_version?: string; hook_event_name?: strin
 		(event.hook_event_name !== undefined && event.hook_event_name !== "PreToolUse");
 }
 
-async function main() {
-	const raw = await new Response(Deno.stdin.readable).text();
+function main() {
+	const raw = readFileSync(0, "utf8");
 	const event = JSON.parse(raw) as {
 		tool_name?: string;
 		tool_input?: Record<string, string>;
@@ -92,31 +97,29 @@ async function main() {
 		reason += " [unattended: auto-denied — no user to ask]";
 	}
 
-	await Deno.stdout.write(
-		OUT.encode(
-			JSON.stringify({
-				hookSpecificOutput: {
-					hookEventName: "PreToolUse",
-					permissionDecision: permission,
-					permissionDecisionReason: reason,
-				},
-			}),
-		),
+	writeSync(
+		1,
+		JSON.stringify({
+			hookSpecificOutput: {
+				hookEventName: "PreToolUse",
+				permissionDecision: permission,
+				permissionDecisionReason: reason,
+			},
+		}),
 	);
 }
 
 try {
-	await main();
+	main();
 } catch (e) {
-	await Deno.stdout.write(
-		OUT.encode(
-			JSON.stringify({
-				hookSpecificOutput: {
-					hookEventName: "PreToolUse",
-					permissionDecision: "deny",
-					permissionDecisionReason: `[guard] guard failed (${e}) — treat as needing approval`,
-				},
-			}),
-		),
+	writeSync(
+		1,
+		JSON.stringify({
+			hookSpecificOutput: {
+				hookEventName: "PreToolUse",
+				permissionDecision: "deny",
+				permissionDecisionReason: `[guard] guard failed (${e}) — treat as needing approval`,
+			},
+		}),
 	);
 }

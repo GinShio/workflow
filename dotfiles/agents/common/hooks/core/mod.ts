@@ -14,6 +14,25 @@
  * is deny; everything reviewable-with-one-approval is ask. New classes take
  * this test, not enumeration instinct.
  *
+ * Reason doctrine — what a reason says, and to whom. The verdict's action
+ * carries the gate semantics (deny stops the call; ask opens the approval
+ * dialog) and the triggering command is in the model's context, but on every
+ * block path the reason is the model's only instruction: deny reaches just
+ * the model, and an ask — user-facing first — returns its reason to the model
+ * on denial, on unattended timeout, and on hosts that degrade asks to deny.
+ * So every reason is two clauses, rationale — next move. The rationale is
+ * what the model cannot infer (irreversibility, trust boundary, ownership,
+ * scope); the next move is one of three forms: the sanctioned alternative, the
+ * hand-off ("hand the exact command to the user and wait"), or the stop
+ * ("report; nothing here is sanctioned"). A rationale alone is a label — it
+ * defers the next move to the model's task-completion gradient, which treats
+ * a blocked step as an obstacle and re-attempts it in variant form, probing a
+ * bash scanner this core documents as heuristic. Still noise: explaining what
+ * the command does, repeating agreement-level NEVERs that AGENTS.md holds
+ * resident (output discipline lives there), and enumerating examples or
+ * exemptions — classification is the model's own knowledge, and the exempt
+ * sets belong to the matcher, not the prose.
+ *
  * The table's `unattended` section is policy annotation, not a verdict: evaluate
  * merely transcribes `unattended.allow` onto the winning ask verdict, and an
  * adapter may honor that mark only while its host is unattended — a host state
@@ -45,17 +64,20 @@
  * permission systems and sandboxes remain the floor; this core only makes the
  * working agreement's action-shaped rules deterministic.
  *
- * No dependencies beyond node builtins — parseable by any deno process (pi
- * extension or hook command).
+ * No dependencies beyond node builtins — loadable by every runtime that hosts
+ * it: pi's extension host (jiti under node or deno, per install method) and
+ * the guard adapters under node. Deno globals are forbidden here for exactly
+ * that reason — they would crash the node side.
  *
- * The three standalone adapters run under sandboxed `deno run` flags carried
- * in each tool's hook config (read: their own hooks dir plus $HOME; sys:
- * homedir). Every deno API this module or an adapter touches must be covered
- * by those flags — test/guard-acceptance.sh runs the adapters under the
- * production flags and fails loudly otherwise; run it after any change here.
+ * The three standalone adapters run under the host node — the same runtime
+ * the agent CLIs themselves need, so the guard adds no dependency of its own
+ * (native TS stripping: node ≥ 22.18). No sandbox flags: matching is the
+ * discipline backstop described above, and the module reads only its own
+ * rules.json plus stat walks. After any change here, feed each adapter a
+ * deny, an ask, and a verdictless event under node.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 export type Intent =
 	| { kind: "bash"; command: string }
@@ -186,7 +208,7 @@ function expandAnchors(pattern: string): string {
 function loadRules(): Rules {
 	if (cached) return cached;
 	const raw = JSON.parse(
-		Deno.readTextFileSync(new URL("../rules.json", import.meta.url)),
+		readFileSync(new URL("../rules.json", import.meta.url), "utf8"),
 	) as {
 		readAllowlist: string[];
 		writeExemptPrefixes: string[];
@@ -274,11 +296,10 @@ export function workspaceRoot(dir: string): string {
 }
 
 /**
- * Sandboxed hook adapters (deno `--allow-read` limited to their own hooks dir
- * plus $HOME) cannot stat ancestors outside that grant: deno's existsSync
- * throws NotCapable instead of returning false. An unreadable ancestor is
- * "no git root here", not a crash — the walk then falls through and the
- * workspace degrades to the cwd itself.
+ * An unreadable ancestor must read as "no git root here", not a crash — the
+ * walk then falls through and the workspace degrades to the cwd itself. The
+ * failure shape differs by runtime: deno's existsSync throws NotCapable where
+ * node's returns false, so the catch carries both.
  */
 function hasGitEntry(base: string): boolean {
 	try {
@@ -449,32 +470,10 @@ export function evaluate(intent: Intent, ctx: MatchContext): Verdict | null {
 /**
  * The cross-tool attendance signal, read fail-safe: AGENTS_UNATTENDED=1 in the
  * environment, exported by the launcher when nobody will answer prompts.
- *
- * Attendance decides only how an ask is *settled*, never whether one is raised,
- * so an unreadable signal degrades to attended — ask the user — and never to a
- * blanket deny. Nothing is auto-allowed by that choice: attended is the
- * direction where every ask still reaches a human.
- *
- * The degradation is load-bearing, not decoration. A subprocess adapter whose
- * deno `--allow-env` grant does not reach it throws NotCapable here, and an
- * adapter crash handler turns that into a deny for every tool call it matches —
- * a misprovisioned guard reading as "the rule table says no", which no host can
- * tell apart from a real verdict. Cursor forces `failClosed: false` on the
- * Claude hooks it imports (cursor.com/docs/reference/third-party-hooks), so
- * there the host was willing to fail open and only the adapter's own verdict
- * blocked the session.
- *
- * loadRules deliberately keeps throwing: attendance has a conservative default,
- * an absent rule table has none — no table means no rules, and inventing either
- * answer is worse than failing loudly.
- *
- * For the subprocess adapters. pi reads the variable itself at session_start:
- * it arms a persisted session mode from it once, rather than querying per call,
- * and nothing can revoke env access inside pi's own runtime.
  */
 export function isUnattended(): boolean {
 	try {
-		return Deno.env.get("AGENTS_UNATTENDED") === "1";
+		return process.env.AGENTS_UNATTENDED === "1";
 	} catch {
 		return false;
 	}

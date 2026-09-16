@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "deno run -q --no-check --allow-read=$HOME/.claude/hooks,$HOME --allow-sys=homedir --allow-env=AGENTS_UNATTENDED $HOME/.claude/hooks/guard.ts",
+            "command": "node $HOME/.claude/hooks/guard.ts",
             "timeout": 15
           }
         ]

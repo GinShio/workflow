@@ -33,6 +33,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
+// node:process, not the Deno global: pi runs this extension in-process under
+// whatever runtime pi itself was installed with — node or deno — and only the
+// node builtins exist in both.
+import process from "node:process";
 import { evaluate, unattendedPolicy, workspaceRoot, type Intent } from "../../hooks/core/mod.ts"; // against the deployed layout: extensions/pi-guard/ is two levels under agent/, hooks/ deploys beside extensions/
 
 const MODE_ENTRY_TYPE = "pi-guard-unattended-mode";
@@ -106,7 +110,7 @@ export default function (pi: ExtensionAPI) {
 		// The cross-tool attendance signal: the subprocess adapters read the same
 		// variable (they cannot prompt or arm a mode mid-session), so one launcher
 		// env covers every host. pi honors it exactly like the flag.
-		if (!unattended && Deno.env.get("AGENTS_UNATTENDED") === "1") {
+		if (!unattended && process.env.AGENTS_UNATTENDED === "1") {
 			unattended = true;
 			pi.appendEntry(MODE_ENTRY_TYPE, { on: true, source: "env" });
 		}

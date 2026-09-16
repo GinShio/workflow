@@ -1,6 +1,9 @@
 /**
  * Cursor adapter — one script for the gating events.
  *
+ * Runs under the host node — the same runtime the agent CLIs themselves need,
+ * so the guard adds no dependency of its own (native TS stripping: node ≥ 22.18).
+ *
  * beforeShellExecution and beforeMCPExecution can truly escalate to the user
  * (`permission: "ask"`); beforeReadFile and preToolUse are deny-only, so their
  * ask verdicts degrade to deny+reason — never a silent allow (preToolUse's ask
@@ -30,21 +33,23 @@
 
 import { evaluate, isUnattended, workspaceRoot, type Intent } from "./core/mod.ts"; // paths are written against the deployed layout (~/.cursor/hooks/) — guard.ts sits beside core/, not against this repo tree
 import { homedir } from "node:os";
+import { readFileSync, writeSync } from "node:fs";
+import process from "node:process";
 
 const ASK_CAPABLE = new Set(["beforeShellExecution", "beforeMCPExecution"]);
 
 const OUT = new TextEncoder();
 
 /** Cursor's permission response; messages ride along only on a refusal. */
-function respond(permission: "allow" | "ask" | "deny", message?: string): Promise<number> {
+function respond(permission: "allow" | "ask" | "deny", message?: string) {
 	const body = message
 		? { permission, user_message: message, agent_message: message }
 		: { permission };
-	return Deno.stdout.write(OUT.encode(JSON.stringify(body)));
+	writeSync(1, JSON.stringify({ permission, user_message: message, agent_message: message }));
 }
 
-async function main() {
-	const raw = await new Response(Deno.stdin.readable).text();
+function main() {
+	const raw = readFileSync(0, "utf8");
 	const event = JSON.parse(raw) as {
 		hook_event_name?: string;
 		command?: string;
@@ -112,12 +117,12 @@ async function main() {
 		permission = "deny";
 		suffix = " [unattended: auto-denied — no user to ask]";
 	}
-	await respond(permission, `[${verdict.rule}] ${verdict.reason}${suffix}`);
+	respond(permission, `[${verdict.rule}] ${verdict.reason}${suffix}`);
 }
 
 try {
-	await main();
+	main();
 } catch (e) {
 	console.error(`guard failed: ${e}`);
-	Deno.exit(2);
+	process.exit(2);
 }
