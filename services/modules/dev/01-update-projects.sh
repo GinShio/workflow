@@ -38,5 +38,5 @@ esac
 # shellcheck disable=SC1091
 . "$PROJECTS_SCRIPT_DIR/scripts/proxy.sh"
 
-build_projects "--install-dir $HOME/.local --install" "mesa spirv-headers spirv-tools slang"
+build_projects "--install-dir $HOME/.local --install" "mesa spirv-headers"
 build_projects "" "llvm"
