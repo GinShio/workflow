@@ -9,6 +9,16 @@
  * built for it, so its ASK_CAPABLE membership only matters if a mapping
  * lands). A crash exits 2 — Cursor's deny.
  *
+ * No verdict resolves to an explicit `permission: "allow"`, not to silence.
+ * Emitting it is Cursor's documented idiom for "proceed" (cursor.com/docs/agent/hooks
+ * shows it as the normal response in every permission-hook example), and the
+ * hooks.json entries carry failClosed: true, which counts an empty stdout among
+ * the failures that block. Silence would therefore read as a broken guard on the
+ * commonest path of all — every action no rule matches. The core still never
+ * resolves to allow: this is the adapter naming "no objection" in the host's
+ * vocabulary, the same translation codex makes with a silent exit 0. Cursor
+ * merges sources as deny > ask > allow, so it can never overrule another hook.
+ *
  * Unattended runs (AGENTS_UNATTENDED=1, exported by the launcher when nobody
  * will answer prompts): on the ask-capable events, a verdict the table marked
  * unattended.allow resolves to "allow" — the user's standing pre-approval,
@@ -18,10 +28,20 @@
  * (~/.cursor/hooks.json) — this guard covers local sessions only.
  */
 
-import { evaluate, workspaceRoot, type Intent } from "./core/mod.ts"; // paths are written against the deployed layout (~/.cursor/hooks/) — guard.ts sits beside core/, not against this repo tree
+import { evaluate, isUnattended, workspaceRoot, type Intent } from "./core/mod.ts"; // paths are written against the deployed layout (~/.cursor/hooks/) — guard.ts sits beside core/, not against this repo tree
 import { homedir } from "node:os";
 
 const ASK_CAPABLE = new Set(["beforeShellExecution", "beforeMCPExecution"]);
+
+const OUT = new TextEncoder();
+
+/** Cursor's permission response; messages ride along only on a refusal. */
+function respond(permission: "allow" | "ask" | "deny", message?: string): Promise<number> {
+	const body = message
+		? { permission, user_message: message, agent_message: message }
+		: { permission };
+	return Deno.stdout.write(OUT.encode(JSON.stringify(body)));
+}
 
 async function main() {
 	const raw = await new Response(Deno.stdin.readable).text();
@@ -39,10 +59,7 @@ async function main() {
 	// meaningful if one ever omits it — a "/" fallback would exempt the whole
 	// filesystem from them.
 	const cwd = event.cwd ?? homedir();
-	// Attendance signal shared by every adapter. Read inside main so a missing
-	// --allow-env grant lands in the exit-2 crash path (failClosed blocks) —
-	// not an uncaught top-level throw.
-	const unattended = Deno.env.get("AGENTS_UNATTENDED") === "1";
+	const unattended = isUnattended();
 
 	let intent: Intent | null = null;
 	if (name === "beforeShellExecution") {
@@ -51,39 +68,51 @@ async function main() {
 		const p = event.path ?? event.file_path;
 		intent = p ? { kind: "read", path: p } : null;
 	} else if (name === "preToolUse") {
-		// The matcher is left unset in hooks.json; the guard filters by tool here.
+		// Cursor's documented preToolUse matcher list is Shell / Read / Write /
+		// Grep / Delete / Task plus MCP:<name>, and the Claude compatibility
+		// map sends Edit to Write — but the native in-place editor arrives as
+		// StrReplace, unmapped. Write and StrReplace both carry the path in
+		// tool_input.path (file_path is the Claude-shaped alias). hooks.json
+		// narrows the matcher to the same three names; the test is repeated
+		// here because the matcher lives in a different file and Cursor merges
+		// four config sources, so this adapter cannot assume which matcher
+		// (if any) selected it.
 		const ti = event.tool_input ?? {};
 		const tn = event.tool_name ?? "";
 		const p = ti.path ?? ti.file_path;
-		if ((tn === "Write" || tn === "Edit" || tn === "Delete") && p) {
+		if ((tn === "Write" || tn === "Delete" || tn === "StrReplace") && p) {
 			intent = { kind: "write", path: p };
 		}
 	}
-	if (!intent) return;
 
-	const verdict = evaluate(intent, { cwd, home: homedir(), projectRoot: workspaceRoot(cwd) });
-	if (!verdict) return;
+	const verdict = intent && evaluate(intent, { cwd, home: homedir(), projectRoot: workspaceRoot(cwd) });
+	if (!verdict) {
+		await respond("allow");
+		return;
+	}
 
 	// Ask-capable events can escalate to the user; the deny-only events degrade
-	// every ask to deny. Unattended mode resolves asks without a human.
+	// every ask to deny. Unattended mode resolves asks without a human. Each
+	// degradation carries the reason it happened: the verdict text alone would
+	// read as an absolute rule, and a deny-only event's silence is not the same
+	// fact as an unattended auto-deny — the user's next move differs.
 	let permission: "allow" | "ask" | "deny";
-	if (verdict.action === "deny" || !ASK_CAPABLE.has(name)) {
+	let suffix = "";
+	if (verdict.action === "deny") {
 		permission = "deny";
+	} else if (!ASK_CAPABLE.has(name)) {
+		permission = "deny";
+		suffix = ` [${name} cannot prompt — put the request to the user and wait]`;
 	} else if (!unattended) {
 		permission = "ask";
 	} else if (verdict.unattended === "allow") {
 		permission = "allow";
+		suffix = " [unattended: pre-approved by rules.json]";
 	} else {
 		permission = "deny";
+		suffix = " [unattended: auto-denied — no user to ask]";
 	}
-	const suffix =
-		permission === "allow" ? " [unattended: pre-approved by rules.json]"
-		: permission === "deny" && verdict.action === "ask" ? " [unattended: auto-denied — no user to ask]"
-		: "";
-	const message = `[${verdict.rule}] ${verdict.reason}${suffix}`;
-	await Deno.stdout.write(
-		new TextEncoder().encode(JSON.stringify({ permission, user_message: message, agent_message: message })),
-	);
+	await respond(permission, `[${verdict.rule}] ${verdict.reason}${suffix}`);
 }
 
 try {

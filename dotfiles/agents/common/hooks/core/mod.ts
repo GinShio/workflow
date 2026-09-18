@@ -19,8 +19,8 @@
  * adapter may honor that mark only while its host is unattended — a host state
  * the core neither knows nor owns. The core still never resolves to allow itself.
  * Adapters learn attendance from their host: pi from its session mode and hasUI;
- * the subprocess hooks from AGENTS_UNATTENDED=1 in their environment (an adapter
- * contract, not a core input).
+ * the subprocess hooks from AGENTS_UNATTENDED=1 in their environment, read
+ * through isUnattended() below (an adapter contract, not a core input).
  *
  * Exemption matrix — how paths escape the scope classes (matches evaluate):
  *   - read intents:  readAllowlist exempts the secret scan, read-scope, and
@@ -444,6 +444,40 @@ export function evaluate(intent: Intent, ctx: MatchContext): Verdict | null {
 		return { ...winner, unattended: "allow" };
 	}
 	return winner;
+}
+
+/**
+ * The cross-tool attendance signal, read fail-safe: AGENTS_UNATTENDED=1 in the
+ * environment, exported by the launcher when nobody will answer prompts.
+ *
+ * Attendance decides only how an ask is *settled*, never whether one is raised,
+ * so an unreadable signal degrades to attended — ask the user — and never to a
+ * blanket deny. Nothing is auto-allowed by that choice: attended is the
+ * direction where every ask still reaches a human.
+ *
+ * The degradation is load-bearing, not decoration. A subprocess adapter whose
+ * deno `--allow-env` grant does not reach it throws NotCapable here, and an
+ * adapter crash handler turns that into a deny for every tool call it matches —
+ * a misprovisioned guard reading as "the rule table says no", which no host can
+ * tell apart from a real verdict. Cursor forces `failClosed: false` on the
+ * Claude hooks it imports (cursor.com/docs/reference/third-party-hooks), so
+ * there the host was willing to fail open and only the adapter's own verdict
+ * blocked the session.
+ *
+ * loadRules deliberately keeps throwing: attendance has a conservative default,
+ * an absent rule table has none — no table means no rules, and inventing either
+ * answer is worse than failing loudly.
+ *
+ * For the subprocess adapters. pi reads the variable itself at session_start:
+ * it arms a persisted session mode from it once, rather than querying per call,
+ * and nothing can revoke env access inside pi's own runtime.
+ */
+export function isUnattended(): boolean {
+	try {
+		return Deno.env.get("AGENTS_UNATTENDED") === "1";
+	} catch {
+		return false;
+	}
 }
 
 export interface UnattendedPolicy {

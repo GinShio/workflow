@@ -25,6 +25,7 @@
 		"preToolUse": [
 			{
 				"command": "deno run -q --no-check --allow-read=$HOME/.cursor/hooks,$HOME --allow-sys=homedir --allow-env=AGENTS_UNATTENDED $HOME/.cursor/hooks/guard.ts",
+				"matcher": "^(Write|Delete|StrReplace)$",
 				"timeout": 15,
 				"failClosed": true
 			}
