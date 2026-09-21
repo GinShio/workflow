@@ -46,6 +46,20 @@ pub struct Worktree {
     pub prunable: bool,
 }
 
+impl Worktree {
+    /// Whether this entry is a checkout that exists and can be worked in.
+    ///
+    /// Three conditions travel together everywhere a caller enumerates
+    /// worktrees to find real checkouts: a **bare** entry has no working tree, a
+    /// **prunable** one is an administrative record whose directory is already
+    /// gone, and a record can point at a directory removed without git's
+    /// knowledge — so the path is confirmed rather than trusted. Spelling them
+    /// out per call site is how one copy comes to disagree with the others.
+    pub fn is_live(&self) -> bool {
+        !self.bare && !self.prunable && self.path.exists()
+    }
+}
+
 impl Repository {
     // -- working-tree reads ---------------------------------------------------
 

@@ -109,6 +109,7 @@ impl Fixture {
 [repos.main]
 path = "{}"
 main_branch = "main"
+build_dir = "{{{{repos.main.workdir}}}}/_build/{{{{branch.slug}}}}-{{{{build_type}}}}"
 [repos.main.remotes]
 origin = "{}"
 "#,
@@ -126,6 +127,7 @@ focus = "component"
 [repos.main]
 path = "{}"
 main_branch = "main"
+build_dir = "{{{{repos.main.workdir}}}}/_build/{{{{branch.slug}}}}-{{{{build_type}}}}"
 skip = ["/nested/work", "/vendor", "!/vendor/keep.c"]
 [repos.main.remotes]
 origin = "{}"
@@ -460,6 +462,86 @@ fn the_owner_answers_for_a_shared_checkout() {
         "stdout: {}",
         described.stdout
     );
+}
+
+/// The counterpart to [`the_owner_answers_for_a_shared_checkout`]: naming the
+/// project a shared checkout is *being developed as* moves the path queries to
+/// it, borrow and all. `wrap` focuses on the component it borrows, so its build
+/// is keyed on that component's branch — which is exactly the case the owner's
+/// answer gets wrong for anyone working on `wrap`.
+#[test]
+fn an_active_project_answers_for_a_shared_checkout_instead_of_its_owner() {
+    let fx = Fixture::new();
+    fx.ok(&["update", "work"]);
+    let work = fx.path("src-work");
+    let owns = |out: &Out, rel: &str| {
+        let want = fx.path(rel);
+        out.stdout.trim().starts_with(want.to_str().unwrap())
+    };
+
+    let default = fx.run_in(&work, &["project", "build-dir"]);
+    assert!(default.success, "stderr: {}", default.stderr);
+    assert!(owns(&default, "src-work"), "stdout: {}", default.stdout);
+
+    git(&work, &["config", "wits.project.active", "wrap"]);
+    let active = fx.run_in(&work, &["project", "build-dir"]);
+    assert!(active.success, "stderr: {}", active.stderr);
+    assert!(owns(&active, "src-wrap"), "stdout: {}", active.stdout);
+
+    // A value naming no known project must not break every query that passes
+    // through path resolution — it degrades to the structural answer.
+    git(&work, &["config", "wits.project.active", "no-such-project"]);
+    let stale = fx.run_in(&work, &["project", "build-dir"]);
+    assert!(stale.success, "stderr: {}", stale.stderr);
+    assert!(owns(&stale, "src-work"), "stdout: {}", stale.stdout);
+}
+
+/// A branch of a shared checkout identifies a build tree in *every* project that
+/// focuses on it, so the deletion query has to cross project boundaries — and
+/// expand the build-type axis, since a branch normally has more than one tree.
+#[test]
+fn branch_build_dirs_span_every_project_the_branch_identifies() {
+    let fx = Fixture::new();
+    fx.ok(&["update", "work"]);
+    let work = fx.path("src-work");
+
+    // Only directories that exist are reported: a cleanup acts on what is there.
+    let present = [
+        "src-work/_build/main-debug",
+        "src-wrap/_build/main-debug",
+        "src-wrap/_build/main-release",
+    ];
+    for rel in present {
+        std::fs::create_dir_all(fx.path(rel)).unwrap();
+    }
+    // Trees that must survive: another branch entirely, and — the dangerous one —
+    // a branch whose slug *starts with* the deleted one's, which a plain prefix
+    // match would sweep in.
+    for rel in [
+        "src-wrap/_build/other-debug",
+        "src-wrap/_build/main-extra-debug",
+        "src-work/_build/main-extra-release",
+    ] {
+        std::fs::create_dir_all(fx.path(rel)).unwrap();
+    }
+
+    let out = fx.run_in(&work, &["project", "branch-build-dirs", "--branch", "main"]);
+    assert!(out.success, "stderr: {}", out.stderr);
+    for rel in present {
+        assert!(
+            out.stdout.contains(fx.path(rel).to_str().unwrap()),
+            "{rel} missing from:\n{}",
+            out.stdout
+        );
+    }
+    for survivor in ["other-debug", "main-extra-debug", "main-extra-release"] {
+        assert!(
+            !out.stdout.contains(survivor),
+            "{survivor} would have been swept in:\n{}",
+            out.stdout
+        );
+    }
+    assert_eq!(out.stdout.lines().count(), present.len(), "{}", out.stdout);
 }
 
 #[test]

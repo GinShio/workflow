@@ -402,6 +402,189 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
     })
 }
 
+// --- branch-identified build directories ---------------------------------------
+
+/// A build directory that exists on disk and is identified by one branch of one
+/// checkout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchBuildDir {
+    /// The owning project, as `org/name`.
+    pub project: String,
+    /// The resolved directory.
+    pub path: PathBuf,
+}
+
+/// A build type substituted into a template purely to locate where the axis
+/// lands in the rendered path. Chosen so it cannot collide with a real value or
+/// a path separator.
+const BUILD_TYPE_PROBE: &str = "\u{1}wits-build-type\u{1}";
+
+/// A branch substituted into a template to test whether the result moves with
+/// the branch at all.
+const BRANCH_PROBE: &str = "wits-branch-probe-a9f3c1";
+
+/// Every build directory on disk whose identity depends on `branch` of the
+/// checkout at `repo_path` — across *all* projects, borrows included.
+///
+/// This is the query a branch deletion needs, and a single-project answer cannot
+/// serve it: one shared checkout may be borrowed by several projects, each keying
+/// its own build tree on that checkout's branch, so deleting the branch orphans
+/// every one of them. The projects reached only through a borrow are exactly the
+/// ones a single-answer path lookup drops.
+///
+/// Two conditions must hold for a project's build directory to be included, and
+/// both are *derived* rather than declared, so no registry annotation can drift
+/// out of step with them:
+///
+/// 1. **The branch identifies the build.** A project's build identity comes from
+///    its focus repo's branch, so that repo must be the checkout in question. A
+///    project that merely borrows the checkout while focusing elsewhere builds the
+///    same sources under its *own* branch, and the deletion says nothing about it.
+/// 2. **The resolved path actually moves with the branch.** Re-resolving against
+///    a probe branch and comparing catches the branch-independent template
+///    (`{{project.focus}}` rather than `{{branch.slug}}`) without parsing it —
+///    and catches it through the same code a build uses, including the case where
+///    the dependence arrives via a worktree strategy's `workdir` rather than the
+///    template text.
+///
+/// The first condition is asked focus-first — "is this project's focus checked out
+/// there?" — rather than by resolving the path to a repo and comparing. A path can
+/// match several of a project's repos, sibling checkouts of one git dir among
+/// them, and picking one of those to compare against would decide by nothing
+/// meaningful. Only one repo is ever relevant: the one the build takes its branch
+/// from.
+///
+/// Where a project's plan cannot be resolved, it is left out. The caller is a
+/// deletion, so an unresolvable project is one whose build layout we do not
+/// understand — and not deleting is the recoverable direction.
+///
+/// Only directories that exist are returned, with the `build_type` axis expanded
+/// across whatever is present: one branch typically has both a debug and a
+/// release tree, and a cleanup that removed one and left the other would have
+/// done nothing useful.
+pub fn branch_build_dirs(ws: &Workspace, repo_path: &Path, branch: &str) -> Vec<BranchBuildDir> {
+    let mut out = Vec::new();
+    for project in ws.projects() {
+        let focus = project.focus_name(None);
+        let Some(identity) = identity_repo(project, focus) else {
+            continue;
+        };
+        if !ws.repo_checkout_contains(project, &identity, repo_path) {
+            continue;
+        }
+        let Some(rendered) = build_dir_for(ws, project, focus, branch, BUILD_TYPE_PROBE) else {
+            continue;
+        };
+        // Branch-independent templates resolve to the same path for any branch,
+        // so a probe that lands somewhere else proves the dependence.
+        match build_dir_for(ws, project, focus, BRANCH_PROBE, BUILD_TYPE_PROBE) {
+            Some(probe) if probe != rendered => {}
+            _ => continue,
+        }
+        for path in expand_build_type(&rendered) {
+            out.push(BranchBuildDir {
+                project: project.key().to_owned(),
+                path,
+            });
+        }
+    }
+    out
+}
+
+/// One project's `build_dir` resolved for a branch and build type, or `None`
+/// when the project declares none or the plan does not resolve.
+fn build_dir_for(
+    ws: &Workspace,
+    project: &ProjectData,
+    focus: &str,
+    branch: &str,
+    build_type: &str,
+) -> Option<PathBuf> {
+    let profile = Profile {
+        focus: Some(focus.to_owned()),
+        branch: Some(branch.to_owned()),
+        build_type: Some(build_type.to_owned()),
+        ..Default::default()
+    };
+    plan(ws, project, &PlanInput::paths_only(&profile, branch))
+        .ok()?
+        .build_dir
+}
+
+/// The directories matching `rendered` once the [`BUILD_TYPE_PROBE`] in it is
+/// replaced by whatever build types are present on disk.
+///
+/// The probe occupies part of exactly one path component (`…/feature-<probe>`) or
+/// all of one (`…/<probe>/feature`); either way the components around it are
+/// concrete, so one directory read over the probe's parent finds every real
+/// value. A rendered path with no probe does not use the axis and stands alone.
+fn expand_build_type(rendered: &Path) -> Vec<PathBuf> {
+    let as_str = rendered.to_string_lossy();
+    if !as_str.contains(BUILD_TYPE_PROBE) {
+        return if rendered.is_dir() {
+            vec![rendered.to_path_buf()]
+        } else {
+            Vec::new()
+        };
+    }
+
+    let mut head = PathBuf::new();
+    let mut component = None;
+    let mut tail = PathBuf::new();
+    for part in rendered.components() {
+        let part = part.as_os_str().to_string_lossy().into_owned();
+        match &component {
+            None if part.contains(BUILD_TYPE_PROBE) => component = Some(part),
+            None => head.push(part),
+            Some(_) => tail.push(part),
+        }
+    }
+    let Some(component) = component else {
+        return Vec::new();
+    };
+    let Some((prefix, suffix)) = component.split_once(BUILD_TYPE_PROBE) else {
+        return Vec::new();
+    };
+
+    let Ok(entries) = std::fs::read_dir(&head) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.len() <= prefix.len() + suffix.len()
+            || !name.starts_with(prefix)
+            || !name.ends_with(suffix)
+        {
+            continue;
+        }
+        // What the name implies the build type was. It has to look like one: a
+        // build type is a lowercase word (`--build-type` is meson-aligned), so a
+        // value carrying a separator means this directory belongs to a *different
+        // branch* whose slug merely starts with ours — `feature` matching
+        // `feature-extra-debug`. Accepting it would make deleting one branch take
+        // another branch's build trees with it.
+        let implied = &name[prefix.len()..name.len() - suffix.len()];
+        if !implied
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        {
+            continue;
+        }
+        // `tail` is empty whenever the axis sits in the last component, and
+        // joining an empty path would leave a trailing separator on every result.
+        let mut candidate = head.join(&name);
+        if !tail.as_os_str().is_empty() {
+            candidate.push(&tail);
+        }
+        if candidate.is_dir() {
+            out.push(candidate);
+        }
+    }
+    out.sort();
+    out
+}
+
 // --- focus / anchor / identity ------------------------------------------------
 
 /// The repo the build sources from: the focus's `anchor`, or the focus itself.
@@ -749,9 +932,7 @@ fn repository_worktree_for_branch(git: &Repository, branch: &str) -> Option<Path
     git.worktrees()
         .into_iter()
         .enumerate()
-        .find(|(_, wt)| {
-            !wt.bare && !wt.prunable && wt.branch.as_deref() == Some(branch) && wt.path.exists()
-        })
+        .find(|(_, wt)| wt.is_live() && wt.branch.as_deref() == Some(branch))
         .map(|(index, wt)| {
             if index == 0 {
                 main.unwrap_or(wt.path)
@@ -902,6 +1083,79 @@ mod tests {
                 cfg.set_definition("MOCK_CC", Value::from(cc.clone()));
             }
         }
+    }
+
+    /// The two ways a project that references a checkout still has nothing
+    /// identified by its branch: it focuses somewhere else (so its build carries
+    /// its *own* branch), or its `build_dir` does not move with a branch at all.
+    /// Both are derived, so neither needs a registry annotation to stay true.
+    #[test]
+    fn branch_build_dirs_skip_projects_the_branch_does_not_identify() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let at = |rel: &str| dir.path().join(rel);
+        let write = |stem: &str, body: &str| {
+            let filled = body.replace("SHARED", at("shared").to_str().unwrap());
+            std::fs::write(config.join(format!("{stem}.toml")), filled).unwrap();
+        };
+
+        // Owns the shared checkout and keys its build on its branch: included.
+        write(
+            "owner",
+            r#"
+[project]
+[repos.main]
+path = "SHARED"
+main_branch = "main"
+build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+"#,
+        );
+        // Borrows the shared checkout but focuses on its own repo, so its build is
+        // identified by *its* branch and the shared branch says nothing about it.
+        write(
+            "bystander",
+            &r#"
+[project]
+[repos.main]
+path = "OWN"
+main_branch = "main"
+build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+[repos.lib]
+from = "owner"
+anchor = "main"
+"#
+            .replace("OWN", at("bystander").to_str().unwrap()),
+        );
+        // Focuses on the borrowed checkout, but its build directory is fixed.
+        write(
+            "fixed",
+            &r#"
+[project]
+focus = "lib"
+[repos.main]
+path = "OWN"
+main_branch = "main"
+build_dir = "{{repos.main.workdir}}/_build/static"
+[repos.lib]
+from = "owner"
+anchor = "main"
+"#
+            .replace("OWN", at("fixed").to_str().unwrap()),
+        );
+
+        for rel in [
+            "shared/_build/feat",
+            "bystander/_build/feat",
+            "fixed/_build/static",
+        ] {
+            std::fs::create_dir_all(at(rel)).unwrap();
+        }
+
+        let ws = Workspace::load_from(&config).unwrap();
+        let found = branch_build_dirs(&ws, &at("shared"), "feat");
+        let paths: Vec<_> = found.iter().map(|f| f.path.clone()).collect();
+        assert_eq!(paths, vec![at("shared/_build/feat")], "{found:?}");
     }
 
     #[test]

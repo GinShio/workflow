@@ -463,6 +463,7 @@ line, which is what makes them usable from a shell:
    project install-dir hello -b feature-x
    project source-dir  hello -b feature-x
    project work-dir    hello -b feature-x
+   project branch-build-dirs  hello -b feature-x
    project hash        hello --submodules recursive --repos <submodule>
 
 ``project hash`` reads a repo's commit hash for a branch — and, with
@@ -475,9 +476,21 @@ checked-out commit rather than the pinned one. ``NAME`` must be a declared
 requires ``--submodules direct|recursive``, and may be repeated and/or
 comma-separated. Only submodules that are actually checked out are reported.
 
+``project branch-build-dirs`` is the reverse of ``build-dir``: given a checkout
+and a branch it prints every **existing** build directory that branch
+identifies, across all projects, as ``<project>\t<path>`` per line. The
+cross-project shape is the point — a borrowed component can be the build
+identity of several projects at once, so the single answer ``build-dir`` gives
+would leave every borrower's tree behind when the branch goes away. A project
+that borrows the checkout but focuses elsewhere builds under its *own* branch and
+is left out, as is a build directory whose path does not vary by branch; both are
+derived from the registry rather than declared in it. It prints and removes
+nothing — ``project`` is read-only, and the caller that deletes wants its own
+confirmation.
+
 These exist to be consumed: a checkout hook points ``compile_commands.json``
 at the active build, a script changes into a branch's ``work-dir``, a cleanup
-script looks up where a deleted branch used to build.
+hook asks which build trees a deleted branch orphaned.
 
 Running from inside a checkout
 ------------------------------
@@ -497,6 +510,31 @@ in:
 A token starting with ``.``, ``/``, or ``~`` is treated as a path; anything
 else is a name (``hello`` or ``mesa/lavapipe``). With no argument, ``project``
 lists every project while the other verbs use the current directory.
+
+A checkout that several projects share resolves to the project that **owns** it —
+the one declaring it as its own repo, rather than any that only ``from``-borrow
+it. That is the right default while exactly one project builds the component, and
+it is unambiguous: a borrow always points at an owner, so there is never a tie.
+
+When you are actually developing the *borrower*, say so in git config:
+
+.. code-block:: console
+
+   $ cd ~/src/engine && git config wits.project.active viewer
+
+Every path query then answers for ``viewer``, borrow and all — so a component
+whose branch identifies the borrower's build resolves to the borrower's build
+directory instead of its owner's. This lives in git config rather than the
+registry on purpose: which project a shared checkout currently serves is a local
+work pattern, not a structural fact about the component, and several projects may
+borrow one component with nothing in the registry to prefer between them. Being
+ordinary git config, it also layers the way git already layers — repository wide
+in ``.git/config``, per worktree in ``config.worktree`` once
+``extensions.worktreeConfig`` is enabled — with no wits-specific mechanism.
+
+A value naming no known project, or one that does not reference the checkout at
+all, is ignored rather than fatal: a stale setting in an unrelated repository
+degrades to the ordinary answer instead of breaking every query.
 
 Global flags
 ------------

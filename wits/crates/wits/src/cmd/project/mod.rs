@@ -56,6 +56,9 @@ pub enum ProjectSub {
     MainBranch(TargetArgs),
     /// Print the resolved build directory for a branch, one line, for scripts.
     BuildDir(TargetArgs),
+    /// Print every existing build directory that a branch of one checkout
+    /// identifies, across all projects — what a branch deletion orphans.
+    BranchBuildDirs(TargetArgs),
     /// Print the resolved install prefix for a branch, one line, for scripts.
     InstallDir(TargetArgs),
     /// Print the resolved source directory (where the build configures from).
@@ -218,6 +221,7 @@ pub fn run(args: &ProjectArgs) -> Result<()> {
         Some(ProjectSub::Exists(a)) => exists(&ws, a),
         Some(ProjectSub::MainBranch(a)) => main_branch(&ws, a, profile),
         Some(ProjectSub::BuildDir(a)) => build_dir(&ws, a, profile),
+        Some(ProjectSub::BranchBuildDirs(a)) => branch_build_dirs(&ws, a, profile),
         Some(ProjectSub::InstallDir(a)) => install_dir(&ws, a, profile),
         Some(ProjectSub::SourceDir(a)) => source_dir(&ws, a, profile),
         Some(ProjectSub::WorkDir(a)) => work_dir(&ws, a, profile),
@@ -377,6 +381,34 @@ path_query!(install_dir, install_dir, optional: "has no install_dir configured")
 path_query!(source_dir, source_dir);
 // `work-dir`: the branch's checkout root, the selected repo's `workdir`.
 path_query!(work_dir, work_dir);
+
+/// `branch-build-dirs`: every existing build directory that `--branch` of the
+/// anchored checkout identifies, one `<project>\t<path>` per line.
+///
+/// The cross-project shape is the point. A branch deletion has to reach the build
+/// trees of every project that keys its build on that checkout's branch, and a
+/// borrowed component is keyed on by more than one — so a per-project query
+/// silently leaves the borrowers' trees behind. The judgement about *which*
+/// projects qualify is [`resolve::branch_build_dirs`]'s, derived from the
+/// registry rather than declared in it.
+///
+/// This stays a query: it prints what a deletion would orphan and removes
+/// nothing, because `project` is the read-only half of the tool (§1.4) and the
+/// caller that deletes wants its own confirmation and dry-run anyway.
+fn branch_build_dirs(ws: &Workspace, args: &TargetArgs, profile: &ProfileArgs) -> Result<()> {
+    let (project, repo) = resolve_repo(ws, args.target.as_deref(), profile.focus.as_deref())?;
+    let branch = branch_or_current(ws, project, &repo, profile.branch.as_deref())?;
+    // Ask by the branch's *checkout*, not the repository. Two repos of a project
+    // may share one git dir and be told apart only by which checkout they place
+    // (a bare-backed component and a review checkout of it), so collapsing to the
+    // repository path would discard the one thing that distinguishes them.
+    let path = resolve::work_dir(ws, project, &repo, &branch)
+        .with_context(|| format!("cannot resolve the checkout of repo '{repo}'"))?;
+    for found in resolve::branch_build_dirs(ws, &path, &branch) {
+        println!("{}\t{}", found.project, found.path.display());
+    }
+    Ok(())
+}
 
 /// `hash`: the commit a branch points at in the anchored repo, and — per
 /// `--submodules` — the commits it pins in its submodules. Everything is read

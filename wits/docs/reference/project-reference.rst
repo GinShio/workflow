@@ -908,7 +908,10 @@ the anchor defaults exactly like any other focus.
 * **A borrow may not itself be borrowed** (hard error).
 * **A borrow never owns a path.** ``project_for_path`` / ``repo_for_path``
   ignore borrowed entries, so a checkout shared by several projects resolves
-  to the one that declares it as its own.
+  to the one that declares it as its own — unless the checkout names a project
+  in ``wits.project.active``, which wins and *does* consider borrows. An
+  unresolvable value, or one naming a project that does not reference the
+  checkout, falls back to the owner rather than failing.
 * **``update`` skips borrowed repos** unless ``--with-borrowed`` is passed. A
   borrowed hook then resolves against the *borrower's* ``org.*`` namespace.
 

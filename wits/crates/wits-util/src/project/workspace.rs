@@ -124,6 +124,46 @@ pub struct Workspace {
     orgs: BTreeMap<String, OrgData>,
 }
 
+/// How deeply `query` sits inside `candidate`, or `None` when it does not.
+///
+/// The depth is the matched path's component count, so a caller comparing
+/// candidates can prefer the most specific one.
+fn containment_depth(query: &Path, candidate: &Path) -> Option<usize> {
+    let real = std::fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf());
+    query.starts_with(&real).then(|| real.components().count())
+}
+
+/// Live worktrees per git dir, remembered for the duration of one path query.
+///
+/// Resolving a path walks every repo of every project, and many of them resolve
+/// to the same git dir — a bare-backed component and each of its borrowers, every
+/// repo of a monorepo. Asking git once per repo instead of once per git dir is
+/// where a single path query comes to spawn a hundred `git worktree list`
+/// processes.
+///
+/// Deliberately **not** stored on [`Workspace`]: a command that creates a
+/// worktree and then asks a path question must see the new one, and a cache
+/// living as long as the registry would answer from before the mutation. Scoped
+/// to one query, there is no window in which it can be stale.
+#[derive(Default)]
+struct WorktreeMemo {
+    by_git_dir: std::collections::HashMap<PathBuf, Vec<crate::git::Worktree>>,
+}
+
+impl WorktreeMemo {
+    fn live_worktrees(&mut self, root: &Path) -> &[crate::git::Worktree] {
+        self.by_git_dir
+            .entry(root.to_path_buf())
+            .or_insert_with(|| {
+                Repository::new(root)
+                    .worktrees()
+                    .into_iter()
+                    .filter(crate::git::Worktree::is_live)
+                    .collect()
+            })
+    }
+}
+
 impl Workspace {
     pub fn toolchains(&self) -> &BTreeMap<String, RawToolchain> {
         &self.toolchains
@@ -396,46 +436,205 @@ impl Workspace {
     /// project that declares that checkout as its own, skipping borrows leaves
     /// exactly one owner, and the answer becomes "the project this component
     /// *is*", not "whichever project happens to sort first".
+    ///
+    /// A checkout may declare that it is currently being worked on *as* one
+    /// particular project, which overrides the structural answer — see
+    /// [`active_repo_for_path`](Self::active_repo_for_path).
     pub fn repo_for_path(&self, path: &Path) -> Option<(&ProjectData, String)> {
         let query = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let memo = &mut WorktreeMemo::default();
+        // The override is read first because it is one git invocation, and
+        // deciding up front whether it *could* apply — whether a second project
+        // references this checkout — means resolving every repo of every project,
+        // which costs more than the read it would save.
+        self.active_repo_for_path(&query, memo)
+            .or_else(|| self.owning_repo_for_path(&query, memo))
+    }
+
+    /// The project a checkout declares it is being developed *as*, via
+    /// `wits.project.active` in its git config.
+    ///
+    /// Which project a shared checkout currently serves is a local work pattern,
+    /// not a structural fact: several projects may borrow one component and the
+    /// registry has no grounds to prefer between them. So the preference lives in
+    /// git config beside the clone — local, per-machine, and layered by git itself
+    /// (repo-wide in `config`, per-worktree in `config.worktree` once
+    /// `extensions.worktreeConfig` is on) — rather than in a registry every
+    /// machine shares.
+    ///
+    /// Unlike [`owning_repo_for_path`](Self::owning_repo_for_path) this *does*
+    /// consider borrowed repos: naming the project is exactly what breaks the
+    /// N-way tie that makes a borrow ineligible there.
+    ///
+    /// The value is read through git, so it resolves wherever git would find it.
+    /// One that does not name a known project, or names a project not referencing
+    /// this checkout, is ignored rather than fatal — which is also what keeps a
+    /// value set too broadly from reaching checkouts it has nothing to say about.
+    fn active_repo_for_path(
+        &self,
+        query: &Path,
+        memo: &mut WorktreeMemo,
+    ) -> Option<(&ProjectData, String)> {
+        let name = Repository::new(query)
+            .get_config("wits.project.active")
+            .ok()
+            .flatten()?;
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        let project = self.project(name).ok()?;
+        // Where the named project matches this checkout in more than one way, its
+        // focus wins: naming the project asks for *its build*, and the focus is
+        // the repo that build takes its identity from.
+        let focus = project.focus_name(None);
+        let best = project
+            .repos
+            .keys()
+            .filter_map(|repo_name| {
+                self.repo_match_depth(project, repo_name, query, memo)
+                    .map(|depth| (depth, repo_name == focus, repo_name.clone()))
+            })
+            .max()?;
+        Some((project, best.2))
+    }
+
+    /// Whether any checkout of `project`'s `repo_name` contains `path`.
+    ///
+    /// The single-repo question behind the path lookups. A caller asking about one
+    /// *named* repo — "is this project's focus checked out here?" — must not go
+    /// through [`repo_for_path`](Self::repo_for_path), whose job is to choose one
+    /// repo among many: it cannot answer about a borrow at all, and where a path
+    /// matches two sibling repos of one project its choice between them decides
+    /// by nothing meaningful. Asking about the repo you actually mean has neither
+    /// problem.
+    pub fn repo_checkout_contains(
+        &self,
+        project: &ProjectData,
+        repo_name: &str,
+        path: &Path,
+    ) -> bool {
+        let query = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        self.repo_match_depth(project, repo_name, &query, &mut WorktreeMemo::default())
+            .is_some()
+    }
+
+    /// The project that declares `query` as its own, borrows excluded — the
+    /// structural answer described on [`repo_for_path`](Self::repo_for_path).
+    fn owning_repo_for_path(
+        &self,
+        query: &Path,
+        memo: &mut WorktreeMemo,
+    ) -> Option<(&ProjectData, String)> {
         let mut best: Option<(&ProjectData, String, usize)> = None;
         for project in self.projects.values() {
             for repo_name in project.repos.keys() {
                 if project.is_borrowed(repo_name) {
                     continue;
                 }
-                let Ok(repo_path) = project.repo_abs_path(repo_name) else {
+                let Some(depth) = self.repo_match_depth(project, repo_name, query, memo) else {
                     continue;
                 };
-                let mut roots = vec![repo_path];
-                if let Ok(primary) = super::resolve::repo_primary_path(self, project, repo_name) {
-                    if !roots.contains(&primary) {
-                        roots.push(primary);
-                    }
-                }
-                let mut candidates = Vec::new();
-                for root in roots {
-                    candidates.push(root.clone());
-                    candidates.extend(
-                        Repository::new(&root)
-                            .worktrees()
-                            .into_iter()
-                            .filter(|wt| !wt.bare && !wt.prunable)
-                            .map(|wt| wt.path),
-                    );
-                }
-                for candidate in candidates {
-                    let candidate = std::fs::canonicalize(&candidate).unwrap_or(candidate);
-                    if query.starts_with(&candidate) {
-                        let depth = candidate.components().count();
-                        if best.as_ref().is_none_or(|(_, _, d)| depth > *d) {
-                            best = Some((project, repo_name.clone(), depth));
-                        }
-                    }
+                if best.as_ref().is_none_or(|(_, _, d)| depth > *d) {
+                    best = Some((project, repo_name.clone(), depth));
                 }
             }
         }
         best.map(|(p, name, _)| (p, name))
+    }
+
+    /// How deeply `query` sits inside any checkout of `repo_name`: its declared
+    /// path, its primary path, and every live worktree either of those places.
+    /// The depth is the matched checkout's component count, so a caller comparing
+    /// candidates picks the most specific one (a submodule over its
+    /// superproject).
+    fn repo_match_depth(
+        &self,
+        project: &ProjectData,
+        repo_name: &str,
+        query: &Path,
+        memo: &mut WorktreeMemo,
+    ) -> Option<usize> {
+        let repo_path = project.repo_abs_path(repo_name).ok()?;
+        // Attributing worktrees costs a strategy resolution per worktree, and it
+        // can only change the answer where a sibling repo of this project resolves
+        // to the same git dir. Deciding that from the registry first keeps the
+        // ordinary one-repo-per-checkout case from paying for it at all.
+        let contested = project.repos.keys().any(|other| {
+            other != repo_name && project.repo_abs_path(other).is_ok_and(|p| p == repo_path)
+        });
+        let mut roots = vec![repo_path];
+        if let Ok(primary) = super::resolve::repo_primary_path(self, project, repo_name) {
+            if !roots.contains(&primary) {
+                roots.push(primary);
+            }
+        }
+        let mut best: Option<usize> = None;
+        let mut deepen = |depth: usize| {
+            if best.is_none_or(|seen| depth > seen) {
+                best = Some(depth);
+            }
+        };
+        for root in roots {
+            // The declared and primary paths are this repo by definition.
+            if let Some(depth) = containment_depth(query, &root) {
+                deepen(depth);
+            }
+            for wt in memo.live_worktrees(&root) {
+                // Containment is tested before attribution because attribution
+                // costs a strategy resolution — several git invocations — while
+                // most worktrees of a repository have nothing to do with the path
+                // being resolved. Asking who placed a worktree that cannot match
+                // is how a single path query comes to run dozens of them.
+                let Some(depth) = containment_depth(query, &wt.path) else {
+                    continue;
+                };
+                if contested && !self.repo_places_worktree(project, repo_name, wt) {
+                    continue;
+                }
+                deepen(depth);
+            }
+        }
+        best
+    }
+
+    /// Whether `repo_name`'s own branch strategy is what put `wt` where it is.
+    ///
+    /// Two repos may share one git repository and still be different checkouts of
+    /// it: a bare-backed component and a review checkout of the same component
+    /// each declare their own `worktree_dir`. `git worktree list` answers for the
+    /// *repository*, so it reports both to both, and attributing every worktree
+    /// to every repo that points at that git dir makes the two
+    /// indistinguishable — a tie broken by map order, which is how a path query
+    /// comes to answer with the wrong sibling.
+    ///
+    /// Re-resolving the strategy for the worktree's own branch says which repo
+    /// would have placed it there, which is the discriminator the paths
+    /// themselves cannot supply. A repo that declares no `worktree_dir` has no
+    /// sibling to be confused with — its checkout *is* the repository — so it
+    /// accepts what git reported and pays no resolution.
+    fn repo_places_worktree(
+        &self,
+        project: &ProjectData,
+        repo_name: &str,
+        wt: &crate::git::Worktree,
+    ) -> bool {
+        let Some(repo) = project.repos.get(repo_name) else {
+            return false;
+        };
+        if repo.worktree_dir.is_none() {
+            return true;
+        }
+        // A detached worktree names no branch; the repo's own main branch stands
+        // in, which is enough for a strategy whose path does not vary by branch.
+        let Some(branch) = wt.branch.clone().or_else(|| repo.main_branch.clone()) else {
+            return false;
+        };
+        let Ok(placed) = super::resolve::work_dir(self, project, repo_name, &branch) else {
+            return false;
+        };
+        let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        real(&placed) == real(&wt.path)
     }
 
     fn available(&self) -> String {

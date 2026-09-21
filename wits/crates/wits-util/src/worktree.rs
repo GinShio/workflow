@@ -379,7 +379,7 @@ enum Primary {
 
 /// A worktree that is a checkout you could actually run git in.
 fn live(wt: &crate::git::Worktree) -> bool {
-    !wt.bare && !wt.prunable && wt.path.exists()
+    wt.is_live()
 }
 
 /// The checkout this repository is anchored on, never depending on the caller's

@@ -625,6 +625,17 @@ Two consequences follow, and both are rules rather than heuristics:
   is never a candidate** for the lookup. Since a borrow always points at a
   project that declares that checkout as its own, exactly one owner remains,
   and ``cd`` into a shared component lands on the project it *is*.
+
+  That default is right while one project builds the component, and wrong when
+  you are developing a *borrower* — whose build may be identified by the shared
+  checkout's branch. The checkout may therefore name the project it is currently
+  being developed as, in ``wits.project.active``, and that answer wins, borrows
+  included. It lives in git config rather than the registry because it is a local
+  work pattern, not a structural fact: several projects may borrow one component
+  with nothing in the registry to prefer between them. Being git config it also
+  layers as git does — repository-wide, or per worktree under
+  ``extensions.worktreeConfig`` — and a value naming no known project, or one
+  that does not reference the checkout, is ignored rather than fatal.
 * **Update ownership.** The same rule, applied to work: ``update`` skips
   borrowed repos, so a component five projects consume is fetched once by its
   owner rather than five times. ``--with-borrowed`` opts in when you do want
