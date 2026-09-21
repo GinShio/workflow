@@ -34,7 +34,11 @@ while read -r _branch _old; do
         *"$_old"*) continue ;;   # the sha lives on under a new name: a rename
     esac
 
-    build_dirs=$(resolve_build_dirs "$_branch" cleanup || true)
+    # Across every project the branch identified a build in, not just the one
+    # that owns the checkout: a borrowed component is the build identity of each
+    # project that focuses on it, and those trees are orphaned by this deletion
+    # too.
+    build_dirs=$(branch_build_dirs "$_branch" || true)
     oldifs=$IFS
     IFS='
 '

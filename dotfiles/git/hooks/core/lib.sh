@@ -161,92 +161,81 @@ prompt_confirm() {
     esac
 }
 
-# Resolve build directories for a specific branch using wits.
-# Usage: resolve_build_dirs <branch_name> [cleanup]
-# Without "cleanup" (the workspace-restore caller) a build directory shared
-# with the main branch is a fine target to link against; with "cleanup" (the
-# branch-deletion caller) a shared root is refused, so a cleanup can never
-# remove the build tree the main branch is using.
-resolve_build_dirs() {
-    _branch="$1"
-    _repo="$GIT_TOPLEVEL"
-    _bd=""
+# The build directory whose compile_commands.json this checkout should point at.
+# Usage: active_build_dir <branch_name>
+#
+# One line, or nothing when the project declares no build_dir. Which project
+# answers is wits's decision: for a checkout several projects share, it follows
+# `wits.project.active`, so a component borrowed by the project you actually
+# build resolves to that project's tree instead of its owner's.
+#
+# The directory is deliberately *not* required to exist. A checkout happens
+# before the branch has ever been built, so demanding it would make the common
+# case a no-op — and leave the previous branch's link in place, which is a stale
+# index silently describing another branch's build.
+active_build_dir() {
+    _abd_branch="$1"
+    command -v wits >/dev/null 2>&1 || {
+        log_warn "build-dir: wits is unavailable; leaving compile_commands.json alone."
+        return 1
+    }
+    wits project build-dir "$GIT_TOPLEVEL" --branch "$_abd_branch" 2>/dev/null
+}
 
+# Every build directory that a branch of this checkout identifies, one per line,
+# filtered to what is safe to delete.
+# Usage: branch_build_dirs <branch_name>
+#
+# The answer spans projects, and that is the point: a borrowed component can be
+# the build identity of several projects at once, so a single-project answer
+# leaves every borrower's tree behind to accumulate forever. wits decides which
+# projects qualify and which build types exist; this adds only the guards that
+# belong beside an `rm -rf`.
+branch_build_dirs() {
+    _bbd_branch="$1"
     command -v wits >/dev/null 2>&1 || {
         log_warn "build-dirs: wits is unavailable; no build directory will be deleted."
         return 1
     }
-    _bd=$(wits project build-dir "$_repo" --branch "$_branch" 2>/dev/null) || {
-        log_warn "build-dirs: cannot resolve build directory for $_branch."
-        return 1
-    }
-    [ -n "$_bd" ] || return 1
+    _bbd_tab=$(printf '\t')
+    wits project branch-build-dirs "$GIT_TOPLEVEL" --branch "$_bbd_branch" 2>/dev/null |
+        while IFS="$_bbd_tab" read -r _bbd_project _bbd_dir; do
+            [ -n "$_bbd_dir" ] || continue
+            removable_build_dir "$_bbd_dir" || continue
+            printf '%s\n' "$_bbd_dir"
+        done
+}
 
-    _main_branch=$(wits project main-branch "$_repo" 2>/dev/null) || {
-        log_warn "build-dirs: cannot resolve the project's main branch."
-        return 1
-    }
-    _main_bd=$(wits project build-dir "$_repo" --branch "$_main_branch" 2>/dev/null) || {
-        log_warn "build-dirs: cannot resolve the main branch's build directory."
-        return 1
-    }
-
-    # Variants of a build directory share the base with the main branch's. A
-    # cleanup must never remove a root the main branch is using, so it refuses
-    # there; the restore caller links instead of deleting, and a shared build
-    # directory is exactly the right target for it — which is why the refusal
-    # applies to cleanup mode only.
-    _bd_base=${_bd%-debug}
-    _bd_base=${_bd_base%-release}
-    _main_base=${_main_bd%-debug}
-    _main_base=${_main_base%-release}
-    if [ "$2" = "cleanup" ] && [ "$_bd_base" = "$_main_base" ]; then
-        log_warn "build-dirs: $_branch shares $_bd_base with $_main_branch; keeping it."
+# Whether a path may be handed to `rm -rf` as a build directory.
+# Usage: removable_build_dir <path>
+#
+# wits only ever names a directory its own registry resolved, so nothing here is
+# expected to fire. They stay because the caller deletes recursively, and the
+# distance between a registry mistake and an unrecoverable one should not be a
+# single template typo.
+removable_build_dir() {
+    _rbd_path="$1"
+    if [ -L "$_rbd_path" ]; then
+        log_warn "build-dirs: refusing symlink $_rbd_path."
         return 1
     fi
-    _build_parent=$(dirname "$_main_base")
-    _build_root=$(CDPATH= cd -P "$_build_parent" 2>/dev/null && pwd) || {
-        log_warn "build-dirs: cannot prove build root $_build_parent."
-        return 1
-    }
-    [ "$_build_root" != / ] || {
-        log_warn "build-dirs: refusing filesystem root as a build root."
-        return 1
-    }
-
-    for suffix in "" "-debug" "-release"; do
-        _bd_target="${_bd_base}${suffix}"
-        [ -d "$_bd_target" ] || continue
-        if [ -L "$_bd_target" ]; then
-            log_warn "build-dirs: refusing symlink $_bd_target."
-            continue
-        fi
-        _bd_safe=$(CDPATH= cd -P "$_bd_target" 2>/dev/null && pwd) || continue
-        case "$_bd_safe" in
-            /|"$HOME"|"$GIT_TOPLEVEL")
-                log_warn "build-dirs: refusing unsafe path $_bd_safe."
-                continue
-                ;;
-        esac
-        if [ "$_bd_safe" = "$_build_root" ]; then
-            log_warn "build-dirs: refusing build root $_bd_safe."
-            continue
-        fi
-        case "$_bd_safe/" in
-            "$_build_root/"*) ;;
-            *)
-                log_warn "build-dirs: $_bd_safe is outside $_build_root."
-                continue
-                ;;
-        esac
-        case "$GIT_TOPLEVEL/" in
-            "$_bd_safe/"*)
-                log_warn "build-dirs: refusing repository ancestor $_bd_safe."
-                continue
-                ;;
-        esac
-        printf '%s\n' "$_bd_safe"
-    done
+    [ -d "$_rbd_path" ] || return 1
+    _rbd_real=$(CDPATH= cd -P "$_rbd_path" 2>/dev/null && pwd) || return 1
+    case "$_rbd_real" in
+        / | "$HOME" | "$GIT_TOPLEVEL")
+            log_warn "build-dirs: refusing unsafe path $_rbd_real."
+            return 1
+            ;;
+    esac
+    # Anything containing the repository is a parent of the source, not a build
+    # tree of it.
+    case "$GIT_TOPLEVEL/" in
+        "$_rbd_real"/*)
+            log_warn "build-dirs: refusing repository ancestor $_rbd_real."
+            return 1
+            ;;
+    esac
+    return 0
 }
 
 # Resolve Main/Default Branch Name

@@ -415,9 +415,30 @@ an out-of-tree build it repoints the working tree's ``compile_commands.json``
 at the active branch's build directory, so language servers and clang-tooling
 index the branch you are actually on. It only acts on branch checkouts (not
 file checkouts), only manages that path when it is a symlink or absent, and
-never clobbers a real file you keep in-tree. When no build directory exists yet
-for the branch, it warns and leaves things alone. Nothing to configure — the
-build directory itself is resolved through the ``wits`` project registry.
+never clobbers a real file you keep in-tree. Nothing to configure — the build
+directory itself is resolved through the ``wits`` project registry.
+
+The link is written even when its target does not exist yet, which is the normal
+case: a checkout happens before the branch has been built. Requiring the file
+would skip the relink and leave the *previous* branch's target in place, and an
+index that silently describes a different build is worse than no index at all.
+Dangling, tooling simply reports no compile commands, and the link starts
+working the moment the build lands.
+
+For a checkout that several projects share — a component one project owns and
+others borrow — the build that indexes it is ambiguous, and git holds nothing
+that resolves the ambiguity. Name the project the checkout is currently being
+developed as, and every path query follows it:
+
+.. code-block:: console
+
+   $ git config wits.project.active <project>
+
+Unset, the project that *owns* the checkout answers, which is the right default
+for the ordinary case where exactly one project builds it. The setting is read
+from ordinary git config, so a repository-wide value lives in ``.git/config``
+and a per-worktree override in ``config.worktree`` once
+``extensions.worktreeConfig`` is enabled — no wits-specific mechanism.
 
 The encrypted-file modes
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -501,10 +522,20 @@ want the housekeeping:
 
    $ git config wits.hooks.reference-transaction.cleanup-build-dir-enable true
 
-It refuses to remove anything it cannot prove is a build directory — the
-resolution checks a candidate is a real directory, not a symlink, not your
-home or the repository root, and not shared with the main branch — so a stray
-branch name can never point ``rm -rf`` at something you care about.
+The sweep spans **every project the branch identified a build in**, not only the
+one that owns the checkout. A borrowed component can be the build identity of
+several projects at once — each keying its own build tree on that component's
+branch — and a per-project cleanup would leave all the borrowers' trees behind to
+accumulate forever. A project that merely borrows the checkout while focusing
+elsewhere builds under its *own* branch, so the deletion says nothing about it
+and it is left alone; so is a build directory whose path does not vary by branch.
+Both are derived from the registry rather than declared in it, so nothing has to
+be kept in step by hand.
+
+It refuses to remove anything it cannot prove is a build directory — a candidate
+must be a real directory, not a symlink, not your home or the repository root,
+and not a parent of the repository — so a stray branch name can never point
+``rm -rf`` at something you care about.
 
 The recorder hooks
 ------------------
