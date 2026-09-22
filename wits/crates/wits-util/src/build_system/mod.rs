@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use minijinja::value::ValueKind;
 use minijinja::Value;
 
+use crate::project::context::scalar_text;
 use crate::project::model::{BuildSystem, LogicalConfig, Toolchain};
 use crate::project::resolve::ToolchainInjector;
 
@@ -161,9 +162,15 @@ fn cmake_definition(key: &str, value: &Value) -> String {
 }
 
 /// Render a definition value for a meson `-D` option (`key=value`).
+///
+/// The spelling comes from [`scalar_text`], not `Value::to_string()`: meson
+/// requires a boolean option to be `true`/`false`, and minijinja renders one
+/// Jinja/Python-style as `True`, which meson rejects.
 fn meson_definition(key: &str, value: &Value) -> String {
     let v = match value.kind() {
-        ValueKind::Bool | ValueKind::Number | ValueKind::String => value.to_string(),
+        ValueKind::Bool | ValueKind::Number | ValueKind::String => {
+            scalar_text(value).unwrap_or_default()
+        }
         _ => String::new(),
     };
     format!("{key}={v}")

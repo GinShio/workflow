@@ -622,7 +622,34 @@ pub(crate) fn value_to_string(v: &Value) -> String {
             })
             .unwrap_or_default(),
         ValueKind::Map => String::new(),
-        _ => v.to_string(),
+        _ => scalar_text(v).unwrap_or_default(),
+    }
+}
+
+/// A scalar's canonical text — the spelling a TOML file would have written and
+/// every consumer but cmake expects — or `None` when the value is a container
+/// and so has no single spelling.
+///
+/// This exists because `Value::to_string()` is the wrong answer for exactly one
+/// kind: minijinja follows Jinja/Python and renders a boolean as `True`/`False`.
+/// That is neither what a config author typed nor what a build system takes —
+/// meson rejects `-Dfoo=True` outright — so every path from a typed definition
+/// back to text routes through here. cmake is the deliberate exception and keeps
+/// its own `ON`/`OFF` spelling, which is a *cmake* convention rather than a
+/// disagreement about the value.
+///
+/// Scope, deliberately: this governs a value the resolver hands *out*. A boolean
+/// interpolated **inside** a larger template (`"p-{{ flag }}"`) is formatted by
+/// MiniJinja while it renders, before any of this runs, and still reads `True`.
+/// Changing that means installing a formatter on the shared environment in
+/// [`crate::jinja`], which would redefine the dialect for every renderer in the
+/// tree (the scaffold plugin included) — a wider decision than spelling a
+/// definition, and no config in this tree writes that form.
+pub fn scalar_text(v: &Value) -> Option<String> {
+    match v.kind() {
+        ValueKind::Map | ValueKind::Seq | ValueKind::Iterable => None,
+        ValueKind::Bool => Some(if v.is_true() { "true" } else { "false" }.to_owned()),
+        _ => Some(v.to_string()),
     }
 }
 
@@ -867,6 +894,21 @@ mod tests {
         insert_path(&mut root, "a", Value::from("scalar"));
         insert_path(&mut root, "a.b", Value::from(1));
         assert_eq!(Ctx::new(root).get("a.b").unwrap(), Value::from(1));
+    }
+
+    /// A boolean definition must reach a backend in its TOML spelling: meson
+    /// rejects `-Dfoo=True`, which is what MiniJinja's Jinja/Python rendering
+    /// of a boolean would have handed it.
+    #[test]
+    fn a_bool_renders_in_its_toml_spelling() {
+        assert_eq!(scalar_text(&Value::from(true)).unwrap(), "true");
+        assert_eq!(scalar_text(&Value::from(false)).unwrap(), "false");
+        assert_eq!(value_to_string(&Value::from(true)), "true");
+        // A container has no single spelling and is refused rather than joined.
+        assert!(scalar_text(&Value::from(vec!["a", "b"])).is_none());
+        // Other scalars are unaffected.
+        assert_eq!(scalar_text(&Value::from(7)).unwrap(), "7");
+        assert_eq!(scalar_text(&Value::from("x")).unwrap(), "x");
     }
 
     #[test]
