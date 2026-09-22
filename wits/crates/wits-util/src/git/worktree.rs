@@ -612,263 +612,6 @@ impl Drop for RestoreGuard<'_> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn git(dir: &Path, args: &[&str]) {
-        Command::new("git")
-            .args(args.iter().copied())
-            .current_dir(dir)
-            .force_run()
-            .exec()
-            .unwrap();
-    }
-
-    /// Reconciling the same declaration twice must leave the same repository.
-    ///
-    /// Driven with a `url.*.insteadOf` rewrite in force, because that is what broke
-    /// the additive version this replaced: it compared the declared URL against
-    /// `git remote get-url`, which reports the *rewritten* form, so the comparison
-    /// could never match and every run appended the push URL again. The assertion
-    /// is on the resulting list, not on the comparison — a set-valued write is
-    /// stable however the reading goes.
-    #[test]
-    fn reconcile_is_idempotent_under_url_rewrites() {
-        // `reconcile_remote` writes through the dry-run-honouring paths, so a
-        // sibling test flipping the global flag would turn every write here into a
-        // preview and the assertions into nonsense.
-        let _guard = crate::log::test_flag_guard();
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        git(dir, &["init", "-q", "-b", "main", "."]);
-        // The rewrite that made the old equality check unmatchable.
-        git(
-            dir,
-            &["config", "url.https://example.com/.insteadOf", "short:"],
-        );
-
-        let repo = Repository::new(dir);
-        let url = "short:me/app.git".to_owned();
-        let mirrors = vec![url.clone(), "short:me/mirror.git".to_owned()];
-
-        for _ in 0..3 {
-            repo.reconcile_remote("origin", &url, &mirrors).unwrap();
-            assert_eq!(repo.get_config_all("remote.origin.url"), vec![url.clone()]);
-            assert_eq!(repo.get_config_all("remote.origin.pushurl"), mirrors);
-        }
-    }
-
-    /// Dropping every mirror must take the push URLs with it. An additive
-    /// reconciler could only ever grow the list, so a declaration walked back left
-    /// pushes still fanning out to a mirror the config no longer mentions.
-    #[test]
-    fn reconcile_removes_push_urls_a_declaration_no_longer_asks_for() {
-        let _guard = crate::log::test_flag_guard();
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        git(dir, &["init", "-q", "-b", "main", "."]);
-        let repo = Repository::new(dir);
-        let url = "https://example.com/me/app.git".to_owned();
-
-        repo.reconcile_remote("origin", &url, &[url.clone(), "https://m/1.git".into()])
-            .unwrap();
-        assert_eq!(repo.get_config_all("remote.origin.pushurl").len(), 2);
-
-        repo.reconcile_remote("origin", &url, &[]).unwrap();
-        assert!(repo.get_config_all("remote.origin.pushurl").is_empty());
-    }
-
-    /// A repoint must be *reported*, because the stale tracking refs it leaves
-    /// behind are the caller's to prune-fetch away, and only a repoint owes that.
-    ///
-    /// The refs are deliberately still there on return: deleting them here would
-    /// leave a window where they are gone and the replacing fetch may fail, and a
-    /// branch whose tracking ref vanishes reads as `gone` — the state
-    /// `wits worktree prune` reclaims worktrees for.
-    #[test]
-    fn a_repoint_is_reported_and_leaves_the_stale_refs_for_the_caller() {
-        let _guard = crate::log::test_flag_guard();
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        git(dir, &["init", "-q", "-b", "main", "."]);
-        let repo = Repository::new(dir);
-
-        // Creating a remote is not a repoint: there is nothing stale to prune.
-        assert!(!repo
-            .reconcile_remote("origin", "https://example.com/a.git", &[])
-            .unwrap());
-        // Stand in for what a fetch would have left behind. Identity comes through
-        // `-c` so the test does not depend on the developer's global git config,
-        // and `core.hooksPath` is neutralised so a globally-installed commit hook
-        // cannot fire here.
-        git(
-            dir,
-            &[
-                "-c",
-                "user.name=T",
-                "-c",
-                "user.email=t@e.com",
-                "-c",
-                "core.hooksPath=/nonexistent-wits-test-hooks",
-                "commit",
-                "-q",
-                "--allow-empty",
-                "-m",
-                "c1",
-            ],
-        );
-        let head = repo.rev_parse("HEAD").unwrap();
-        repo.update_ref("refs/remotes/origin/main", &head).unwrap();
-        assert!(!repo.refs_under("refs/remotes/origin/").is_empty());
-
-        assert!(
-            repo.reconcile_remote("origin", "https://example.com/b.git", &[])
-                .unwrap(),
-            "a URL change must report itself as a repoint"
-        );
-        assert_eq!(
-            repo.refs_under("refs/remotes/origin/").len(),
-            1,
-            "the stale refs are the caller's to prune-fetch, not ours to delete"
-        );
-
-        // A reconcile that changes nothing owes no prune-fetch.
-        assert!(!repo
-            .reconcile_remote("origin", "https://example.com/b.git", &[])
-            .unwrap());
-    }
-
-    /// Borrowing a submodule's objects from a reference store must leave the new
-    /// clone with an `alternates` file pointing at that store — the "no
-    /// re-download" guarantee `review checkout --submodules` relies on.
-    ///
-    /// Driven level by level, the way [`crate::worktree::sync_submodules`] drives
-    /// it, because that is the contract: this call materialises **one** submodule,
-    /// and the store each level borrows from is a different repository.
-    #[test]
-    fn submodule_init_borrows_objects_via_alternates() {
-        let _guard = crate::log::test_flag_guard();
-        // The submodule clone `submodule_init_borrow` triggers is a *child* git
-        // process, which inherits repo config only via the environment — so the
-        // file-protocol allowance (needed for a local test submodule; real ones
-        // are https/ssh) and identity go through `GIT_CONFIG_*`, not `-c` on the
-        // setup calls. Held under the flag guard so it doesn't race other tests.
-        std::env::set_var("GIT_CONFIG_COUNT", "4");
-        std::env::set_var("GIT_CONFIG_KEY_0", "protocol.file.allow");
-        std::env::set_var("GIT_CONFIG_VALUE_0", "always");
-        std::env::set_var("GIT_CONFIG_KEY_1", "user.email");
-        std::env::set_var("GIT_CONFIG_VALUE_1", "t@e.com");
-        std::env::set_var("GIT_CONFIG_KEY_2", "user.name");
-        std::env::set_var("GIT_CONFIG_VALUE_2", "T");
-        // Keep the test hermetic from any globally-installed hooks (a
-        // `core.hooksPath` in the user's config would otherwise fire on commits).
-        std::env::set_var("GIT_CONFIG_KEY_3", "core.hooksPath");
-        std::env::set_var("GIT_CONFIG_VALUE_3", "/nonexistent-wits-test-hooks");
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        let run = |dir: &Path, args: &[&str]| {
-            Command::new("git")
-                .args(args.iter().copied())
-                .current_dir(dir)
-                .force_run()
-                .exec()
-                .unwrap();
-        };
-        // Two levels of nesting: P -> mid -> leaf, so the recursive borrow's
-        // chaining (not just the top level) is exercised.
-        let mk = |name: &str| {
-            let d = root.join(name);
-            run(root, &["init", "-q", "-b", "main", name]);
-            std::fs::write(d.join("f"), "v1").unwrap();
-            run(&d, &["add", "f"]);
-            run(&d, &["commit", "-q", "-m", "c1"]);
-            d
-        };
-        let leaf = mk("leaf");
-        let mid = mk("mid");
-        run(
-            &mid,
-            &[
-                "submodule",
-                "add",
-                "-q",
-                &format!("file://{}", leaf.display()),
-                "leaf",
-            ],
-        );
-        run(&mid, &["commit", "-q", "-m", "add leaf"]);
-        let sup = root.join("P");
-        run(root, &["init", "-q", "-b", "main", "P"]);
-        run(
-            &sup,
-            &[
-                "submodule",
-                "add",
-                "-q",
-                &format!("file://{}", mid.display()),
-                "mid",
-            ],
-        );
-        run(&sup, &["commit", "-q", "-m", "add mid"]);
-        // Primary initialises the whole tree, so every level's store exists to borrow.
-        run(&sup, &["submodule", "update", "--init", "--recursive"]);
-
-        // A linked worktree of the superproject — where a bare update would
-        // re-clone every submodule from scratch.
-        let wt = root.join("W");
-        run(
-            &sup,
-            &[
-                "worktree",
-                "add",
-                "-q",
-                wt.to_str().unwrap(),
-                "-b",
-                "feat",
-                "HEAD",
-            ],
-        );
-
-        let common = Repository::new(&wt).git_common_dir().unwrap();
-        let mid_store = common.join("modules/mid");
-        Repository::new(&wt)
-            .submodule_init_borrow("mid", Some(&mid_store))
-            .unwrap();
-
-        let alternates_of = |sub_rel: &str| {
-            let gitdir = Repository::new(wt.join(sub_rel)).git_dir().unwrap();
-            std::fs::read_to_string(gitdir.join("objects/info/alternates")).unwrap_or_default()
-        };
-        let mid_alts = alternates_of("mid");
-        assert!(
-            mid_alts.contains(mid_store.to_str().unwrap()),
-            "the submodule should borrow from {}, got: {mid_alts}",
-            mid_store.display()
-        );
-        // One level only: the nested submodule is the caller's next step, not a
-        // side effect of this one, so nothing has been checked out there yet.
-        assert!(
-            !wt.join("mid/leaf/.git").exists(),
-            "the nesting is the caller's to walk"
-        );
-
-        // Driving that next level is the same call, from inside the level above
-        // and against that level's own store — which is where the chaining would
-        // have looked, so the alternates land in the same place either way.
-        let leaf_store = mid_store.join("modules/leaf");
-        Repository::new(wt.join("mid"))
-            .submodule_init_borrow("leaf", Some(&leaf_store))
-            .unwrap();
-        let leaf_alts = alternates_of("mid/leaf");
-        assert!(
-            leaf_alts.contains(leaf_store.to_str().unwrap()),
-            "the nested submodule should borrow from its own store {}, got: {leaf_alts}",
-            leaf_store.display()
-        );
-    }
-}
-
 /// Logically normalize a path, collapsing `.` and `..` without touching the
 /// filesystem — so a relative `core.worktree` joined onto the git-dir resolves
 /// the same way git resolves it, regardless of symlinks or missing intermediates.
@@ -1204,4 +947,261 @@ fn ensure_dir(dir: &Path) -> Result<(), GitError> {
 /// `icd/api/compiler`) is not, and must never reach `--reference`.
 pub fn is_object_store(dir: &Path) -> bool {
     dir.join("objects").is_dir()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn git(dir: &Path, args: &[&str]) {
+        Command::new("git")
+            .args(args.iter().copied())
+            .current_dir(dir)
+            .force_run()
+            .exec()
+            .unwrap();
+    }
+
+    /// Reconciling the same declaration twice must leave the same repository.
+    ///
+    /// Driven with a `url.*.insteadOf` rewrite in force, because that is what broke
+    /// the additive version this replaced: it compared the declared URL against
+    /// `git remote get-url`, which reports the *rewritten* form, so the comparison
+    /// could never match and every run appended the push URL again. The assertion
+    /// is on the resulting list, not on the comparison — a set-valued write is
+    /// stable however the reading goes.
+    #[test]
+    fn reconcile_is_idempotent_under_url_rewrites() {
+        // `reconcile_remote` writes through the dry-run-honouring paths, so a
+        // sibling test flipping the global flag would turn every write here into a
+        // preview and the assertions into nonsense.
+        let _guard = crate::log::test_flag_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        git(dir, &["init", "-q", "-b", "main", "."]);
+        // The rewrite that made the old equality check unmatchable.
+        git(
+            dir,
+            &["config", "url.https://example.com/.insteadOf", "short:"],
+        );
+
+        let repo = Repository::new(dir);
+        let url = "short:me/app.git".to_owned();
+        let mirrors = vec![url.clone(), "short:me/mirror.git".to_owned()];
+
+        for _ in 0..3 {
+            repo.reconcile_remote("origin", &url, &mirrors).unwrap();
+            assert_eq!(repo.get_config_all("remote.origin.url"), vec![url.clone()]);
+            assert_eq!(repo.get_config_all("remote.origin.pushurl"), mirrors);
+        }
+    }
+
+    /// Dropping every mirror must take the push URLs with it. An additive
+    /// reconciler could only ever grow the list, so a declaration walked back left
+    /// pushes still fanning out to a mirror the config no longer mentions.
+    #[test]
+    fn reconcile_removes_push_urls_a_declaration_no_longer_asks_for() {
+        let _guard = crate::log::test_flag_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        git(dir, &["init", "-q", "-b", "main", "."]);
+        let repo = Repository::new(dir);
+        let url = "https://example.com/me/app.git".to_owned();
+
+        repo.reconcile_remote("origin", &url, &[url.clone(), "https://m/1.git".into()])
+            .unwrap();
+        assert_eq!(repo.get_config_all("remote.origin.pushurl").len(), 2);
+
+        repo.reconcile_remote("origin", &url, &[]).unwrap();
+        assert!(repo.get_config_all("remote.origin.pushurl").is_empty());
+    }
+
+    /// A repoint must be *reported*, because the stale tracking refs it leaves
+    /// behind are the caller's to prune-fetch away, and only a repoint owes that.
+    ///
+    /// The refs are deliberately still there on return: deleting them here would
+    /// leave a window where they are gone and the replacing fetch may fail, and a
+    /// branch whose tracking ref vanishes reads as `gone` — the state
+    /// `wits worktree prune` reclaims worktrees for.
+    #[test]
+    fn a_repoint_is_reported_and_leaves_the_stale_refs_for_the_caller() {
+        let _guard = crate::log::test_flag_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        git(dir, &["init", "-q", "-b", "main", "."]);
+        let repo = Repository::new(dir);
+
+        // Creating a remote is not a repoint: there is nothing stale to prune.
+        assert!(!repo
+            .reconcile_remote("origin", "https://example.com/a.git", &[])
+            .unwrap());
+        // Stand in for what a fetch would have left behind. Identity comes through
+        // `-c` so the test does not depend on the developer's global git config,
+        // and `core.hooksPath` is neutralised so a globally-installed commit hook
+        // cannot fire here.
+        git(
+            dir,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@e.com",
+                "-c",
+                "core.hooksPath=/nonexistent-wits-test-hooks",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "c1",
+            ],
+        );
+        let head = repo.rev_parse("HEAD").unwrap();
+        repo.update_ref("refs/remotes/origin/main", &head).unwrap();
+        assert!(!repo.refs_under("refs/remotes/origin/").is_empty());
+
+        assert!(
+            repo.reconcile_remote("origin", "https://example.com/b.git", &[])
+                .unwrap(),
+            "a URL change must report itself as a repoint"
+        );
+        assert_eq!(
+            repo.refs_under("refs/remotes/origin/").len(),
+            1,
+            "the stale refs are the caller's to prune-fetch, not ours to delete"
+        );
+
+        // A reconcile that changes nothing owes no prune-fetch.
+        assert!(!repo
+            .reconcile_remote("origin", "https://example.com/b.git", &[])
+            .unwrap());
+    }
+
+    /// Borrowing a submodule's objects from a reference store must leave the new
+    /// clone with an `alternates` file pointing at that store — the "no
+    /// re-download" guarantee `review checkout --submodules` relies on.
+    ///
+    /// Driven level by level, the way [`crate::worktree::sync_submodules`] drives
+    /// it, because that is the contract: this call materialises **one** submodule,
+    /// and the store each level borrows from is a different repository.
+    #[test]
+    fn submodule_init_borrows_objects_via_alternates() {
+        let _guard = crate::log::test_flag_guard();
+        // The submodule clone `submodule_init_borrow` triggers is a *child* git
+        // process, which inherits repo config only via the environment — so the
+        // file-protocol allowance (needed for a local test submodule; real ones
+        // are https/ssh) and identity go through `GIT_CONFIG_*`, not `-c` on the
+        // setup calls. Held under the flag guard so it doesn't race other tests.
+        std::env::set_var("GIT_CONFIG_COUNT", "4");
+        std::env::set_var("GIT_CONFIG_KEY_0", "protocol.file.allow");
+        std::env::set_var("GIT_CONFIG_VALUE_0", "always");
+        std::env::set_var("GIT_CONFIG_KEY_1", "user.email");
+        std::env::set_var("GIT_CONFIG_VALUE_1", "t@e.com");
+        std::env::set_var("GIT_CONFIG_KEY_2", "user.name");
+        std::env::set_var("GIT_CONFIG_VALUE_2", "T");
+        // Keep the test hermetic from any globally-installed hooks (a
+        // `core.hooksPath` in the user's config would otherwise fire on commits).
+        std::env::set_var("GIT_CONFIG_KEY_3", "core.hooksPath");
+        std::env::set_var("GIT_CONFIG_VALUE_3", "/nonexistent-wits-test-hooks");
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let run = |dir: &Path, args: &[&str]| {
+            Command::new("git")
+                .args(args.iter().copied())
+                .current_dir(dir)
+                .force_run()
+                .exec()
+                .unwrap();
+        };
+        // Two levels of nesting: P -> mid -> leaf, so the recursive borrow's
+        // chaining (not just the top level) is exercised.
+        let mk = |name: &str| {
+            let d = root.join(name);
+            run(root, &["init", "-q", "-b", "main", name]);
+            std::fs::write(d.join("f"), "v1").unwrap();
+            run(&d, &["add", "f"]);
+            run(&d, &["commit", "-q", "-m", "c1"]);
+            d
+        };
+        let leaf = mk("leaf");
+        let mid = mk("mid");
+        run(
+            &mid,
+            &[
+                "submodule",
+                "add",
+                "-q",
+                &format!("file://{}", leaf.display()),
+                "leaf",
+            ],
+        );
+        run(&mid, &["commit", "-q", "-m", "add leaf"]);
+        let sup = root.join("P");
+        run(root, &["init", "-q", "-b", "main", "P"]);
+        run(
+            &sup,
+            &[
+                "submodule",
+                "add",
+                "-q",
+                &format!("file://{}", mid.display()),
+                "mid",
+            ],
+        );
+        run(&sup, &["commit", "-q", "-m", "add mid"]);
+        // Primary initialises the whole tree, so every level's store exists to borrow.
+        run(&sup, &["submodule", "update", "--init", "--recursive"]);
+
+        // A linked worktree of the superproject — where a bare update would
+        // re-clone every submodule from scratch.
+        let wt = root.join("W");
+        run(
+            &sup,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                wt.to_str().unwrap(),
+                "-b",
+                "feat",
+                "HEAD",
+            ],
+        );
+
+        let common = Repository::new(&wt).git_common_dir().unwrap();
+        let mid_store = common.join("modules/mid");
+        Repository::new(&wt)
+            .submodule_init_borrow("mid", Some(&mid_store))
+            .unwrap();
+
+        let alternates_of = |sub_rel: &str| {
+            let gitdir = Repository::new(wt.join(sub_rel)).git_dir().unwrap();
+            std::fs::read_to_string(gitdir.join("objects/info/alternates")).unwrap_or_default()
+        };
+        let mid_alts = alternates_of("mid");
+        assert!(
+            mid_alts.contains(mid_store.to_str().unwrap()),
+            "the submodule should borrow from {}, got: {mid_alts}",
+            mid_store.display()
+        );
+        // One level only: the nested submodule is the caller's next step, not a
+        // side effect of this one, so nothing has been checked out there yet.
+        assert!(
+            !wt.join("mid/leaf/.git").exists(),
+            "the nesting is the caller's to walk"
+        );
+
+        // Driving that next level is the same call, from inside the level above
+        // and against that level's own store — which is where the chaining would
+        // have looked, so the alternates land in the same place either way.
+        let leaf_store = mid_store.join("modules/leaf");
+        Repository::new(wt.join("mid"))
+            .submodule_init_borrow("leaf", Some(&leaf_store))
+            .unwrap();
+        let leaf_alts = alternates_of("mid/leaf");
+        assert!(
+            leaf_alts.contains(leaf_store.to_str().unwrap()),
+            "the nested submodule should borrow from its own store {}, got: {leaf_alts}",
+            leaf_store.display()
+        );
+    }
 }
