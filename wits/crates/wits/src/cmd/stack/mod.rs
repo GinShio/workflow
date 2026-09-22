@@ -67,6 +67,8 @@ pub enum TreeAction {
     Rm(RmArgs),
     /// Move a branch — and everything stacked on it — onto a new parent.
     Mv(MvArgs),
+    /// Rename an entry, keeping its place, its substack and its MR note.
+    Rename(RenameArgs),
 }
 
 #[derive(Debug, Args)]
@@ -92,6 +94,15 @@ pub struct MvArgs {
     /// The new parent (an existing branch, or the base branch).
     #[arg(long)]
     pub onto: String,
+}
+
+#[derive(Debug, Args)]
+pub struct RenameArgs {
+    /// The name the entry currently carries.
+    pub from: String,
+
+    /// The name to give it — an existing local branch.
+    pub to: String,
 }
 
 /// Scope shared by the verbs that walk the stack. The optional branch is a

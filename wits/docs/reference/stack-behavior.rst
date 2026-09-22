@@ -396,10 +396,25 @@ then retargets its base). The base branch is protected from removal.
        come along). Refused if it would place the branch beneath its own
        descendant (the cycle guard). Creates the node if it was not recorded
        yet, so ``mv`` also serves as "add this branch onto X".
+   * - ``tree rename <from> <to>``
+     - Follow a ``git branch -m``: the node keeps its parent, its slot among
+       that parent's siblings, its substack and its MR annotation — only the
+       name changes. ``<to>`` must be an existing local branch. A ``<from>``
+       that was never stacked is reported and ignored; a ``<to>`` already in
+       the forest is refused (it can only be a stale entry, since git will not
+       rename onto a live branch — ``tree prune`` is the way out). Unlike
+       ``rm`` and ``mv``, the base branch is **not** protected.
 
 ``tree mv`` changes the *declared* shape only — it does not move commits.
 After a move, rebase the branch onto its new parent for the code to match;
 ``submit`` then retargets the MR base.
+
+``tree rename`` is likewise a file edit and never renames a git branch: the
+git rename has already happened, which is why ``<to>`` must exist. It is not
+``rm`` + ``mv``, because that sequence would lose the MR annotation, append the
+node after its former siblings instead of restoring its slot, and reorder the
+file — three silent losses for an operation in which nothing about the stack
+changed except a name.
 
 Adding and removing mid-stack
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

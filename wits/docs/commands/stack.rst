@@ -305,18 +305,52 @@ splice up to its parent, and the next ``submit`` retargets their base.
    wits stack tree rm feature-b       # remove one branch (its children move up)
    wits stack tree rm feature-b --delete   # ...and delete the git branch too
    wits stack tree mv feature-c --onto main   # restack a branch (its substack moves with it)
+   wits stack tree rename feature-c feature-d # follow a `git branch -m`
 
 ``tree mv`` updates the *shape* only; rebase the branch onto its new parent
 yourself for the code to match. It also creates the entry if the branch was not
 in the stack yet, so it doubles as "put this branch onto X".
+
+``tree rename`` follows a branch that changed its name, keeping everything else
+about its entry: its parent, its slot among that parent's children, its
+substack, and its MR annotation. It is a file edit and never renames a git
+branch — ``git branch -m`` has already done that, and the new name must be a
+branch that exists. It deliberately does not protect the base branch, since a
+renamed base is exactly the case where refusing would leave the forest naming a
+branch that is gone.
+
+.. _rename-needs-following:
+
+After ``git branch -m``
+~~~~~~~~~~~~~~~~~~~~~~~
+
+A rename is the one branch event nothing can follow for you, and the reason is
+worth knowing rather than rediscovering. Git applies ``git branch -m`` by
+deleting the old ref, firing ``reference-transaction``, and only *then* creating
+the new one — so at the moment any hook could react, the new name exists in no
+ref, no reflog, no ``HEAD`` reflog entry and no ``packed-refs`` line. A hook can
+tell that a branch disappeared while keeping its commit, which is very likely a
+rename; it cannot learn what the branch became.
+
+So the shipped ``reference-transaction`` hook recognises that shape, leaves the
+entry alone rather than dropping it, and prints the command to finish the job:
+
+.. code-block:: sh
+
+   git branch -m feature-c feature-d
+   wits stack tree rename feature-c feature-d
+
+Skip it and nothing is lost — the entry simply names a branch that is gone,
+which ``sync`` and ``submit`` pass over and ``tree prune`` cleans up.
 
 Automating cleanup
 ~~~~~~~~~~~~~~~~~~
 
 ``tree prune`` is the one to reach for in automation: it needs no branch
 names, is idempotent, and only drops branches whose ref is actually gone.
-There is no git hook for branch deletion (and ``git maintenance`` only runs its
-own built-in tasks), so the clean integrations are either to run it at the end
+The ``reference-transaction`` hook shipped alongside this repository's git
+hooks already calls ``tree rm`` when a branch is deleted, so on a machine using
+those hooks the forest keeps itself honest. Everywhere else, run it at the end
 of a branch-cleanup script:
 
 .. code-block:: sh

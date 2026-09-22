@@ -287,6 +287,56 @@ impl Topology {
         true
     }
 
+    /// Rename a node in place, keeping everything about its position: its parent,
+    /// its slot among that parent's children, its own children, its annotation,
+    /// and where it sits in file order.
+    ///
+    /// This is deliberately not `remove` + `ensure` + `reparent`. That sequence
+    /// loses the MR annotation, appends the node after its former siblings rather
+    /// than restoring its slot, and re-orders the file — three silent losses for
+    /// an operation whose whole point is that nothing about the stack changed
+    /// except a name.
+    ///
+    /// Returns `false`, changing nothing, when `from` is absent or `to` is already
+    /// taken. A taken `to` can only be a stale entry (git refuses a rename onto a
+    /// live branch), and merging the two nodes would have to discard one of their
+    /// subtrees; `tree prune` is the way out.
+    pub fn rename(&mut self, from: &str, to: &str) -> bool {
+        if from == to {
+            return self.nodes.contains_key(from);
+        }
+        if !self.nodes.contains_key(from) || self.nodes.contains_key(to) {
+            return false;
+        }
+
+        let node = self
+            .nodes
+            .remove(from)
+            .expect("presence checked immediately above");
+
+        // Relationships are stored as names in both directions, so every place
+        // the old name appears has to move with it: the children's back-pointers,
+        // the parent's slot, and the file order.
+        for child in &node.children {
+            if let Some(child_node) = self.nodes.get_mut(child) {
+                child_node.parent = Some(to.to_owned());
+            }
+        }
+        if let Some(parent) = &node.parent {
+            if let Some(parent_node) = self.nodes.get_mut(parent) {
+                if let Some(slot) = parent_node.children.iter().position(|c| c == from) {
+                    parent_node.children[slot] = to.to_owned();
+                }
+            }
+        }
+        if let Some(slot) = self.order.iter().position(|n| n == from) {
+            self.order[slot] = to.to_owned();
+        }
+
+        self.nodes.insert(to.to_owned(), node);
+        true
+    }
+
     /// Remove a node, splicing its children up into the slot it occupied under
     /// its parent. The subtree below the node is **preserved** — re-parented, not
     /// discarded — because removing one branch from a stack must never destroy
@@ -428,6 +478,48 @@ mod tests {
         // C lands where B was: before X, preserving the primary line order.
         assert_eq!(t.children("A"), ["C".to_owned(), "X".to_owned()]);
         assert!(!t.contains("B"));
+    }
+
+    #[test]
+    fn rename_keeps_the_slot_the_subtree_and_the_annotation() {
+        // A forks to [B, X]; B carries an MR note and a child. Renaming B must
+        // leave every one of those facts alone — only the name changes.
+        let mut t = Topology::parse("main\n    A\n        B PR #7\n            C\n        X\n");
+        assert!(t.rename("B", "B2"));
+
+        assert_eq!(t.parent("B2"), Some("A"));
+        assert_eq!(t.annotation("B2"), Some("PR #7"));
+        assert_eq!(t.children("B2"), ["C".to_owned()]);
+        assert_eq!(t.parent("C"), Some("B2"));
+        // The slot among siblings survives: B2 still precedes X.
+        assert_eq!(t.children("A"), ["B2".to_owned(), "X".to_owned()]);
+        assert!(!t.contains("B"));
+        assert_eq!(
+            t.render(),
+            "main\n    A\n        B2 PR #7\n            C\n        X\n"
+        );
+    }
+
+    #[test]
+    fn rename_moves_a_root_without_disturbing_file_order() {
+        let mut t = Topology::parse("main\n    A\nother\n");
+        assert!(t.rename("main", "trunk"));
+        assert_eq!(t.parent("A"), Some("trunk"));
+        assert_eq!(t.roots(), ["trunk".to_owned(), "other".to_owned()]);
+        assert_eq!(t.render(), "trunk\n    A\nother\n");
+    }
+
+    #[test]
+    fn rename_refuses_a_missing_source_or_a_taken_target() {
+        let mut t = Topology::parse("main\n    A\n        B\n");
+        assert!(!t.rename("nope", "X"));
+        // B already exists — merging the two would have to discard a subtree.
+        assert!(!t.rename("A", "B"));
+        assert_eq!(t.render(), "main\n    A\n        B\n");
+        // Renaming a node to itself is a no-op that still reports the node is there.
+        assert!(t.rename("A", "A"));
+        assert!(!t.rename("nope", "nope"));
+        assert_eq!(t.render(), "main\n    A\n        B\n");
     }
 
     #[test]

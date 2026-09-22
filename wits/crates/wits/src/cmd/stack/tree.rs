@@ -14,13 +14,14 @@
 use wits_util::git::Repository;
 use wits_util::remote::RemoteRoles;
 
-use super::{fail_if_any, resolution, MvArgs, RmArgs, TreeAction};
+use super::{fail_if_any, resolution, MvArgs, RenameArgs, RmArgs, TreeAction};
 
 pub fn run(repo: &Repository, roles: &RemoteRoles, action: &TreeAction) -> anyhow::Result<()> {
     match action {
         TreeAction::Prune => prune(repo, roles),
         TreeAction::Rm(args) => rm(repo, roles, args),
         TreeAction::Mv(args) => mv(repo, roles, args),
+        TreeAction::Rename(args) => rename(repo, args),
     }
 }
 
@@ -149,5 +150,54 @@ fn mv(repo: &Repository, roles: &RemoteRoles, args: &MvArgs) -> anyhow::Result<(
 
     log::info!("moved {branch} onto {onto} (its substack moved with it)");
     log::info!("note: this updates the stack's shape only — rebase {branch} onto {onto} for the code to match");
+    Ok(())
+}
+
+/// Follow a branch that changed its name, keeping its entry otherwise untouched.
+///
+/// `git branch -m` leaves the forest naming a branch that no longer exists, and
+/// the file is the only record of where that line of work sat. This is the verb
+/// the `reference-transaction` hook reaches for when it recognises a deletion as
+/// a rename, and it is a pure file edit: the git rename has already happened, and
+/// this command never performs one (see `docs/commands/stack.rst`).
+///
+/// Unlike `rm` and `mv`, the base branch is **not** protected. A renamed base is
+/// exactly the case where refusing would leave the forest naming a dead branch,
+/// which is the staleness this verb exists to prevent.
+fn rename(repo: &Repository, args: &RenameArgs) -> anyhow::Result<()> {
+    let from = &args.from;
+    let to = &args.to;
+
+    if from == to {
+        anyhow::bail!("'{from}' is already the entry's name");
+    }
+    // The same guard `mv` applies, for the same reason: the new name has to be a
+    // branch that exists, so a typo cannot mint a phantom entry. The hook path
+    // satisfies it inherently — it reads the new name off a live ref.
+    if !repo.branch_tips().contains_key(to) {
+        anyhow::bail!("branch '{to}' does not exist locally");
+    }
+
+    let _lock = resolution::MacheteLock::acquire(repo)?;
+    let mut topology = resolution::load_topology(repo)?;
+
+    // Renaming a branch that was never stacked is the ordinary case, not a
+    // failure: most branches are not in the forest at all.
+    if !topology.contains(from) {
+        log::info!("{from}: not in the stack");
+        return Ok(());
+    }
+    if topology.contains(to) {
+        anyhow::bail!(
+            "'{to}' is already in the stack; it can only be a stale entry (git refuses a rename \
+             onto a live branch) — run `wits stack tree prune` and retry"
+        );
+    }
+    if !topology.rename(from, to) {
+        anyhow::bail!("could not rename '{from}' to '{to}' in the stack");
+    }
+    resolution::save_topology(repo, &topology)?;
+
+    log::info!("renamed {from} to {to} in the stack");
     Ok(())
 }

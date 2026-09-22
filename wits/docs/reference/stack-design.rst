@@ -66,17 +66,25 @@ distinct intents::
    wits stack anno      [scope]   # rewrite MR descriptions with stack navigation
    wits stack decorate  [branch]  # add labels/assignees/reviewers to an MR (additive)
    wits stack slice     [--base B] # interactively cut HEAD's commits into a stack
-   wits stack tree      {prune|rm|mv}  # direct edits to the stack's structure
+   wits stack tree      {prune|rm|mv|rename}  # direct edits to the stack's structure
 
 ``decorate`` is single-MR by default (attributes differ per MR; ``--all``
 applies one set across the stack) and additive-only, so it never fights a
 project's own label/reviewer automation.
 
-``tree`` is a separate group on purpose: ``prune``/``rm``/``mv`` change *what
-the stack is* (structure edits to ``<common-git-dir>/machete``), as opposed to
-the four verbs that *act on* it. Their behaviour — and the splice-up rule that
-keeps a removal from destroying the line above it — is specified in
-:doc:`stack-behavior`.
+``tree`` is a separate group on purpose: ``prune``/``rm``/``mv``/``rename``
+change *what the stack is* (structure edits to ``<common-git-dir>/machete``),
+as opposed to the four verbs that *act on* it. Their behaviour — and the
+splice-up rule that keeps a removal from destroying the line above it — is
+specified in :doc:`stack-behavior`.
+
+``rename`` exists because a rename is the one branch event nothing can follow
+automatically. Git applies ``git branch -m`` by deleting the old ref, firing
+``reference-transaction``, and creating the new one only afterwards, so at the
+moment a hook runs the new name exists in no ref, no reflog and no
+``packed-refs`` line. A hook can see that a branch vanished while keeping its
+commit — very likely a rename — but never what it became, so following it is
+necessarily a separate, explicit act.
 
 The three remote verbs are orthogonal facets of remote state — branch content
 (``sync``), MR existence and base (``submit``), MR description (``anno``) —
