@@ -7,6 +7,7 @@
         path = config.d/core.conf
         path = config.d/diff.conf
         path = config.d/fetch.conf
+        path = config.d/hooks.conf
         path = config.d/identity.conf
         path = config.d/index.conf
         path = config.d/init.conf
