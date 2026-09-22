@@ -29,35 +29,11 @@ fi
 # resolved here is exported so the `.d` children (which re-source lib.sh only for
 # its functions) inherit it and never re-fork for it.
 
-# Repo-fact resolvers. Each memoizes into (and exports) its well-known variable;
-# warm_facts calls the ones a hook needs, so the resolution happens once in the
-# parent and children read the plain $VAR. They also honour a value already in
-# the environment (one git exported, or one already resolved), so they are free
-# when it is known. dispatch.sh's run_local_hook / run_external_hooks call
-# git_dir / git_toplevel for the hooks warm_facts doesn't pre-resolve them for.
-git_dir() {
-    [ -n "${GIT_DIR:-}" ] || { GIT_DIR=$(git rev-parse --git-dir); export GIT_DIR; }
-}
-git_common_dir() {
-    [ -n "${GIT_COMMON_DIR:-}" ] ||
-        { GIT_COMMON_DIR=$(git rev-parse --git-common-dir); export GIT_COMMON_DIR; }
-}
-git_toplevel() {
-    if [ -z "${GIT_TOPLEVEL:-}" ]; then
-        GIT_TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null)
-        # A bare repository has no working tree; fall back to the git dir.
-        [ -n "$GIT_TOPLEVEL" ] || { git_dir; GIT_TOPLEVEL=$GIT_DIR; }
-        export GIT_TOPLEVEL
-    fi
-}
-current_branch() {
-    [ -n "${CURRENT_BRANCH:-}" ] ||
-        { CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null); export CURRENT_BRANCH; }
-}
-null_sha() {
-    [ -n "${NULL_SHA:-}" ] ||
-        { NULL_SHA=$(git hash-object --stdin </dev/null | tr '0-9a-f' '0'); export NULL_SHA; }
-}
+# The repo-fact resolvers (git_dir, git_toplevel, null_sha, ...) live in lib.sh,
+# so that a `.d` child can call the one it needs after its own guards. warm_facts
+# below calls them here for the hooks whose scripts need a fact unconditionally;
+# dispatch.sh's run_local_hook / run_external_hooks call git_dir / git_toplevel
+# for the hooks warm_facts does not pre-resolve them for.
 
 # The pre-commit staged cache: one `--numstat` both enumerates the staged paths
 # (added/copied/modified) and classifies each as text or binary (a binary blob
@@ -116,17 +92,24 @@ _WITS_CFG_EOF
     export _WITS_CONFIG_WARMED
 }
 
-# warm_facts <hook>: resolve exactly the repo facts this hook's scripts need —
-# the single, auditable declaration of each hook's needs. Resolved in the parent,
-# inherited by every child as a plain $VAR. (prepare-commit-msg's issue-tracker
-# resolves its own branch, detached-aware, so only provenance's GIT_DIR is here.)
+# warm_facts <hook>: resolve exactly the repo facts this hook's scripts need
+# *unconditionally* — the single, auditable declaration of each hook's needs.
+# Resolved in the parent, inherited by every child as a plain $VAR.
+# (prepare-commit-msg's issue-tracker resolves its own branch, detached-aware, so
+# only provenance's GIT_DIR is here.)
+#
+# reference-transaction is deliberately absent. It is by far the hottest hook —
+# three fires per transaction, and a rebase produces dozens of transactions —
+# while the facts its scripts want are needed only on the rare fire that is a
+# committed branch deletion. Those scripts read stdin first, which costs nothing,
+# and call the lib.sh resolvers themselves once they know they have work; warming
+# here would pay for every one of them on every fire instead.
 warm_facts() {
     case "$1" in
-        pre-commit)            warm_staged_cache; current_branch ;;
-        pre-push)              null_sha ;;
-        post-checkout)         git_common_dir; git_toplevel ;;
-        reference-transaction) git_dir; git_common_dir; git_toplevel; null_sha ;;
-        prepare-commit-msg)    git_dir ;;
+        pre-commit)         warm_staged_cache; current_branch ;;
+        pre-push)           null_sha ;;
+        post-checkout)      git_common_dir; git_toplevel ;;
+        prepare-commit-msg) git_dir ;;
     esac
 }
 

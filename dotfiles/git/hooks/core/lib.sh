@@ -143,6 +143,42 @@ log_error() {
     fi
 }
 
+# --- Repo facts ---
+#
+# Each resolver memoizes into (and exports) its well-known variable, so the cost
+# is paid once per process tree and every later reader sees a plain $VAR. They
+# honour a value already in the environment — one git exported, or one a parent
+# already resolved — which is what lets core/runner pre-resolve a hook's facts
+# for every child, and lets a child resolve one the runner did not.
+#
+# They live here rather than in the runner precisely so a `.d` script can call
+# the one it needs *after* its early-exit guards. On the hot hooks that is the
+# difference between forking git on every ref update and forking it only on the
+# rare update a script actually acts on.
+git_dir() {
+    [ -n "${GIT_DIR:-}" ] || { GIT_DIR=$(git rev-parse --git-dir); export GIT_DIR; }
+}
+git_common_dir() {
+    [ -n "${GIT_COMMON_DIR:-}" ] ||
+        { GIT_COMMON_DIR=$(git rev-parse --git-common-dir); export GIT_COMMON_DIR; }
+}
+git_toplevel() {
+    if [ -z "${GIT_TOPLEVEL:-}" ]; then
+        GIT_TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null)
+        # A bare repository has no working tree; fall back to the git dir.
+        [ -n "$GIT_TOPLEVEL" ] || { git_dir; GIT_TOPLEVEL=$GIT_DIR; }
+        export GIT_TOPLEVEL
+    fi
+}
+current_branch() {
+    [ -n "${CURRENT_BRANCH:-}" ] ||
+        { CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null); export CURRENT_BRANCH; }
+}
+null_sha() {
+    [ -n "${NULL_SHA:-}" ] ||
+        { NULL_SHA=$(git hash-object --stdin </dev/null | tr '0-9a-f' '0'); export NULL_SHA; }
+}
+
 # --- Common utilities ---
 
 prompt_confirm() {
@@ -179,6 +215,11 @@ active_build_dir() {
         log_warn "build-dir: wits is unavailable; leaving compile_commands.json alone."
         return 1
     }
+    # Resolved here rather than assumed: a caller whose hook does not warm the
+    # fact would otherwise pass an empty path, and wits would answer for the
+    # wrong repository (or none) instead of failing. Memoized, so free when the
+    # runner already resolved it.
+    git_toplevel
     wits project info --get build_dir "$GIT_TOPLEVEL" --branch "$_abd_branch" 2>/dev/null
 }
 
@@ -197,6 +238,7 @@ branch_build_dirs() {
         log_warn "build-dirs: wits is unavailable; no build directory will be deleted."
         return 1
     }
+    git_toplevel   # see active_build_dir: never assume the caller warmed it
     _bbd_tab=$(printf '\t')
     wits project branch-build-dirs "$GIT_TOPLEVEL" --branch "$_bbd_branch" 2>/dev/null |
         while IFS="$_bbd_tab" read -r _bbd_project _bbd_dir; do
@@ -282,6 +324,68 @@ get_main_branch() {
 
     # 4. Fallback
     echo "master"
+}
+
+# --- Branch events ---
+#
+# `reference-transaction` reports ref updates, not intent. Every script that acts
+# on branches has to turn the same stdin into the same answer, so the reading of
+# it lives here once rather than once per script.
+
+# True while a rebase is running in this worktree.
+#
+# `git rebase --abort` tears down the refs the rebase created, through a
+# *committed* transaction whose new value is all zeros — from inside the hook,
+# indistinguishable from `git branch -D`. The rebase state directory still exists
+# at that moment, so its presence is what separates a transient teardown from a
+# deletion the user meant. The state is per-worktree, hence GIT_DIR and not the
+# common dir.
+rebase_in_progress() {
+    git_dir
+    [ -d "$GIT_DIR/rebase-merge" ] || [ -d "$GIT_DIR/rebase-apply" ]
+}
+
+# The branches this transaction deleted, one `<branch> <old-sha>` per line, read
+# from the transaction on stdin.
+#
+# Costs no subprocess, which is what keeps it usable as a first guard: an all-zero
+# new value means deletion whatever the hash width, so the string test covers
+# sha-1 and sha-256 without asking git for the null OID, and a symref update
+# (`ref:refs/heads/x`, which HEAD gets) is not all zeros so it falls out too.
+branch_deletions() {
+    while read -r _bd_old _bd_new _bd_ref; do
+        case "$_bd_ref" in
+            refs/heads/*) ;;
+            *) continue ;;
+        esac
+        case "$_bd_new" in
+            '' | *[!0]*) continue ;;
+        esac
+        printf '%s %s\n' "${_bd_ref#refs/heads/}" "$_bd_old"
+    done
+}
+
+# True when a deletion might really be a rename, judged from its old value alone.
+# Usage: may_be_rename <old-sha>
+#
+# **The new name is not knowable from inside this hook**, and no amount of looking
+# will change that: git deletes the old ref, fires us, and only afterwards creates
+# the new one. At the moment we run, the new name exists in no ref, no reflog, not
+# in HEAD's reflog and not in packed-refs. So a hook can recognise that a rename
+# may have happened, and cannot learn what it was renamed to.
+#
+# What separates the two is whether the transaction asserted the old value.
+# `git branch -m` deletes the old name with its real SHA; every ordinary deletion
+# path (`git branch -d`, `git branch -D`, `git update-ref -d` without an old
+# value) writes all zeros. The one other way to get a real SHA is an explicit
+# `git update-ref -d <ref> <old>`, which is rare and hand-driven; treating it as
+# "might be a rename" only means a stack entry outlives its branch until
+# `wits stack tree prune` runs, which is the recoverable direction.
+may_be_rename() {
+    case "$1" in
+        '' | *[!0]*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # --- Staged content ---

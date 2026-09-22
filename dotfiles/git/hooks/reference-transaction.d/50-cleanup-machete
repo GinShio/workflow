@@ -1,8 +1,12 @@
 #!/bin/sh
-# Prune deleted branches from the git-machete definition file, re-parenting any
-# children of a deleted branch up to its parent so the tree stays valid.
-
-. "$HOOKS_DIR/core/lib.sh"
+# Keep the git-machete forest in step with the branches git just renamed or
+# deleted, so the stack never names a branch that is no longer there.
+#
+# Guards run before the library on purpose. reference-transaction fires three
+# times per transaction and once per transaction a rebase or fetch produces,
+# while this script has work only on a committed branch deletion. Sourcing
+# core/lib.sh costs a parse of the whole library and each repo fact below it
+# costs a `git` subprocess, so both wait behind the cheap tests.
 
 # reference-transaction runs up to three times per transaction:
 #   prepared  - refs locked, not yet written
@@ -11,104 +15,59 @@
 # Acting on any other state would corrupt the file mid-rebase/restack.
 [ "$1" = "committed" ] || exit 0
 
-# `git rebase --abort` deletes the refs it created via a *committed* transaction
-# with new-value=0000..., which is indistinguishable from `git branch -D` here.
-# The rebase state dirs still exist at this point, so use them to skip the abort.
-if [ -d "$GIT_DIR/rebase-merge" ] || [ -d "$GIT_DIR/rebase-apply" ]; then
+. "$HOOKS_DIR/core/lib.sh"
+
+# wits owns the machete format, and there is deliberately no second
+# implementation of it here: a shell rewrite of the same tree algebra is a copy
+# to keep in step with the real one, and the failure mode of a stale copy is a
+# silently mangled stack. Without wits this hook does nothing.
+command -v wits >/dev/null 2>&1 || exit 0
+
+# Costs no subprocess, so it is the right thing to ask first: the overwhelming
+# majority of fires update a tip and delete nothing.
+deletions=$(branch_deletions)
+[ -n "$deletions" ] || exit 0
+
+if rebase_in_progress; then
     exit 0
 fi
 
-MACHETE_FILE="$GIT_COMMON_DIR/machete"
-[ -f "$MACHETE_FILE" ] || exit 0
+git_common_dir
+[ -f "$GIT_COMMON_DIR/machete" ] || exit 0
 
-# Collect deletions and creations from stdin: <old-value> <new-value> <ref-name>.
-# Git applies a branch rename as a zero-update of the old name plus a create
-# of the new name at the same commit, both inside this one transaction; treat
-# that pair as a rename, not a deletion, so a renamed branch keeps its stack
-# entry and its build directory.
-deletions=""   # one "<branch> <old-sha>" pair per line
-creations=""   # one new sha per line
-while read -r old_val new_val ref_name; do
-    case "$ref_name" in
-        refs/heads/*) ;;
-        *) continue ;;
-    esac
-    if [ "$new_val" = "$NULL_SHA" ]; then
-        deletions="$deletions${ref_name#refs/heads/} $old_val
-"
+# Split the certain deletions from the ones that may be renames. A rename keeps
+# the work, the place in the stack and the MR — only the name changed — so
+# dropping its entry would throw away the one record of where that line of work
+# sat. The new name cannot be learned here (see may_be_rename), so the entry is
+# left standing and the user is told which verb finishes the job.
+removals=""
+suspects=""
+while read -r branch old_sha; do
+    [ -n "$branch" ] || continue
+    if may_be_rename "$old_sha"; then
+        suspects="${suspects:+$suspects }$branch"
     else
-        creations="$creations$new_val
-"
+        removals="${removals:+$removals }$branch"
     fi
+done <<_DELETIONS_EOF
+$deletions
+_DELETIONS_EOF
+
+# One call for the removals — `git branch -d a b c` is a single transaction, and
+# each wits invocation re-reads the project registry and takes the forest lock.
+# Word-splitting is intentional, to pass one argument per branch.
+if [ -n "$removals" ]; then
+    # shellcheck disable=SC2086
+    wits stack tree rm $removals ||
+        log_warn "cleanup-machete: could not remove deleted branches from the stack."
+fi
+
+for branch in $suspects; do
+    log_warn "cleanup-machete: '$branch' is gone but kept its commit — likely renamed. Its stack entry was left in place; \`wits stack tree rename $branch <new-name>\` follows it, \`wits stack tree prune\` drops it."
 done
 
-deleted_branches=""
-while read -r _branch _old; do
-    [ -n "$_branch" ] || continue
-    case "$creations" in
-        *"$_old"*) continue ;;   # the sha lives on under a new name: a rename
-    esac
-    deleted_branches="${deleted_branches:+$deleted_branches }$_branch"
-done <<_REFS_EOF
-$deletions
-_REFS_EOF
-[ -n "$deleted_branches" ] || exit 0
-
-# Preferred path: let the native tool own the tree edit. `wits stack tree rm`
-# removes each branch and splices its children up to the parent (identical
-# semantics to the awk fallback), and stays the single source of truth for the
-# machete format. Word-splitting is intentional to pass one arg per branch. A
-# wits failure leaves the file untouched, so fall through to the rewrite below
-# rather than silently dropping the cleanup.
-# shellcheck disable=SC2086
-if command -v wits >/dev/null 2>&1 &&
-   wits stack tree rm $deleted_branches; then
-    exit 0
-fi
-
-# Fallback: rewrite the tree ourselves. Indentation width is detected per-subtree
-# from the deleted node's first child, so any consistent unit (tabs or N spaces)
-# is preserved.
-tmp_file=$(mktemp "${MACHETE_FILE}.XXXXXX") || exit 0
-awk -v deleted_list="$deleted_branches" '
-BEGIN {
-    n = split(deleted_list, arr, " ")
-    for (i = 1; i <= n; i++)
-        if (arr[i] != "") deleted[arr[i]] = 1
-}
-{
-    # Separate leading whitespace (indent) from the branch + annotation body.
-    match($0, /^[ \t]*/)
-    lead[NR]   = substr($0, 1, RLENGTH)
-    indent[NR] = RLENGTH
-    body[NR]   = substr($0, RLENGTH + 1)
-    split(body[NR], tok, /[ \t]/)
-    branch[NR] = tok[1]
-    total = NR
-}
-END {
-    for (i = 1; i <= total; i++) {
-        if (!(branch[i] in deleted) || status[i] == "del")
-            continue
-        d = indent[i]
-        step = 0
-        # Dedent every descendant by one level (the deleted node first child gap).
-        for (j = i + 1; j <= total && indent[j] > d; j++) {
-            if (step == 0) step = indent[j] - d
-            drop = (step > indent[j]) ? indent[j] : step
-            lead[j]   = substr(lead[j], drop + 1)
-            indent[j] = indent[j] - drop
-        }
-        status[i] = "del"
-    }
-    for (i = 1; i <= total; i++)
-        if (status[i] != "del") print lead[i] body[i]
-}
-' "$MACHETE_FILE" > "$tmp_file"
-
-if cmp -s "$MACHETE_FILE" "$tmp_file"; then
-    rm -f "$tmp_file"
-else
-    mv "$tmp_file" "$MACHETE_FILE"
-    log_info "cleanup-machete: removed deleted branches from machete definition."
-fi
+# This hook is advisory: the refs are already written, and bookkeeping that could
+# not be done must not abort the chain under the runner's fail-fast rule. The
+# explicit status also keeps a suppressed log_warn (which returns non-zero when
+# the log level hides it) from becoming this script's exit code.
+exit 0

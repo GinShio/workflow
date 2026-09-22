@@ -197,22 +197,34 @@ SHA — each cost a ``git`` subprocess to learn. Those resolvers live in
 runs, in two batches. ``warm_config`` reads the hook's config keys once and
 hands them to every script as environment twins; out of that same batch the
 runner resolves the kill switch the dispatcher consults for every candidate.
-``warm_facts`` then resolves exactly the repo facts the hook's scripts declare
-they need: the staged-content cache and current branch on ``pre-commit``, the
-null SHA on ``pre-push``, the common dir and top level on ``post-checkout``,
-the git dir on ``prepare-commit-msg`` — and every one of them on
-``reference-transaction``. Each declaration is one auditable line in the
-runner, resolved in the parent and inherited by every child as a plain
-``$VAR``.
+``warm_facts`` then resolves exactly the repo facts the hook's scripts need
+*unconditionally*: the staged-content cache and current branch on
+``pre-commit``, the null SHA on ``pre-push``, the common dir and top level on
+``post-checkout``, the git dir on ``prepare-commit-msg``. Each declaration is
+one auditable line in the runner, resolved in the parent and inherited by every
+child as a plain ``$VAR``.
 
-**Everything else is lazy.** The remaining facts are memoizing getters
+**Everything else is lazy.** The facts themselves are memoizing getters
 (``git_dir``, ``null_sha``, ...) that fill their variable on first use and are
-a no-op after; a script calls the getter it needs *after* its early-exit
-guards, then reads the plain variable. The placement is the whole point: on a
-``reference-transaction`` fire that is not a committed branch deletion — the
-overwhelming majority — every script bails at its guard, so not one of those
-``git`` subprocesses is ever spawned. This is what keeps the hottest hook cheap
-without a value cache to invalidate.
+a no-op after. They live in ``core/lib.sh`` rather than in the runner precisely
+so that a ``.d`` script can call the one it needs *after* its own early-exit
+guards, then read the plain variable.
+
+``reference-transaction`` is the hook that placement was built for, and it is
+deliberately absent from ``warm_facts``. It is by far the hottest hook — three
+fires per transaction, and a single rebase produces dozens of transactions —
+while its scripts have work only on the rare fire that is a committed branch
+deletion. So they read their stdin first, which costs no subprocess at all, and
+call the resolvers only once they know they have something to do. On every
+other fire not one ``git`` subprocess is spawned, and the hottest hook stays
+cheap without a value cache to invalidate.
+
+Worth stating plainly, because the measurement is easy to assume the other way
+round: this is a correctness-and-clarity argument, not a throughput one. The
+framework's floor is process startup — one shell for the runner plus one per
+``.d`` script, each re-parsing the library — and that dominates everything the
+warm layer does. Lazy facts are worth having because a script should pay for
+what it uses; they are not what makes the pipeline fast.
 
 What lazy evaluation deliberately does *not* buy: it cannot stop each child
 from re-parsing the library on ``exec``. POSIX ``sh`` has no way to share

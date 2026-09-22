@@ -336,9 +336,10 @@ Fires whenever refs change; acts only on committed branch deletions.
      - Meaning
    * - ``wits.hooks.reference-transaction.cleanup-build-dir-enable``
      - off
-     - Remove a branch's build directory (resolved through the ``wits``
-       project registry) when that branch is deleted. ``-enable``: off
-       until set, because it deletes files.
+     - Remove a branch's build directories (resolved through the ``wits``
+       project registry) once no branch carries that name — deleted outright,
+       or renamed away, which orphans the old name's trees just the same.
+       ``-enable``: off until set, because it deletes files.
 
 The per-script toggles (``wits.hooks.reference-transaction.``):
 

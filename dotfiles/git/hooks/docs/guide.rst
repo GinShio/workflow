@@ -490,11 +490,37 @@ reference-transaction
 ---------------------
 
 Fires whenever refs change. The scripts here react to one case in particular —
-branch deletion — and act only once the change is actually committed, so an
-aborted rebase or a rolled-back transaction never triggers them. A branch
-rename — which git applies as a deletion of the old name plus a creation of
-the new one, pointing at the same commit — is recognized by that pairing and
-left alone.
+a branch that stops existing — and act only once the change is actually
+committed, so a rolled-back transaction never triggers them. An aborted rebase
+is skipped too: it tears down the refs it created through a *committed*
+transaction, which from inside the hook is indistinguishable from a deletion,
+so the presence of the rebase state directory is what tells the two apart.
+
+.. _rename-blind-spot:
+
+What a rename looks like from in here
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``git branch -m`` reaches these scripts as a plain deletion of the *old* name.
+The new name is not merely hard to find — at the moment the hook runs it does
+not exist yet, in any form: git deletes the old ref, fires the hook, and only
+afterwards creates the new one. There is no ref, no reflog, no ``HEAD`` reflog
+entry and no ``packed-refs`` line naming it. (On the ``reftable`` backend a
+rename produces no branch transaction at all, so the hook never even runs.)
+
+What *is* visible is that the deletion asserted the branch's real commit, which
+every ordinary deletion path leaves as all zeros. That is enough to recognise
+"this may be a rename" without knowing what it became, and the scripts use it
+to stay out of the way:
+
+* **The machete cleanup** leaves the entry standing and says so, naming
+  ``wits stack tree rename <old> <new>`` to follow the rename and
+  ``wits stack tree prune`` to drop it. Losing the entry would throw away the
+  only record of where that line of work sat.
+* **The build-directory cleanup** treats it exactly like a deletion, because it
+  only ever needs the *old* name: ``build_dir`` templates key on
+  ``branch.slug``, so the trees built under the old name are orphaned either
+  way.
 
 The machete cleanup
 ~~~~~~~~~~~~~~~~~~~
@@ -502,20 +528,22 @@ The machete cleanup
 Keeps your ``git-machete``/stack layout honest as branches come and go. Delete
 a branch and it is removed from the machete definition file with its children
 spliced up to its parent, so the tree stays valid instead of collecting
-dangling entries you would have to prune by hand. Where ``wits`` is installed,
-it owns the edit (``wits stack tree rm``); when the tool is missing or the
-edit fails, a built-in rewrite does the same splice. The file lives in the
-common git dir, so the cleanup reaches
-the same forest from any worktree of the repository. Runs wherever a machete
-file exists; nothing to configure.
+dangling entries you would have to prune by hand. ``wits`` owns the edit
+(``wits stack tree rm``), and deliberately owns it alone: a second
+implementation of the machete format living here would be a copy to keep in
+step, and a stale copy mangles the stack silently. Without ``wits`` on
+``PATH`` this script does nothing at all. The file lives in the common git dir,
+so the cleanup reaches the same forest from any worktree of the repository.
+Runs wherever a machete file exists; nothing to configure.
 
 The build-directory cleanup
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Reclaims disk when you delete a branch. Opt in, and deleting a branch also
-removes its build directory (resolved through the ``wits`` project registry).
-Off by default because it deletes files — enable it per repository where you
-want the housekeeping:
+Reclaims disk when a branch stops carrying its name — deleted outright, or
+renamed away, which orphans the old name's trees just the same. Opt in, and the
+branch's build directory (resolved through the ``wits`` project registry) goes
+with it. Off by default because it deletes files — enable it per repository
+where you want the housekeeping:
 
 .. code-block:: console
 

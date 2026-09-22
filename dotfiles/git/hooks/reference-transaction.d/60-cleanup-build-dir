@@ -1,47 +1,40 @@
 #!/bin/sh
-# Remove a branch's build directory when the branch is deleted.
+# Remove a branch's build directories once no branch carries that name any more.
+#
+# A rename orphans them exactly as a deletion does: `build_dir` templates key on
+# `branch.slug`, so the trees built under the old name are no longer reachable
+# from any branch, and the new name resolves somewhere else. Both events are
+# therefore handled the same way, which is why this script only needs to know
+# that the name is gone, never why.
+#
+# Guards run before the library for the reason spelled out in 50-cleanup-machete.
+
+[ "$1" = "committed" ] || exit 0
 
 . "$HOOKS_DIR/core/lib.sh"
 
+# Fork-free once the runner has warmed the config, so it stays ahead of the work.
 cfg_bool wits.hooks.reference-transaction.cleanup-build-dir-enable || exit 0
 
-# Only act once the refs are actually written (see cleanup-machete for details).
-[ "$1" = "committed" ] || exit 0
+deletions=$(branch_deletions)
+[ -n "$deletions" ] || exit 0
 
-# stdin: <old-sha> <new-sha> <ref-name>. A new-sha of all-zero means deletion.
-# Git applies a branch rename as a zero-update of the old name plus a create
-# of the new name at the same commit in this transaction (see cleanup-machete);
-# such a pair is a rename, and the branch's build directory must survive it.
-deletions=""   # one "<branch> <old-sha>" pair per line
-creations=""   # one new sha per line
-while read -r old_sha new_sha ref_name; do
-    case "$ref_name" in
-        refs/heads/*) ;;
-        *) continue ;;
-    esac
-    if [ "$new_sha" = "$NULL_SHA" ]; then
-        deletions="$deletions${ref_name#refs/heads/} $old_sha
-"
-    else
-        creations="$creations$new_sha
-"
-    fi
-done
+# `git rebase --abort` deletes the refs the rebase created, and restores the ones
+# it rewrote. Those branches live on, so their build trees must too.
+if rebase_in_progress; then
+    exit 0
+fi
 
-while read -r _branch _old; do
-    [ -n "$_branch" ] || continue
-    case "$creations" in
-        *"$_old"*) continue ;;   # the sha lives on under a new name: a rename
-    esac
+while read -r branch _old_sha; do
+    [ -n "$branch" ] || continue
 
     # Across every project the branch identified a build in, not just the one
     # that owns the checkout: a borrowed component is the build identity of each
-    # project that focuses on it, and those trees are orphaned by this deletion
-    # too.
-    build_dirs=$(branch_build_dirs "$_branch" || true)
+    # project that focuses on it, and those trees are orphaned by this too.
+    # branch_build_dirs has already dropped anything unsafe to delete.
+    build_dirs=$(branch_build_dirs "$branch" || true)
     oldifs=$IFS
-    IFS='
-'
+    IFS=$LF
     set -f
     for build_dir in $build_dirs; do
         if rm -rf -- "$build_dir"; then
@@ -52,6 +45,9 @@ while read -r _branch _old; do
     done
     IFS=$oldifs
     set +f
-done <<_REFS_EOF
+done <<_DELETIONS_EOF
 $deletions
-_REFS_EOF
+_DELETIONS_EOF
+
+# Advisory, like every reference-transaction script: see 50-cleanup-machete.
+exit 0

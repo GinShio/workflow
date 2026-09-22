@@ -84,8 +84,8 @@ so the table doubles as a map of the scripts.
      - Branchless record.
    * - ``reference-transaction``
      - Reacts to committed ref changes: branchless record, pruning deleted
-       branches from the ``git-machete`` file, and (opt-in) cleaning up a
-       deleted branch's build directory.
+       branches from the ``git-machete`` file, and (opt-in) cleaning up the
+       build directories of a branch that no longer carries its name.
 
 The ordering within a hook is set by each script's numeric prefix. The list
 below is the order ``pre-commit`` runs them in, which shows the shape of a
@@ -191,8 +191,10 @@ The framework itself needs only git. Everything else is incremental:
        still runs and UTF-8 validation is simply skipped.
    * - ``wits``
      - Resolves build directories (for workspace-restore and build-dir
-       cleanup) and edits the ``git-machete`` file (cleanup-machete). When
-       absent, those features fall back to their own built-in logic or warn.
+       cleanup) and owns every edit to the ``git-machete`` file
+       (cleanup-machete). When absent, workspace-restore warns and the two
+       ``reference-transaction`` cleanups do nothing — there is deliberately no
+       second implementation of the machete format to fall back to.
    * - ``git-machete``
      - Its definition file is read and pruned by ``reference-transaction``;
        the tool itself never needs to run.
