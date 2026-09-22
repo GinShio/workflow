@@ -80,6 +80,13 @@ pub struct RawRepo {
     /// (`anchor`, `source_dir`, `build_dir`, `install_dir`, `presets`). A borrow
     /// may not itself be borrowed.
     pub from: Option<String>,
+    /// Which project this checkout is currently developed *as*, as a project
+    /// reference (`[<org>/]<project>`), when several projects reference it. It is
+    /// the **owner's** statement: the borrowers have no grounds to prefer between
+    /// themselves. Path lookups then answer for that project's borrow of this
+    /// repo instead of for its owner — see
+    /// [`Workspace::developed_as`](super::workspace::Workspace::developed_as).
+    pub developed_as: Option<String>,
     pub main_branch: Option<String>,
     pub anchor: Option<String>,
     pub branch_strategy: Option<String>,
@@ -115,10 +122,13 @@ pub struct RawRepo {
 }
 
 impl RawRepo {
-    /// The fields a [`from`](Self::from) borrow supplies. Declaring one *and*
-    /// `from` is rejected by the loader rather than silently picked between: the
-    /// borrow exists so the component's git identity has a single home, and a
-    /// local override would quietly reintroduce the duplication it removes.
+    /// The fields a borrower may not declare. Two reasons, one rule: a
+    /// [`from`](Self::from) borrow *supplies* the component's git identity, and a
+    /// local override would quietly reintroduce the duplication the borrow
+    /// removes; [`developed_as`](Self::developed_as) is the *owner's* answer about
+    /// a checkout this entry does not own, so a borrower declaring it would only
+    /// be writing a value nothing reads. Both are rejected by the loader rather
+    /// than silently picked between or ignored.
     pub fn borrowed_field_conflicts(&self) -> Vec<&'static str> {
         let mut out = Vec::new();
         if self.path.is_some() {
@@ -144,6 +154,9 @@ impl RawRepo {
         }
         if self.hooks != RawHooks::default() {
             out.push("hooks");
+        }
+        if self.developed_as.is_some() {
+            out.push("developed_as");
         }
         out
     }
@@ -635,7 +648,8 @@ mod tests {
     }
 
     /// The borrow is the single source for a repo's git identity, so a locally
-    /// declared travelling field is a conflict the loader must reject.
+    /// declared travelling field is a conflict the loader must reject — and so is
+    /// `developed_as`, which answers for a checkout the borrower does not own.
     #[test]
     fn borrowed_field_conflicts_are_reported() {
         let repo: RawRepo = toml::from_str(
@@ -643,13 +657,14 @@ mod tests {
             from = "acme/engine"
             main_branch = "mine"
             bootstrap_worktree_dir = "/mine"
+            developed_as = "acme/other"
             anchor = "main"
             "#,
         )
         .unwrap();
         assert_eq!(
             repo.borrowed_field_conflicts(),
-            vec!["main_branch", "bootstrap_worktree_dir"]
+            vec!["main_branch", "bootstrap_worktree_dir", "developed_as"]
         );
 
         // `anchor` / `source_dir` / `build_dir` / `install_dir` / `presets` are

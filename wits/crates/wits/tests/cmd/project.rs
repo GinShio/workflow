@@ -99,25 +99,8 @@ impl Fixture {
         );
         git(&wrap_up, &["commit", "-q", "-m", "add submodule"]);
 
-        let work_dir = root.join("src-work");
         let wrap_dir = root.join("src-wrap");
-        std::fs::write(
-            config.join("work.toml"),
-            format!(
-                r#"
-[project]
-[repos.main]
-path = "{}"
-main_branch = "main"
-build_dir = "{{{{repos.main.workdir}}}}/_build/{{{{branch.slug}}}}-{{{{build_type}}}}"
-[repos.main.remotes]
-origin = "{}"
-"#,
-                work_dir.display(),
-                work_up.display()
-            ),
-        )
-        .unwrap();
+        Fixture::declare_work(&root, "");
         std::fs::write(
             config.join("wrap.toml"),
             format!(
@@ -146,6 +129,31 @@ anchor = "main"
             root,
             config,
         }
+    }
+
+    /// (Re)write the component project's registry file. `extra` is appended to its
+    /// `[repos.main]`, which is how a test adds a declaration the shared fixture
+    /// does not carry: every command reads the registry fresh, so the rewritten
+    /// value is in force from the next run.
+    fn declare_work(root: &Path, extra: &str) {
+        std::fs::write(
+            root.join("config/work.toml"),
+            format!(
+                r#"
+[project]
+[repos.main]
+path = "{}"
+main_branch = "main"
+build_dir = "{{{{repos.main.workdir}}}}/_build/{{{{branch.slug}}}}-{{{{build_type}}}}"
+{extra}
+[repos.main.remotes]
+origin = "{}"
+"#,
+                root.join("src-work").display(),
+                root.join("up-work").display()
+            ),
+        )
+        .unwrap();
     }
 
     /// A repo with one commit per named file.
@@ -464,13 +472,13 @@ fn the_owner_answers_for_a_shared_checkout() {
     );
 }
 
-/// The counterpart to [`the_owner_answers_for_a_shared_checkout`]: naming the
-/// project a shared checkout is *being developed as* moves the path queries to
-/// it, borrow and all. `wrap` focuses on the component it borrows, so its build
-/// is keyed on that component's branch — which is exactly the case the owner's
-/// answer gets wrong for anyone working on `wrap`.
+/// The counterpart to [`the_owner_answers_for_a_shared_checkout`]: the owner
+/// saying which project the shared checkout is *being developed as* moves the
+/// path queries to it, borrow and all. `wrap` focuses on the component it
+/// borrows, so its build is keyed on that component's branch — which is exactly
+/// the case the owner's answer gets wrong for anyone working on `wrap`.
 #[test]
-fn an_active_project_answers_for_a_shared_checkout_instead_of_its_owner() {
+fn developed_as_answers_for_a_shared_checkout_instead_of_its_owner() {
     let fx = Fixture::new();
     fx.ok(&["update", "work"]);
     let work = fx.path("src-work");
@@ -484,17 +492,53 @@ fn an_active_project_answers_for_a_shared_checkout_instead_of_its_owner() {
     assert!(default.success, "stderr: {}", default.stderr);
     assert!(owns(&default, "src-work"), "stdout: {}", default.stdout);
 
-    git(&work, &["config", "wits.project.active", "wrap"]);
-    let active = fx.run_in(&work, &query);
-    assert!(active.success, "stderr: {}", active.stderr);
-    assert!(owns(&active, "src-wrap"), "stdout: {}", active.stdout);
+    Fixture::declare_work(&fx.root, r#"developed_as = "wrap""#);
+    let redirected = fx.run_in(&work, &query);
+    assert!(redirected.success, "stderr: {}", redirected.stderr);
+    assert!(
+        owns(&redirected, "src-wrap"),
+        "stdout: {}",
+        redirected.stdout
+    );
+    // The redirect is the whole registry's answer, so `check` has nothing to say
+    // about the declaration the query just followed. (It still reports this
+    // fixture's unrelated gaps, so the absence of a complaint is the assertion.)
+    let accepted = fx.run(&["project", "check"]);
+    assert!(
+        !accepted.stderr.contains("developed_as"),
+        "stderr: {}",
+        accepted.stderr
+    );
 
     // A value naming no known project must not break every query that passes
-    // through path resolution — it degrades to the structural answer.
-    git(&work, &["config", "wits.project.active", "no-such-project"]);
+    // through path resolution — it degrades to the structural answer, and the
+    // report of it belongs to `check`.
+    Fixture::declare_work(&fx.root, r#"developed_as = "no-such-project""#);
     let stale = fx.run_in(&work, &query);
     assert!(stale.success, "stderr: {}", stale.stderr);
     assert!(owns(&stale, "src-work"), "stdout: {}", stale.stdout);
+
+    let checked = fx.run(&["project", "check"]);
+    assert!(!checked.success);
+    assert!(
+        checked
+            .stderr
+            .contains("developed_as 'no-such-project' names no known project"),
+        "stderr: {}",
+        checked.stderr
+    );
+
+    // A real project that does not borrow this repo is the other way the value
+    // can resolve to nothing, and reads differently in the report.
+    Fixture::declare_work(&fx.root, r#"developed_as = "work""#);
+    let unrelated = fx.run(&["project", "check"]);
+    assert!(
+        unrelated
+            .stderr
+            .contains("developed_as 'work' does not borrow this repo"),
+        "stderr: {}",
+        unrelated.stderr
+    );
 }
 
 /// A branch of a shared checkout identifies a build tree in *every* project that

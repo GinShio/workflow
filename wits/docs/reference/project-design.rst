@@ -595,7 +595,9 @@ and ``skip`` come from the source; ``anchor``, ``source_dir``, ``build_dir``,
 right, because the per-consumer build knobs differ per consumer while the
 repo does not. Declaring a travelling field *and* ``from`` is a hard error
 rather than a silent precedence rule: a local override would quietly
-reintroduce the duplication the borrow exists to remove.
+reintroduce the duplication the borrow exists to remove. ``developed_as`` is
+rejected there for the neighbouring reason — it answers for a checkout the
+borrower does not own, so a borrower declaring it writes a value nothing reads.
 
 Four decisions make this cheap rather than a dependency subsystem (nothing
 here ever builds a second project):
@@ -630,14 +632,26 @@ Two consequences follow, and both are rules rather than heuristics:
 
   That default is right while one project builds the component, and wrong when
   you are developing a *borrower* — whose build may be identified by the shared
-  checkout's branch. The checkout may therefore name the project it is currently
-  being developed as, in ``wits.project.active``, and that answer wins, borrows
-  included. It lives in git config rather than the registry because it is a local
-  work pattern, not a structural fact: several projects may borrow one component
-  with nothing in the registry to prefer between them. Being git config it also
-  layers as git does — repository-wide, or per worktree under
-  ``extensions.worktreeConfig`` — and a value naming no known project, or one
-  that does not reference the checkout, is ignored rather than fatal.
+  checkout's branch. The **owner** may therefore name the project the checkout
+  is currently developed as, in ``developed_as``, and that answer replaces the
+  structural one.
+
+  The owner declares it because the borrowers cannot: several projects may
+  borrow one component, and none of them has grounds to prefer itself, so N
+  claims would restore the tie the rule above exists to break. The owner is
+  unique by construction, which makes one line in one file the whole mechanism
+  — and it travels with the registry, so a fresh clone resolves correctly on
+  the very first checkout, before anything local has been set.
+
+  The redirect follows the borrow edges rather than the filesystem: the named
+  project's repo whose ``from`` resolves to this exact project and repo is the
+  entry describing how the checkout is built there, and its ``focus`` decides
+  if several do. So the answer is looked up, not searched for, and a path query
+  spends no git invocation on it. A value naming no known project, or one that
+  does not borrow the repo, leaves the structural answer standing rather than
+  failing — one registry file deployed without the project it names must not
+  break every path query — and ``check`` reports both, where the whole registry
+  is in hand to judge them.
 * **Update ownership.** The same rule, applied to work: ``update`` skips
   borrowed repos, so a component five projects consume is fetched once by its
   owner rather than five times. ``--with-borrowed`` opts in when you do want

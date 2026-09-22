@@ -547,25 +547,28 @@ the one declaring it as its own repo, rather than any that only ``from``-borrow
 it. That is the right default while exactly one project builds the component, and
 it is unambiguous: a borrow always points at an owner, so there is never a tie.
 
-When you are actually developing the *borrower*, say so in git config:
+When the component is actually developed as one of its borrowers, its **owner**
+says so, in the repo the borrowers point at:
 
-.. code-block:: console
+.. code-block:: toml
 
-   $ cd ~/src/engine && git config wits.project.active viewer
+   # engine.toml — the project that owns the checkout
+   [repos.main]
+   path = "~/src/engine"
+   developed_as = "viewer"
 
 Every path query then answers for ``viewer``, borrow and all — so a component
 whose branch identifies the borrower's build resolves to the borrower's build
-directory instead of its owner's. This lives in git config rather than the
-registry on purpose: which project a shared checkout currently serves is a local
-work pattern, not a structural fact about the component, and several projects may
-borrow one component with nothing in the registry to prefer between them. Being
-ordinary git config, it also layers the way git already layers — repository wide
-in ``.git/config``, per worktree in ``config.worktree`` once
-``extensions.worktreeConfig`` is enabled — with no wits-specific mechanism.
+directory instead of its owner's. The owner declares it because the borrowers
+cannot: several projects may borrow one component and none of them has grounds
+to prefer itself, while the owner is unique. Being registry config it also
+travels, so a fresh clone resolves correctly on its first checkout rather than
+after you remember to set something locally.
 
-A value naming no known project, or one that does not reference the checkout at
-all, is ignored rather than fatal: a stale setting in an unrelated repository
-degrades to the ordinary answer instead of breaking every query.
+A value naming no known project, or one that does not borrow the repo, is
+ignored rather than fatal, so a registry deployed without the project it names
+degrades to the ordinary answer instead of breaking every query. ``check``
+reports both.
 
 Global flags
 ------------

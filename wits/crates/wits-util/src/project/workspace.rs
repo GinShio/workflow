@@ -22,7 +22,9 @@
 //! not itself be borrowed, which is what keeps this one pass rather than a graph
 //! walk with cycle detection. Borrowed entries also never win
 //! [`Workspace::repo_for_path`]: the project whose own `repos.main` a checkout is
-//! owns it, so `cd` into a shared component and you land on *its* project.
+//! owns it, so `cd` into a shared component and you land on *its* project —
+//! unless that owner says the checkout is currently developed as one of its
+//! borrowers ([`Workspace::developed_as`]).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -309,7 +311,7 @@ impl Workspace {
         let conflicts = borrower.borrowed_field_conflicts();
         if !conflicts.is_empty() {
             bail!(
-                "a borrow supplies {} — declare them in the project that owns the repo, not here",
+                "a borrow may not declare {} — they belong to the project that owns the repo",
                 conflicts.join(", ")
             );
         }
@@ -437,66 +439,77 @@ impl Workspace {
     /// exactly one owner, and the answer becomes "the project this component
     /// *is*", not "whichever project happens to sort first".
     ///
-    /// A checkout may declare that it is currently being worked on *as* one
-    /// particular project, which overrides the structural answer — see
-    /// [`active_repo_for_path`](Self::active_repo_for_path).
+    /// The owner may redirect the answer to a project that *borrows* the repo,
+    /// for a checkout several projects share — see
+    /// [`developed_as`](Self::developed_as).
     pub fn repo_for_path(&self, path: &Path) -> Option<(&ProjectData, String)> {
         let query = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        let memo = &mut WorktreeMemo::default();
-        // The override is read first because it is one git invocation, and
-        // deciding up front whether it *could* apply — whether a second project
-        // references this checkout — means resolving every repo of every project,
-        // which costs more than the read it would save.
-        self.active_repo_for_path(&query, memo)
-            .or_else(|| self.owning_repo_for_path(&query, memo))
+        let (owner, repo) = self.owning_repo_for_path(&query, &mut WorktreeMemo::default())?;
+        Some(self.developed_as(owner, &repo).unwrap_or((owner, repo)))
     }
 
-    /// The project a checkout declares it is being developed *as*, via
-    /// `wits.project.active` in its git config.
+    /// The project a checkout is currently developed *as*, and that project's
+    /// borrow of it — `None` when the owner names none.
     ///
-    /// Which project a shared checkout currently serves is a local work pattern,
-    /// not a structural fact: several projects may borrow one component and the
-    /// registry has no grounds to prefer between them. So the preference lives in
-    /// git config beside the clone — local, per-machine, and layered by git itself
-    /// (repo-wide in `config`, per-worktree in `config.worktree` once
-    /// `extensions.worktreeConfig` is on) — rather than in a registry every
-    /// machine shares.
+    /// A component several projects borrow is owned by exactly one of them, and
+    /// [`owning_repo_for_path`](Self::owning_repo_for_path) answers with that
+    /// owner. That is right while the owner is the project being built and wrong
+    /// when you develop a borrower whose build is identified by the shared
+    /// checkout's branch: every path query then names the owner's build tree
+    /// rather than the one being built.
     ///
-    /// Unlike [`owning_repo_for_path`](Self::owning_repo_for_path) this *does*
-    /// consider borrowed repos: naming the project is exactly what breaks the
-    /// N-way tie that makes a borrow ineligible there.
+    /// So the owner declares which borrower the checkout currently serves, in
+    /// [`RawRepo::developed_as`]. It is the owner's to declare because the
+    /// borrowers have no grounds to prefer between themselves — N of them
+    /// claiming it would restore the very tie that makes a borrow ineligible
+    /// above, whereas the owner is unique by construction.
     ///
-    /// The value is read through git, so it resolves wherever git would find it.
-    /// One that does not name a known project, or names a project not referencing
-    /// this checkout, is ignored rather than fatal — which is also what keeps a
-    /// value set too broadly from reaching checkouts it has nothing to say about.
-    fn active_repo_for_path(
+    /// The redirect follows the **borrow edges**, not the filesystem: among the
+    /// named project's repos, the ones whose `from` resolves to this exact
+    /// (project, repo) pair are the entries describing how this checkout is built
+    /// there. Where more than one does, the project's focus wins — naming the
+    /// project asks for *its build*, and the focus is the repo that build takes
+    /// its identity from.
+    ///
+    /// A value naming no known project, or one that names a project not borrowing
+    /// this repo, yields `None` and so leaves the structural answer standing: a
+    /// registry half-deployed on some machine must not break every query that
+    /// passes through path resolution. `project check` reports both, which is
+    /// where a typo can be judged against the whole registry.
+    pub fn developed_as(
         &self,
-        query: &Path,
-        memo: &mut WorktreeMemo,
+        owner: &ProjectData,
+        repo_name: &str,
     ) -> Option<(&ProjectData, String)> {
-        let name = Repository::new(query)
-            .get_config("wits.project.active")
-            .ok()
-            .flatten()?;
-        let name = name.trim();
-        if name.is_empty() {
-            return None;
-        }
-        let project = self.project(name).ok()?;
-        // Where the named project matches this checkout in more than one way, its
-        // focus wins: naming the project asks for *its build*, and the focus is
-        // the repo that build takes its identity from.
+        let spec = owner.repos.get(repo_name)?.developed_as.as_deref()?;
+        let project = self.project(spec).ok()?;
+        let owner_key = owner.key();
         let focus = project.focus_name(None);
-        let best = project
+        project
             .repos
-            .keys()
-            .filter_map(|repo_name| {
-                self.repo_match_depth(project, repo_name, query, memo)
-                    .map(|depth| (depth, repo_name == focus, repo_name.clone()))
-            })
-            .max()?;
-        Some((project, best.2))
+            .iter()
+            .filter(|(_, repo)| self.borrows(repo, &owner_key, repo_name))
+            .map(|(name, _)| (name == focus, name.clone()))
+            .max()
+            .map(|(_, name)| (project, name))
+    }
+
+    /// Does `repo` borrow the repo `repo_name` of the project keyed `owner_key`?
+    ///
+    /// The `from` reference is resolved through [`project`](Self::project) before
+    /// comparing, so a borrow is recognised whichever way it spells the project —
+    /// bare name or `org/name`.
+    fn borrows(&self, repo: &RawRepo, owner_key: &str, repo_name: &str) -> bool {
+        let Some(spec) = repo.from.as_deref() else {
+            return false;
+        };
+        let Ok(reference) = parse_borrow(spec) else {
+            return false;
+        };
+        reference.repo == repo_name
+            && self
+                .project(reference.project)
+                .is_ok_and(|source| source.key() == owner_key)
     }
 
     /// Whether any checkout of `project`'s `repo_name` contains `path`.
@@ -1056,6 +1069,78 @@ mod tests {
         let (owner, repo) = ws.repo_for_path(&component.join("src")).unwrap();
         assert_eq!(owner.name, "engine");
         assert_eq!(repo, "main");
+    }
+
+    /// The owner's counterpart to [`path_lookup_answers_the_owner_not_a_borrower`]:
+    /// when it says the checkout is being developed as a borrower, the answer moves
+    /// to that borrower's *entry* — the one carrying how the checkout is built
+    /// there. Two of the borrower's repos borrow it, so returning the focus proves
+    /// the focus preference rather than map order.
+    #[test]
+    fn developed_as_moves_the_answer_to_the_named_borrowers_focus() {
+        let dir = tempfile::tempdir().unwrap();
+        let component = dir.path().join("engine");
+        std::fs::create_dir_all(component.join("src")).unwrap();
+        let owner = |declaration: &str| {
+            write(
+                dir.path(),
+                "engine.toml",
+                &format!(
+                    r#"
+                    [project]
+                    [repos.main]
+                    path = "{}"
+                    main_branch = "stable"
+                    {declaration}
+                    "#,
+                    component.display()
+                ),
+            );
+        };
+        write(
+            dir.path(),
+            "consumer.toml",
+            r#"
+            [project]
+            focus = "engine"
+            [repos.main]
+            path = "/src/consumer"
+            main_branch = "main"
+            [repos.engine]
+            from = "engine"
+            anchor = "main"
+            [repos.engine-review]
+            from = "engine"
+            anchor = "main"
+            "#,
+        );
+        let resolved = |dir: &Path| {
+            let ws = Workspace::load_from(dir).unwrap();
+            let (project, repo) = ws.repo_for_path(&component.join("src")).unwrap();
+            (project.name.clone(), repo)
+        };
+
+        owner(r#"developed_as = "consumer""#);
+        assert_eq!(
+            resolved(dir.path()),
+            ("consumer".to_owned(), "engine".to_owned())
+        );
+
+        // Both ways the value can resolve to nothing leave the structural answer
+        // standing, so one unreadable line cannot break every path query.
+        for declaration in [
+            r#"developed_as = "no-such-project""#,
+            // A real project, but one that does not borrow this repo.
+            r#"developed_as = "engine""#,
+            "",
+        ] {
+            owner(declaration);
+            assert_eq!(
+                resolved(dir.path()),
+                ("engine".to_owned(), "main".to_owned()),
+                "declaration: {declaration}"
+            );
+        }
     }
 
     #[test]

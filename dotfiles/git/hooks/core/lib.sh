@@ -202,8 +202,8 @@ prompt_confirm() {
 #
 # One line, or nothing when the project declares no build_dir. Which project
 # answers is wits's decision: for a checkout several projects share, it follows
-# `wits.project.active`, so a component borrowed by the project you actually
-# build resolves to that project's tree instead of its owner's.
+# the owner's `developed_as`, so a component borrowed by the project you
+# actually build resolves to that project's tree instead of its owner's.
 #
 # The directory is deliberately *not* required to exist. A checkout happens
 # before the branch has ever been built, so demanding it would make the common

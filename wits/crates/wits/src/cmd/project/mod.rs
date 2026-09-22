@@ -839,6 +839,22 @@ fn check_one(ws: &Workspace, project: &ProjectData) -> Vec<String> {
         if project.kind_of(name).is_some_and(|k| k.has_own_git()) && repo.main_branch.is_none() {
             issues.push(format!("repo '{name}' has its own git but no main_branch"));
         }
+        // A `developed_as` that resolves to nothing is silent everywhere else:
+        // path resolution keeps the structural answer rather than failing, so
+        // that one registry file deployed without the project it names cannot
+        // break every query. Judged here instead, where the whole registry is in
+        // hand and the verdict is the caller's to act on.
+        if let Some(spec) = &repo.developed_as {
+            if ws.project(spec).is_err() {
+                issues.push(format!(
+                    "repo '{name}': developed_as '{spec}' names no known project"
+                ));
+            } else if ws.developed_as(project, name).is_none() {
+                issues.push(format!(
+                    "repo '{name}': developed_as '{spec}' does not borrow this repo"
+                ));
+            }
+        }
         // A declared `skip` that is not in force is the one config fact whose
         // truth lives on disk rather than in the file, so it is checked here
         // rather than validated at load. Only a cloned checkout can answer.

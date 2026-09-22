@@ -723,13 +723,15 @@ naming an undeclared toolchain, or a toolchain whose ``supports`` list
 contradicts the project's ``build_system``; preset inheritance and template
 reference cycles; and template resolvability against a representative
 context — one dry resolve at branch ``main``. For a cloned checkout, that a
-declared ``skip`` is in force. No ``<name>`` checks every project.
+declared ``skip`` is in force. A ``developed_as`` naming no known project, or
+one that does not borrow the repo declaring it — silent in path resolution by
+design, so this is where it is reported. No ``<name>`` checks every project.
 
 Malformed structure is rejected earlier, when the registry loads, so
 ``--check`` never sees it: a file with no ``[repos.main]``, a repo with
 neither ``path`` nor ``from``, a ``from`` naming an unknown project or repo,
-a borrowed repo that is itself borrowed, and a travelling field declared
-alongside ``from`` all fail the load outright. So do a worktree/hybrid repo
+a borrowed repo that is itself borrowed, and a travelling field (or
+``developed_as``) declared alongside ``from`` all fail the load outright. So do a worktree/hybrid repo
 without ``worktree_dir``, a hybrid repo without ``bootstrap_worktree_dir``,
 and a bootstrap template that references ``branch.*`` or resolves to nothing.
 
@@ -766,6 +768,12 @@ Repos, branches, and build contexts
      - Borrow another project's repo as this one:
        ``[<org>/]<project>[:<repo>]``, the repo defaulting to ``main``. See
        below.
+   * - ``developed_as``
+     - string
+     - no
+     - Which project this checkout is currently developed *as*, as
+       ``[<org>/]<project>``. Declared by the repo's **owner**; path lookups
+       then answer for that project's borrow of it. See below.
    * - ``skip``
      - list\<string\>
      - no
@@ -1003,12 +1011,33 @@ the anchor defaults exactly like any other focus.
 * **A borrow may not itself be borrowed** (hard error).
 * **A borrow never owns a path.** ``project_for_path`` / ``repo_for_path``
   ignore borrowed entries, so a checkout shared by several projects resolves
-  to the one that declares it as its own — unless the checkout names a project
-  in ``wits.project.active``, which wins and *does* consider borrows. An
-  unresolvable value, or one naming a project that does not reference the
-  checkout, falls back to the owner rather than failing.
+  to the one that declares it as its own — unless that owner redirects it with
+  ``developed_as``.
 * **``update`` skips borrowed repos** unless ``--with-borrowed`` is passed. A
   borrowed hook then resolves against the *borrower's* ``org.*`` namespace.
+
+``developed_as`` — which borrower a shared checkout serves
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``developed_as = "[<org>/]<project>"`` on an **owned** repo says the checkout
+is currently being developed as that project, so every path query answers for
+*its* borrow of the repo instead of for the owner. The project reference
+resolves exactly as ``from``'s does.
+
+It belongs to the owner because the borrowers have no grounds to prefer
+between themselves: N of them claiming one checkout would restore the very tie
+that makes a borrow ineligible above, while the owner is unique. Declaring it
+alongside ``from`` is therefore a hard error, like a travelling field.
+
+The redirect follows the **borrow edges**, not the filesystem: among the named
+project's repos, the one whose ``from`` resolves to this exact project and repo
+is the entry that describes how this checkout is built there. Where several do,
+that project's ``focus`` wins.
+
+A value naming no known project, or one naming a project that does not borrow
+this repo, leaves the structural answer in place rather than failing — a
+registry deployed without the project it names must not break every query that
+passes through path resolution. ``check`` reports both.
 
 ``skip`` — paths never checked out
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

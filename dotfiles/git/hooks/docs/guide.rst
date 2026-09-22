@@ -426,19 +426,13 @@ Dangling, tooling simply reports no compile commands, and the link starts
 working the moment the build lands.
 
 For a checkout that several projects share — a component one project owns and
-others borrow — the build that indexes it is ambiguous, and git holds nothing
-that resolves the ambiguity. Name the project the checkout is currently being
-developed as, and every path query follows it:
-
-.. code-block:: console
-
-   $ git config wits.project.active <project>
-
-Unset, the project that *owns* the checkout answers, which is the right default
-for the ordinary case where exactly one project builds it. The setting is read
-from ordinary git config, so a repository-wide value lives in ``.git/config``
-and a per-worktree override in ``config.worktree`` once
-``extensions.worktreeConfig`` is enabled — no wits-specific mechanism.
+others borrow — the build that indexes it is ambiguous, and nothing in git
+resolves the ambiguity. The registry does: the owning project's repo entry
+names, in ``developed_as``, the project the checkout is currently developed as,
+and every path query follows it. Undeclared, the project that *owns* the
+checkout answers, which is the right default for the ordinary case where
+exactly one project builds it. Nothing is set per clone, so the first checkout
+after a fresh clone already links the right build.
 
 The encrypted-file modes
 ~~~~~~~~~~~~~~~~~~~~~~~~
