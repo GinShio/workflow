@@ -472,8 +472,12 @@ mod tests {
         let lock_path = repo.git_dir().unwrap().join("machete.lock");
 
         let guard = MacheteLock::acquire(&repo).unwrap();
+        // Opened exactly as `acquire` opens it, so the probe is the descriptor
+        // another process would hold rather than one that truncates the file
+        // under a live holder.
         let probe = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(&lock_path)
             .unwrap();
