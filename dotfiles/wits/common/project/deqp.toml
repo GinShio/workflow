@@ -8,7 +8,7 @@ default_presets = ["common"]
 [repos.main]
 path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
 build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
-install_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+install_dir = "{{build_dir}}"
 main_branch = "main"
 [repos.main.remotes]
 origin = "https://github.com/KhronosGroup/VK-GL-CTS.git"

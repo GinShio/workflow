@@ -82,11 +82,23 @@ pub struct Plan {
     pub build_dir: Option<PathBuf>,
     /// The resolved focus-over-anchor `install_dir`, if either declared one.
     pub install_dir: Option<PathBuf>,
+    /// The presets that applied, in application order — `default_presets`, then
+    /// `applies_when` matches, then `--preset` (§5.6). Reported rather than
+    /// recomputed by a caller, because it is the answer to "why is this
+    /// definition set" and re-deriving it would be a second implementation of
+    /// the selection rules.
+    pub presets: Vec<String>,
     pub logical: LogicalConfig,
-    /// The final context, so callers can resolve arbitrary templates or inspect.
-    /// Part of the read-only query surface (§11); not consumed in-tree yet.
-    #[allow(dead_code)]
-    pub context: Value,
+    /// The final context, so callers can resolve arbitrary templates or inspect
+    /// one path — the read-only query surface (§11) that
+    /// `wits project info --get` is built on.
+    ///
+    /// The whole [`Ctx`] rather than its flattened bindings: a binding's value
+    /// may itself be a template, so a caller handed the raw map would read
+    /// template text where it asked for a value. Resolution stays lazy and
+    /// memoised, which is what makes a one-path query cheap on a context that
+    /// carries the entire process environment.
+    pub ctx: Ctx,
 }
 
 impl Plan {
@@ -263,6 +275,14 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
             &format!("repos.{name}.workdir"),
             Value::from(dir.display().to_string()),
         );
+        // `repo.*` is the relative alias for the repo being resolved, so it
+        // mirrors the focus's entry — including `workdir`, the one field it used
+        // to be missing while `repo.path` above was already bound. Without it a
+        // caller who does not know the focus's *name* has no way to name its
+        // checkout, which is the whole point of the alias.
+        if name == &focus {
+            ctx.set("repo.workdir", Value::from(dir.display().to_string()));
+        }
         work_dirs.insert(name.clone(), dir);
     }
     let work_dir = work_dirs[&build_repo].clone();
@@ -273,24 +293,46 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
     // The anchor owns the configure source. Output paths default there too, but
     // the focus may override them: two variants can build through one root
     // without forcing the anchor's branch-keyed path onto a detached focus.
+    // Each resolved output is bound back into the context as it lands, the same
+    // way every repo's `workdir` is above. Two things follow, and both are the
+    // point rather than a side effect:
+    //
+    //   - a later output may name an earlier one, so the common case where an
+    //     install prefix *is* the build tree is `install_dir = "{{build_dir}}"`
+    //     instead of a second copy of the same expression, which drifts;
+    //   - `wits project info --get <path>` is a plain context lookup, so these
+    //     need no special case there — see `cmd::project`.
+    //
+    // The order below is therefore a contract, not an accident: `source_dir` may
+    // be named by `build_dir`, and both by `install_dir`, never the other way.
+    // An absent `build_dir`/`install_dir` stays *unbound* rather than bound to
+    // an empty string, so naming one is an unknown-path error instead of a value
+    // a caller cannot tell apart from a configured empty.
     let build = &project.repos[&build_repo];
     let focused = &project.repos[&focus];
     let source_dir = match &build.source_dir {
         Some(tpl) => PathBuf::from(ctx.render(tpl)?),
         None => work_dir.clone(),
     };
+    ctx.set("source_dir", Value::from(source_dir.display().to_string()));
     let build_template = focused.build_dir.as_ref().or(build.build_dir.as_ref());
     let build_dir = match (input.build_dir_override, build_template) {
         (Some(dir), _) => Some(dir.to_path_buf()),
         (None, Some(tpl)) => Some(PathBuf::from(ctx.render(tpl)?)),
         (None, None) => None,
     };
+    if let Some(dir) = &build_dir {
+        ctx.set("build_dir", Value::from(dir.display().to_string()));
+    }
     let install_template = focused.install_dir.as_ref().or(build.install_dir.as_ref());
     let install_dir = match (input.install_dir_override, install_template) {
         (Some(dir), _) => Some(dir.to_path_buf()),
         (None, Some(tpl)) => Some(PathBuf::from(ctx.render(tpl)?)),
         (None, None) => None,
     };
+    if let Some(dir) = &install_dir {
+        ctx.set("install_dir", Value::from(dir.display().to_string()));
+    }
 
     // --- Pipeline ----------------------------------------------------------
     let mut logical = LogicalConfig::default();
@@ -357,7 +399,7 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
     )?;
 
     // L2 — presets.
-    let names = applied_presets(
+    let presets = applied_presets(
         ws,
         project,
         &focus,
@@ -366,7 +408,7 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
         &build_type,
         &generator,
     );
-    for name in &names {
+    for name in &presets {
         let mut seen = Vec::new();
         resolve_preset_into(&mut ctx, &mut logical, ws, project, &focus, name, &mut seen)?;
     }
@@ -397,8 +439,9 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
         source_dir,
         build_dir,
         install_dir,
+        presets,
         logical,
-        context: ctx.into_value(),
+        ctx,
     })
 }
 
@@ -1209,6 +1252,88 @@ anchor = "main"
         // The injector ran at L0: the selected toolchain's `cc` was translated
         // into the backend-shaped definition the mock emits.
         assert!(plan.logical.definitions.iter().any(|(k, _)| k == "MOCK_CC"));
+    }
+
+    /// The resolved outputs are bound back into the context in the order they
+    /// land, so a later one may name an earlier one — which is how an install
+    /// prefix that *is* the build tree avoids being a second copy of the same
+    /// expression. `--get` reads the same bindings.
+    #[test]
+    fn resolved_output_paths_are_bound_back_into_the_context() {
+        let body = r#"
+            [project]
+            build_system = "cmake"
+
+            [repos.main]
+            path = "/src/hello"
+            main_branch = "main"
+            source_dir = "{{repos.main.workdir}}/src"
+            build_dir = "{{source_dir}}/../_build/{{branch.slug}}"
+            install_dir = "{{build_dir}}"
+        "#;
+        let (_d, ws) = ws_with(body, "hello");
+        let project = ws.project("hello").unwrap();
+        let profile = Profile::default();
+        let plan = plan(&ws, project, &PlanInput::paths_only(&profile, "main")).unwrap();
+
+        assert_eq!(plan.source_dir, PathBuf::from("/src/hello/src"));
+        assert_eq!(
+            plan.build_dir.clone().unwrap(),
+            PathBuf::from("/src/hello/src/../_build/main")
+        );
+        // install_dir named build_dir rather than repeating its expression.
+        assert_eq!(plan.install_dir, plan.build_dir);
+
+        // The same paths answer a one-path query, which is all `--get` does.
+        // `repo.workdir` is there too: the relative alias mirrors the focus's
+        // entry, so a caller that does not know the focus's name can still name
+        // its checkout.
+        for (path, want) in [
+            ("source_dir", "/src/hello/src"),
+            ("build_dir", "/src/hello/src/../_build/main"),
+            ("install_dir", "/src/hello/src/../_build/main"),
+            ("repo.workdir", "/src/hello"),
+            ("repos.main.workdir", "/src/hello"),
+        ] {
+            assert_eq!(
+                plan.ctx.get_scalar(path).ok().as_deref(),
+                Some(want),
+                "{path}"
+            );
+        }
+    }
+
+    /// A project declaring no `build_dir` leaves the path *unbound*, so naming it
+    /// is an unknown-path error rather than an empty string a caller could not
+    /// tell apart from a configured empty value.
+    #[test]
+    fn an_undeclared_output_path_is_unbound_not_empty() {
+        let body = r#"
+            [project]
+
+            [repos.main]
+            path = "/src/hello"
+            main_branch = "main"
+        "#;
+        let (_d, ws) = ws_with(body, "hello");
+        let project = ws.project("hello").unwrap();
+        let profile = Profile::default();
+        let plan = plan(&ws, project, &PlanInput::paths_only(&profile, "main")).unwrap();
+
+        assert!(plan.build_dir.is_none());
+        assert!(matches!(
+            plan.ctx.get("build_dir"),
+            Err(TemplateError::UnknownPath(p)) if p == "build_dir"
+        ));
+        assert!(matches!(
+            plan.ctx.get("install_dir"),
+            Err(TemplateError::UnknownPath(p)) if p == "install_dir"
+        ));
+        // source_dir always resolves: it falls back to the build repo's workdir.
+        assert_eq!(
+            plan.ctx.get("source_dir").unwrap().as_str(),
+            Some("/src/hello")
+        );
     }
 
     #[test]

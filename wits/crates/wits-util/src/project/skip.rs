@@ -23,7 +23,7 @@
 //! `update` never touches a working tree (`docs/project/design.md` §7). So the
 //! split is: `clone` **applies** it (the tree is ours, still being built, so
 //! removing what config says not to keep is finishing construction, not
-//! repairing reality), while `update` and `project --check` only **verify** and
+//! repairing reality), while `update` and `project check` only **verify** and
 //! fail loudly. Converting an existing checkout is your `git` call —
 //! [`remedy`] prints exactly which.
 //!

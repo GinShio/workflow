@@ -55,6 +55,8 @@ pub enum TemplateError {
     Cycle(String),
     #[error("template {template:?} resolved to a non-string: {value}")]
     NotAString { template: String, value: String },
+    #[error("path '{path}' is a {kind}, not a single value")]
+    NotAScalar { path: String, kind: String },
     #[error("{0}")]
     Render(String),
 }
@@ -104,12 +106,6 @@ impl Ctx {
         self.set(&format!("env.{key}"), Value::from(value));
     }
 
-    /// The accumulated context tree, consumed at the end of a plan so it can be
-    /// handed back for arbitrary template resolution.
-    pub(crate) fn into_value(self) -> Value {
-        Value::from(self.root)
-    }
-
     /// Resolve a template string, keeping the type of a whole-expression result.
     pub fn resolve_str(&self, s: &str) -> Result<Value, TemplateError> {
         self.resolve_string(s, &mut Vec::new())
@@ -124,6 +120,25 @@ impl Ctx {
     /// Look up (and fully resolve) a dotted context path.
     pub fn get(&self, path: &str) -> Result<Value, TemplateError> {
         self.resolve_path(path, &mut Vec::new())
+    }
+
+    /// Look up a dotted context path as the single line a scalar has.
+    ///
+    /// A container is refused rather than flattened: a table or a list is not one
+    /// value, and joining one yields a string that no longer round-trips to what
+    /// it came from. A non-string *scalar* is fine — an integer from
+    /// `system.mem.gb` or a boolean from a definition each have exactly one
+    /// unambiguous spelling.
+    ///
+    /// This lives beside the resolver because "what counts as one value" is a
+    /// property of the template layer, not of whichever caller is printing it;
+    /// `wits project info --get` is the first consumer.
+    pub fn get_scalar(&self, path: &str) -> Result<String, TemplateError> {
+        let value = self.get(path)?;
+        scalar_text(&value).ok_or_else(|| TemplateError::NotAScalar {
+            path: path.to_owned(),
+            kind: value.kind().to_string(),
+        })
     }
 
     /// Render a template to the single string an environment variable or a
@@ -610,7 +625,7 @@ pub fn path_context(name: &str, org: Option<&str>) -> Bindings {
 /// A list becomes its space-joined elements, which is what a flag list or a
 /// `PATH`-shaped value wants; Jinja's own rendering (`["a", "b"]`) is for display.
 /// A map has no such form, so it flattens to nothing rather than to a guess.
-pub(crate) fn value_to_string(v: &Value) -> String {
+pub fn value_to_string(v: &Value) -> String {
     match v.kind() {
         ValueKind::Seq => v
             .try_iter()
@@ -909,6 +924,44 @@ mod tests {
         // Other scalars are unaffected.
         assert_eq!(scalar_text(&Value::from(7)).unwrap(), "7");
         assert_eq!(scalar_text(&Value::from("x")).unwrap(), "x");
+    }
+
+    /// The same rule as seen through a context lookup, which is the form
+    /// `--get` relies on: containers refused so N lines stay readable back.
+    #[test]
+    fn get_scalar_spells_a_bool_as_toml_does_and_refuses_containers() {
+        let mut root = Bindings::new();
+        insert_path(&mut root, "yes", Value::from(true));
+        insert_path(&mut root, "no", Value::from(false));
+        insert_path(&mut root, "n", Value::from(7));
+        insert_path(&mut root, "s", Value::from("text"));
+        insert_path(&mut root, "list", Value::from(vec!["a", "b"]));
+        insert_path(&mut root, "map.inner", Value::from("x"));
+        let ctx = Ctx::new(root);
+
+        assert_eq!(ctx.get_scalar("yes").unwrap(), "true");
+        assert_eq!(ctx.get_scalar("no").unwrap(), "false");
+        assert_eq!(ctx.get_scalar("n").unwrap(), "7");
+        assert_eq!(ctx.get_scalar("s").unwrap(), "text");
+        for container in ["list", "map"] {
+            assert!(
+                matches!(
+                    ctx.get_scalar(container),
+                    Err(TemplateError::NotAScalar { ref path, .. }) if path == container
+                ),
+                "{container} should be refused as a container"
+            );
+        }
+    }
+
+    /// A whole-expression template keeps its type through resolution, so a
+    /// boolean one reaches `scalar_text` as a boolean and not as rendered text.
+    #[test]
+    fn a_whole_expression_bool_keeps_the_toml_spelling() {
+        let mut root = Bindings::new();
+        insert_path(&mut root, "flag", Value::from("{{ 1 == 1 }}"));
+        let ctx = Ctx::new(root);
+        assert_eq!(ctx.get_scalar("flag").unwrap(), "true");
     }
 
     #[test]

@@ -19,7 +19,7 @@ build_projects() {
 
         echo "=> Updating $proj..."
         if wits update "$proj" --with-borrowed; then
-            _main_branch=$(wits project main-branch "$proj")
+            _main_branch=$(wits project info --get repo.main_branch "$proj")
             # Release build (word splitting on _extra_args is intended here)
             wits build "$proj" --build-type release $_extra_args "-b$_main_branch"
 

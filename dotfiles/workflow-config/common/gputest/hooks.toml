@@ -3,7 +3,7 @@ get_flakes = '''awk -F, '$2 == "Flake"{print $1}' results.csv >flakes.txt'''
 
 # Test execution hooks (run in the test output directory)
 # Note: The command itself handles the output redirection
-get_git_info = '''if [ {{layout_name}} = "amdvlk" ]; then wits-project hash amdvlk --focus main --repos compiler --submodules direct && wits-project hash amdvlk --branch $(wits-project main-branch amdvlk) --submodules direct; else wits-project hash {{layout_name}} --submodules=direct; fi >> git-sha1.txt; wits-project hash {{suite_type}} --submodules=direct >> git-sha1.txt; wits-project hash {{backend_name}} --submodules=direct >> git-sha1.txt'''
+get_git_info = '''if [ {{layout_name}} = "amdvlk" ]; then wits-project hash amdvlk --focus main --repos compiler --submodules direct && wits-project hash amdvlk --branch $(wits-project info --get repo.main_branch amdvlk) --submodules direct; else wits-project hash {{layout_name}} --submodules=direct; fi >> git-sha1.txt; wits-project hash {{suite_type}} --submodules=direct >> git-sha1.txt; wits-project hash {{backend_name}} --submodules=direct >> git-sha1.txt'''
 
 # Toolbox hooks (run after installation)
 # {{dest}} is substituted with the installation directory

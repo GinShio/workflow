@@ -416,7 +416,7 @@ fn a_skipped_path_that_is_materialised_fails_check_and_update() {
     );
     assert!(wrap.join("nested/work").exists(), "fixture precondition");
 
-    let check = fx.run(&["project", "--check", "wrap"]);
+    let check = fx.run(&["project", "check", "wrap"]);
     assert!(!check.success, "check passed on a contradicted skip");
     assert!(
         check.stderr.contains("nested/work"),
@@ -452,11 +452,11 @@ fn the_owner_answers_for_a_shared_checkout() {
 
     // Standing in the shared component resolves to the project that *is* it, not
     // to a project that merely borrows it.
-    let out = fx.run_in(&work, &["project", "main-branch"]);
+    let out = fx.run_in(&work, &["project", "info", "--get", "repo.main_branch"]);
     assert!(out.success, "stderr: {}", out.stderr);
     assert_eq!(out.stdout.trim(), "main");
 
-    let described = fx.run_in(&work, &["project", "."]);
+    let described = fx.run_in(&work, &["project", "info", "."]);
     assert!(
         described.stdout.contains("project: work"),
         "stdout: {}",
@@ -479,19 +479,20 @@ fn an_active_project_answers_for_a_shared_checkout_instead_of_its_owner() {
         out.stdout.trim().starts_with(want.to_str().unwrap())
     };
 
-    let default = fx.run_in(&work, &["project", "build-dir"]);
+    let query = ["project", "info", "--get", "build_dir"];
+    let default = fx.run_in(&work, &query);
     assert!(default.success, "stderr: {}", default.stderr);
     assert!(owns(&default, "src-work"), "stdout: {}", default.stdout);
 
     git(&work, &["config", "wits.project.active", "wrap"]);
-    let active = fx.run_in(&work, &["project", "build-dir"]);
+    let active = fx.run_in(&work, &query);
     assert!(active.success, "stderr: {}", active.stderr);
     assert!(owns(&active, "src-wrap"), "stdout: {}", active.stdout);
 
     // A value naming no known project must not break every query that passes
     // through path resolution — it degrades to the structural answer.
     git(&work, &["config", "wits.project.active", "no-such-project"]);
-    let stale = fx.run_in(&work, &["project", "build-dir"]);
+    let stale = fx.run_in(&work, &query);
     assert!(stale.success, "stderr: {}", stale.stderr);
     assert!(owns(&stale, "src-work"), "stdout: {}", stale.stdout);
 }
@@ -544,20 +545,36 @@ fn branch_build_dirs_span_every_project_the_branch_identifies() {
     assert_eq!(out.stdout.lines().count(), present.len(), "{}", out.stdout);
 }
 
+/// `info` is the whole picture, so it reports the facts that are invisible in a
+/// path: where a repo's identity came from, what its checkout leaves out, and —
+/// side by side — the declared templates and what they resolve to. Assertions
+/// match label and value on one line rather than exact columns, so re-aligning
+/// the report is not a test change.
 #[test]
-fn info_reports_the_borrow_and_the_skip_list() {
+fn info_reports_the_borrow_the_skip_list_and_both_template_and_resolution() {
     let fx = Fixture::new();
-    let out = fx.ok(&["project", "wrap"]);
-    assert!(
-        out.stdout.contains("borrowed from work"),
-        "stdout: {}",
+    fx.ok(&["update", "work"]);
+    let out = fx.ok(&["project", "info", "wrap"]);
+    let has = |label: &str, value: &str| {
         out.stdout
-    );
-    assert!(
-        out.stdout.contains("skip     /nested/work"),
-        "stdout: {}",
-        out.stdout
-    );
+            .lines()
+            .any(|l| l.contains(label) && l.contains(value))
+    };
+
+    assert!(has("borrowed from", "work"), "stdout: {}", out.stdout);
+    assert!(has("skip", "/nested/work"), "stdout: {}", out.stdout);
+
+    // The declared template and its resolution are both present, and they are
+    // different text — showing only one of them would hide the other's bugs.
+    assert!(out.stdout.contains("templates:"), "stdout: {}", out.stdout);
+    assert!(has("build_dir", "{{"), "stdout: {}", out.stdout);
+    assert!(out.stdout.contains("resolved ("), "stdout: {}", out.stdout);
+
+    // The three repo roles are reported separately: they coincide here, and the
+    // point is that a reader can see that rather than having to assume it.
+    for role in ["focus:", "build_repo:", "identity_repo:", "strategy:"] {
+        assert!(out.stdout.contains(role), "{role} missing: {}", out.stdout);
+    }
 }
 
 #[test]
@@ -853,8 +870,8 @@ origin = "{upstream}"
 
     // The shell: an ordinary in-place clone that builds its own tree, focused on the
     // borrowed component so the component carries the branch identity. `install_dir`
-    // is only here as a window onto `{{repos.component.workdir}}`, which no path
-    // query prints directly.
+    // is pointed at `{{repos.component.workdir}}` so one assertion covers both the
+    // resolved output path and the repo workdir it is derived from.
     let host_up = fx.path("up-host");
     std::fs::create_dir_all(host_up.join("src")).unwrap();
     git(&host_up, &["init", "-q", "-b", "main", "."]);
@@ -940,13 +957,39 @@ install_dir = "{{repos['component-review'].workdir}}"
     assert!(created.success, "stderr: {}", created.stderr);
 
     // The component's workdir, seen from the borrower: the live worktree for `feat`…
-    let resolved = fx.ok(&["project", "install-dir", "host", "--branch", "feat"]);
-    assert_eq!(resolved.stdout.trim(), comp_feat.to_str().unwrap());
+    // Repeatable `--get`: one resolve answers both the derived output path and
+    // the borrowed component's own checkout, in flag order.
+    let resolved = fx.ok(&[
+        "project",
+        "info",
+        "--get",
+        "install_dir",
+        "--get",
+        "repos.component.workdir",
+        "host",
+        "--branch",
+        "feat",
+    ]);
+    let want = comp_feat.to_str().unwrap();
+    assert_eq!(
+        resolved.stdout.lines().collect::<Vec<_>>(),
+        vec![want, want],
+        "stdout: {}",
+        resolved.stdout
+    );
     // …and, for a branch no worktree holds, the location the component's *own*
     // `worktree_dir` names. Rendered in the borrower's namespace this would read
     // `src-host.wt/` or `host.wt/`, quietly relocating a shared component under
     // whoever consumes it.
-    let absent = fx.ok(&["project", "install-dir", "host", "--branch", "later"]);
+    let absent = fx.ok(&[
+        "project",
+        "info",
+        "--get",
+        "install_dir",
+        "host",
+        "--branch",
+        "later",
+    ]);
     assert_eq!(
         absent.stdout.trim(),
         fx.path("comp.wt/later").to_str().unwrap()
@@ -1051,7 +1094,18 @@ origin = "{upstream}"
     .unwrap();
 
     fx.ok(&["update", "hybrid"]);
-    let main = fx.ok(&["project", "work-dir", "hybrid", "--branch", "main"]);
+    fn workdir(branch: &str) -> [&str; 7] {
+        [
+            "project",
+            "info",
+            "--get",
+            "repos.main.workdir",
+            "hybrid",
+            "--branch",
+            branch,
+        ]
+    }
+    let main = fx.ok(&workdir("main"));
     assert_eq!(
         main.stdout.trim(),
         bootstrap.to_str().unwrap(),
@@ -1066,12 +1120,12 @@ origin = "{upstream}"
     );
     assert!(created.success, "stderr: {}", created.stderr);
 
-    let queried = fx.ok(&["project", "work-dir", "hybrid", "--branch", "feat"]);
+    let queried = fx.ok(&workdir("feat"));
     assert_eq!(queried.stdout.trim(), custom.to_str().unwrap());
 
     // Reverse lookup includes linked worktrees, and the current worktree branch
     // wins over the bare repository's symbolic HEAD.
-    let from_inside = fx.run_in(&custom, &["project", "work-dir"]);
+    let from_inside = fx.run_in(&custom, &["project", "info", "--get", "repos.main.workdir"]);
     assert!(from_inside.success, "stderr: {}", from_inside.stderr);
     assert_eq!(from_inside.stdout.trim(), custom.to_str().unwrap());
 

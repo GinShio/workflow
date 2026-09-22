@@ -23,48 +23,51 @@ use clap::{Args, Subcommand, ValueEnum};
 use anyhow::Context;
 
 use wits_util::git;
+use wits_util::project::context::value_to_string;
 use wits_util::project::model::{Kind, Profile};
 use wits_util::project::skip;
 use wits_util::project::workspace::{expand_tilde, looks_like_path, ProjectData, Workspace};
 use wits_util::project::{resolve, resolve_target};
 
-/// `wits project` — describe projects (the default), or answer one script query.
+/// `wits project` — the read-only half of the tool: one verb per shape of
+/// question it answers.
 #[derive(Debug, Args)]
-#[command(args_conflicts_with_subcommands = true)]
 pub struct ProjectArgs {
     #[command(subcommand)]
-    pub command: Option<ProjectSub>,
-    #[command(flatten)]
-    pub info: InfoArgs,
+    pub command: ProjectSub,
     /// The profile axes (branch / build-type / toolchain / …) that shape
     /// resolution. Declared once here as **global** flags, so every `project`
     /// subcommand accepts them uniformly — the way `-v`/`-n` are inherited from
     /// the process layer (§1.3) — and so a machine-readable path query resolves
     /// the *same* dir a build would (the one shared `Profile`, §6.3). Being
-    /// global, they are exempt from `args_conflicts_with_subcommands` and may be
-    /// written on either side of the subcommand.
+    /// global, they may be written on either side of the subcommand.
     #[command(flatten)]
     pub profile: ProfileArgs,
 }
 
+/// The verbs, and why each is its own rather than a key of `info --get`.
+///
+/// `info` projects one *value* out of a resolved plan, which is a shape three of
+/// these do not have: `exists` answers with an exit status and must work on a
+/// project that is not cloned (so it never resolves a plan at all);
+/// `branch-build-dirs` is a search across the registry returning 0..N rows
+/// spanning projects, not a field of this project; `hash` carries its own flags
+/// and walks git objects rather than resolving config. Folding any of them into
+/// `--get` would cost it the single-line-scalar contract that makes `--get`
+/// repeatable and safe to read back positionally.
 #[derive(Debug, Subcommand)]
 pub enum ProjectSub {
+    /// Summarise every registered project, one line each.
+    List,
+    /// Describe one project in full — or, with `--get`, print one resolved value.
+    Info(InfoArgs),
+    /// Validate configuration legality (no target: every project, for CI).
+    Check(TargetArgs),
     /// Exit successfully when a named project's main repository is cloned.
     Exists(ExistsArgs),
-    /// Print the main branch of the repo you are in (or a named project) —
-    /// the machine-readable answer scripts and git hooks need.
-    MainBranch(TargetArgs),
-    /// Print the resolved build directory for a branch, one line, for scripts.
-    BuildDir(TargetArgs),
     /// Print every existing build directory that a branch of one checkout
     /// identifies, across all projects — what a branch deletion orphans.
     BranchBuildDirs(TargetArgs),
-    /// Print the resolved install prefix for a branch, one line, for scripts.
-    InstallDir(TargetArgs),
-    /// Print the resolved source directory (where the build configures from).
-    SourceDir(TargetArgs),
-    /// Print the branch's checkout root (`repos.<name>.workdir`).
-    WorkDir(TargetArgs),
     /// Print a repo's commit hash for a branch, optionally with its submodules'
     /// pinned hashes — read from the tree, so no checkout or branch switch.
     Hash(HashArgs),
@@ -203,12 +206,23 @@ impl ProfileArgs {
 
 #[derive(Debug, Args)]
 pub struct InfoArgs {
-    /// Project name, or a path inside one (default: list every project).
+    /// Project name, or a path inside one (default: the project owning the
+    /// current directory).
     #[arg(value_name = "NAME|PATH")]
     pub target: Option<String>,
-    /// Validate configuration legality instead of describing.
-    #[arg(long)]
-    pub check: bool,
+    /// Print one resolved value instead of the description: a dotted path into
+    /// the same template context the config files are written against, so
+    /// `build_dir`, `repos.main.workdir`, `toolchain.linker` and
+    /// `repo.main_branch` are all spelled here exactly as a template spells
+    /// them. Repeatable — each path prints one line, in the order given, so a
+    /// script reads several answers out of one resolve instead of paying for a
+    /// registry load per question.
+    ///
+    /// The value must be a scalar: a table or a list is not one line, and
+    /// rendering it as several would break reading the lines back positionally.
+    /// Use the description for those.
+    #[arg(long = "get", value_name = "PATH")]
+    pub get: Vec<String>,
 }
 
 pub fn run(args: &ProjectArgs) -> Result<()> {
@@ -218,15 +232,12 @@ pub fn run(args: &ProjectArgs) -> Result<()> {
     // regardless of which side of the subcommand it was written on.
     let profile = &args.profile;
     match &args.command {
-        Some(ProjectSub::Exists(a)) => exists(&ws, a),
-        Some(ProjectSub::MainBranch(a)) => main_branch(&ws, a, profile),
-        Some(ProjectSub::BuildDir(a)) => build_dir(&ws, a, profile),
-        Some(ProjectSub::BranchBuildDirs(a)) => branch_build_dirs(&ws, a, profile),
-        Some(ProjectSub::InstallDir(a)) => install_dir(&ws, a, profile),
-        Some(ProjectSub::SourceDir(a)) => source_dir(&ws, a, profile),
-        Some(ProjectSub::WorkDir(a)) => work_dir(&ws, a, profile),
-        Some(ProjectSub::Hash(a)) => hash(&ws, a, profile),
-        None => info(&ws, &args.info, profile),
+        ProjectSub::List => list(&ws),
+        ProjectSub::Info(a) => info(&ws, a, profile),
+        ProjectSub::Check(a) => check(&ws, a.target.as_deref()),
+        ProjectSub::Exists(a) => exists(&ws, a),
+        ProjectSub::BranchBuildDirs(a) => branch_build_dirs(&ws, a, profile),
+        ProjectSub::Hash(a) => hash(&ws, a, profile),
     }
 }
 
@@ -281,35 +292,16 @@ fn resolve_repo<'a>(
     }
 }
 
-/// The main branch that governs the anchored repo: its identity repo's
-/// `main_branch` (a subtree inherits its anchor's). One line to stdout.
-fn main_branch(ws: &Workspace, args: &TargetArgs, profile: &ProfileArgs) -> Result<()> {
-    let (project, repo) = resolve_repo(ws, args.target.as_deref(), profile.focus.as_deref())?;
-    let identity = resolve::identity_repo(project, &repo).unwrap_or(repo);
-    let mb = project
-        .repos
-        .get(&identity)
-        .and_then(|r| r.main_branch.clone())
-        .with_context(|| {
-            format!(
-                "repo '{identity}' of project '{}' has no main_branch",
-                project.key()
-            )
-        })?;
-    println!("{mb}");
-    Ok(())
-}
-
-/// Resolve a branch's build [`Plan`](resolve::Plan) for a path query, anchored
-/// like [`resolve_repo`] with the branch defaulting to the anchored repo's
-/// current one. Shared by the `*-dir` queries below, which differ only in the
-/// resolved path they print.
+/// Resolve a branch's build [`Plan`](resolve::Plan) for a query, anchored like
+/// [`resolve_repo`] with the branch defaulting to the anchored repo's current
+/// one. Shared by `info` and `--get`, so a description and a projection out of
+/// it can never disagree.
 fn resolve_plan<'a>(
     ws: &'a Workspace,
-    args: &TargetArgs,
+    target: Option<&str>,
     profile: &ProfileArgs,
 ) -> Result<(&'a ProjectData, resolve::Plan)> {
-    let (project, repo) = resolve_repo(ws, args.target.as_deref(), profile.focus.as_deref())?;
+    let (project, repo) = resolve_repo(ws, target, profile.focus.as_deref())?;
     let branch = branch_or_current(ws, project, &repo, profile.branch.as_deref())?;
     // Carry the *whole* profile (build_type / toolchain / generator / presets),
     // not just focus+branch: a `build_dir`/`install_dir` template may embed any
@@ -344,43 +336,43 @@ fn branch_or_current(
         .context("could not determine a branch; pass --branch")
 }
 
-/// Generate a one-line path query over the resolved [`Plan`](resolve::Plan).
-/// The queries differ only in which field they print and whether it is optional
-/// (a declared template that may be absent) or always resolvable, so they are
-/// one macro rather than four near-identical functions.
-macro_rules! path_query {
-    // An optional path: print it, or bail with why it isn't there.
-    ($name:ident, $field:ident, optional: $absent:literal) => {
-        fn $name(ws: &Workspace, args: &TargetArgs, profile: &ProfileArgs) -> Result<()> {
-            let (project, plan) = resolve_plan(ws, args, profile)?;
-            match plan.$field {
-                Some(dir) => {
-                    println!("{}", dir.display());
-                    Ok(())
-                }
-                None => bail!("project '{}' {}", project.key(), $absent),
-            }
-        }
-    };
-    // An always-resolvable path.
-    ($name:ident, $field:ident) => {
-        fn $name(ws: &Workspace, args: &TargetArgs, profile: &ProfileArgs) -> Result<()> {
-            let (_project, plan) = resolve_plan(ws, args, profile)?;
-            println!("{}", plan.$field.display());
-            Ok(())
-        }
-    };
+/// `info --get <path>…`: one resolved value per path, one line each, in the
+/// order given.
+///
+/// The path is a dotted lookup into the plan's own template context — the same
+/// namespace the config files are written against — so there is no second
+/// vocabulary to define, document, or keep from drifting: `build_dir`,
+/// `repos.main.workdir` and `repo.main_branch` mean here exactly what they mean
+/// in a `[repos.*]` table. That also makes every value a *resolved* one, since
+/// the context resolves a binding that is itself a template on the way out.
+///
+/// Two rules, both in service of the single-line contract that lets a caller
+/// read N lines back positionally:
+///
+///   - a non-scalar is refused rather than flattened. A table or a list is not
+///     one line, and joining one would hand back a string that no longer
+///     round-trips to the value it came from;
+///   - one failing path fails the whole invocation. Printing a blank line for it
+///     would keep the *positions* right while leaving the caller unable to tell
+///     an empty value from an absent one, which is worse than not answering.
+fn get_paths(ws: &Workspace, args: &InfoArgs, profile: &ProfileArgs) -> Result<()> {
+    let (project, plan) = resolve_plan(ws, args.target.as_deref(), profile)?;
+    // Resolve every path before printing any: a later failure must not leave a
+    // caller holding a partial, positionally-misread answer on stdout.
+    let mut values = Vec::with_capacity(args.get.len());
+    for path in &args.get {
+        let value = plan
+            .ctx
+            .get_scalar(path)
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .with_context(|| format!("project '{}': --get {path}", project.key()))?;
+        values.push(value);
+    }
+    for value in values {
+        println!("{value}");
+    }
+    Ok(())
 }
-
-// `build-dir`: where a checkout hook points `compile_commands.json`.
-path_query!(build_dir, build_dir, optional: "has no build_dir template to resolve");
-// `install-dir`: the resolved install prefix.
-path_query!(install_dir, install_dir, optional: "has no install_dir configured");
-// `source-dir`: where the backend configures from (defaults to the build repo's
-// namespaced `workdir`).
-path_query!(source_dir, source_dir);
-// `work-dir`: the branch's checkout root, the selected repo's `workdir`.
-path_query!(work_dir, work_dir);
 
 /// `branch-build-dirs`: every existing build directory that `--branch` of the
 /// anchored checkout identifies, one `<project>\t<path>` per line.
@@ -559,22 +551,23 @@ fn walk_submodules(
 
 // --- info ---------------------------------------------------------------------
 
+/// `list`: one summary line per registered project. Its own verb rather than
+/// `info` with no target, so `info` describes exactly one project on every path
+/// and its omitted positional means what it means for `build`/`update` — the
+/// project owning the current directory.
+fn list(ws: &Workspace) -> Result<()> {
+    for project in ws.projects() {
+        println!("{}", summary_line(project));
+    }
+    Ok(())
+}
+
 fn info(ws: &Workspace, args: &InfoArgs, profile: &ProfileArgs) -> Result<()> {
-    if args.check {
-        return check(ws, args.target.as_deref());
+    if !args.get.is_empty() {
+        return get_paths(ws, args, profile);
     }
-    match &args.target {
-        None => {
-            for project in ws.projects() {
-                println!("{}", summary_line(project));
-            }
-            Ok(())
-        }
-        Some(_) => {
-            let project = resolve_target(ws, args.target.as_deref())?;
-            describe(ws, project, profile)
-        }
-    }
+    let project = resolve_target(ws, args.target.as_deref())?;
+    describe(ws, project, profile)
 }
 
 fn summary_line(project: &ProjectData) -> String {
@@ -587,21 +580,45 @@ fn summary_line(project: &ProjectData) -> String {
     format!("{:<24} focus={:<8} build={}", project.key(), focus, bs)
 }
 
+/// `info`: everything known about one project, in four sections — what it is,
+/// its repos and their git state, the path *templates* it declares, and the
+/// resolution of those templates for one branch.
+///
+/// Templates and their resolution are both shown, rather than one or the other.
+/// They answer different questions ("what did I write" versus "what does it come
+/// out as"), and a mismatch between them is exactly the bug this output exists to
+/// make visible; showing only the resolved form hides the declaration that
+/// produced it, and only the template hides everything the profile contributes.
+/// Resolution still needs a branch, so that section is what degrades when none
+/// can be discovered — the templates are always printed.
 fn describe(ws: &Workspace, project: &ProjectData, profile: &ProfileArgs) -> Result<()> {
     println!("project: {}", project.key());
-    println!("  source: {}", project.source.display());
+    println!("  source:       {}", project.source.display());
     if let Some(org) = &project.org {
-        println!("  org:   {org}");
+        println!("  org:          {org}");
     }
-    println!("  focus: {}", project.focus_name(profile.focus.as_deref()));
+    println!(
+        "  focus:        {}",
+        project.focus_name(profile.focus.as_deref())
+    );
     if let Some(bs) = project.project.build_system {
-        println!("  build: {}", bs.as_str());
+        println!("  build_system: {}", bs.as_str());
+    }
+    if let Some(gen) = &project.project.generator {
+        println!("  generator:    {gen}");
     }
     if let Some(tc) = &project.project.toolchain {
-        println!("  toolchain: {tc}");
+        println!("  toolchain:    {tc}");
+    }
+    if !project.project.default_presets.is_empty() {
+        println!(
+            "  default_presets: {}",
+            project.project.default_presets.join(" ")
+        );
     }
 
-    println!("  repos:");
+    println!();
+    println!("repos:");
     for (name, repo) in &project.repos {
         let kind = project.kind_of(name).map(|k| k.as_str()).unwrap_or("?");
         // A path template that fails to resolve is a real config error; surface
@@ -610,7 +627,7 @@ fn describe(ws: &Workspace, project: &ProjectData, profile: &ProfileArgs) -> Res
         let path = match resolve::repo_primary_path(ws, project, name) {
             Ok(path) => path,
             Err(e) => {
-                println!("    {name:<10} {kind:<10} <path error: {e}>");
+                println!("  {name:<12} {kind:<10} <path error: {e}>");
                 continue;
             }
         };
@@ -626,79 +643,172 @@ fn describe(ws: &Workspace, project: &ProjectData, profile: &ProfileArgs) -> Res
         } else {
             "<not cloned>".into()
         };
-        println!("    {name:<10} {kind:<10} {state:<24} {}", path.display());
+        println!("  {name:<12} {kind:<10} {state:<24} {}", path.display());
         // Where a repo's identity came from, and what its checkout leaves out —
         // both invisible in the path alone, and both change what you are looking
         // at (a borrowed repo is someone else's to update).
         if let Some(from) = &repo.from {
             println!("      borrowed from {from}");
         }
+        if let Some(anchor) = &repo.anchor {
+            println!("      anchor        {anchor}");
+        }
+        if let Some(mb) = &repo.main_branch {
+            println!("      main_branch   {mb}");
+        }
+        if let Some(strategy) = &repo.branch_strategy {
+            println!("      strategy      {strategy}");
+        }
+        // Remotes decide where `update` fetches from and where a stack pushes, and
+        // a role held by a free name is invisible in the URL alone.
+        for (remote, spec) in &repo.remotes {
+            let role = spec.role.map(|r| r.as_str()).unwrap_or("");
+            let role = if role.is_empty() {
+                String::new()
+            } else {
+                format!("  [{role}]")
+            };
+            println!("      remote        {remote:<10} {}{role}", spec.url);
+            for mirror in &spec.mirrors {
+                println!("        mirror      {mirror}");
+            }
+        }
         if !repo.skip.is_empty() {
-            println!("      skip     {}", repo.skip.join(" "));
+            println!("      skip          {}", repo.skip.join(" "));
         }
         for wt in git.worktrees() {
             if wt.path != path {
                 let b = wt.branch.as_deref().unwrap_or("-");
-                println!("      worktree {b:<16} {}", wt.path.display());
+                println!("      worktree      {b:<16} {}", wt.path.display());
             }
         }
     }
 
-    // Resolved paths when a profile is supplied (or a current branch is known);
-    // otherwise show the raw templates, since resolution needs a branch.
+    // The declared path templates, always — resolution may be impossible (no
+    // branch), but what the file says never is. Read with the same
+    // focus-over-anchor precedence `resolve` applies, so what is printed is the
+    // template that would actually be used and not merely the one nearest to hand.
     let focus = project.focus_name(profile.focus.as_deref());
-    let branch = branch_or_current(ws, project, focus, profile.branch.as_deref()).ok();
-    match branch {
-        Some(branch) => {
-            let plan = resolve::plan(
-                ws,
-                project,
-                &resolve::PlanInput::paths_only(&profile.to_profile(), &branch),
-            )?;
-            let branch = plan
-                .branch
-                .as_ref()
-                .context("branch path query resolved as detached")?;
-            println!("  resolved (branch {}, {}):", branch.slug, plan.build_type);
-            println!("    focus:       {}", plan.focus);
-            if let Some(tc) = &plan.toolchain {
-                println!("    toolchain:   {}", tc.name);
-            }
-            println!(
-                "    repos.{}.workdir: {}",
-                plan.build_repo,
-                plan.work_dir.display()
-            );
-            if plan.source_dir != plan.work_dir {
-                println!("    source_dir:  {}", plan.source_dir.display());
-            }
-            if let Some(b) = &plan.build_dir {
-                println!("    build_dir:   {}", b.display());
-            }
-            if let Some(i) = &plan.install_dir {
-                println!("    install_dir: {}", i.display());
+    let build_repo = resolve::anchor_of(project, focus);
+    let anchor = &project.repos[&build_repo];
+    let focused = &project.repos[focus];
+    let templates = [
+        ("source_dir", anchor.source_dir.as_ref()),
+        (
+            "build_dir",
+            focused.build_dir.as_ref().or(anchor.build_dir.as_ref()),
+        ),
+        (
+            "install_dir",
+            focused.install_dir.as_ref().or(anchor.install_dir.as_ref()),
+        ),
+    ];
+    if templates.iter().any(|(_, t)| t.is_some()) {
+        println!();
+        println!("templates:");
+        for (name, template) in templates {
+            if let Some(template) = template {
+                println!("  {name:<12} {template}");
             }
         }
-        _ => {
-            let focus = project.focus_name(profile.focus.as_deref());
-            let build_repo = resolve::anchor_of(project, focus);
-            let anchor = &project.repos[&build_repo];
-            let focused = &project.repos[focus];
-            if let Some(t) = &anchor.source_dir {
-                println!("  source_dir (template):  {t}");
-            }
-            if let Some(t) = focused.build_dir.as_ref().or(anchor.build_dir.as_ref()) {
-                println!("  build_dir (template):   {t}");
-            }
-            if let Some(t) = focused.install_dir.as_ref().or(anchor.install_dir.as_ref()) {
-                println!("  install_dir (template): {t}");
+    }
+
+    // Resolution needs a branch, so this is the section that degrades: an
+    // unresolvable branch says so rather than silently dropping the section,
+    // since "no resolved paths" and "this project has none" are different facts.
+    let branch = branch_or_current(ws, project, focus, profile.branch.as_deref()).ok();
+    println!();
+    let Some(branch) = branch else {
+        println!("resolved: <no branch discovered — pass --branch to resolve>");
+        return Ok(());
+    };
+    let plan = resolve::plan(
+        ws,
+        project,
+        &resolve::PlanInput::paths_only(&profile.to_profile(), &branch),
+    )?;
+    let identity = plan
+        .branch
+        .as_ref()
+        .context("branch path query resolved as detached")?;
+    println!(
+        "resolved (branch {}, build_type {}):",
+        identity.raw, plan.build_type
+    );
+    // focus / build_repo / identity_repo are three roles one repo usually fills
+    // at once, which is exactly why they are printed separately: when they differ
+    // (a borrowed focus, an anchored subtree) every path below follows a
+    // different one of them.
+    println!("  focus:         {}", plan.focus);
+    println!("  build_repo:    {}", plan.build_repo);
+    println!(
+        "  identity_repo: {}",
+        plan.identity_repo.as_deref().unwrap_or("-")
+    );
+    println!("  strategy:      {}", plan.strategy.as_str());
+    println!("  branch.slug:   {}", identity.slug);
+    if let Some(bs) = plan.build_system {
+        println!("  build_system:  {}", bs.as_str());
+    }
+    if let Some(gen) = &plan.generator {
+        println!("  generator:     {gen}");
+    }
+    if let Some(tc) = &plan.toolchain {
+        println!("  toolchain:     {}", tc.name);
+    }
+    if !plan.presets.is_empty() {
+        println!("  presets:       {}", plan.presets.join(" "));
+    }
+    println!("  source_dir:    {}", plan.source_dir.display());
+    if let Some(dir) = &plan.build_dir {
+        println!("  build_dir:     {}", dir.display());
+    }
+    if let Some(dir) = &plan.install_dir {
+        println!("  install_dir:   {}", dir.display());
+    }
+    for (name, dir) in &plan.work_dirs {
+        println!("  repos.{name}.workdir: {}", dir.display());
+    }
+
+    // The accumulated pipeline result. A path-only resolve skips L0 (there is no
+    // backend to translate a toolchain for), so what shows here is the org,
+    // project, and preset layers — which is what answers "where did this
+    // definition come from", read together with `presets` above.
+    let logical = &plan.logical;
+    if !logical.definitions.is_empty() {
+        println!();
+        println!("definitions:");
+        for (key, value) in &logical.definitions {
+            // The backend's own spelling, so what is reported is what the build
+            // receives — not minijinja's Jinja/Python rendering, in which a
+            // boolean reads `True`.
+            println!("  {key} = {}", value_to_string(value));
+        }
+    }
+    if !logical.environment.is_empty() {
+        println!();
+        println!("environment:");
+        for (key, value) in &logical.environment {
+            println!("  {key} = {value}");
+        }
+    }
+    for (label, args) in [
+        ("extra_config_args", &logical.extra_config_args),
+        ("extra_build_args", &logical.extra_build_args),
+        ("extra_install_args", &logical.extra_install_args),
+    ] {
+        if !args.is_empty() {
+            println!();
+            println!("{label}:");
+            for arg in args {
+                println!("  {arg}");
             }
         }
     }
     Ok(())
 }
 
-// --- info --check -------------------------------------------------------------
+// --- check --------------------------------------------------------------------
 
 fn check(ws: &Workspace, target: Option<&str>) -> Result<()> {
     let projects: Vec<&ProjectData> = match target {

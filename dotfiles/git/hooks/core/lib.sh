@@ -179,7 +179,7 @@ active_build_dir() {
         log_warn "build-dir: wits is unavailable; leaving compile_commands.json alone."
         return 1
     }
-    wits project build-dir "$GIT_TOPLEVEL" --branch "$_abd_branch" 2>/dev/null
+    wits project info --get build_dir "$GIT_TOPLEVEL" --branch "$_abd_branch" 2>/dev/null
 }
 
 # Every build directory that a branch of this checkout identifies, one per line,
@@ -245,8 +245,16 @@ get_main_branch() {
 
     # 1. The wits project registry — authoritative for a known project, below an
     # explicit git-config override but above the remote-HEAD / name guesses.
+    #
+    # `repo.*` is the focus repo, so this reads the focus's own `main_branch`. A
+    # focus that is a *subtree* has none (it shares its anchor's git), and the
+    # registry renders that as the empty string — which the `-n` test below then
+    # passes over to the remote-HEAD tier rather than returning a wrong branch.
+    # That tier is the right answer for such a repo anyway, and wits's own design
+    # notes record a nested focus as a shape that may be removed
+    # (wits/docs/reference/project-design.rst, "Open questions / future").
     if command -v wits >/dev/null 2>&1; then
-        _wits_mb=$(wits project main-branch 2>/dev/null) &&
+        _wits_mb=$(wits project info --get repo.main_branch 2>/dev/null) &&
             [ -n "$_wits_mb" ] && { echo "$_wits_mb"; return; }
     fi
 

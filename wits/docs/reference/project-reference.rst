@@ -20,9 +20,32 @@ CLI
 
 ::
 
-   project [<name|path>] [--check] [--focus <repo>] [profile flags]
+   project <verb> [<name|path>] [--focus <repo>] [profile flags]
    build   [<name|path>] [--focus <repo>] [profile flags] [--detach] [build options]
    update  [<name|path>] [--with-borrowed]
+
+``project`` has one verb per *shape* of question, and nothing else:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Verb
+     - Answers
+   * - ``list``
+     - One summary line per registered project. No positional.
+   * - ``info [<name|path>]``
+     - Everything about one project (default: the one owning the current
+       directory). With ``--get``, one resolved value per line instead.
+   * - ``check [<name|path>]``
+     - Configuration legality. No positional validates every project (CI).
+   * - ``exists <name>``
+     - Exit status only: is this project's ``repos.main`` cloned?
+   * - ``branch-build-dirs [<name|path>]``
+     - ``<project>\t<path>`` per line: every existing build dir a branch of one
+       checkout identifies, across **all** projects.
+   * - ``hash [<name|path>]``
+     - A repo's commit for a branch, optionally descending into submodules.
 
 ``--with-borrowed`` also refreshes repos declared with ``from``, which
 ``update`` otherwise leaves to the project that owns them.
@@ -33,27 +56,67 @@ work-dir`` resolves/discovers one, ``build --work-dir`` accepts any.
 
 Machine-readable queries for scripts and git hooks::
 
-   project exists       <name>
-   project main-branch [<name|path>]
-   project build-dir   [<name|path>] [--branch <X>]
-   project install-dir [<name|path>] [--branch <X>]
-   project source-dir  [<name|path>] [--branch <X>]
-   project work-dir    [<name|path>] [--branch <X>]
-   project hash        [<name|path>] [--submodules none|direct|recursive] [--repos NAME]
+   project exists            <name>
+   project info --get <path> [--get <path>]… [<name|path>] [--branch <X>]
+   project branch-build-dirs [<name|path>] [--branch <X>]
+   project hash              [<name|path>] [--submodules none|direct|recursive] [--repos NAME]
 
 ``exists`` resolves a bare or fully-qualified name, then succeeds only when
 ``repos.main.path`` is the root of a Git working-tree checkout or bare clone.
 A registered but un-cloned project returns a non-zero status; missing and
-ambiguous names remain lookup errors.
+ambiguous names remain lookup errors. It is the one query that never resolves a
+plan, which is why it can answer for a project that is not cloned.
 
-The four ``*-dir`` queries resolve the same build plan as
-``build``/``info`` and print one of its paths — ``build_dir``,
-``install_dir``, ``source_dir``, or the selected repo's ``workdir``
-respectively (``build-dir``/``install-dir`` error when the **build repo**
-declares no such template; ``source-dir``/``work-dir`` are always resolvable).
-The branch defaults to the anchored repo's current one. This is how a checkout
-hook points ``compile_commands.json`` at the active build, or a script changes
-directory into a branch's ``repos.<name>.workdir``.
+``info --get`` — one resolved value per path
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``--get`` takes a **dotted path into the template context** — the identical
+namespace `Context variables`_ documents for config files — and prints its
+resolved value, one line per path, in the order given. There is deliberately no
+separate CLI key vocabulary: ``{{build_dir}}`` in a ``[repos.*]`` table and
+``--get build_dir`` name the same thing, so nothing can drift between them.
+
+.. code-block:: sh
+
+   project info --get build_dir hello -b feature-x
+   project info --get repo.workdir --get repo.main_branch hello -b feature-x
+   project info --get toolchain.linker --get build_type --get project.focus hello
+
+The resolution is the same plan ``build`` would use, so every profile flag
+applies. The branch defaults to the anchored repo's current one.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 74
+
+   * - Rule
+     - Behaviour
+   * - Repeatable
+     - Each ``--get`` prints one line in flag order, from **one** resolve — so a
+       script asks several questions per process instead of one.
+   * - Scalars only
+     - A table or a list is refused (``path 'repos' is a map, not a single
+       value``). A container is not one line, and joining one yields text that
+       no longer round-trips; use the description for those. A non-string
+       *scalar* is fine — an integer or a boolean each have one spelling.
+   * - Booleans
+     - Spelled as TOML does, ``true``/``false``, never Jinja's ``True``.
+   * - All-or-nothing
+     - One failing path fails the whole command, and nothing is printed. A blank
+       line would keep the positions right while making an empty value
+       indistinguishable from an absent one.
+   * - Unbound is an error
+     - A project declaring no ``build_dir`` leaves the path unbound, so
+       ``--get build_dir`` errors rather than printing an empty line.
+
+The resolved output paths ``source_dir``, ``build_dir`` and ``install_dir`` are
+bound back into the context as they are computed, in that order — which is both
+what makes them reachable here and what lets ``install_dir = "{{build_dir}}"``
+replace a second copy of the same expression. A later one may name an earlier
+one, never the reverse.
+
+This is how a checkout hook points ``compile_commands.json`` at the active
+build, or a script changes directory into a branch's ``repo.workdir``.
 
 ``project hash`` prints a repo's commit for a branch — with ``--submodules``,
 descending into pinned gitlinks read from the tree (never a checkout or branch
@@ -201,25 +264,42 @@ interpreted by the tool.
 Modes are mutually exclusive; the default is ``auto`` (configure if needed,
 then build).
 
-``project`` (describe / validate)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``list`` / ``info`` / ``check``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``project`` with no subcommand is the read command:
+* ``list`` — a one-line summary of every project: ``<org/name> focus=… build=…``.
+  Its own verb rather than ``info`` with no positional, so ``info`` describes
+  exactly one project on every path and its omitted positional means what it
+  means for ``build``/``update``: the project owning the current directory.
+* ``info [<name|path>]`` — four sections, in order:
 
-* No positional: a one-line summary of every project.
-* A name or path: full details for that project, including each repo's
-  branch/commit and any worktrees. With profile flags, resolved
-  ``repos.<name>.workdir``/``build_dir``/``install_dir`` are shown; without
-  them, the raw templates.
-* ``--check``: validate configuration legality. No positional validates
-  everything (CI use); a name/path validates one.
+  #. the project — source file, org, focus, build system, generator, toolchain,
+     ``default_presets``;
+  #. its repos — inferred kind, git state, the borrow it came from, its anchor,
+     ``main_branch``, branch strategy, declared remotes (with roles and
+     mirrors), ``skip``, and any worktrees;
+  #. ``templates:`` — the declared ``source_dir``/``build_dir``/``install_dir``,
+     read with the same focus-over-anchor precedence resolution applies;
+  #. ``resolved (branch …, build_type …):`` — focus, build repo and identity
+     repo separately, strategy, ``branch.slug``, build system, generator,
+     toolchain, the presets that applied, every resolved path, and every
+     ``repos.<name>.workdir`` — followed by the accumulated ``definitions``,
+     ``environment`` and ``extra_*_args``.
+
+  Templates and resolution are both printed. They answer different questions,
+  and a mismatch between them is the bug the report exists to expose. Section 4
+  is the only one that needs a branch, so it is the only one that degrades: with
+  none discoverable it says so instead of falling silent.
+* ``check [<name|path>]`` — validate configuration legality. No positional
+  validates everything (CI use); a name/path validates one. Prints ``ok``, or
+  lists problems on stderr and exits non-zero.
 
 Worktrees are not here
 ~~~~~~~~~~~~~~~~~~~~~~
 
 ``project context {create,prune}`` is **removed**; :doc:`/commands/worktree`
 manages worktrees for any repository. Nothing deletes a branch's
-``build_dir`` any more — ``project build-dir`` prints the path.
+``build_dir`` any more — ``project info --get build_dir`` prints the path.
 
 Configuration topology
 ----------------------
@@ -504,23 +584,38 @@ Context variables
    project.{ name, org, focus }
    repo.*                     # the *current* repo (focus repo in project scope;
                               #   the repo itself in a repo-scoped field like a hook)
-     { name, path, kind, main_branch, anchor }
+     { name, path, kind, main_branch, anchor, workdir }
      remotes.<name>.{ url, role, mirrors }   # keyed by remote name
    repos.<name>.*             # any repo by explicit name; same fields as repo.*
+   repos.<name>.workdir       # effective checkout dir for the named repo
    org.environment.<K>        # org entry; inherited, and nameable here too
    org.definitions.<K>        # org entry; inherited, and nameable here too
-   repos.<name>.workdir       # effective checkout dir for the named repo
+   source_dir                 # resolved: where the backend configures from
+   build_dir                  # resolved: bound only when a template declares one
+   install_dir                # resolved: bound only when a template declares one
    branch.{ raw, slug }       # attached builds only: raw branch + filesystem slug
    build_type
    toolchain.{ name, cc, cxx, rustc, ar, nm, ranlib, strip,
                linker, launcher, c_flags, cxx_flags, link_flags }
    generator
-   system.{ os, arch, memory.gb, cpu.count }
+   system.os.{ name, kernel.{ release, major, minor, patch } }
+   system.cpu.{ count, vendor, arch }
+   system.mem.{ mb, gb }
+   system.gpu.*  system.distro.*  system.power.*
+   system.{ hostname, desktop, display, virt }
    env.*                      # process environment
    spec.*                     # CLI-registered vars (--spec K=V); required if referenced
 
-* ``repo`` is a **relative** alias for the repo being resolved; use
-  ``repos.<name>`` to reference any other repo.
+* ``repo`` is a **relative** alias for the repo being resolved, ``workdir``
+  included; use ``repos.<name>`` to reference any other repo. The alias is how a
+  caller that does not know the focus's *name* still names its checkout.
+* ``source_dir``/``build_dir``/``install_dir`` are the pipeline's own resolved
+  outputs, bound back into the context in that order as each is computed. So a
+  later one may name an earlier one — ``install_dir = "{{build_dir}}"`` is the
+  intended way to say "install into the build tree" — and the reverse is an
+  unknown path, not a cycle. A repo declaring no ``build_dir``/``install_dir``
+  leaves that path **unbound**, so naming it fails loudly instead of resolving
+  to an empty string.
 * There is no bare ``{{branch}}``; use ``{{branch.raw}}`` or
   ``{{branch.slug}}``.
 * An explicit ``build --detach`` does not bind ``branch.*``. References
@@ -834,7 +929,7 @@ repo is a git-dir with no working tree at all.
   branch in a worktree already.
 * **worktree**: ``repos.<name>.workdir`` = that repo's resolved
   ``worktree_dir`` for the target branch. It must already exist; ``build``
-  never creates it. ``wits worktree create <branch> "$(project work-dir … --
+  never creates it. ``wits worktree create <branch> "$(project info --get repo.workdir … --
   branch <branch>)"`` makes one.
 * **hybrid**: if Git reports a live worktree currently attached to the target
   branch, its actual path wins regardless of location. Otherwise resolution
@@ -952,7 +1047,7 @@ submodule.
    * - ``update``
      - **Verifies** before doing anything; a contradicted ``skip`` is a hard
        error.
-   * - ``project --check``
+   * - ``project check``
      - Verifies and reports.
 
 Writing the patterns is **refused** when the checkout already has sparse

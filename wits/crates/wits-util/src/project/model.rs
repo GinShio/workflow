@@ -462,6 +462,16 @@ impl BranchStrategy {
         }
     }
 
+    /// The config spelling, the exact inverse of [`parse`](Self::parse) — so what
+    /// a report prints is what a file may be written with.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BranchStrategy::InPlace => "in-place",
+            BranchStrategy::Worktree => "worktree",
+            BranchStrategy::Hybrid => "hybrid",
+        }
+    }
+
     /// Worktree and hybrid repositories use a bare common repository plus
     /// linked working trees; in-place keeps a conventional clone.
     pub fn is_bare_backed(self) -> bool {

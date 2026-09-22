@@ -13,7 +13,7 @@ contains what is actually finished. Today that is:
 | [`wits stack`](docs/commands/stack.rst) | Manage a stack of branches as a set of merge requests (push, open/retarget MRs, navigation) |
 | [`wits review`](docs/commands/review.rst) | Review merge requests locally across forges: fetch, comment, verdict, and submit as one batch |
 | [`wits worktree`](docs/commands/worktree.rst) | Create, inspect, and reclaim git worktrees in any repo (submodules borrowed, not re-cloned) |
-| [`wits project`](docs/commands/project.rst) | Describe/validate source projects from one declarative registry, and answer path queries for scripts |
+| [`wits project`](docs/commands/project.rst) | Describe/validate source projects from one declarative registry, and answer resolved-value queries for scripts |
 | [`wits build`](docs/commands/build.rst) | Configure and build a project on top of that registry (cmake/meson/cargo) |
 | [`wits update`](docs/commands/update.rst) | Refresh git for every repo of a project |
 | [`wits dotfiles`](docs/commands/dotfiles.rst) | Compile a TOML manifest tree into Dotdrop's per-host configs |

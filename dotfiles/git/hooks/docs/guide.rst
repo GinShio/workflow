@@ -461,7 +461,6 @@ A nudge so you do not run against stale dependencies. When a checkout changes a
 lockfile — ``package-lock.json``, ``Cargo.lock``, ``go.sum``, ``poetry.lock``,
 and the rest — it reminds you to reinstall. It only ever warns; it will not run
 your package manager for you. The watcher matches by basename anywhere in the
-The watcher matches by basename anywhere in the
 tree, so the exact path does not matter. (The same script also runs on
 ``post-merge`` and ``post-rewrite``, comparing the tree before the operation
 — git's ``ORIG_HEAD`` after a merge, the rewritten commits' old tips on the
@@ -548,7 +547,6 @@ and dependency-change scripts from ``post-checkout``; ``post-rewrite`` likewise
 runs both, since a rebase or amend can surface freshly smudged secrets — and
 the lockfiles the upstream you just rebased onto has moved. There is nothing
 framework-specific to configure on
-any of them — they do their one job and get out of the way.
 any of them — they do their one job and get out of the way.
 
 .. _turning-pieces-off:

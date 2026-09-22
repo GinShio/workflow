@@ -8,12 +8,12 @@
 # at startup only registers completions and defines functions; every query
 # runs at TAB time.
 
-# Projects: `wits project` prints one `org/name focus=… build=…` row per
+# Projects: `wits project list` prints one `org/name focus=… build=…` row per
 # project. Both the bare name and org/name are accepted as [NAME|PATH]
 # (wits/docs/commands/project.rst), so the candidate is the bare name with
 # org/name as the description.
 function __wits_projects
-    wits project 2>/dev/null | while read -l row
+    wits project list 2>/dev/null | while read -l row
         set -l orgname (string split -f 1 ' ' -- $row)
         string match -q '*/*' -- $orgname; or continue
         printf '%s\t%s\n' (string split -m 1 -f 2 / -- $orgname) $orgname
@@ -21,6 +21,42 @@ function __wits_projects
 end
 complete -c wits -f -n '__fish_seen_subcommand_from build update' -a '(__wits_projects)'
 complete -c wits -f -n '__fish_seen_subcommand_from project' -a '(__wits_projects)'
+
+# `project info --get` paths: a dotted lookup into the template context
+# (wits/docs/reference/project-reference.rst). The namespace is open — `env.*`
+# and a repo's `remotes.*` are only known at resolve time — so this offers the
+# roots and the enumerable leaves and leaves the rest to typing, which is the
+# same bargain the toolchain/preset completions below make. The `repos.<name>.*`
+# entries need the repo names, which come out of the config tree the same way
+# the preset names do.
+function __wits_project_get_paths
+    # Resolved plan outputs and the Profile axes: flat, always present.
+    printf '%s\n' source_dir build_dir install_dir build_type generator
+    # The focus repo, by its relative alias — `workdir` included, which is how a
+    # caller names the focus's checkout without knowing its repo name.
+    for f in name path kind main_branch anchor workdir
+        printf 'repo.%s\n' $f
+    end
+    printf '%s\n' project.name project.org project.focus
+    printf '%s\n' branch.raw branch.slug
+    for f in name cc cxx rustc ar nm ranlib strip linker launcher \
+        c_flags cxx_flags link_flags
+        printf 'toolchain.%s\n' $f
+    end
+    printf '%s\n' system.os.name system.cpu.count system.cpu.arch \
+        system.mem.gb system.mem.mb
+    # Every declared repo, so `repos.<name>.workdir` completes without typing
+    # the name. Section headers are the documented config surface.
+    set -l dir (__wits_project_dir)
+    for repo in (grep -hoE '^[[:space:]]*\[repos\.("[^"]+"|[^].]+)' $dir/*.toml 2>/dev/null \
+            | string replace -r '^[[:space:]]*\[repos\.("[^"]+"|[^].]+).*' '$1' \
+            | string trim --chars='"' | sort -u)
+        for f in name path kind main_branch anchor workdir
+            printf 'repos.%s.%s\n' $repo $f
+        end
+    end
+end
+complete -c wits -f -l get -r -a '(__wits_project_get_paths)'
 
 # Branches: local branches of the current repo. Self-contained — fish 4.x
 # removed the old __fish_git_branches helper, and depending on which of its

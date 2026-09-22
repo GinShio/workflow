@@ -320,7 +320,7 @@ afterwards would mean cloning a skipped submodule in full and only then
 deinitialising it. Later ``wits worktree create`` calls are driven from that
 bootstrap checkout, so Git copies the mask.
 
-``update`` and ``project --check`` only *verify*, in that repo's own checkout
+``update`` and ``project check`` only *verify*, in that repo's own checkout
 — the in-place clone itself, or for a bare-backed repo the worktree holding
 ``main_branch``, falling back to whichever checkout stands in for its missing
 main worktree. Both look at the same checkout, so a ``--check`` that passes is
@@ -382,13 +382,15 @@ worktree to exist and never creates one implicitly:
 
 .. code-block:: sh
 
-   wits worktree create feature-x "$(project work-dir hello --branch feature-x)"
+   wits worktree create feature-x \
+       "$(project info --get repo.workdir hello --branch feature-x)"
    build hello --branch feature-x                    # build in it
    wits worktree prune feature-x                     # reclaim it when done
 
 Creating and reclaiming worktrees belongs to :doc:`worktree`, which does it
 for **any** repository rather than only a registered one. ``project`` and
-worktrees meet at a path and nowhere else: ask ``project work-dir`` where the
+worktrees meet at a path and nowhere else: ask ``project info --get
+``repo.workdir`` where the
 strategy says the checkout goes, or skip the registry entirely and point
 ``build --work-dir`` at a worktree you made yourself.
 
@@ -412,8 +414,8 @@ converted.
 
    Removing a worktree does not remove its **build directory**; ``wits
    worktree`` is project-agnostic and knows nothing about build dirs. Delete
-   it yourself when you want the space back — ``project build-dir hello
-   --branch feature-x`` prints the path.
+   it yourself when you want the space back — ``project info --get build_dir
+   hello --branch feature-x`` prints the path.
 
 Updating
 --------
@@ -441,30 +443,59 @@ Inspecting and validating
 
 .. code-block:: sh
 
-   project                       # one-line summary of every project
-   project hello                 # details for one
-   project hello -b feature-x -B release   # resolved build/install/work dirs for that profile
-   project --check               # validate every project's config (CI)
-   project --check hello         # validate one
+   project list                  # one-line summary of every project
+   project info hello            # everything known about one
+   project info hello -b feature-x -B release   # …resolved for that profile
+   project check                 # validate every project's config (CI)
+   project check hello           # validate one
 
 ``project`` is pure read — it never builds or switches anything.
+
+``project info`` prints four sections: what the project is, its repos with
+their git state, the path **templates** it declares, and the **resolution** of
+those templates for one branch (plus the presets that applied and the
+definitions/environment they produced). Templates and resolution are both shown
+because they answer different questions, and a mismatch between them is usually
+the bug you opened ``info`` to find. Resolution needs a branch, so that is the
+one section that degrades — without ``-b``, and outside a checkout whose branch
+can be discovered, it says so rather than going quiet.
 
 Machine-readable queries for scripts and git hooks
 --------------------------------------------------
 
-The ``*-dir`` queries resolve the same build plan as ``build`` and print one
-line, which is what makes them usable from a shell:
+``info --get <path>`` prints one resolved value per line instead of the
+description. The path is a dotted lookup into **the same template context the
+config files are written against**, so there is no second vocabulary to learn:
+what ``{{build_dir}}`` or ``{{repos.main.workdir}}`` means in a ``[repos.*]``
+table is what it means here.
 
 .. code-block:: sh
 
-   project exists       hello        # exit 0 when hello's main repo is cloned
-   project main-branch              # the main branch of the repo you're in
-   project build-dir   hello -b feature-x
-   project install-dir hello -b feature-x
-   project source-dir  hello -b feature-x
-   project work-dir    hello -b feature-x
-   project branch-build-dirs  hello -b feature-x
-   project hash        hello --submodules recursive --repos <submodule>
+   project info --get build_dir hello -b feature-x
+   project info --get install_dir hello -b feature-x
+   project info --get source_dir hello -b feature-x
+   project info --get repo.workdir hello -b feature-x   # the focus's checkout
+   project info --get repo.main_branch                  # of the repo you're in
+   project info --get toolchain.linker --get build_type hello
+
+``--get`` is repeatable, and each path prints one line in the order given — so a
+script reads several answers out of **one** resolve rather than paying a registry
+load per question. Two rules keep that safe to read back positionally: the value
+must be a **scalar** (a table or a list is refused, with the description as the
+place to look instead), and one failing path fails the whole command rather than
+emitting a blank line you could not tell from an empty value.
+
+The other three queries stay their own verbs, because each has a shape ``--get``
+does not. ``exists`` answers with an **exit status** and works on a project that
+is not cloned, so it never resolves a plan at all; ``branch-build-dirs`` returns
+0..N rows spanning *other* projects; ``hash`` carries its own flags and walks git
+objects rather than resolving config.
+
+.. code-block:: sh
+
+   project exists hello                  # exit 0 when hello's main repo is cloned
+   project branch-build-dirs hello -b feature-x
+   project hash hello --submodules recursive --repos <submodule>
 
 ``project hash`` reads a repo's commit hash for a branch — and, with
 ``--submodules``, the pinned hashes below it — straight from the tree, so no
@@ -476,12 +507,12 @@ checked-out commit rather than the pinned one. ``NAME`` must be a declared
 requires ``--submodules direct|recursive``, and may be repeated and/or
 comma-separated. Only submodules that are actually checked out are reported.
 
-``project branch-build-dirs`` is the reverse of ``build-dir``: given a checkout
-and a branch it prints every **existing** build directory that branch
+``project branch-build-dirs`` is the reverse of ``--get build_dir``: given a
+checkout and a branch it prints every **existing** build directory that branch
 identifies, across all projects, as ``<project>\t<path>`` per line. The
 cross-project shape is the point — a borrowed component can be the build
-identity of several projects at once, so the single answer ``build-dir`` gives
-would leave every borrower's tree behind when the branch goes away. A project
+identity of several projects at once, so the single answer ``--get build_dir``
+gives would leave every borrower's tree behind when the branch goes away. A project
 that borrows the checkout but focuses elsewhere builds under its *own* branch and
 is left out, as is a build directory whose path does not vary by branch; both are
 derived from the registry rather than declared in it. It prints and removes
@@ -489,8 +520,8 @@ nothing — ``project`` is read-only, and the caller that deletes wants its own
 confirmation.
 
 These exist to be consumed: a checkout hook points ``compile_commands.json``
-at the active build, a script changes into a branch's ``work-dir``, a cleanup
-hook asks which build trees a deleted branch orphaned.
+at the active build, a script changes into a branch's ``repo.workdir``, a
+cleanup hook asks which build trees a deleted branch orphaned.
 
 Running from inside a checkout
 ------------------------------

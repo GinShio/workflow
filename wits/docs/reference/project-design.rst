@@ -73,7 +73,9 @@ all.
 
 ::
 
-   wits project [<name|path>] [--check]                # describe / list / validate (read-only; the default)
+   wits project list                                   # summarise every project
+   wits project info  [<name|path>] [--get <path>]…    # describe one, or print resolved values
+   wits project check [<name|path>]                    # validate configuration
    wits build   [<name|path>]                          # configure + build + (un)install
    wits update  [<name|path>]                          # refresh git for a project's repos
 
@@ -690,7 +692,7 @@ tree that already holds the content means deleting checked-out work, and
 ``update`` never touches a working tree. So ``clone`` **applies** it —
 legitimate, because the tree is ours and still being built, so removing what
 config says not to keep is finishing construction rather than repairing
-reality — while ``update`` and ``project --check`` only **verify**, and fail.
+reality — while ``update`` and ``project check`` only **verify**, and fail.
 Converting an existing checkout stays your ``git`` call; ``-v`` prints
 exactly which commands, in the order that works. This is the mechanism at the
 lifecycle level: we build what you declared and refuse to fight what you
@@ -1081,7 +1083,11 @@ Context variables
    toolchain.{ name, cc, cxx, rustc, ar, nm, ranlib, strip, linker, launcher,
                c_flags, cxx_flags, link_flags }
    generator
-   system.{ os, arch, memory.gb, cpu.count }
+   system.os.{ name, kernel.{ release, major, minor, patch } }
+   system.cpu.{ count, vendor, arch }
+   system.mem.{ mb, gb }
+   system.gpu.*  system.distro.*  system.power.*
+   system.{ hostname, desktop, display, virt }
    env.*                      # process environment
    spec.*                     # CLI-registered vars (--spec K=V); purely
                               #   referenceable — supplied on the command line,
@@ -1299,7 +1305,7 @@ by ``build``. ``steps`` runs at emit and owns the definition→argv spelling
 meson's ``coredata.dat``, none for cargo) — none of which the core ever sees.
 
 Whether a declared ``build_system`` actually *has* a backend is reported by
-``wits build`` at run time, not by ``wits project --check``: the core does
+``wits build`` at run time, not by ``wits project check``: the core does
 not know the set of supported build systems, so ``--check`` validates only
 declared-fact consistency (e.g. a toolchain's ``supports`` list vs the
 ``build_system``).
@@ -1342,14 +1348,14 @@ retired it:
   lossier than git's own copy.
 
 The ``--work-dir`` override is what remains of the seam, and it is enough:
-``project work-dir`` returns the deterministic path (worktree) or the
+``project info --get repo.workdir`` returns the deterministic path (worktree) or the
 discovered path/fallback suggestion (hybrid), ``wits worktree create`` makes
 one anywhere, and ``build --work-dir`` builds from whatever you hand it. The
 two components meet at a path and share no code.
 
 What genuinely went away is the **build-dir teardown** — nothing else deletes
 a branch's ``build_dir``, because ``wits worktree`` is project-agnostic by
-design and knows nothing about build dirs. ``project build-dir`` prints the
+design and knows nothing about build dirs. ``project info --get build_dir`` prints the
 path to delete. Install prefixes were never in scope either way; install
 reversal is ``build --uninstall``.
 
@@ -1390,14 +1396,24 @@ not from this registry — see :doc:`stack-design`.)
 CLI contract
 ~~~~~~~~~~~~
 
-* **``project [<name>]``** — the read command. No name lists a summary of
-  every project; a name gives details. With ``Profile`` flags it shows
-  resolved build/install/work dirs; without them it shows the raw templates.
-  It also lists a project's worktrees and their resolved dirs. Pure read.
-* **``project --check [<name>]``** — config-legality validation (required
+* **``project list``** — a summary line per project. Its own verb so that
+  ``info``'s omitted positional can mean "the project owning this directory",
+  the way ``build``/``update``'s does, instead of "all of them".
+* **``project info [<name>]``** — the description: the project, its repos and
+  their git state, the declared path *templates*, and the resolution of those
+  templates for one branch (with the presets that applied and the config they
+  produced). Both template and resolution, because a mismatch between them is
+  what the report is for. Pure read.
+* **``project info --get <path>…``** — the same resolve, projected to one value
+  per dotted context path, one line each, repeatable. This is the answer to the
+  scriptable-output question below: the machine-readable form is a *projection
+  of the human one*, in the config's own vocabulary, rather than a second
+  serialization of it. Scalars only, and one bad path fails the command — both
+  so N lines can be read back positionally.
+* **``project check [<name>]``** — config-legality validation (required
   fields, valid build system, preset/inheritance cycles, template
   resolvability, toolchain references exist). No name checks everything (CI
-  use). A ``--check`` mode of the read command rather than a separate verb.
+  use). Its own verb: validating is not a mode of describing.
 * **``build <name>``** — resolves a full ``Profile``, runs the pipeline and
   the backend emit, honouring the focus repo's branch strategy.
 * **``update [<name>]``** — the lifecycle over all of the project's repos; no
@@ -1465,8 +1481,14 @@ umbrella binary name is a separate, out-of-scope concern.)
 Open questions / future
 -----------------------
 
-* **[open]** Output *format* of ``project`` (``--json`` rejected as the
-  answer; the exact human/scriptable format is to be designed).
+* **decided** Output *format* of ``project``. ``--json`` stayed rejected, and
+  the answer is not a format at all: ``info`` renders for a human, and
+  ``info --get <path>`` projects one scalar out of the *same* resolve for a
+  script. The query vocabulary is the template context the config files already
+  use, so no third namespace exists to document or let drift — the cost is that
+  ``--get`` reaches only what the context binds, which is why the resolved
+  ``source_dir``/``build_dir``/``install_dir`` are now bound back into it and
+  why ``exists``/``branch-build-dirs``/``hash`` stay separate verbs.
 * **future** Which backends ship in v1 (cmake / meson / cargo are confirmed
   real; bazel / make pending a real need).
 * **future** The finer points of submodules inside worktrees beyond the v1

@@ -9,7 +9,7 @@ default_presets = ["common"]
 path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
 source_dir = "{{repos.main.workdir}}/llvm"
 build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}-{{build_type}}"
-install_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}-{{build_type}}"
+install_dir = "{{build_dir}}"
 main_branch = "main"
 [repos.main.remotes]
 upstream = "https://github.com/llvm/llvm-project.git"
