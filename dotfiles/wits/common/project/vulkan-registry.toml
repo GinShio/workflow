@@ -1,0 +1,13 @@
+[project]
+org = "khronos"
+
+[repos.main]
+path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
+main_branch = "main"
+[repos.main.remotes]
+origin = "https://github.com/GinShio/SPIRV-Registry.git"
+{%@@ if "khronos3d" in overlays @@%}
+upstream = "https://gitlab.khronos.org/vulkan/vulkan.git"
+{%@@ else @@%}
+upstream = "https://github.com/KhronosGroup/Vulkan-Docs.git"
+{%@@ endif @@%}
