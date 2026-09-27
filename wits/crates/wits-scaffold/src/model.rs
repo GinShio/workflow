@@ -68,7 +68,6 @@ pub struct SpvPlane {
     /// `spv_vnd_widget`.
     pub snake: String,
     /// The registered vendor tag, `VND`, taken from the name.
-    #[serde(default)]
     pub vendor: String,
     /// Grammar type declarations, kept separate because their result shape and
     /// target registration differ from ordinary operations.
