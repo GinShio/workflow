@@ -22,6 +22,10 @@
     <extension supported=> vulkan and disabled
     <spirvextension>       the version / extension / feature enable forms
     <spirvcapability>      the property enable form
+
+  Beyond the schema, the header generator's emission order, which is what
+  decides the extension a type belongs to: see the extensions after
+  VK_TEST_disabled_widget.
 -->
 <registry>
     <!--
@@ -73,6 +77,16 @@
 
         <!-- Referenced by the extension, defined elsewhere: nothing to declare. -->
         <type category="enum" name="VkFormat"/>
+
+        <!-- For the emission-order extensions after VK_TEST_disabled_widget. -->
+        <type category="enum" name="VkWidgetScopeKHR"/>
+        <type category="union" name="VkWidgetAddressKHR">
+            <member><type>uint64_t</type> <name>address</name></member>
+        </type>
+        <type category="struct" name="VkWidgetEarlyInfoEXT">
+            <member><type>VkWidgetEarlyModeEXT</type> <name>mode</name></member>
+        </type>
+        <type category="enum" name="VkWidgetEarlyModeEXT"/>
     </types>
 
     <!--
@@ -180,6 +194,49 @@
             <require>
                 <enum value="1" name="VK_TEST_DISABLED_WIDGET_SPEC_VERSION"/>
                 <command name="vkTestHiddenTEST"/>
+            </require>
+        </extension>
+
+        <!--
+          Emission order. The header generator declares a type under the first
+          block that reaches it in its own order - sortorder, then core, then
+          the Khronos extensions, then the rest, each by number - and declares
+          what that type depends on alongside it. Document order, which is
+          number order, would credit every type here to the wrong extension.
+        -->
+        <!-- sortorder="1" defers this past VK_EXT_test_early, which uses its
+             union and so declares it. -->
+        <extension name="VK_KHR_test_deferred" number="240" sortorder="1" type="device"
+                   author="KHR" contact="nobody" supported="vulkan">
+            <require>
+                <enum value="1" name="VK_KHR_TEST_DEFERRED_SPEC_VERSION"/>
+                <type name="VkWidgetAddressKHR"/>
+            </require>
+        </extension>
+        <!-- Numbered before VK_KHR_test_scope, emitted after it: a vendor
+             extension naming a KHR type does not declare it. -->
+        <extension name="VK_NV_test_scope_user" number="250" type="device"
+                   author="NV" contact="nobody" supported="vulkan">
+            <require>
+                <enum value="1" name="VK_NV_TEST_SCOPE_USER_SPEC_VERSION"/>
+                <type name="VkWidgetScopeKHR"/>
+            </require>
+        </extension>
+        <!-- Lists the struct but not the enum its member uses; the enum is
+             declared here all the same, as a dependency. -->
+        <extension name="VK_EXT_test_early" number="260" type="device"
+                   author="EXT" contact="nobody" supported="vulkan">
+            <require>
+                <enum value="1" name="VK_EXT_TEST_EARLY_SPEC_VERSION"/>
+                <type name="VkWidgetAddressKHR"/>
+                <type name="VkWidgetEarlyInfoEXT"/>
+            </require>
+        </extension>
+        <extension name="VK_KHR_test_scope" number="300" type="device"
+                   author="KHR" contact="nobody" supported="vulkan">
+            <require>
+                <enum value="1" name="VK_KHR_TEST_SCOPE_SPEC_VERSION"/>
+                <type name="VkWidgetScopeKHR"/>
             </require>
         </extension>
     </extensions>

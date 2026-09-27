@@ -181,6 +181,15 @@ in ``registry.rnc``, so "what is missing" is answered by diffing against the
 schema rather than by judgement. Alias chains are resolved with cycle checks,
 while immediate alias targets remain available to templates.
 
+A type is recorded for the extension the Vulkan header declares it under. The
+registry does not say which that is: its header generator decides, by the order
+it emits blocks in — ``sortorder``, then core, then the Khronos extensions, then
+the rest, each by number — and by declaring a type together with the types it
+depends on. An extension's ``<require>`` list is therefore not the answer. It
+names types another block declared first, which the descriptor leaves out, and
+it omits types that are declared under it only as dependencies, which the
+descriptor includes.
+
 Commands carry their exact parameter declarations, dispatch class, alias family
 and requirement conditions, together with the recording constraints the registry
 states: ``success_codes``, ``error_codes``, ``queues``, ``cmd_buffer_level``,

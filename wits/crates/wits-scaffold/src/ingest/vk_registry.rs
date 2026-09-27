@@ -11,7 +11,7 @@
 //! diffing this module against the schema, rather than one that needs a survey
 //! of the document.
 //!
-//! ## Two indirections worth spelling out
+//! ## Three indirections worth spelling out
 //!
 //! A struct names its `VkStructureType` *inside itself*, on the `sType` member's
 //! `values` attribute. Following that pairs the two exactly, where deriving one
@@ -22,6 +22,11 @@
 //! A platform extension's guard macro is spelled only in `<platforms>`; the
 //! extension names a platform, and no `<require>` carries a `protect` attribute
 //! at all. See [`platform_protect`].
+//!
+//! Which extension a type belongs to is not written down anywhere. The header
+//! generator settles it by the order it emits blocks in, and a `<require>` list
+//! both names types another block declares and omits types its own block does,
+//! so the list cannot answer it. See [`declared_by`].
 
 use anyhow::{bail, Context, Result};
 use roxmltree::{Document, Node};
@@ -50,9 +55,8 @@ pub fn extract(text: &str, name: &str) -> Result<(VkPlane, Vec<String>)> {
     // `supported` lists the APIs an extension belongs to. A disabled or
     // Vulkan SC-only one is spelled out in full here, so nothing about its
     // contents distinguishes it from one worth scaffolding — only this does.
-    // Absent is treated as Vulkan, for the hand-written documents that omit it.
-    let supported = extension.attribute("supported").unwrap_or("vulkan");
-    if !supported.split(',').any(|api| api == "vulkan") {
+    let supported = supported_apis(extension);
+    if !names_vulkan(supported) {
         bail!("{name} is supported = \"{supported}\", which does not include vulkan");
     }
 
@@ -108,15 +112,7 @@ pub fn extract(text: &str, name: &str) -> Result<(VkPlane, Vec<String>)> {
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
 
-    let requirements: Vec<_> = extension
-        .children()
-        .filter(|node| node.has_tag_name("require"))
-        .filter(|requirement| {
-            requirement
-                .attribute("api")
-                .is_none_or(|api| api.split(',').any(|entry| entry == "vulkan"))
-        })
-        .collect();
+    let requirements: Vec<_> = vulkan_requirements(extension).collect();
 
     plane.features = requirements
         .iter()
@@ -176,41 +172,16 @@ pub fn extract(text: &str, name: &str) -> Result<(VkPlane, Vec<String>)> {
     }
     plane.enumerators = dedupe_enumerators(plane.enumerators, &mut notes);
 
-    // Which tags this extension actually introduces. A `<require>` also names
-    // structs that merely have to exist, and emitting those would duplicate
-    // another extension's declarations.
+    // The tags this extension gives a value to, which are the only ones it can
+    // register a struct through.
     let introduced: std::collections::BTreeSet<&str> = plane
         .enumerators
         .iter()
         .map(|enumerator| enumerator.name.as_str())
         .collect();
-    // Named but valueless is a third case, distinct from both: the tag is
-    // mentioned and yet cannot be registered, which is worth a note.
-    let mentioned: std::collections::BTreeSet<&str> = requirements
-        .iter()
-        .flat_map(|requirement| requirement.descendants())
-        .filter(|node| node.has_tag_name("enum"))
-        .filter_map(|node| node.attribute("name"))
-        .collect();
 
-    let owners = type_owners(&doc);
     let mut structs = Vec::new();
-    for referenced in requirements
-        .iter()
-        .flat_map(|requirement| requirement.descendants())
-        .filter(|node| node.has_tag_name("type"))
-        .filter_map(|node| node.attribute("name"))
-    {
-        let Some(type_node) = find_type(&doc, referenced) else {
-            continue;
-        };
-        // A `<require>` names every type the extension's declarations mention,
-        // most of which core or an earlier extension already defined. Only the
-        // first requirement introduces a type; the rest are references, and
-        // generating them again would redeclare somebody else's.
-        if owners.get(referenced).copied() != Some(name) {
-            continue;
-        }
+    for (referenced, type_node) in declared_by(&doc, name) {
         if let Some(alias_of) = type_node.attribute("alias") {
             plane.type_aliases.push(VkAlias {
                 name: referenced.to_owned(),
@@ -227,11 +198,14 @@ pub fn extract(text: &str, name: &str) -> Result<(VkPlane, Vec<String>)> {
                 let record = struct_of(type_node, referenced)?;
                 // A chainable struct reaches a tree through its tag, so a tag
                 // with no value leaves it unregisterable — say so rather than
-                // emitting a declaration nothing can reference. A struct with
-                // no `sType` has no such gate and is simply declared.
+                // emitting a declaration nothing can reference. The tag may be
+                // named here without a value, or not named at all when the
+                // struct came in as a dependency of one this extension lists.
+                // A struct with no `sType` has no such gate and is simply
+                // declared.
                 if record.stype.is_empty() || introduced.contains(record.stype.as_str()) {
                     structs.push(record);
-                } else if mentioned.contains(record.stype.as_str()) {
+                } else {
                     notes.push(format!(
                         "{referenced}: its {} has no value in this extension's require block, so \
                          the struct cannot be registered",
@@ -274,7 +248,6 @@ pub fn extract(text: &str, name: &str) -> Result<(VkPlane, Vec<String>)> {
     plane.structs = structs;
 
     plane.spirv = spirv_requirements(&doc, name);
-    plane.type_aliases = dedupe_aliases(plane.type_aliases, "type", &mut notes);
 
     if plane.is_empty() {
         bail!("{name} adds no modeled API surface; there is nothing to scaffold");
@@ -282,53 +255,221 @@ pub fn extract(text: &str, name: &str) -> Result<(VkPlane, Vec<String>)> {
     Ok((plane, notes))
 }
 
-fn dedupe_aliases(aliases: Vec<VkAlias>, what: &str, notes: &mut Vec<String>) -> Vec<VkAlias> {
-    let mut kept: Vec<VkAlias> = Vec::new();
-    for alias in aliases {
-        if let Some(existing) = kept.iter().find(|entry| entry.name == alias.name) {
-            if existing.alias_of != alias.alias_of {
-                notes.push(format!(
-                    "{what} alias {} names both {} and {}; kept the first",
-                    alias.name, existing.alias_of, alias.alias_of
-                ));
-            }
-            continue;
-        }
-        kept.push(alias);
-    }
-    kept
+/// Whether a registry API list — an `api` or `supported` attribute — names
+/// Vulkan.
+fn names_vulkan(apis: &str) -> bool {
+    apis.split(',').any(|api| api == "vulkan")
 }
 
-/// Which core version or extension first requires each type.
+/// An extension's `supported` list. Absent is read as Vulkan, for the
+/// hand-written documents that omit it.
+fn supported_apis<'a>(extension: Node<'a, 'a>) -> &'a str {
+    extension.attribute("supported").unwrap_or("vulkan")
+}
+
+/// A feature's or extension's `<require>` blocks that apply to Vulkan.
+fn vulkan_requirements<'a>(block: Node<'a, 'a>) -> impl Iterator<Item = Node<'a, 'a>> {
+    block.children().filter(|node| {
+        node.has_tag_name("require") && node.attribute("api").is_none_or(names_vulkan)
+    })
+}
+
+/// The types the Vulkan header declares under `extension`, in the order its
+/// generator reaches them.
 ///
-/// The registry never says outright who *defines* a type. What it does give is
-/// order: a type is introduced by the first `<feature>` or `<extension>` that
-/// requires it, and every later mention is a reference. Built once per document
-/// because the alternative is a document scan per referenced type.
-fn type_owners<'a>(doc: &'a Document<'a>) -> std::collections::BTreeMap<&'a str, &'a str> {
-    let mut owners = std::collections::BTreeMap::new();
-    for block in doc.descendants().filter(|node| {
-        // `<feature>` is also the spelling of a feature *bit* inside a
-        // `<require>`, so the parent decides which one this is.
-        (node.has_tag_name("feature") || node.has_tag_name("extension"))
-            && node.parent().is_some_and(|parent| {
-                parent.has_tag_name("registry") || parent.has_tag_name("extensions")
-            })
-    }) {
-        let Some(owner) = block.attribute("name") else {
-            continue;
-        };
-        for required in block
-            .children()
-            .filter(|node| node.has_tag_name("require"))
-            .flat_map(|node| node.children())
-            .filter(|node| node.has_tag_name("type"))
-            .filter_map(|node| node.attribute("name"))
-        {
-            owners.entry(required).or_insert(owner);
+/// The registry never says outright who *defines* a type; its header generator
+/// decides, and this repeats its walk (Vulkan-Docs `scripts/reg.py`,
+/// `generateRequiredInterface` and `generateFeature`). Blocks are visited in
+/// [`emission_rank`] order, and a type is declared under the first block that
+/// requires it — listed as a `<type>`, or used by a `<command>` it lists —
+/// together with everything that type depends on: whatever its `alias`,
+/// `requires` and `bitvalues` name, and every `<type>` inside its definition.
+///
+/// A `<require>` list therefore cannot answer the question alone. It names
+/// types another block declared first, and it omits types its own block
+/// declares as dependencies.
+fn declared_by<'a>(doc: &'a Document<'a>, extension: &str) -> Vec<(&'a str, Node<'a, 'a>)> {
+    let mut walk = HeaderWalk {
+        types: vulkan_definitions(doc, "types", "type", type_name_of),
+        commands: vulkan_definitions(doc, "commands", "command", command_name_of),
+        declared_types: std::collections::BTreeSet::new(),
+        declared_commands: std::collections::BTreeSet::new(),
+    };
+    let mut blocks: Vec<_> = doc
+        .descendants()
+        .filter(|node| is_vulkan_block(*node))
+        .collect();
+    blocks.sort_by_key(|block| emission_rank(*block));
+
+    for block in blocks {
+        let mut reached = Vec::new();
+        for requirement in vulkan_requirements(block) {
+            // Types before commands within each `<require>`, as the generator
+            // takes them, so the listed types come first in the descriptor too.
+            for listed in requirement
+                .children()
+                .filter(|node| node.has_tag_name("type"))
+                .filter_map(|node| node.attribute("name"))
+            {
+                walk.declare_type(listed, &mut reached);
+            }
+            for command in requirement
+                .children()
+                .filter(|node| node.has_tag_name("command"))
+                .filter_map(|node| node.attribute("name"))
+            {
+                walk.declare_command(command, &mut reached);
+            }
+        }
+        if block.attribute("name") == Some(extension) {
+            return reached;
         }
     }
-    owners
+    Vec::new()
+}
+
+/// The header generator's bookkeeping: what exists, and what some block has
+/// already declared.
+struct HeaderWalk<'a> {
+    types: std::collections::BTreeMap<&'a str, Node<'a, 'a>>,
+    commands: std::collections::BTreeMap<&'a str, Node<'a, 'a>>,
+    declared_types: std::collections::BTreeSet<&'a str>,
+    declared_commands: std::collections::BTreeSet<&'a str>,
+}
+
+impl<'a> HeaderWalk<'a> {
+    /// Declare `name` in the block being walked, with its dependencies, unless
+    /// an earlier block already did. A name the registry does not define as a
+    /// Vulkan type — a C scalar the headers take from elsewhere — is skipped.
+    fn declare_type(&mut self, name: &'a str, reached: &mut Vec<(&'a str, Node<'a, 'a>)>) {
+        let Some(&node) = self.types.get(name) else {
+            return;
+        };
+        if !self.declared_types.insert(name) {
+            return;
+        }
+        reached.push((name, node));
+        for dependency in ["alias", "requires", "bitvalues"]
+            .into_iter()
+            .filter_map(|attribute| node.attribute(attribute))
+        {
+            self.declare_type(dependency, reached);
+        }
+        for nested in node
+            .descendants()
+            .filter(|child| *child != node && child.has_tag_name("type"))
+            .filter_map(|child| child.text())
+        {
+            self.declare_type(nested, reached);
+        }
+    }
+
+    /// Declare every type a command's prototype and parameters use, following
+    /// an alias to the definition it names.
+    fn declare_command(&mut self, name: &'a str, reached: &mut Vec<(&'a str, Node<'a, 'a>)>) {
+        let Some(&node) = self.commands.get(name) else {
+            return;
+        };
+        if !self.declared_commands.insert(name) {
+            return;
+        }
+        if let Some(alias) = node.attribute("alias") {
+            self.declare_command(alias, reached);
+        }
+        for used in node
+            .descendants()
+            .filter(|child| child.has_tag_name("type"))
+            .filter_map(|child| child.text())
+        {
+            self.declare_type(used, reached);
+        }
+    }
+}
+
+/// Every Vulkan definition under `<section>`, by name.
+///
+/// A few are defined twice, once for Vulkan and once for Vulkan SC; only the
+/// first Vulkan one counts.
+fn vulkan_definitions<'a>(
+    doc: &'a Document<'a>,
+    section: &str,
+    tag: &str,
+    name_of: fn(Node<'a, 'a>) -> Option<&'a str>,
+) -> std::collections::BTreeMap<&'a str, Node<'a, 'a>> {
+    let mut found = std::collections::BTreeMap::new();
+    for node in doc.descendants().filter(|node| {
+        node.has_tag_name(tag)
+            && node
+                .parent()
+                .is_some_and(|parent| parent.has_tag_name(section))
+            && node.attribute("api").is_none_or(names_vulkan)
+    }) {
+        if let Some(name) = name_of(node) {
+            found.entry(name).or_insert(node);
+        }
+    }
+    found
+}
+
+/// A top-level `<feature>` or `<extension>` that is part of Vulkan.
+///
+/// `<feature>` is also the spelling of a feature *bit* inside a `<require>`, so
+/// the parent decides which one a node is.
+fn is_vulkan_block(node: Node<'_, '_>) -> bool {
+    let parent_is = |tag| node.parent().is_some_and(|parent| parent.has_tag_name(tag));
+    if node.has_tag_name("feature") {
+        parent_is("registry") && node.attribute("api").is_none_or(names_vulkan)
+    } else if node.has_tag_name("extension") {
+        parent_is("extensions") && names_vulkan(supported_apis(node))
+    } else {
+        false
+    }
+}
+
+/// The order the header generator emits blocks in: `sortorder`, then core
+/// versions, then the Khronos extensions, then every other, each by version or
+/// number (Vulkan-Docs `scripts/generator.py`, `regSortFeatures`).
+///
+/// Equal ranks keep document order: the sort is stable, like the generator's.
+fn emission_rank(block: Node<'_, '_>) -> (i64, BlockGroup, (u32, u32), i64) {
+    let sortorder = block
+        .attribute("sortorder")
+        .and_then(|order| order.parse().ok())
+        .unwrap_or(0);
+    if block.has_tag_name("feature") {
+        let version = block
+            .attribute("number")
+            .and_then(|number| number.split_once('.'))
+            .and_then(|(major, minor)| Some((major.parse().ok()?, minor.parse().ok()?)))
+            .unwrap_or_default();
+        return (sortorder, BlockGroup::Core, version, 0);
+    }
+    let khronos = block
+        .attribute("name")
+        .and_then(|name| name.split('_').nth(1))
+        .is_some_and(|tag| {
+            ["KHR", "ARB", "OES"]
+                .iter()
+                .any(|khronos| tag.eq_ignore_ascii_case(khronos))
+        });
+    let number = block
+        .attribute("number")
+        .and_then(|number| number.parse().ok())
+        .unwrap_or(0);
+    let group = if khronos {
+        BlockGroup::Khronos
+    } else {
+        BlockGroup::Other
+    };
+    (sortorder, group, (0, 0), number)
+}
+
+/// The generator's second sort key, in its order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum BlockGroup {
+    Core,
+    Khronos,
+    Other,
 }
 
 /// An optional attribute as owned text, empty when absent.
@@ -558,7 +699,7 @@ fn find_type<'a>(doc: &'a Document<'a>, name: &str) -> Option<Node<'a, 'a>> {
             && node
                 .parent()
                 .is_some_and(|parent| parent.has_tag_name("types"))
-            && type_name_of(*node).as_deref() == Some(name)
+            && type_name_of(*node) == Some(name)
     })
 }
 
@@ -567,10 +708,18 @@ fn find_type<'a>(doc: &'a Document<'a>, name: &str) -> Option<Node<'a, 'a>> {
 /// The registry spells it as an attribute when it generates the declaration
 /// itself, and as a `<name>` child when the entry carries C text the name is
 /// embedded in — which is every handle, function pointer, bitmask and base type.
-fn type_name_of(node: Node<'_, '_>) -> Option<String> {
-    node.attribute("name")
-        .map(str::to_owned)
-        .or_else(|| child_text(node, "name"))
+fn type_name_of<'a>(node: Node<'a, 'a>) -> Option<&'a str> {
+    node.attribute("name").or_else(|| child_str(node, "name"))
+}
+
+/// A command's name: an attribute on an alias, which has no body, and the
+/// prototype's `<name>` on a definition.
+fn command_name_of<'a>(node: Node<'a, 'a>) -> Option<&'a str> {
+    node.attribute("name").or_else(|| {
+        node.children()
+            .find(|child| child.has_tag_name("proto"))
+            .and_then(|proto| child_str(proto, "name"))
+    })
 }
 
 fn canonical_type_name(doc: &Document<'_>, name: &str) -> Result<String> {
@@ -712,15 +861,7 @@ fn find_command<'a>(doc: &'a Document<'a>, name: &str) -> Option<Node<'a, 'a>> {
         {
             return false;
         }
-        let node_name = node.attribute("name").map(str::to_owned).or_else(|| {
-            node.children()
-                .find(|child| child.has_tag_name("proto"))
-                .and_then(|proto| child_text(proto, "name"))
-        });
-        node_name.as_deref() == Some(name)
-            && node
-                .attribute("api")
-                .is_none_or(|api| api.split(',').any(|entry| entry == "vulkan"))
+        command_name_of(*node) == Some(name) && node.attribute("api").is_none_or(names_vulkan)
     })
 }
 
@@ -813,11 +954,14 @@ fn members_of<'a>(definition: Node<'a, 'a>) -> Result<Vec<VkMember>> {
         .collect()
 }
 
-fn child_text<'a>(node: Node<'a, 'a>, tag: &str) -> Option<String> {
+fn child_str<'a>(node: Node<'a, 'a>, tag: &str) -> Option<&'a str> {
     node.children()
         .find(|child| child.has_tag_name(tag))
         .and_then(|child| child.text())
-        .map(str::to_owned)
+}
+
+fn child_text<'a>(node: Node<'a, 'a>, tag: &str) -> Option<String> {
+    child_str(node, tag).map(str::to_owned)
 }
 
 #[cfg(test)]
@@ -1054,9 +1198,54 @@ mod tests {
     }
 
     #[test]
-    fn a_referenced_non_struct_type_is_skipped() {
-        // `VkSomeEnum` is referenced but has no body to generate.
-        assert_eq!(plane().structs.len(), 2);
+    fn a_listed_type_that_core_declares_is_left_to_core() {
+        // The extension lists `VkFormat` because its enumerators extend it, but
+        // core declared it first; generating it again would redeclare it.
+        let plane = plane();
+        assert!(plane.enums.iter().all(|e| e.name != "VkFormat"));
+        assert_eq!(plane.structs.len(), 2);
+    }
+
+    /// The struct, union and enum names an extension's descriptor declares —
+    /// the categories the emission-order blocks of the fixture use.
+    fn declared_names(name: &str) -> Vec<String> {
+        let (plane, _) = extract(REGISTRY, name).unwrap();
+        let structs = plane.structs.into_iter().map(|t| t.name);
+        let unions = plane.unions.into_iter().map(|t| t.name);
+        let enums = plane.enums.into_iter().map(|t| t.name);
+        structs.chain(unions).chain(enums).collect()
+    }
+
+    #[test]
+    fn a_khronos_extension_declares_its_type_before_a_lower_numbered_vendor_one() {
+        // The generator emits every KHR extension before any vendor one, so
+        // `VkComponentTypeKHR` is declared under VK_KHR_cooperative_matrix even
+        // though VK_NV_cooperative_vector, numbered lower, names it too.
+        assert!(declared_names("VK_KHR_test_scope").contains(&"VkWidgetScopeKHR".to_owned()));
+        assert!(!declared_names("VK_NV_test_scope_user").contains(&"VkWidgetScopeKHR".to_owned()));
+    }
+
+    #[test]
+    fn a_sortorder_defers_an_extension_past_the_blocks_that_use_its_types() {
+        // VK_KHR_acceleration_structure is `sortorder="1"`, which is why the
+        // header declares most of its types under VK_NV_ray_tracing and others.
+        assert!(declared_names("VK_EXT_test_early").contains(&"VkWidgetAddressKHR".to_owned()));
+        assert!(!declared_names("VK_KHR_test_deferred").contains(&"VkWidgetAddressKHR".to_owned()));
+    }
+
+    #[test]
+    fn a_type_reached_only_as_a_dependency_is_declared_with_what_reached_it() {
+        // No <require> lists `VkWidgetEarlyModeEXT`; the struct that uses it
+        // does, and the header declares the two together.
+        let names = declared_names("VK_EXT_test_early");
+        assert!(
+            names.contains(&"VkWidgetEarlyInfoEXT".to_owned()),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"VkWidgetEarlyModeEXT".to_owned()),
+            "{names:?}"
+        );
     }
 
     #[test]
@@ -1182,6 +1371,21 @@ mod tests {
             FEATURES_TAG,
             r#"<enum extends="VkStructureType" name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND"/>"#,
         );
+        let (plane, notes) = extract(&xml, "VK_TEST_widget").unwrap();
+        assert!(plane.structs.iter().all(|s| !s.is_features));
+        assert!(
+            notes.iter().any(|n| n.contains("no value")),
+            "got: {notes:?}"
+        );
+    }
+
+    #[test]
+    fn a_tag_this_extension_never_names_is_reported() {
+        // The published case is a struct that arrives as a dependency: a
+        // vendor extension listing its alias of an EXT struct is where the
+        // header declares that struct, while the EXT extension gives its tag a
+        // value. Dropping it silently would hide why it never gets registered.
+        let xml = REGISTRY.replace(FEATURES_TAG, "");
         let (plane, notes) = extract(&xml, "VK_TEST_widget").unwrap();
         assert!(plane.structs.iter().all(|s| !s.is_features));
         assert!(
