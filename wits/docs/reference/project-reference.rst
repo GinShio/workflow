@@ -572,7 +572,7 @@ The full Jinja expression language, e.g.
   ``and``/``or``/``not``; the ``a if c else b`` ternary.
 * Filters: Jinja's built-ins (``min``, ``max``, ``int``, ``float``, ``string``,
   ``join``, ``default``, …) plus ``prefix``, ``suffix``, ``strip_prefix``,
-  ``pad`` and ``required``, and the ``fail('…')`` function.
+  ``pad``, ``initials`` and ``required``, and the ``fail('…')`` function.
 * Statements (``{% if %}``, ``{% for %}``) work too, though a condition that
   selects a whole config layer belongs in ``applies_when`` rather than here.
 

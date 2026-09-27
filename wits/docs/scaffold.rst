@@ -194,8 +194,10 @@ Commands carry their exact parameter declarations, dispatch class, alias family
 and requirement conditions, together with the recording constraints the registry
 states: ``success_codes``, ``error_codes``, ``queues``, ``cmd_buffer_level``,
 ``render_pass``, ``video_coding`` and ``tasks``. Struct and union members carry
-``limit_type``, ``optional``, ``len`` and the rest of the registry's member
-attributes.
+``optional``, ``limit_type``, ``len``, ``alt_len``, ``extern_sync``,
+``no_auto_validity``, ``object_type``, ``selector``, ``selection``, ``values``,
+``api`` and ``deprecated``; the registry's ``featurelink``, ``flagsextend``,
+``flagsextendmember`` and ``stride`` are not read.
 
 .. code-block:: toml
 

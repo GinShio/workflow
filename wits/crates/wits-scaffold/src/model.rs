@@ -439,8 +439,10 @@ pub struct VkMember {
     pub selector: String,
     #[serde(default)]
     pub selection: String,
-    /// The fixed enumerator a member must carry, which is how a struct's `sType`
-    /// is paired with its `VkStructureType`.
+    /// The registry's `values`, the enumerants the member may hold. The
+    /// published registry sets it only on `sType`, which `members` leaves out
+    /// because its value is already the struct's `stype`, so it is empty on
+    /// every member today.
     #[serde(default)]
     pub values: String,
     #[serde(default)]
