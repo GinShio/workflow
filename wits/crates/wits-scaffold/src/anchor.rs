@@ -357,9 +357,9 @@ fn take_number(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> u64 {
 /// Compile the already-rendered patterns of a rule whose shape is already known.
 ///
 /// The shape is a parameter rather than something re-derived from which fields
-/// happen to be set: [`crate::catalog::RuleSpec::placement`] decided it once,
-/// when the catalogue was parsed, and reading the fields again here is how the
-/// two could come to disagree about the same rule.
+/// happen to be set: [`crate::catalog::RuleSpec::shape`] is the one reader of
+/// that key combination, and reading the fields again here is how the two
+/// could come to disagree about the same rule.
 pub fn compile(shape: Shape, spec: &AnchorSpec) -> Result<Anchor> {
     let scope = spec
         .scope

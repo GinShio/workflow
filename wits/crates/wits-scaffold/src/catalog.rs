@@ -222,10 +222,10 @@ impl RuleSpec {
 
     /// The single placement this rule names.
     ///
-    /// The one place a set of keys is turned into a shape. Parsing calls it to
-    /// reject a malformed rule and [`crate::anchor`] calls it to decide what to
-    /// compile, so the two cannot come to different conclusions about the same
-    /// rule — which they could while each read the key combination for itself.
+    /// The one place a set of keys is turned into a shape. It runs the check
+    /// parsing does, and anchor compilation is handed its answer rather than
+    /// reading the key combination for itself, so the two cannot come to
+    /// different conclusions about the same rule.
     pub fn shape(&self) -> Result<Shape> {
         self.validate()?;
         Ok(match self {
