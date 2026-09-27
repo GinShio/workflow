@@ -16,7 +16,8 @@
     <type category=…>      struct, union, enum, bitmask, handle, funcpointer,
                            basetype, and an alias of a struct
     <enums>                a new enum type's own values
-    <enum> value forms     value, bitpos, offset (+extnumber, +dir), alias
+    <enum> value forms     value, bitpos, offset (+extnumber, +dir), alias,
+                           and an alias beside a bitpos
     <command>              recording conditions, a dispatchable first parameter,
                            and an alias with no body of its own
     <extension supported=> vulkan and disabled
@@ -163,6 +164,10 @@
                 <enum offset="0" extends="VkFormat" name="VK_FORMAT_WIDGET_TEST"/>
                 <enum offset="4" extnumber="99" extends="VkFormat" name="VK_FORMAT_BORROWED_TEST"/>
                 <enum bitpos="7" extends="VkWidgetUsageFlagBitsTEST" name="VK_WIDGET_USAGE_FAST_BIT_TEST"/>
+                <!-- registry.rnc also admits an alias beside a value or bitpos;
+                     the published registry does not use it yet. -->
+                <enum bitpos="7" extends="VkWidgetUsageFlagBitsTEST" name="VK_WIDGET_USAGE_QUICK_BIT_TEST"
+                      alias="VK_WIDGET_USAGE_FAST_BIT_TEST"/>
                 <enum offset="1" dir="-" extends="VkResult" name="VK_ERROR_WIDGET_LOST_TEST"/>
                 <enum offset="3" extends="VkObjectType" name="VK_OBJECT_TYPE_WIDGET_SESSION_TEST"/>
 

@@ -513,6 +513,9 @@ pub struct VkBaseType {
 }
 
 /// One enumerant an extension contributes to an enum that already exists.
+///
+/// At least one of `value` and `alias` is present: an `<enum>` that spells
+/// neither only refers to an enumerant defined elsewhere, and is not recorded.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VkEnumerator {
     pub name: String,
@@ -532,15 +535,27 @@ pub struct VkEnumerator {
     /// `aliased`, `unused` or `true`, where the registry marks it legacy.
     #[serde(default)]
     pub deprecated: String,
-    pub value: VkEnumValue,
+    /// How the registry spells the value. Absent for an enumerator that is
+    /// only an alias.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<VkEnumValue>,
+    /// The enumerator this one is identical to, where the registry says so.
+    ///
+    /// Read apart from `value` because `registry.rnc` lets an alias stand alone
+    /// or accompany a `value` or `bitpos`. Where both are present the header
+    /// generator emits the value (Vulkan-Docs `scripts/generator.py`,
+    /// `enumToValue`); which one a tree registers is its catalogue's choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<VkEnumAlias>,
 }
 
 /// How the registry spells an enumerator's value.
 ///
-/// `registry.rnc` makes these four mutually exclusive, so this is one tagged
-/// value rather than six optional fields: a template dispatches on `kind` once
-/// instead of probing each field in turn, and a document setting two of them
-/// fails to parse instead of silently taking whichever the reader checks first.
+/// `registry.rnc` never lets two of these appear together, so this is one
+/// tagged value rather than five optional fields: a template dispatches on
+/// `kind` once instead of probing each field in turn, and a document setting
+/// two of them fails to parse instead of silently taking whichever the reader
+/// checks first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum VkEnumValue {
@@ -563,21 +578,16 @@ pub enum VkEnumValue {
         #[serde(default)]
         negative: bool,
     },
-    /// Another enumerator this one is identical to. `canonical` is the end of
-    /// the alias chain, resolved here because following it needs the whole
-    /// document and a cycle check.
-    Alias { alias: String, canonical: String },
 }
 
-/// A document always spells a value, so this exists only to build a record in
-/// code. An empty literal is the degenerate form; `#[derive(Default)]` cannot
-/// pick a struct variant, hence the hand-written impl.
-impl Default for VkEnumValue {
-    fn default() -> Self {
-        Self::Literal {
-            value: String::new(),
-        }
-    }
+/// The enumerator an alias is identical to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VkEnumAlias {
+    /// The enumerator the registry names, which may itself be an alias.
+    pub of: String,
+    /// The end of that chain, resolved here because following it needs the
+    /// whole document and a cycle check.
+    pub canonical: String,
 }
 
 /// A queryable feature bit and the struct that reports it.
@@ -897,42 +907,53 @@ mod tests {
     }
 
     #[test]
-    fn each_enumerator_value_form_survives_the_document() {
-        // The four forms are what a catalogue dispatches on, so a round trip
-        // that quietly collapsed one into another would show up as a wrong
-        // enumerator in a target tree rather than as an error here.
+    fn each_enumerator_form_survives_the_document() {
+        // The value forms and the alias are what a catalogue dispatches on, so
+        // a round trip that quietly collapsed one into another — or dropped the
+        // alias riding beside a value — would show up as a wrong enumerator in a
+        // target tree rather than as an error here.
+        let alias = |of: &str| {
+            Some(VkEnumAlias {
+                of: of.into(),
+                canonical: of.into(),
+            })
+        };
         let mut vk = VkPlane::new("VK_TEST_widget");
         vk.enumerators = vec![
             VkEnumerator {
                 name: "VK_TEST_WIDGET_EXTENSION_NAME".into(),
-                value: VkEnumValue::Literal {
+                value: Some(VkEnumValue::Literal {
                     value: "\"VK_TEST_widget\"".into(),
-                },
+                }),
                 ..Default::default()
             },
             VkEnumerator {
                 name: "VK_WIDGET_USAGE_FAST_BIT_TEST".into(),
                 extends: "VkWidgetUsageFlagBitsTEST".into(),
-                value: VkEnumValue::Bitpos { bitpos: 7 },
+                value: Some(VkEnumValue::Bitpos { bitpos: 7 }),
                 ..Default::default()
             },
             VkEnumerator {
                 name: "VK_ERROR_WIDGET_LOST_TEST".into(),
                 extends: "VkResult".into(),
-                value: VkEnumValue::Offset {
+                value: Some(VkEnumValue::Offset {
                     offset: 1,
                     ext_number: 232,
                     negative: true,
-                },
+                }),
                 ..Default::default()
             },
             VkEnumerator {
                 name: "VK_STRUCTURE_TYPE_WIDGET_ALIAS_TEST".into(),
                 extends: "VkStructureType".into(),
-                value: VkEnumValue::Alias {
-                    alias: "VK_STRUCTURE_TYPE_WIDGET_TEST".into(),
-                    canonical: "VK_STRUCTURE_TYPE_WIDGET_TEST".into(),
-                },
+                alias: alias("VK_STRUCTURE_TYPE_WIDGET_TEST"),
+                ..Default::default()
+            },
+            VkEnumerator {
+                name: "VK_WIDGET_USAGE_QUICK_BIT_TEST".into(),
+                extends: "VkWidgetUsageFlagBitsTEST".into(),
+                value: Some(VkEnumValue::Bitpos { bitpos: 7 }),
+                alias: alias("VK_WIDGET_USAGE_FAST_BIT_TEST"),
                 ..Default::default()
             },
         ];
@@ -948,8 +969,10 @@ mod tests {
         assert!(text.contains("kind = \"offset\""), "got:\n{text}");
 
         let back = from_toml(&text).unwrap().vk.expect("the vk plane");
+        assert_eq!(back.enumerators.len(), expected.len());
         for (wrote, read) in expected.iter().zip(&back.enumerators) {
             assert_eq!(wrote.value, read.value, "{}", wrote.name);
+            assert_eq!(wrote.alias, read.alias, "{}", wrote.name);
         }
     }
 

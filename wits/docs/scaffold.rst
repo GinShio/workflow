@@ -232,8 +232,8 @@ these and is not privileged — extensions add far more to ``VkFormat``,
 ``VkResult`` and the flag-bits enums than they do to ``VkStructureType``. A
 struct's ``stype`` names its tag; the value lives with the other enumerators.
 
-``registry.rnc`` makes the four value forms mutually exclusive, so the value is
-one tagged table rather than six optional fields: a template dispatches on
+``registry.rnc`` makes the three value forms mutually exclusive, so the value is
+one tagged table rather than five optional fields: a template dispatches on
 ``kind`` once, and a document setting two of them fails to parse.
 
 .. code-block:: toml
@@ -261,12 +261,28 @@ one tagged table rather than six optional fields: a template dispatches on
    * - ``offset``
      - ``offset`` within ``ext_number``'s reserved block, ``negative`` for
        ``dir="-"``.
-   * - ``alias``
-     - ``alias``, plus the ``canonical`` end of the chain.
 
 The arithmetic for an ``offset`` stays with the target: a tree that registers
 these already has a macro for the registry's formula, and emitting a computed
 number would bypass it.
+
+An alias is its own table beside the value, because the schema lets an alias
+stand alone or accompany a ``value`` or ``bitpos``. ``of`` is the enumerator it
+names and ``canonical`` the end of that chain; an enumerator that is only an
+alias has no ``value`` table at all.
+
+.. code-block:: toml
+
+   [[vk.enumerators]]
+   name = "VK_STRUCTURE_TYPE_WIDGET_ALIAS_TEST"
+   extends = "VkStructureType"
+
+   [vk.enumerators.alias]
+   of = "VK_STRUCTURE_TYPE_WIDGET_TEST"
+   canonical = "VK_STRUCTURE_TYPE_WIDGET_TEST"
+
+Where an enumerator has both, the Vulkan header generator emits the value.
+Which of the two a tree registers is its catalogue's choice.
 
 New enum *types* are separate. Their enumerants come from the registry's own
 ``<enums>`` block rather than from the extension's ``<require>``, so they sit

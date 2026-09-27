@@ -5,8 +5,9 @@
 //! ## What is read, and how the completeness question is answered
 //!
 //! The reader follows the registry's own taxonomy: `<type>` is dispatched on its
-//! `category`, an `<enum>` value on which of the four mutually exclusive forms
-//! `registry.rnc` allows, and nothing is grouped in a way the schema does not.
+//! `category`, an `<enum>` value on which of the three mutually exclusive forms
+//! `registry.rnc` allows — with its `alias` read apart, since the schema lets
+//! one accompany a value — and nothing is grouped in a way the schema does not.
 //! That is deliberate — it makes "is anything missing" a question you settle by
 //! diffing this module against the schema, rather than one that needs a survey
 //! of the document.
@@ -32,9 +33,9 @@ use anyhow::{bail, Context, Result};
 use roxmltree::{Document, Node};
 
 use crate::model::{
-    VkAlias, VkBaseType, VkBitmask, VkCommand, VkDispatch, VkEnumType, VkEnumValue, VkEnumerator,
-    VkExtensionType, VkFeature, VkFuncPointer, VkHandle, VkMember, VkParam, VkPlane, VkRequirement,
-    VkSpirvEnable, VkSpirvKind, VkSpirvRequirement, VkStruct, VkUnion,
+    VkAlias, VkBaseType, VkBitmask, VkCommand, VkDispatch, VkEnumAlias, VkEnumType, VkEnumValue,
+    VkEnumerator, VkExtensionType, VkFeature, VkFuncPointer, VkHandle, VkMember, VkParam, VkPlane,
+    VkRequirement, VkSpirvEnable, VkSpirvKind, VkSpirvRequirement, VkStruct, VkUnion,
 };
 
 /// Extract `name`'s API surface from a registry document.
@@ -480,12 +481,12 @@ fn text_attribute(node: Node<'_, '_>, name: &str) -> String {
     node.attribute(name).unwrap_or_default().to_owned()
 }
 
-/// One `<enum>` entry, in whichever of the four value forms it uses.
+/// One `<enum>` entry: its value in whichever form it uses, and its alias.
 ///
-/// `None` for an entry carrying no value at all: the registry also uses `<enum>`
-/// to *reference* an enumerant defined elsewhere, and a reference introduces
-/// nothing. The forms are mutually exclusive per `registry.rnc`, so the order
-/// here only decides what a malformed document does.
+/// `None` for an entry carrying neither: the registry also uses `<enum>` to
+/// *reference* an enumerant defined elsewhere, and a reference introduces
+/// nothing. The alias is read on its own because `registry.rnc` lets it stand
+/// alone or accompany a `value` or `bitpos`.
 fn enumerator_of(
     doc: &Document<'_>,
     node: Node<'_, '_>,
@@ -494,10 +495,45 @@ fn enumerator_of(
     let Some(name) = node.attribute("name") else {
         return Ok(None);
     };
-    let value = if let Some(alias) = node.attribute("alias") {
-        VkEnumValue::Alias {
-            alias: alias.to_owned(),
-            canonical: canonical_enum_name(doc, alias)?,
+    let value = enum_value_of(node, name, ext_number)?;
+    let alias = match node.attribute("alias") {
+        Some(of) => Some(VkEnumAlias {
+            of: of.to_owned(),
+            canonical: canonical_enum_name(doc, of)?,
+        }),
+        None => None,
+    };
+    if value.is_none() && alias.is_none() {
+        return Ok(None);
+    }
+
+    Ok(Some(VkEnumerator {
+        name: name.to_owned(),
+        extends: text_attribute(node, "extends"),
+        type_name: text_attribute(node, "type"),
+        api: text_attribute(node, "api"),
+        protect: text_attribute(node, "protect"),
+        deprecated: text_attribute(node, "deprecated"),
+        value,
+        alias,
+    }))
+}
+
+/// The value an `<enum>` spells, if any.
+///
+/// `registry.rnc` never lets two of the three forms appear together, so the
+/// order here only decides what a malformed document does. It is the header
+/// generator's order (Vulkan-Docs `scripts/generator.py`, `enumToValue`).
+fn enum_value_of(node: Node<'_, '_>, name: &str, ext_number: i64) -> Result<Option<VkEnumValue>> {
+    Ok(Some(if let Some(literal) = node.attribute("value") {
+        VkEnumValue::Literal {
+            value: literal.to_owned(),
+        }
+    } else if let Some(bitpos) = node.attribute("bitpos") {
+        VkEnumValue::Bitpos {
+            bitpos: bitpos
+                .parse()
+                .with_context(|| format!("enumerator {name} has a non-numeric bitpos"))?,
         }
     } else if let Some(offset) = node.attribute("offset") {
         VkEnumValue::Offset {
@@ -514,36 +550,16 @@ fn enumerator_of(
             },
             negative: node.attribute("dir") == Some("-"),
         }
-    } else if let Some(bitpos) = node.attribute("bitpos") {
-        VkEnumValue::Bitpos {
-            bitpos: bitpos
-                .parse()
-                .with_context(|| format!("enumerator {name} has a non-numeric bitpos"))?,
-        }
-    } else if let Some(literal) = node.attribute("value") {
-        VkEnumValue::Literal {
-            value: literal.to_owned(),
-        }
     } else {
         return Ok(None);
-    };
-
-    Ok(Some(VkEnumerator {
-        name: name.to_owned(),
-        extends: text_attribute(node, "extends"),
-        type_name: text_attribute(node, "type"),
-        api: text_attribute(node, "api"),
-        protect: text_attribute(node, "protect"),
-        deprecated: text_attribute(node, "deprecated"),
-        value,
     }))
 }
 
 /// Keep one record per enumerator name, reporting a disagreement.
 ///
 /// An extension may name the same enumerant in two `<require>` blocks, normally
-/// under different conditions and with the same value. A differing value is the
-/// case worth hearing about.
+/// under different conditions and with the same value. A differing value or
+/// alias is the case worth hearing about.
 fn dedupe_enumerators(
     enumerators: Vec<VkEnumerator>,
     notes: &mut Vec<String>,
@@ -551,7 +567,7 @@ fn dedupe_enumerators(
     let mut kept: Vec<VkEnumerator> = Vec::new();
     for enumerator in enumerators {
         if let Some(existing) = kept.iter().find(|entry| entry.name == enumerator.name) {
-            if existing.value != enumerator.value {
+            if existing.value != enumerator.value || existing.alias != enumerator.alias {
                 notes.push(format!(
                     "enumerator {} is given two different values; kept the first",
                     enumerator.name
@@ -1026,7 +1042,7 @@ mod tests {
     /// a struct is tagged by.
     fn offset_of(plane: &VkPlane, name: &str) -> Option<i64> {
         match &plane.enumerators.iter().find(|e| e.name == name)?.value {
-            VkEnumValue::Offset { offset, .. } => Some(*offset),
+            Some(VkEnumValue::Offset { offset, .. }) => Some(*offset),
             _ => None,
         }
     }
@@ -1069,11 +1085,11 @@ mod tests {
         assert_eq!(format.extends, "VkFormat");
         assert_eq!(
             format.value,
-            VkEnumValue::Offset {
+            Some(VkEnumValue::Offset {
                 offset: 0,
                 ext_number: 232,
                 negative: false
-            }
+            })
         );
 
         let bit = plane
@@ -1081,7 +1097,7 @@ mod tests {
             .iter()
             .find(|e| e.name == "VK_WIDGET_USAGE_FAST_BIT_TEST")
             .expect("the flag bit");
-        assert_eq!(bit.value, VkEnumValue::Bitpos { bitpos: 7 });
+        assert_eq!(bit.value, Some(VkEnumValue::Bitpos { bitpos: 7 }));
 
         let error = plane
             .enumerators
@@ -1092,11 +1108,11 @@ mod tests {
         // place the enumerator on top of an unrelated success code.
         assert_eq!(
             error.value,
-            VkEnumValue::Offset {
+            Some(VkEnumValue::Offset {
                 offset: 1,
                 ext_number: 232,
                 negative: true
-            }
+            })
         );
     }
 
@@ -1110,11 +1126,11 @@ mod tests {
             .expect("the borrowing entry");
         assert_eq!(
             borrowed.value,
-            VkEnumValue::Offset {
+            Some(VkEnumValue::Offset {
                 offset: 4,
                 ext_number: 99,
                 negative: false
-            }
+            })
         );
     }
 
@@ -1147,9 +1163,9 @@ mod tests {
         assert_eq!(kind.enumerants.len(), 2);
         assert_eq!(
             kind.enumerants[0].value,
-            VkEnumValue::Literal {
+            Some(VkEnumValue::Literal {
                 value: "0".to_owned()
-            }
+            })
         );
     }
 
@@ -1296,21 +1312,42 @@ mod tests {
             plane.type_aliases[0].canonical_name,
             "VkPhysicalDeviceWidgetFeaturesVND"
         );
-        // An aliasing enumerator is an ordinary enumerator whose value happens
-        // to be a name, so it lives with the rest rather than in a list of its
-        // own. The end of the chain is resolved because following it needs the
-        // whole document.
+        // An aliasing enumerator lives with the rest rather than in a list of
+        // its own, and one with no value of its own has none recorded. The end
+        // of the chain is resolved because following it needs the whole
+        // document.
         let alias = plane
             .enumerators
             .iter()
             .find(|e| e.name == "VK_STRUCTURE_TYPE_WIDGET_ALIAS_VND")
             .expect("the aliasing enumerator");
+        assert_eq!(alias.value, None);
         assert_eq!(
-            alias.value,
-            VkEnumValue::Alias {
-                alias: "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND".to_owned(),
+            alias.alias,
+            Some(VkEnumAlias {
+                of: "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND".to_owned(),
                 canonical: "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND".to_owned(),
-            }
+            })
+        );
+    }
+
+    #[test]
+    fn an_alias_beside_a_value_keeps_both() {
+        // registry.rnc lets an alias accompany a `value` or `bitpos`. Reading
+        // either one as the whole answer loses the other: the value is what the
+        // header generator emits, the alias what the name is identical to.
+        let quick = plane()
+            .enumerators
+            .into_iter()
+            .find(|e| e.name == "VK_WIDGET_USAGE_QUICK_BIT_TEST")
+            .expect("the enumerator spelling both");
+        assert_eq!(quick.value, Some(VkEnumValue::Bitpos { bitpos: 7 }));
+        assert_eq!(
+            quick.alias,
+            Some(VkEnumAlias {
+                of: "VK_WIDGET_USAGE_FAST_BIT_TEST".to_owned(),
+                canonical: "VK_WIDGET_USAGE_FAST_BIT_TEST".to_owned(),
+            })
         );
     }
 
@@ -1352,12 +1389,13 @@ mod tests {
             .iter()
             .find(|e| e.name == features.stype)
             .expect("the struct's tag");
+        assert_eq!(tag.value, None);
         assert_eq!(
-            tag.value,
-            VkEnumValue::Alias {
-                alias: "VK_STRUCTURE_TYPE_PROMOTED".to_owned(),
+            tag.alias,
+            Some(VkEnumAlias {
+                of: "VK_STRUCTURE_TYPE_PROMOTED".to_owned(),
                 canonical: "VK_STRUCTURE_TYPE_PROMOTED".to_owned(),
-            }
+            })
         );
         assert!(!notes.iter().any(|n| n.contains("no value")));
     }
