@@ -189,6 +189,7 @@ fn char_boundary(text: &str, offset: usize) -> Result<usize> {
 mod tests {
     use super::*;
     use crate::anchor::{self, AnchorSpec};
+    use crate::catalog::Shape;
 
     fn insert_at_eof(path: &str, what: &str, text: &str) -> Edit {
         Edit {
@@ -196,11 +197,7 @@ mod tests {
             what: what.to_owned(),
             text: text.to_owned(),
             action: Action::Insert {
-                anchor: anchor::compile(&AnchorSpec {
-                    eof: true,
-                    ..Default::default()
-                })
-                .unwrap(),
+                anchor: anchor::compile(Shape::Eof, &AnchorSpec::default()).unwrap(),
                 sort_line: None,
             },
         }
@@ -283,10 +280,13 @@ mod tests {
                 what: "doomed".to_owned(),
                 text: "y\n".to_owned(),
                 action: Action::Insert {
-                    anchor: anchor::compile(&AnchorSpec {
-                        close: Some("^nowhere$".to_owned()),
-                        ..Default::default()
-                    })
+                    anchor: anchor::compile(
+                        Shape::Before,
+                        &AnchorSpec {
+                            close: Some("^nowhere$".to_owned()),
+                            ..Default::default()
+                        },
+                    )
                     .unwrap(),
                     sort_line: None,
                 },
@@ -399,13 +399,16 @@ mod tests {
             what: "id".to_owned(),
             text: "        GROUP_THING,\n".to_owned(),
             action: Action::Insert {
-                anchor: anchor::compile(&AnchorSpec {
-                    scope: vec!["enum E".to_owned()],
-                    close: Some(r"^\};$".to_owned()),
-                    key: Some(r"^\s*([A-Z0-9_]+),".to_owned()),
-                    group: Some("^([A-Z]+)_".to_owned()),
-                    ..Default::default()
-                })
+                anchor: anchor::compile(
+                    Shape::Sorted,
+                    &AnchorSpec {
+                        scope: vec!["enum E".to_owned()],
+                        close: Some(r"^\};$".to_owned()),
+                        key: Some(r"^\s*([A-Z0-9_]+),".to_owned()),
+                        group: Some("^([A-Z]+)_".to_owned()),
+                        ..Default::default()
+                    },
+                )
                 .unwrap(),
                 sort_line: Some("        GROUP_THING,".to_owned()),
             },

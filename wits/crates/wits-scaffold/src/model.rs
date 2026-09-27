@@ -67,6 +67,9 @@ pub struct SpvPlane {
     pub feature: String,
     /// `spv_vnd_widget`.
     pub snake: String,
+    /// The registered vendor tag, `VND`, taken from the name.
+    #[serde(default)]
+    pub vendor: String,
     /// Grammar type declarations, kept separate because their result shape and
     /// target registration differ from ordinary operations.
     #[serde(default)]
@@ -102,6 +105,7 @@ impl SpvPlane {
         Self {
             feature: feature_stem(&name, "SPV_"),
             snake: name.to_lowercase(),
+            vendor: vendor_tag(&name),
             name,
             types: Vec::new(),
             operations: Vec::new(),
@@ -116,6 +120,14 @@ impl SpvPlane {
 pub struct KindGroup {
     /// The specification's operand-kind name.
     pub name: String,
+    /// The grammar's own category: `BitEnum`, `ValueEnum`, `Id`, `Literal` or
+    /// `Composite`. A target needs it to tell a flags declaration from a plain
+    /// enum one, and it is a grammar fact, so it is read rather than configured.
+    #[serde(default)]
+    pub category: String,
+    /// For a `Composite` kind, the kinds it is built from, in order.
+    #[serde(default)]
+    pub bases: Vec<String>,
     /// Private catalogues give these keys meaning; the scaffold engine does not.
     #[serde(default)]
     pub meta: std::collections::BTreeMap<String, toml::Value>,
@@ -124,7 +136,7 @@ pub struct KindGroup {
 }
 
 /// One enumerant of an operand kind, named as both sources spell it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Enumerant {
     pub name: String,
     #[serde(default)]
@@ -134,10 +146,25 @@ pub struct Enumerant {
     /// kind, the capabilities that enable it.
     #[serde(default)]
     pub requires: Vec<String>,
+    /// The SPIR-V version this entered core in, or `None` while it is reachable
+    /// only through an extension.
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub last_version: String,
+    /// Still provisional: the assignment may change before it is ratified.
+    #[serde(default)]
+    pub provisional: bool,
+    /// Operands the enumerant itself carries — the id a `Bias` image operand
+    /// takes, for instance. An encoder that ignores these writes a short
+    /// instruction, so they are part of the enumerant rather than a detail of
+    /// the kind.
+    #[serde(default)]
+    pub parameters: Vec<SpvOperand>,
 }
 
 /// One canonical SPIR-V opcode and every spelling that aliases it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SpvOpcode {
     pub name: String,
     #[serde(default)]
@@ -146,6 +173,16 @@ pub struct SpvOpcode {
     /// The grammar's instruction class. Prose extraction supplies
     /// `Type-Declaration` or `Unknown`.
     pub class: String,
+    /// The SPIR-V version this entered core in, or `None` while it is reachable
+    /// only through an extension. A target that gates on core version needs it,
+    /// and it cannot be derived from anything else in the record.
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub last_version: String,
+    /// Still provisional: the opcode may change before it is ratified.
+    #[serde(default)]
+    pub provisional: bool,
     #[serde(default)]
     pub operands: Vec<SpvOperand>,
     #[serde(default)]
@@ -186,6 +223,11 @@ pub struct SpvEncoding {
 // ----------------------------------------------------------------------------
 
 /// The Vulkan API surface an extension introduces.
+///
+/// The collections mirror the registry's own `category` taxonomy rather than any
+/// grouping of ours. That taxonomy is closed — Khronos fixes it in
+/// `registry.rnc` — so the list cannot drift, and "what is missing" stays a
+/// question you answer by diffing against the schema rather than by judgement.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VkPlane {
     /// The registry spelling, e.g. `VK_VND_widget`.
@@ -194,35 +236,118 @@ pub struct VkPlane {
     pub feature: String,
     /// `vk_vnd_widget`.
     pub snake: String,
+    /// The registered vendor tag, `VND`, taken from the name.
+    ///
+    /// Not [`VkPlane::author`], which is who proposed the extension: 65 of the
+    /// published extensions disagree between the two, and a few spell the author
+    /// as a person's name.
+    pub vendor: String,
     pub extension_type: VkExtensionType,
     /// The registry's extension number.
     pub number: i64,
     pub spec_version: i64,
     #[serde(default)]
     pub author: String,
+    #[serde(default)]
+    pub contact: String,
     /// The registry's raw `depends` expression, carried verbatim because its
     /// `+`/`,` grammar is the registry's to interpret, not ours.
     #[serde(default)]
     pub depends: String,
+    /// The registry's `platform` name, empty for a portable extension.
+    #[serde(default)]
+    pub platform: String,
+    /// The preprocessor symbol guarding a platform extension's declarations.
+    ///
+    /// This is a plane-level fact: `platform` names an entry in the registry's
+    /// `<platforms>` table and that table is the only place the macro is spelled.
+    /// Everything the extension declares is guarded by the same one.
+    #[serde(default)]
+    pub protect: String,
+    /// The extension that supersedes this one, where the registry says so.
+    #[serde(default)]
+    pub promoted_to: String,
+    #[serde(default)]
+    pub deprecated_by: String,
+    #[serde(default)]
+    pub obsoleted_by: String,
+    /// The registry's `specialuse` list: a warning that an extension is not for
+    /// general use, carried verbatim because the set of uses is the registry's.
+    #[serde(default)]
+    pub special_use: String,
+    /// Whether the extension is ratified, and for which APIs.
+    #[serde(default)]
+    pub ratified: String,
+    #[serde(default)]
+    pub provisional: bool,
+    /// The registry's `nofeatures`: the extension adds no feature bits at all,
+    /// which is distinct from adding some that this descriptor failed to find.
+    #[serde(default)]
+    pub no_features: bool,
+
     #[serde(default)]
     pub structs: Vec<VkStruct>,
+    #[serde(default)]
+    pub unions: Vec<VkUnion>,
+    /// New enum *types*. Their enumerants come from the registry's own `<enums>`
+    /// block, not from this extension's `<require>` — which is why they sit here
+    /// rather than in [`VkPlane::enumerators`].
+    #[serde(default)]
+    pub enums: Vec<VkEnumType>,
+    #[serde(default)]
+    pub bitmasks: Vec<VkBitmask>,
+    #[serde(default)]
+    pub handles: Vec<VkHandle>,
+    #[serde(default)]
+    pub func_pointers: Vec<VkFuncPointer>,
+    #[serde(default)]
+    pub base_types: Vec<VkBaseType>,
+    /// Enumerants this extension adds to enums that already exist, whatever they
+    /// are. The `VkStructureType` entry tagging a struct is one of these; so is
+    /// every `VkFormat`, `VkResult` or flag bit the extension contributes.
+    #[serde(default)]
+    pub enumerators: Vec<VkEnumerator>,
     #[serde(default)]
     pub commands: Vec<VkCommand>,
     #[serde(default)]
     pub type_aliases: Vec<VkAlias>,
-    #[serde(default)]
-    pub enum_aliases: Vec<VkAlias>,
     /// Feature members, each naming the struct that carries it.
     #[serde(default)]
     pub features: Vec<VkFeature>,
+    /// What the registry's own `<spirvextensions>`/`<spirvcapabilities>` tables
+    /// say this extension enables on the SPIR-V side.
+    #[serde(default)]
+    pub spirv: Vec<VkSpirvRequirement>,
 }
 
 impl VkPlane {
+    /// Whether the extension contributes nothing a target could register.
+    ///
+    /// Every collection counts, not just the ones with a C declaration behind
+    /// them: an extension whose whole Vulkan surface is a handful of `VkFormat`
+    /// enumerants, or nothing but a `<spirvextension>` row, is still an
+    /// extension a tree has to know about.
+    pub fn is_empty(&self) -> bool {
+        self.structs.is_empty()
+            && self.unions.is_empty()
+            && self.enums.is_empty()
+            && self.bitmasks.is_empty()
+            && self.handles.is_empty()
+            && self.func_pointers.is_empty()
+            && self.base_types.is_empty()
+            && self.enumerators.is_empty()
+            && self.commands.is_empty()
+            && self.type_aliases.is_empty()
+            && self.features.is_empty()
+            && self.spirv.is_empty()
+    }
+
     pub fn new(name: impl Into<String>) -> Self {
         let name = name.into();
         Self {
             feature: feature_stem(&name, "VK_"),
             snake: name.to_lowercase(),
+            vendor: vendor_tag(&name),
             name,
             extension_type: VkExtensionType::Device,
             ..Default::default()
@@ -239,30 +364,46 @@ pub enum VkExtensionType {
 }
 
 /// A struct the extension adds, with the `VkStructureType` that tags it.
+///
+/// The tagging enumerator's *value* is not here: it is an ordinary entry in
+/// [`VkPlane::enumerators`] with `extends = "VkStructureType"`, the same as
+/// every other enumerant the extension contributes. `stype` is the link.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VkStruct {
     /// `VkPhysicalDeviceWidgetFeaturesVND`.
     pub name: String,
     /// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND`.
     pub stype: String,
-    /// Offset of `stype` within the extension's enum block, or the enumerator it
-    /// aliases when no arithmetic value exists.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stype_offset: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stype_alias_of: Option<String>,
     /// True for a struct an implementation *answers* in a feature query rather
     /// than reads as an input.
     #[serde(default)]
     pub is_features: bool,
     #[serde(default)]
     pub is_properties: bool,
+    /// The registry's `returnedonly`: the application never fills this in.
+    #[serde(default)]
+    pub returned_only: bool,
+    /// Everything the struct may be chained onto, verbatim.
+    #[serde(default)]
+    pub struct_extends: String,
     #[serde(default)]
     pub members: Vec<VkMember>,
 }
 
-/// One member of an extension struct, past the common `sType`/`pNext` pair —
-/// those are structural and every generated struct spells them the same way.
+/// A union the extension adds. Members are spelled exactly as for a struct;
+/// what differs is the declaration keyword, which is the target's to write.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VkUnion {
+    pub name: String,
+    #[serde(default)]
+    pub returned_only: bool,
+    #[serde(default)]
+    pub members: Vec<VkMember>,
+}
+
+/// One member of an extension struct or union, past the common `sType`/`pNext`
+/// pair — those are structural and every generated struct spells them the same
+/// way.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VkMember {
     pub name: String,
@@ -271,6 +412,172 @@ pub struct VkMember {
     #[serde(default)]
     pub suffix: String,
     pub declaration: String,
+    /// The registry's `optional`, a comma-separated list matching the pointer
+    /// depth, so it is carried as text rather than reduced to a boolean.
+    #[serde(default)]
+    pub optional: String,
+    /// How a properties member combines across implementations: `max`, `min`,
+    /// `bitmask`, `exact`, `noauto` and so on. Empty for a non-properties member.
+    #[serde(default)]
+    pub limit_type: String,
+    /// The member giving this one's element count, for an array.
+    #[serde(default)]
+    pub len: String,
+    /// A C expression for the length where `len` cannot express it.
+    #[serde(default)]
+    pub alt_len: String,
+    #[serde(default)]
+    pub no_auto_validity: String,
+    #[serde(default)]
+    pub extern_sync: String,
+    /// The `VkObjectType` a handle member holds, where the registry says.
+    #[serde(default)]
+    pub object_type: String,
+    /// For a union member, the enumerator selecting it; on the selecting member,
+    /// `selector` names the member it governs.
+    #[serde(default)]
+    pub selector: String,
+    #[serde(default)]
+    pub selection: String,
+    /// The fixed enumerator a member must carry, which is how a struct's `sType`
+    /// is paired with its `VkStructureType`.
+    #[serde(default)]
+    pub values: String,
+    #[serde(default)]
+    pub api: String,
+    #[serde(default)]
+    pub deprecated: String,
+}
+
+/// A new enum type, with the enumerants the registry files under it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VkEnumType {
+    pub name: String,
+    /// The registry's `<enums type=>`: `enum` for a value enum, `bitmask` for a
+    /// flag-bits enum.
+    #[serde(default)]
+    pub kind: String,
+    /// 32 unless the registry widens it.
+    #[serde(default)]
+    pub bitwidth: i64,
+    #[serde(default)]
+    pub enumerants: Vec<VkEnumerator>,
+}
+
+/// A `VkFlags` typedef and the flag-bits enum it draws from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VkBitmask {
+    pub name: String,
+    /// The `*FlagBits` enum supplying the values, empty for a bitmask with none
+    /// defined yet.
+    #[serde(default)]
+    pub requires: String,
+    /// The registry's `bitvalues`, used instead of `requires` for the 64-bit
+    /// form.
+    #[serde(default)]
+    pub bit_values: String,
+    #[serde(default)]
+    pub api: String,
+}
+
+/// A new object handle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VkHandle {
+    pub name: String,
+    /// False for the non-dispatchable form, which the registry spells by using
+    /// a different definition macro rather than by an attribute.
+    pub dispatchable: bool,
+    /// The handle this one is created from.
+    #[serde(default)]
+    pub parent: String,
+    /// The `VkObjectType` enumerator naming this handle.
+    #[serde(default)]
+    pub object_type_enum: String,
+}
+
+/// A function-pointer typedef, carried as the registry spells it because its
+/// signature is C text rather than structured content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VkFuncPointer {
+    pub name: String,
+    pub declaration: String,
+    #[serde(default)]
+    pub requires: String,
+}
+
+/// A scalar or forward-declared type the extension brings in.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VkBaseType {
+    pub name: String,
+    pub declaration: String,
+}
+
+/// One enumerant an extension contributes to an enum that already exists.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VkEnumerator {
+    pub name: String,
+    /// The enum being extended. Empty for a bare constant such as
+    /// `VK_..._SPEC_VERSION`, which extends nothing.
+    #[serde(default)]
+    pub extends: String,
+    /// `uint8_t`, `uint32_t`, `uint64_t` or `float`, where the registry pins it.
+    #[serde(default)]
+    pub type_name: String,
+    #[serde(default)]
+    pub api: String,
+    /// An additional guard around this one enumerator, independent of the
+    /// extension's platform.
+    #[serde(default)]
+    pub protect: String,
+    /// `aliased`, `unused` or `true`, where the registry marks it legacy.
+    #[serde(default)]
+    pub deprecated: String,
+    pub value: VkEnumValue,
+}
+
+/// How the registry spells an enumerator's value.
+///
+/// `registry.rnc` makes these four mutually exclusive, so this is one tagged
+/// value rather than six optional fields: a template dispatches on `kind` once
+/// instead of probing each field in turn, and a document setting two of them
+/// fails to parse instead of silently taking whichever the reader checks first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VkEnumValue {
+    /// A literal, as text: a constant such as `VK_..._EXTENSION_NAME` holds a
+    /// quoted string here, so narrowing this to an integer would lose it.
+    Literal { value: String },
+    /// A bit position within a bitmask.
+    Bitpos { bitpos: i64 },
+    /// An offset within an extension's reserved block.
+    ///
+    /// The arithmetic stays with the target: every tree that registers these
+    /// already has its own macro for the registry's formula, and emitting a
+    /// computed number instead would bypass it. `ext_number` is the defining
+    /// extension's unless the enumerator borrows another extension's block.
+    Offset {
+        offset: i64,
+        ext_number: i64,
+        /// `dir="-"`, placing the enumerator below the block base rather than
+        /// above it. `VkResult` error codes are why it exists.
+        #[serde(default)]
+        negative: bool,
+    },
+    /// Another enumerator this one is identical to. `canonical` is the end of
+    /// the alias chain, resolved here because following it needs the whole
+    /// document and a cycle check.
+    Alias { alias: String, canonical: String },
+}
+
+/// A document always spells a value, so this exists only to build a record in
+/// code. An empty literal is the degenerate form; `#[derive(Default)]` cannot
+/// pick a struct variant, hence the hand-written impl.
+impl Default for VkEnumValue {
+    fn default() -> Self {
+        Self::Literal {
+            value: String::new(),
+        }
+    }
 }
 
 /// A queryable feature bit and the struct that reports it.
@@ -281,6 +588,59 @@ pub struct VkFeature {
     pub struct_name: String,
 }
 
+/// One entry of the registry's SPIR-V tables, as it concerns this extension.
+///
+/// `<spirvextensions>` and `<spirvcapabilities>` are where the registry itself
+/// states which SPIR-V tokens a Vulkan version, extension, feature or property
+/// turns on. It is the only place the two planes are linked, so it is read
+/// rather than reconstructed from naming coincidences.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VkSpirvRequirement {
+    /// Whether the name is a `SPV_` extension or a SPIR-V capability.
+    pub kind: VkSpirvKind,
+    pub name: String,
+    /// Every condition the registry lists, not only the one that selected this
+    /// entry: a capability is commonly reachable more than one way, and which
+    /// route a target prefers is the target's decision.
+    #[serde(default)]
+    pub enables: Vec<VkSpirvEnable>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VkSpirvKind {
+    Extension,
+    Capability,
+}
+
+/// One way a SPIR-V token becomes available, in the registry's own four forms.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VkSpirvEnable {
+    /// A core version enables it.
+    Version { version: String },
+    /// A Vulkan extension enables it.
+    Extension { extension: String },
+    /// A feature bit enables it.
+    Feature {
+        #[serde(rename = "struct")]
+        struct_name: String,
+        feature: String,
+        #[serde(default)]
+        requires: String,
+        #[serde(default)]
+        alias: String,
+    },
+    /// A property member holding a given value enables it.
+    Property {
+        property: String,
+        member: String,
+        value: String,
+        #[serde(default)]
+        requires: String,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VkAlias {
     pub name: String,
@@ -288,19 +648,26 @@ pub struct VkAlias {
     pub canonical_name: String,
 }
 
+/// One `<require>` block's condition, as it applies to what that block names.
+///
+/// A `<require>` carries no `protect`: guarding is a property of the extension's
+/// platform, not of any one requirement block. See [`VkPlane::protect`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VkRequirement {
     #[serde(default)]
     pub depends: String,
     #[serde(default)]
-    pub protect: String,
-    #[serde(default)]
     pub api: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// Which handle a command dispatches through, read off its first parameter.
+///
+/// `Global` is the default because it is the no-handle case: a command whose
+/// first parameter is not a dispatchable handle is dispatched globally.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VkDispatch {
+    #[default]
     Global,
     Instance,
     PhysicalDevice,
@@ -310,7 +677,7 @@ pub enum VkDispatch {
 }
 
 /// One public command spelling required by the selected extension.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VkCommand {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -318,8 +685,37 @@ pub struct VkCommand {
     pub canonical_name: String,
     pub return_type: String,
     pub dispatch: VkDispatch,
+    /// A copy of [`VkPlane::protect`], so a template looping over commands can
+    /// guard each declaration without reaching back out to the plane. Every
+    /// command of one extension carries the same value.
     #[serde(default)]
     pub protect: String,
+    /// The `VkResult` values the command may return on success, verbatim.
+    #[serde(default)]
+    pub success_codes: String,
+    #[serde(default)]
+    pub error_codes: String,
+    /// Which queue families may record the command.
+    #[serde(default)]
+    pub queues: String,
+    /// `primary`, `secondary`, or both.
+    #[serde(default)]
+    pub cmd_buffer_level: String,
+    /// Whether the command is legal inside a render pass, outside, or both.
+    #[serde(default)]
+    pub render_pass: String,
+    /// Whether the command is legal inside a video coding scope.
+    #[serde(default)]
+    pub video_coding: String,
+    /// The task types the command performs: `action`, `state`, `synchronization`
+    /// and so on.
+    #[serde(default)]
+    pub tasks: String,
+    #[serde(default)]
+    pub conditional_rendering: String,
+    /// The command that replaces this one, where the registry says so.
+    #[serde(default)]
+    pub superseded_by: String,
     #[serde(default)]
     pub params: Vec<VkParam>,
     #[serde(default)]
@@ -340,6 +736,31 @@ pub struct VkParam {
     /// Complete C parameter spelling reconstructed from the registry's mixed
     /// content.
     pub declaration: String,
+    /// The registry's `optional`, one entry per pointer level, so it is text
+    /// rather than a boolean.
+    #[serde(default)]
+    pub optional: String,
+    /// The parameter giving this one's element count, for an array.
+    #[serde(default)]
+    pub len: String,
+    /// A C expression for the length where `len` cannot express it.
+    #[serde(default)]
+    pub alt_len: String,
+    /// Which of the parameter's handles the caller must externally synchronise.
+    #[serde(default)]
+    pub extern_sync: String,
+    #[serde(default)]
+    pub no_auto_validity: String,
+    /// The `VkObjectType` a handle parameter holds, where the registry says.
+    #[serde(default)]
+    pub object_type: String,
+    /// The structures a `void*` parameter may legally point at.
+    #[serde(default)]
+    pub valid_structs: String,
+    #[serde(default)]
+    pub stride: String,
+    #[serde(default)]
+    pub api: String,
 }
 
 // ----------------------------------------------------------------------------
@@ -362,6 +783,12 @@ fn feature_stem(name: &str, plane_prefix: &str) -> String {
     name.strip_prefix(plane_prefix)
         .unwrap_or(name)
         .to_uppercase()
+}
+
+/// `SPV_VND_widget` -> `VND`. Both registries spell a name the same way, so one
+/// reading serves both planes. Empty for a name that does not follow it.
+fn vendor_tag(name: &str) -> String {
+    name.split('_').nth(1).unwrap_or_default().to_owned()
 }
 
 #[cfg(test)]
@@ -400,10 +827,11 @@ mod tests {
             )]),
             enumerants: vec![Enumerant {
                 name: "WidgetTEST".into(),
-                aliases: Vec::new(),
                 value: 5454,
                 requires: vec!["BaseTEST".into()],
+                ..Default::default()
             }],
+            ..Default::default()
         });
         assert_eq!(plane.kind("Alpha").len(), 1);
         assert_eq!(plane.kind("Alpha")[0].name, "WidgetTEST");
@@ -428,13 +856,12 @@ mod tests {
             aliases: vec!["OpWidgetAliasTEST".into()],
             value: 5451,
             class: "Arithmetic".into(),
-            operands: Vec::new(),
             capabilities: vec!["WidgetTEST".into()],
-            encoding: SpvEncoding::default(),
-            meta: Default::default(),
+            ..Default::default()
         });
         spv.kinds.push(KindGroup {
             name: "Alpha".into(),
+            category: "ValueEnum".into(),
             meta: std::collections::BTreeMap::from([(
                 "label".into(),
                 toml::Value::String("A".into()),
@@ -444,7 +871,14 @@ mod tests {
                 aliases: vec!["WidgetAliasTEST".into()],
                 value: 5454,
                 requires: vec!["BaseTEST".into()],
+                parameters: vec![SpvOperand {
+                    kind: "IdRef".into(),
+                    name: Some("Value".into()),
+                    quantifier: None,
+                }],
+                ..Default::default()
             }],
+            ..Default::default()
         });
         ext.spv = Some(spv);
 
@@ -455,7 +889,68 @@ mod tests {
         assert_eq!(spv.kinds[0].enumerants[0].value, 5454);
         assert_eq!(spv.operations[0].value, 5451);
         assert_eq!(spv.operations[0].aliases, ["OpWidgetAliasTEST"]);
+        assert_eq!(spv.kinds[0].category, "ValueEnum");
+        // An enumerant's own operands ride with it: an encoder that loses them
+        // emits a short instruction, which no later stage can detect.
+        assert_eq!(spv.kinds[0].enumerants[0].parameters[0].kind, "IdRef");
         assert_eq!(spv.kinds[0].enumerants[0].aliases, ["WidgetAliasTEST"]);
+    }
+
+    #[test]
+    fn each_enumerator_value_form_survives_the_document() {
+        // The four forms are what a catalogue dispatches on, so a round trip
+        // that quietly collapsed one into another would show up as a wrong
+        // enumerator in a target tree rather than as an error here.
+        let mut vk = VkPlane::new("VK_TEST_widget");
+        vk.enumerators = vec![
+            VkEnumerator {
+                name: "VK_TEST_WIDGET_EXTENSION_NAME".into(),
+                value: VkEnumValue::Literal {
+                    value: "\"VK_TEST_widget\"".into(),
+                },
+                ..Default::default()
+            },
+            VkEnumerator {
+                name: "VK_WIDGET_USAGE_FAST_BIT_TEST".into(),
+                extends: "VkWidgetUsageFlagBitsTEST".into(),
+                value: VkEnumValue::Bitpos { bitpos: 7 },
+                ..Default::default()
+            },
+            VkEnumerator {
+                name: "VK_ERROR_WIDGET_LOST_TEST".into(),
+                extends: "VkResult".into(),
+                value: VkEnumValue::Offset {
+                    offset: 1,
+                    ext_number: 232,
+                    negative: true,
+                },
+                ..Default::default()
+            },
+            VkEnumerator {
+                name: "VK_STRUCTURE_TYPE_WIDGET_ALIAS_TEST".into(),
+                extends: "VkStructureType".into(),
+                value: VkEnumValue::Alias {
+                    alias: "VK_STRUCTURE_TYPE_WIDGET_TEST".into(),
+                    canonical: "VK_STRUCTURE_TYPE_WIDGET_TEST".into(),
+                },
+                ..Default::default()
+            },
+        ];
+        let expected = vk.enumerators.clone();
+
+        let text = to_toml(&Extension {
+            vk: Some(vk),
+            ..Default::default()
+        })
+        .unwrap();
+        // The tag is what a template branches on, so it has to be in the
+        // document rather than implied by which field is present.
+        assert!(text.contains("kind = \"offset\""), "got:\n{text}");
+
+        let back = from_toml(&text).unwrap().vk.expect("the vk plane");
+        for (wrote, read) in expected.iter().zip(&back.enumerators) {
+            assert_eq!(wrote.value, read.value, "{}", wrote.name);
+        }
     }
 
     #[test]

@@ -1,30 +1,35 @@
 //! Select one extension out of the Vulkan registry, `vk.xml`.
 //!
 //! The registry is machine-readable and complete, so nothing here is heuristic.
-//! One chain is worth spelling out because it is what avoids guesswork: an
-//! extension's `<require>` block names its structs and, separately, the
-//! `VkStructureType` enumerators it defines —
 //!
-//! ```xml
-//! <type name="VkPhysicalDeviceWidgetFeaturesVND" />
-//! <enum offset="0" extends="VkStructureType"
-//!       name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND" />
-//! ```
+//! ## What is read, and how the completeness question is answered
 //!
-//! and the two are linked *inside* the struct, whose `sType` member carries
-//! `values="VK_STRUCTURE_TYPE_…"`. Following that attribute pairs a struct with
-//! its enumerator exactly, where deriving one name from the other by
-//! case-mangling would be a guess that fails on the irregular ones.
+//! The reader follows the registry's own taxonomy: `<type>` is dispatched on its
+//! `category`, an `<enum>` value on which of the four mutually exclusive forms
+//! `registry.rnc` allows, and nothing is grouped in a way the schema does not.
+//! That is deliberate — it makes "is anything missing" a question you settle by
+//! diffing this module against the schema, rather than one that needs a survey
+//! of the document.
 //!
-//! The `offset` and extension number together determine an enumerator value, so
-//! pairing a struct with the wrong offset silently produces a collision.
+//! ## Two indirections worth spelling out
+//!
+//! A struct names its `VkStructureType` *inside itself*, on the `sType` member's
+//! `values` attribute. Following that pairs the two exactly, where deriving one
+//! name from the other by case-mangling would fail on the irregular ones. The
+//! enumerator itself is an ordinary entry in the extension's `<require>` block
+//! and is read as one, like every other enumerant.
+//!
+//! A platform extension's guard macro is spelled only in `<platforms>`; the
+//! extension names a platform, and no `<require>` carries a `protect` attribute
+//! at all. See [`platform_protect`].
 
 use anyhow::{bail, Context, Result};
 use roxmltree::{Document, Node};
 
 use crate::model::{
-    VkAlias, VkCommand, VkDispatch, VkExtensionType, VkFeature, VkMember, VkParam, VkPlane,
-    VkRequirement, VkStruct,
+    VkAlias, VkBaseType, VkBitmask, VkCommand, VkDispatch, VkEnumType, VkEnumValue, VkEnumerator,
+    VkExtensionType, VkFeature, VkFuncPointer, VkHandle, VkMember, VkParam, VkPlane, VkRequirement,
+    VkSpirvEnable, VkSpirvKind, VkSpirvRequirement, VkStruct, VkUnion,
 };
 
 /// Extract `name`'s API surface from a registry document.
@@ -42,6 +47,15 @@ pub fn extract(text: &str, name: &str) -> Result<(VkPlane, Vec<String>)> {
             )
         })?;
 
+    // `supported` lists the APIs an extension belongs to. A disabled or
+    // Vulkan SC-only one is spelled out in full here, so nothing about its
+    // contents distinguishes it from one worth scaffolding — only this does.
+    // Absent is treated as Vulkan, for the hand-written documents that omit it.
+    let supported = extension.attribute("supported").unwrap_or("vulkan");
+    if !supported.split(',').any(|api| api == "vulkan") {
+        bail!("{name} is supported = \"{supported}\", which does not include vulkan");
+    }
+
     let mut plane = VkPlane::new(name);
     plane.extension_type = match extension.attribute("type").unwrap_or("device") {
         "instance" => VkExtensionType::Instance,
@@ -54,10 +68,33 @@ pub fn extract(text: &str, name: &str) -> Result<(VkPlane, Vec<String>)> {
         .parse()
         .with_context(|| format!("{name} has a non-numeric extension number"))?;
     plane.author = extension.attribute("author").unwrap_or_default().to_owned();
+    plane.contact = extension
+        .attribute("contact")
+        .unwrap_or_default()
+        .to_owned();
     plane.depends = extension
         .attribute("depends")
         .unwrap_or_default()
         .to_owned();
+    plane.promoted_to = text_attribute(extension, "promotedto");
+    plane.deprecated_by = text_attribute(extension, "deprecatedby");
+    plane.obsoleted_by = text_attribute(extension, "obsoletedby");
+    plane.special_use = text_attribute(extension, "specialuse");
+    plane.ratified = text_attribute(extension, "ratified");
+    plane.provisional = extension.attribute("provisional") == Some("true");
+    plane.no_features = extension.attribute("nofeatures") == Some("true");
+    plane.platform = extension
+        .attribute("platform")
+        .unwrap_or_default()
+        .to_owned();
+    if !plane.platform.is_empty() {
+        plane.protect = platform_protect(&doc, &plane.platform).with_context(|| {
+            format!(
+                "{name} names platform '{}', which <platforms> does not define",
+                plane.platform
+            )
+        })?;
+    }
 
     // `<enum value="1" name="VK_..._SPEC_VERSION">`
     plane.spec_version = extension
@@ -93,14 +130,11 @@ pub fn extract(text: &str, name: &str) -> Result<(VkPlane, Vec<String>)> {
         })
         .collect();
 
+    let protect = plane.protect.clone();
     for requirement in &requirements {
         let condition = VkRequirement {
             depends: requirement
                 .attribute("depends")
-                .unwrap_or_default()
-                .to_owned(),
-            protect: requirement
-                .attribute("protect")
                 .unwrap_or_default()
                 .to_owned(),
             api: requirement.attribute("api").unwrap_or_default().to_owned(),
@@ -110,45 +144,57 @@ pub fn extract(text: &str, name: &str) -> Result<(VkPlane, Vec<String>)> {
             .filter(|node| node.has_tag_name("command"))
             .filter_map(|node| node.attribute("name"))
         {
-            let command = command_of(&doc, command_name, condition.clone())?;
+            let command = command_of(&doc, command_name, condition.clone(), &protect)?;
             match plane
                 .commands
                 .iter_mut()
                 .find(|existing| existing.name == command.name)
             {
-                Some(existing) => {
-                    if existing.protect != command.protect {
-                        bail!(
-                            "command {} has incompatible protection macros '{}' and '{}'",
-                            command.name,
-                            existing.protect,
-                            command.protect
-                        );
-                    }
-                    existing.requirements.extend(command.requirements);
-                }
+                // One command can be required by several blocks, each under its
+                // own condition. Keep a single record and collect the conditions.
+                Some(existing) => existing.requirements.extend(command.requirements),
                 None => plane.commands.push(command),
             }
         }
     }
 
-    // Enumerator name -> offset, for the structs below. Only enumerators with an
-    // `offset` are computable; an `alias` of a promoted core enumerator has a
-    // fixed spelling instead and needs no arithmetic.
-    let offsets: Vec<(String, i64)> = requirements
+    // Every enumerant the extension contributes, to whatever enum. The
+    // `VkStructureType` entry tagging a struct is one of these and gets no
+    // special handling: an extension adds far more entries to VkFormat,
+    // VkResult and the flag-bits enums than it does sType values.
+    for node in requirements
         .iter()
         .flat_map(|requirement| requirement.descendants())
-        .filter(|node| {
-            node.has_tag_name("enum") && node.attribute("extends") == Some("VkStructureType")
-        })
-        .filter_map(|node| {
-            Some((
-                node.attribute("name")?.to_owned(),
-                node.attribute("offset")?.parse().ok()?,
-            ))
-        })
+        .filter(|node| node.has_tag_name("enum"))
+    {
+        match enumerator_of(&doc, node, plane.number)? {
+            Some(enumerator) => plane.enumerators.push(enumerator),
+            // The registry also uses <enum> to *reference* an existing
+            // enumerant, with no value of any kind. Nothing to record.
+            None => continue,
+        }
+    }
+    plane.enumerators = dedupe_enumerators(plane.enumerators, &mut notes);
+
+    // Which tags this extension actually introduces. A `<require>` also names
+    // structs that merely have to exist, and emitting those would duplicate
+    // another extension's declarations.
+    let introduced: std::collections::BTreeSet<&str> = plane
+        .enumerators
+        .iter()
+        .map(|enumerator| enumerator.name.as_str())
+        .collect();
+    // Named but valueless is a third case, distinct from both: the tag is
+    // mentioned and yet cannot be registered, which is worth a note.
+    let mentioned: std::collections::BTreeSet<&str> = requirements
+        .iter()
+        .flat_map(|requirement| requirement.descendants())
+        .filter(|node| node.has_tag_name("enum"))
+        .filter_map(|node| node.attribute("name"))
         .collect();
 
+    let owners = type_owners(&doc);
+    let mut structs = Vec::new();
     for referenced in requirements
         .iter()
         .flat_map(|requirement| requirement.descendants())
@@ -158,6 +204,13 @@ pub fn extract(text: &str, name: &str) -> Result<(VkPlane, Vec<String>)> {
         let Some(type_node) = find_type(&doc, referenced) else {
             continue;
         };
+        // A `<require>` names every type the extension's declarations mention,
+        // most of which core or an earlier extension already defined. Only the
+        // first requirement introduces a type; the rest are references, and
+        // generating them again would redeclare somebody else's.
+        if owners.get(referenced).copied() != Some(name) {
+            continue;
+        }
         if let Some(alias_of) = type_node.attribute("alias") {
             plane.type_aliases.push(VkAlias {
                 name: referenced.to_owned(),
@@ -166,69 +219,64 @@ pub fn extract(text: &str, name: &str) -> Result<(VkPlane, Vec<String>)> {
             });
             continue;
         }
-        if type_node.attribute("category") != Some("struct") {
-            // Extensions reference handle and enum types too; only structs have
-            // a body to generate.
-            continue;
+        // Dispatch on the registry's own taxonomy. `include` and `define` are
+        // the two categories with nothing to generate: one names a system
+        // header, the other is preprocessor text the headers already carry.
+        match type_node.attribute("category").unwrap_or_default() {
+            "struct" => {
+                let record = struct_of(type_node, referenced)?;
+                // A chainable struct reaches a tree through its tag, so a tag
+                // with no value leaves it unregisterable — say so rather than
+                // emitting a declaration nothing can reference. A struct with
+                // no `sType` has no such gate and is simply declared.
+                if record.stype.is_empty() || introduced.contains(record.stype.as_str()) {
+                    structs.push(record);
+                } else if mentioned.contains(record.stype.as_str()) {
+                    notes.push(format!(
+                        "{referenced}: its {} has no value in this extension's require block, so \
+                         the struct cannot be registered",
+                        record.stype
+                    ));
+                }
+            }
+            "union" => plane.unions.push(VkUnion {
+                name: referenced.to_owned(),
+                returned_only: type_node.attribute("returnedonly") == Some("true"),
+                members: members_of(type_node)?,
+            }),
+            "enum" => plane.enums.push(enum_type_of(&doc, referenced)?),
+            "bitmask" => plane.bitmasks.push(VkBitmask {
+                name: referenced.to_owned(),
+                requires: text_attribute(type_node, "requires"),
+                bit_values: text_attribute(type_node, "bitvalues"),
+                api: text_attribute(type_node, "api"),
+            }),
+            "handle" => plane.handles.push(VkHandle {
+                name: referenced.to_owned(),
+                // The registry marks dispatchability by which definition macro
+                // it uses, not by an attribute.
+                dispatchable: mixed_text(type_node).contains("VK_DEFINE_HANDLE"),
+                parent: text_attribute(type_node, "parent"),
+                object_type_enum: text_attribute(type_node, "objtypeenum"),
+            }),
+            "funcpointer" => plane.func_pointers.push(VkFuncPointer {
+                name: referenced.to_owned(),
+                declaration: mixed_text(type_node),
+                requires: text_attribute(type_node, "requires"),
+            }),
+            "basetype" => plane.base_types.push(VkBaseType {
+                name: referenced.to_owned(),
+                declaration: mixed_text(type_node),
+            }),
+            _ => continue,
         }
-        let Some(stype) = stype_of(type_node) else {
-            notes.push(format!("{referenced}: no sType member, skipped"));
-            continue;
-        };
-        let stype_entry = requirements
-            .iter()
-            .flat_map(|requirement| requirement.descendants())
-            .find(|node| {
-                node.has_tag_name("enum") && node.attribute("name") == Some(stype.as_str())
-            });
-        let Some(stype_entry) = stype_entry else {
-            // The referenced struct already exists outside this extension.
-            continue;
-        };
-        let offset = offsets.iter().find(|(n, _)| *n == stype).map(|(_, o)| *o);
-        let stype_alias_of = stype_entry.attribute("alias").map(str::to_owned);
-        if offset.is_none() && stype_alias_of.is_none() {
-            notes.push(format!(
-                "{stype}: no offset in this extension's require block, so its value cannot be \
-                 computed"
-            ));
-            continue;
-        }
-        let extends = type_node.attribute("structextends").unwrap_or_default();
-        plane.structs.push(VkStruct {
-            name: referenced.to_owned(),
-            stype,
-            stype_offset: offset,
-            stype_alias_of,
-            is_features: extends.contains("VkPhysicalDeviceFeatures2"),
-            is_properties: extends.contains("VkPhysicalDeviceProperties2"),
-            members: members_of(type_node)?,
-        });
     }
+    plane.structs = structs;
 
-    for node in requirements
-        .iter()
-        .flat_map(|requirement| requirement.descendants())
-        .filter(|node| node.has_tag_name("enum"))
-    {
-        let (Some(name), Some(alias_of)) = (node.attribute("name"), node.attribute("alias")) else {
-            continue;
-        };
-        plane.enum_aliases.push(VkAlias {
-            name: name.to_owned(),
-            alias_of: alias_of.to_owned(),
-            canonical_name: canonical_enum_name(&doc, alias_of)?,
-        });
-    }
+    plane.spirv = spirv_requirements(&doc, name);
     plane.type_aliases = dedupe_aliases(plane.type_aliases, "type", &mut notes);
-    plane.enum_aliases = dedupe_aliases(plane.enum_aliases, "enumerator", &mut notes);
 
-    if plane.structs.is_empty()
-        && plane.features.is_empty()
-        && plane.commands.is_empty()
-        && plane.type_aliases.is_empty()
-        && plane.enum_aliases.is_empty()
-    {
+    if plane.is_empty() {
         bail!("{name} adds no modeled API surface; there is nothing to scaffold");
     }
     Ok((plane, notes))
@@ -251,14 +299,278 @@ fn dedupe_aliases(aliases: Vec<VkAlias>, what: &str, notes: &mut Vec<String>) ->
     kept
 }
 
+/// Which core version or extension first requires each type.
+///
+/// The registry never says outright who *defines* a type. What it does give is
+/// order: a type is introduced by the first `<feature>` or `<extension>` that
+/// requires it, and every later mention is a reference. Built once per document
+/// because the alternative is a document scan per referenced type.
+fn type_owners<'a>(doc: &'a Document<'a>) -> std::collections::BTreeMap<&'a str, &'a str> {
+    let mut owners = std::collections::BTreeMap::new();
+    for block in doc.descendants().filter(|node| {
+        // `<feature>` is also the spelling of a feature *bit* inside a
+        // `<require>`, so the parent decides which one this is.
+        (node.has_tag_name("feature") || node.has_tag_name("extension"))
+            && node.parent().is_some_and(|parent| {
+                parent.has_tag_name("registry") || parent.has_tag_name("extensions")
+            })
+    }) {
+        let Some(owner) = block.attribute("name") else {
+            continue;
+        };
+        for required in block
+            .children()
+            .filter(|node| node.has_tag_name("require"))
+            .flat_map(|node| node.children())
+            .filter(|node| node.has_tag_name("type"))
+            .filter_map(|node| node.attribute("name"))
+        {
+            owners.entry(required).or_insert(owner);
+        }
+    }
+    owners
+}
+
+/// An optional attribute as owned text, empty when absent.
+///
+/// Most registry attributes are optional and most of them are carried verbatim,
+/// so this keeps the reader from repeating the same three calls forty times.
+fn text_attribute(node: Node<'_, '_>, name: &str) -> String {
+    node.attribute(name).unwrap_or_default().to_owned()
+}
+
+/// One `<enum>` entry, in whichever of the four value forms it uses.
+///
+/// `None` for an entry carrying no value at all: the registry also uses `<enum>`
+/// to *reference* an enumerant defined elsewhere, and a reference introduces
+/// nothing. The forms are mutually exclusive per `registry.rnc`, so the order
+/// here only decides what a malformed document does.
+fn enumerator_of(
+    doc: &Document<'_>,
+    node: Node<'_, '_>,
+    ext_number: i64,
+) -> Result<Option<VkEnumerator>> {
+    let Some(name) = node.attribute("name") else {
+        return Ok(None);
+    };
+    let value = if let Some(alias) = node.attribute("alias") {
+        VkEnumValue::Alias {
+            alias: alias.to_owned(),
+            canonical: canonical_enum_name(doc, alias)?,
+        }
+    } else if let Some(offset) = node.attribute("offset") {
+        VkEnumValue::Offset {
+            offset: offset
+                .parse()
+                .with_context(|| format!("enumerator {name} has a non-numeric offset"))?,
+            // `extnumber` borrows another extension's reserved block. Without
+            // it the enumerator sits in the block of the extension defining it.
+            ext_number: match node.attribute("extnumber") {
+                Some(borrowed) => borrowed
+                    .parse()
+                    .with_context(|| format!("enumerator {name} has a non-numeric extnumber"))?,
+                None => ext_number,
+            },
+            negative: node.attribute("dir") == Some("-"),
+        }
+    } else if let Some(bitpos) = node.attribute("bitpos") {
+        VkEnumValue::Bitpos {
+            bitpos: bitpos
+                .parse()
+                .with_context(|| format!("enumerator {name} has a non-numeric bitpos"))?,
+        }
+    } else if let Some(literal) = node.attribute("value") {
+        VkEnumValue::Literal {
+            value: literal.to_owned(),
+        }
+    } else {
+        return Ok(None);
+    };
+
+    Ok(Some(VkEnumerator {
+        name: name.to_owned(),
+        extends: text_attribute(node, "extends"),
+        type_name: text_attribute(node, "type"),
+        api: text_attribute(node, "api"),
+        protect: text_attribute(node, "protect"),
+        deprecated: text_attribute(node, "deprecated"),
+        value,
+    }))
+}
+
+/// Keep one record per enumerator name, reporting a disagreement.
+///
+/// An extension may name the same enumerant in two `<require>` blocks, normally
+/// under different conditions and with the same value. A differing value is the
+/// case worth hearing about.
+fn dedupe_enumerators(
+    enumerators: Vec<VkEnumerator>,
+    notes: &mut Vec<String>,
+) -> Vec<VkEnumerator> {
+    let mut kept: Vec<VkEnumerator> = Vec::new();
+    for enumerator in enumerators {
+        if let Some(existing) = kept.iter().find(|entry| entry.name == enumerator.name) {
+            if existing.value != enumerator.value {
+                notes.push(format!(
+                    "enumerator {} is given two different values; kept the first",
+                    enumerator.name
+                ));
+            }
+            continue;
+        }
+        kept.push(enumerator);
+    }
+    kept
+}
+
+/// A struct's record.
+///
+/// `stype` is empty for a struct that is not chainable. Those are ordinary
+/// public structs — a transform matrix, an AABB — and the extension declares
+/// them like any other; only the registration through a `pNext` tag is missing.
+fn struct_of(node: Node<'_, '_>, name: &str) -> Result<VkStruct> {
+    let extends = node.attribute("structextends").unwrap_or_default();
+    Ok(VkStruct {
+        name: name.to_owned(),
+        stype: stype_of(node).unwrap_or_default(),
+        is_features: extends.contains("VkPhysicalDeviceFeatures2"),
+        is_properties: extends.contains("VkPhysicalDeviceProperties2"),
+        returned_only: node.attribute("returnedonly") == Some("true"),
+        struct_extends: extends.to_owned(),
+        members: members_of(node)?,
+    })
+}
+
+/// A new enum type and the enumerants the registry files under it.
+///
+/// Those come from the document's own `<enums>` block, not from the extension's
+/// `<require>`: defining an enum and extending someone else's are different acts
+/// and the registry writes them in different places.
+fn enum_type_of(doc: &Document<'_>, name: &str) -> Result<VkEnumType> {
+    let Some(block) = doc
+        .descendants()
+        .find(|node| node.has_tag_name("enums") && node.attribute("name") == Some(name))
+    else {
+        // A declared type with no values yet. Real: a flag-bits enum is often
+        // introduced empty and filled by later extensions.
+        return Ok(VkEnumType {
+            name: name.to_owned(),
+            kind: String::new(),
+            bitwidth: 32,
+            enumerants: Vec::new(),
+        });
+    };
+    let mut enumerants = Vec::new();
+    for node in block.children().filter(|node| node.has_tag_name("enum")) {
+        // An entry in an <enums> block spells its value outright, so it never
+        // needs an extension's block base.
+        if let Some(enumerant) = enumerator_of(doc, node, 0)? {
+            enumerants.push(enumerant);
+        }
+    }
+    Ok(VkEnumType {
+        name: name.to_owned(),
+        kind: text_attribute(block, "type"),
+        bitwidth: block
+            .attribute("bitwidth")
+            .and_then(|width| width.parse().ok())
+            .unwrap_or(32),
+        enumerants,
+    })
+}
+
+/// What the registry's own SPIR-V tables say this extension enables.
+///
+/// An entry is selected when one of its `<enable>` conditions names this
+/// extension. All of that entry's conditions are then carried, not just the
+/// matching one: a capability is usually reachable several ways, and which route
+/// a target wants to require is the target's decision.
+fn spirv_requirements(doc: &Document<'_>, extension: &str) -> Vec<VkSpirvRequirement> {
+    let mut found = Vec::new();
+    for node in doc
+        .descendants()
+        .filter(|node| node.has_tag_name("spirvextension") || node.has_tag_name("spirvcapability"))
+    {
+        let enables: Vec<VkSpirvEnable> = node
+            .children()
+            .filter(|child| child.has_tag_name("enable"))
+            .filter_map(spirv_enable)
+            .collect();
+        let names_it = enables
+            .iter()
+            .any(|enable| matches!(enable, VkSpirvEnable::Extension { extension: by } if by == extension));
+        if !names_it {
+            continue;
+        }
+        found.push(VkSpirvRequirement {
+            kind: if node.has_tag_name("spirvextension") {
+                VkSpirvKind::Extension
+            } else {
+                VkSpirvKind::Capability
+            },
+            name: text_attribute(node, "name"),
+            enables,
+        });
+    }
+    found
+}
+
+/// One `<enable>` row, in whichever of the registry's four forms it uses.
+fn spirv_enable(node: Node<'_, '_>) -> Option<VkSpirvEnable> {
+    if let Some(version) = node.attribute("version") {
+        return Some(VkSpirvEnable::Version {
+            version: version.to_owned(),
+        });
+    }
+    if let Some(extension) = node.attribute("extension") {
+        return Some(VkSpirvEnable::Extension {
+            extension: extension.to_owned(),
+        });
+    }
+    if let (Some(struct_name), Some(feature)) =
+        (node.attribute("struct"), node.attribute("feature"))
+    {
+        return Some(VkSpirvEnable::Feature {
+            struct_name: struct_name.to_owned(),
+            feature: feature.to_owned(),
+            requires: text_attribute(node, "requires"),
+            alias: text_attribute(node, "alias"),
+        });
+    }
+    if let (Some(property), Some(member), Some(value)) = (
+        node.attribute("property"),
+        node.attribute("member"),
+        node.attribute("value"),
+    ) {
+        return Some(VkSpirvEnable::Property {
+            property: property.to_owned(),
+            member: member.to_owned(),
+            value: value.to_owned(),
+            requires: text_attribute(node, "requires"),
+        });
+    }
+    None
+}
+
 fn find_type<'a>(doc: &'a Document<'a>, name: &str) -> Option<Node<'a, 'a>> {
     doc.descendants().find(|node| {
         node.has_tag_name("type")
             && node
                 .parent()
                 .is_some_and(|parent| parent.has_tag_name("types"))
-            && node.attribute("name") == Some(name)
+            && type_name_of(*node).as_deref() == Some(name)
     })
+}
+
+/// A type's name.
+///
+/// The registry spells it as an attribute when it generates the declaration
+/// itself, and as a `<name>` child when the entry carries C text the name is
+/// embedded in — which is every handle, function pointer, bitmask and base type.
+fn type_name_of(node: Node<'_, '_>) -> Option<String> {
+    node.attribute("name")
+        .map(str::to_owned)
+        .or_else(|| child_text(node, "name"))
 }
 
 fn canonical_type_name(doc: &Document<'_>, name: &str) -> Result<String> {
@@ -300,7 +612,12 @@ fn canonical_enum_name(doc: &Document<'_>, name: &str) -> Result<String> {
     }
 }
 
-fn command_of(doc: &Document<'_>, name: &str, requirement: VkRequirement) -> Result<VkCommand> {
+fn command_of(
+    doc: &Document<'_>,
+    name: &str,
+    requirement: VkRequirement,
+    protect: &str,
+) -> Result<VkCommand> {
     let public =
         find_command(doc, name).with_context(|| format!("no command definition for {name}"))?;
     let alias_of = public.attribute("alias").map(str::to_owned);
@@ -335,6 +652,15 @@ fn command_of(doc: &Document<'_>, name: &str, requirement: VkRequirement) -> Res
                 type_decl,
                 suffix,
                 declaration,
+                optional: text_attribute(param, "optional"),
+                len: text_attribute(param, "len"),
+                alt_len: text_attribute(param, "altlen"),
+                extern_sync: text_attribute(param, "externsync"),
+                no_auto_validity: text_attribute(param, "noautovalidity"),
+                object_type: text_attribute(param, "objecttype"),
+                valid_structs: text_attribute(param, "validstructs"),
+                stride: text_attribute(param, "stride"),
+                api: text_attribute(param, "api"),
             })
         })
         .collect::<Result<_>>()?;
@@ -345,11 +671,34 @@ fn command_of(doc: &Document<'_>, name: &str, requirement: VkRequirement) -> Res
         canonical_name,
         return_type,
         dispatch,
-        protect: requirement.protect.clone(),
+        protect: protect.to_owned(),
+        // Recording conditions comes off the canonical definition: an alias has
+        // no body of its own, so it inherits every constraint of what it names.
+        success_codes: text_attribute(canonical, "successcodes"),
+        error_codes: text_attribute(canonical, "errorcodes"),
+        queues: text_attribute(canonical, "queues"),
+        cmd_buffer_level: text_attribute(canonical, "cmdbufferlevel"),
+        render_pass: text_attribute(canonical, "renderpass"),
+        video_coding: text_attribute(canonical, "videocoding"),
+        tasks: text_attribute(canonical, "tasks"),
+        conditional_rendering: text_attribute(canonical, "conditionalrendering"),
+        superseded_by: text_attribute(public, "supersededby"),
         params,
         requirements: vec![requirement],
         meta: Default::default(),
     })
+}
+
+/// The preprocessor symbol a platform's declarations are guarded by.
+///
+/// The extension names a platform and the `<platforms>` table spells the macro;
+/// no `<require>` in the published registry carries a `protect` attribute, so
+/// this lookup is the only route to it.
+fn platform_protect(doc: &Document<'_>, platform: &str) -> Option<String> {
+    doc.descendants()
+        .find(|node| node.has_tag_name("platform") && node.attribute("name") == Some(platform))
+        .and_then(|node| node.attribute("protect"))
+        .map(str::to_owned)
 }
 
 fn find_command<'a>(doc: &'a Document<'a>, name: &str) -> Option<Node<'a, 'a>> {
@@ -447,6 +796,18 @@ fn members_of<'a>(definition: Node<'a, 'a>) -> Result<Vec<VkMember>> {
                 type_decl,
                 suffix,
                 declaration,
+                optional: text_attribute(member, "optional"),
+                limit_type: text_attribute(member, "limittype"),
+                len: text_attribute(member, "len"),
+                alt_len: text_attribute(member, "altlen"),
+                no_auto_validity: text_attribute(member, "noautovalidity"),
+                extern_sync: text_attribute(member, "externsync"),
+                object_type: text_attribute(member, "objecttype"),
+                selector: text_attribute(member, "selector"),
+                selection: text_attribute(member, "selection"),
+                values: text_attribute(member, "values"),
+                api: text_attribute(member, "api"),
+                deprecated: text_attribute(member, "deprecated"),
             })
         })
         .collect()
@@ -463,59 +824,44 @@ fn child_text<'a>(node: Node<'a, 'a>, tag: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// Includes the public registry's sType/offset link and pointer spelling.
-    const XML: &str = r#"<registry>
-      <types>
-        <type category="struct" name="VkPhysicalDeviceWidgetFeaturesVND"
-              structextends="VkPhysicalDeviceFeatures2,VkDeviceCreateInfo">
-          <member values="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND"><type>VkStructureType</type> <name>sType</name></member>
-          <member optional="true"><type>void</type>*  <name>pNext</name></member>
-          <member><type>VkBool32</type>  <name>widgetEnabled</name></member>
-          <member>const <type>char</type>* <name>names</name>[4]</member>
-        </type>
-        <type category="struct" name="VkPhysicalDeviceWidgetPropertiesVND"
-              structextends="VkPhysicalDeviceProperties2">
-          <member values="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_PROPERTIES_VND"><type>VkStructureType</type> <name>sType</name></member>
-          <member optional="true"><type>void</type>*  <name>pNext</name></member>
-          <member limittype="max"><type>uint64_t</type>  <name>maxThing</name></member>
-        </type>
-        <type category="enum" name="VkSomeEnum"/>
-        <type category="struct" name="VkWidgetAliasVND"
-              alias="VkPhysicalDeviceWidgetFeaturesVND"/>
-      </types>
-      <commands>
-        <command>
-          <proto><type>VkResult</type> <name>vkWidgetTEST</name></proto>
-          <param><type>VkDevice</type> <name>device</name></param>
-          <param>const <type>VkPhysicalDeviceWidgetFeaturesVND</type>* <name>pInfo</name></param>
-          <param><type>uint32_t</type> <name>values</name>[4]</param>
-        </command>
-        <command name="vkWidgetAliasTEST" alias="vkWidgetTEST"/>
-      </commands>
-      <extensions>
-        <extension name="VK_TEST_widget" number="232" type="device" author="TEST"
-                   depends="VK_TEST_prerequisite,VK_VERSION_1_1" supported="vulkan">
-          <require depends="VK_TEST_condition" protect="VK_TEST_PLATFORM">
-            <enum value="3" name="VK_TEST_WIDGET_SPEC_VERSION" />
-            <enum value="&quot;VK_TEST_widget&quot;" name="VK_TEST_WIDGET_EXTENSION_NAME" />
-            <type name="VkPhysicalDeviceWidgetFeaturesVND" />
-            <type name="VkPhysicalDeviceWidgetPropertiesVND" />
-            <type name="VkSomeEnum" />
-            <type name="VkWidgetAliasVND" />
-            <enum offset="0" extends="VkStructureType" name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND" />
-            <enum offset="2" extends="VkStructureType" name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_PROPERTIES_VND" />
-            <enum extends="VkStructureType" name="VK_STRUCTURE_TYPE_WIDGET_ALIAS_VND"
-                  alias="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND" />
-            <command name="vkWidgetTEST" />
-            <command name="vkWidgetAliasTEST" />
-            <feature name="widgetEnabled" struct="VkPhysicalDeviceWidgetFeaturesVND" />
-          </require>
-        </extension>
-      </extensions>
-    </registry>"#;
+    /// A synthetic registry that keeps the published document's structure. See
+    /// the file's own header for what each block is there to exercise.
+    ///
+    /// One document rather than a fixture per test: most of what this reader
+    /// gets wrong is an indirection between two blocks — a platform to its
+    /// macro, a struct to its tag, a type to the version that introduced it —
+    /// and those only exist in a document shaped like the real one.
+    const REGISTRY: &str = include_str!("testdata/registry.xml");
 
     fn plane() -> VkPlane {
-        extract(XML, "VK_TEST_widget").unwrap().0
+        extract(REGISTRY, "VK_TEST_widget").unwrap().0
+    }
+
+    #[test]
+    fn a_platform_extension_carries_its_protect_macro() {
+        // The macro guarding a platform extension's declarations is named only
+        // in <platforms>, reached through the extension's `platform` attribute.
+        // No <require> in the published registry carries `protect`, so reading
+        // it from there yields an empty string for all 44 platform extensions
+        // and their declarations are emitted unguarded.
+        let (plane, _) = extract(REGISTRY, "VK_TEST_platform_widget").unwrap();
+        let command = plane
+            .commands
+            .iter()
+            .find(|command| command.name == "vkTestWidgetTEST")
+            .expect("the extension requires this command");
+        assert_eq!(command.protect, "VK_USE_PLATFORM_TEST");
+    }
+
+    #[test]
+    fn an_extension_unsupported_on_vulkan_is_refused() {
+        // `supported` lists the APIs an extension belongs to. A disabled one is
+        // still fully spelled out in the document, so nothing else distinguishes
+        // it from an extension worth scaffolding.
+        let err = extract(REGISTRY, "VK_TEST_disabled_widget")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("supported"), "got: {err}");
     }
 
     #[test]
@@ -531,6 +877,16 @@ mod tests {
         assert!(matches!(plane.extension_type, VkExtensionType::Device));
     }
 
+    /// The offset an enumerator carries, or `None` if it is spelled some other
+    /// way. Used by the sType pairing checks, which are about *which* enumerator
+    /// a struct is tagged by.
+    fn offset_of(plane: &VkPlane, name: &str) -> Option<i64> {
+        match &plane.enumerators.iter().find(|e| e.name == name)?.value {
+            VkEnumValue::Offset { offset, .. } => Some(*offset),
+            _ => None,
+        }
+    }
+
     #[test]
     fn pairs_each_struct_with_its_own_enumerator_offset() {
         let plane = plane();
@@ -543,7 +899,7 @@ mod tests {
             features.stype,
             "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND"
         );
-        assert_eq!(features.stype_offset, Some(0));
+        assert_eq!(offset_of(&plane, &features.stype), Some(0));
 
         let properties = plane
             .structs
@@ -552,7 +908,129 @@ mod tests {
             .expect("a properties struct");
         // Offset 2, not 1: the pairing comes from the sType attribute, not from
         // the order the enumerators appear in.
-        assert_eq!(properties.stype_offset, Some(2));
+        assert_eq!(offset_of(&plane, &properties.stype), Some(2));
+    }
+
+    #[test]
+    fn every_enumerant_is_kept_whatever_it_extends() {
+        // The sType entries are not privileged: an extension contributes far
+        // more to VkFormat, VkResult and the flag-bits enums than to
+        // VkStructureType, and all of it has to be registered somewhere.
+        let plane = plane();
+        let format = plane
+            .enumerators
+            .iter()
+            .find(|e| e.name == "VK_FORMAT_WIDGET_TEST")
+            .expect("the VkFormat entry");
+        assert_eq!(format.extends, "VkFormat");
+        assert_eq!(
+            format.value,
+            VkEnumValue::Offset {
+                offset: 0,
+                ext_number: 232,
+                negative: false
+            }
+        );
+
+        let bit = plane
+            .enumerators
+            .iter()
+            .find(|e| e.name == "VK_WIDGET_USAGE_FAST_BIT_TEST")
+            .expect("the flag bit");
+        assert_eq!(bit.value, VkEnumValue::Bitpos { bitpos: 7 });
+
+        let error = plane
+            .enumerators
+            .iter()
+            .find(|e| e.name == "VK_ERROR_WIDGET_LOST_TEST")
+            .expect("the error code");
+        // `dir="-"` puts an error code below the block base. Dropping it would
+        // place the enumerator on top of an unrelated success code.
+        assert_eq!(
+            error.value,
+            VkEnumValue::Offset {
+                offset: 1,
+                ext_number: 232,
+                negative: true
+            }
+        );
+    }
+
+    #[test]
+    fn an_enumerator_borrowing_another_block_keeps_that_number() {
+        let plane = plane();
+        let borrowed = plane
+            .enumerators
+            .iter()
+            .find(|e| e.name == "VK_FORMAT_BORROWED_TEST")
+            .expect("the borrowing entry");
+        assert_eq!(
+            borrowed.value,
+            VkEnumValue::Offset {
+                offset: 4,
+                ext_number: 99,
+                negative: false
+            }
+        );
+    }
+
+    #[test]
+    fn new_types_are_kept_under_the_registry_category_that_named_them() {
+        let plane = plane();
+        assert_eq!(plane.handles.len(), 1);
+        assert_eq!(plane.handles[0].name, "VkWidgetSessionTEST");
+        assert!(!plane.handles[0].dispatchable);
+        assert_eq!(plane.handles[0].parent, "VkDevice");
+        assert_eq!(
+            plane.handles[0].object_type_enum,
+            "VK_OBJECT_TYPE_WIDGET_SESSION_TEST"
+        );
+
+        assert_eq!(plane.unions.len(), 1);
+        assert_eq!(plane.unions[0].members.len(), 2);
+
+        assert_eq!(plane.bitmasks.len(), 1);
+        assert_eq!(plane.bitmasks[0].requires, "VkWidgetUsageFlagBitsTEST");
+
+        // A new enum type takes its values from the document's own <enums>
+        // block, not from the extension's <require>.
+        let kind = plane
+            .enums
+            .iter()
+            .find(|e| e.name == "VkWidgetKindTEST")
+            .expect("the new enum type");
+        assert_eq!(kind.kind, "enum");
+        assert_eq!(kind.enumerants.len(), 2);
+        assert_eq!(
+            kind.enumerants[0].value,
+            VkEnumValue::Literal {
+                value: "0".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn the_registrys_own_spirv_link_is_read_rather_than_guessed() {
+        let plane = plane();
+        let entry = plane
+            .spirv
+            .iter()
+            .find(|entry| entry.name == "SPV_TEST_widget")
+            .expect("the spirvextension row naming this extension");
+        assert!(matches!(entry.kind, VkSpirvKind::Extension));
+
+        let capability = plane
+            .spirv
+            .iter()
+            .find(|entry| entry.name == "WidgetTEST")
+            .expect("the spirvcapability row");
+        // Every route is carried, not just the one that matched: which to
+        // require is the target's call.
+        assert_eq!(capability.enables.len(), 2);
+        assert!(capability.enables.iter().any(|enable| matches!(
+            enable,
+            VkSpirvEnable::Feature { feature, .. } if feature == "widgetEnabled"
+        )));
     }
 
     #[test]
@@ -609,7 +1087,6 @@ mod tests {
         assert_eq!(command.params[2].type_decl, "uint32_t");
         assert_eq!(command.params[2].suffix, "[4]");
         assert_eq!(command.requirements[0].depends, "VK_TEST_condition");
-        assert_eq!(command.protect, "VK_TEST_PLATFORM");
 
         let alias = plane
             .commands
@@ -630,16 +1107,27 @@ mod tests {
             plane.type_aliases[0].canonical_name,
             "VkPhysicalDeviceWidgetFeaturesVND"
         );
-        assert_eq!(plane.enum_aliases.len(), 1);
+        // An aliasing enumerator is an ordinary enumerator whose value happens
+        // to be a name, so it lives with the rest rather than in a list of its
+        // own. The end of the chain is resolved because following it needs the
+        // whole document.
+        let alias = plane
+            .enumerators
+            .iter()
+            .find(|e| e.name == "VK_STRUCTURE_TYPE_WIDGET_ALIAS_VND")
+            .expect("the aliasing enumerator");
         assert_eq!(
-            plane.enum_aliases[0].alias_of,
-            "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND"
+            alias.value,
+            VkEnumValue::Alias {
+                alias: "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND".to_owned(),
+                canonical: "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND".to_owned(),
+            }
         );
     }
 
     #[test]
     fn an_unknown_extension_says_what_to_do_instead() {
-        let err = extract(XML, "VK_TEST_absent").unwrap_err().to_string();
+        let err = extract(REGISTRY, "VK_TEST_absent").unwrap_err().to_string();
         assert!(err.contains("by hand"), "got: {err}");
     }
 
@@ -658,36 +1146,53 @@ mod tests {
         assert!(err.contains("no modeled API surface"), "got: {err}");
     }
 
+    /// The tag of the features struct, spelled exactly as the fixture does, so
+    /// the rewriting tests below can swap it for another value form.
+    const FEATURES_TAG: &str = r#"<enum offset="0" extends="VkStructureType" name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND"/>"#;
+
     #[test]
     fn an_alias_is_preserved_instead_of_inventing_an_offset() {
-        let xml = XML.replace(
-            r#"<enum offset="0" extends="VkStructureType" name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND" />"#,
-            r#"<enum extends="VkStructureType" alias="VK_STRUCTURE_TYPE_PROMOTED" name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND" />"#,
+        let xml = REGISTRY.replace(
+            FEATURES_TAG,
+            r#"<enum extends="VkStructureType" alias="VK_STRUCTURE_TYPE_PROMOTED" name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND"/>"#,
         );
         let (plane, notes) = extract(&xml, "VK_TEST_widget").unwrap();
         let features = plane.structs.iter().find(|s| s.is_features).unwrap();
-        assert_eq!(features.stype_offset, None);
+        let tag = plane
+            .enumerators
+            .iter()
+            .find(|e| e.name == features.stype)
+            .expect("the struct's tag");
         assert_eq!(
-            features.stype_alias_of.as_deref(),
-            Some("VK_STRUCTURE_TYPE_PROMOTED")
+            tag.value,
+            VkEnumValue::Alias {
+                alias: "VK_STRUCTURE_TYPE_PROMOTED".to_owned(),
+                canonical: "VK_STRUCTURE_TYPE_PROMOTED".to_owned(),
+            }
         );
-        assert!(!notes.iter().any(|n| n.contains("no offset")));
+        assert!(!notes.iter().any(|n| n.contains("no value")));
     }
 
     #[test]
-    fn a_missing_offset_and_alias_is_reported() {
-        let xml = XML.replace(
-            r#"<enum offset="0" extends="VkStructureType" name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND" />"#,
-            r#"<enum extends="VkStructureType" name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND" />"#,
+    fn a_tag_with_no_value_at_all_is_reported() {
+        // `<enum>` is also how the registry *references* an enumerant defined
+        // elsewhere. A struct tagged by one of those cannot be registered, and
+        // dropping it without a word is how a scaffold ends up half applied.
+        let xml = REGISTRY.replace(
+            FEATURES_TAG,
+            r#"<enum extends="VkStructureType" name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND"/>"#,
         );
         let (plane, notes) = extract(&xml, "VK_TEST_widget").unwrap();
         assert!(plane.structs.iter().all(|s| !s.is_features));
-        assert!(notes.iter().any(|n| n.contains("no offset")));
+        assert!(
+            notes.iter().any(|n| n.contains("no value")),
+            "got: {notes:?}"
+        );
     }
 
     #[test]
     fn a_pointer_member_keeps_its_star() {
-        let xml = XML.replace(
+        let xml = REGISTRY.replace(
             "<member><type>VkBool32</type>  <name>widgetEnabled</name></member>",
             "<member><type>char</type>* <name>pName</name></member>",
         );

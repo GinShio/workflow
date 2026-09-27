@@ -173,11 +173,20 @@ catalogue.
 Enumerants remain grouped by operand kind, and each enumerant likewise
 preserves its aliases.
 
-The Vulkan plane records extension type, structs, members, structure-type
-offsets or aliases, public command spellings, exact parameter declarations,
-dispatch class, command alias families, requirement conditions, type aliases,
-enumerator aliases, and feature members. Alias chains are resolved with cycle
-checks, while immediate alias targets remain available to templates.
+The Vulkan plane mirrors the registry's own taxonomy rather than a grouping of
+this tool's. Types are collected under the ``category`` the registry gives them
+— ``vk.structs``, ``vk.unions``, ``vk.enums``, ``vk.bitmasks``, ``vk.handles``,
+``vk.func_pointers``, ``vk.base_types`` — because that set is closed and fixed
+in ``registry.rnc``, so "what is missing" is answered by diffing against the
+schema rather than by judgement. Alias chains are resolved with cycle checks,
+while immediate alias targets remain available to templates.
+
+Commands carry their exact parameter declarations, dispatch class, alias family
+and requirement conditions, together with the recording constraints the registry
+states: ``success_codes``, ``error_codes``, ``queues``, ``cmd_buffer_level``,
+``render_pass``, ``video_coding`` and ``tasks``. Struct and union members carry
+``limit_type``, ``optional``, ``len`` and the rest of the registry's member
+attributes.
 
 .. code-block:: toml
 
@@ -188,11 +197,96 @@ checks, while immediate alias targets remain available to templates.
    return_type = "VkResult"
    dispatch = "device"
    protect = ""
+   success_codes = "VK_SUCCESS"
 
    [[vk.commands.params]]
    name = "device"
    type_name = "VkDevice"
    declaration = "VkDevice device"
+
+Guarding is a plane-level fact. An extension names a ``platform`` and the
+registry's ``<platforms>`` table is the only place the macro is spelled, so
+``vk.protect`` is resolved through that table; no ``<require>`` carries a
+``protect`` attribute. Every command of one extension repeats the same value for
+the convenience of a template looping over them.
+
+An extension that ``supported`` does not list ``vulkan`` for is refused rather
+than extracted: a disabled entry is spelled out in full and nothing else about
+its contents distinguishes it.
+
+Enumerators
+~~~~~~~~~~~
+
+Every enumerant the extension contributes is one entry in ``vk.enumerators``,
+whatever it extends. The ``VkStructureType`` value tagging a struct is one of
+these and is not privileged — extensions add far more to ``VkFormat``,
+``VkResult`` and the flag-bits enums than they do to ``VkStructureType``. A
+struct's ``stype`` names its tag; the value lives with the other enumerators.
+
+``registry.rnc`` makes the four value forms mutually exclusive, so the value is
+one tagged table rather than six optional fields: a template dispatches on
+``kind`` once, and a document setting two of them fails to parse.
+
+.. code-block:: toml
+
+   [[vk.enumerators]]
+   name = "VK_FORMAT_WIDGET_TEST"
+   extends = "VkFormat"
+
+   [vk.enumerators.value]
+   kind = "offset"
+   offset = 3
+   ext_number = 232
+   negative = false
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 86
+
+   * - ``kind``
+     - Payload
+   * - ``literal``
+     - ``value``, as text — a name constant holds a quoted string.
+   * - ``bitpos``
+     - ``bitpos``, a bit position in a bitmask.
+   * - ``offset``
+     - ``offset`` within ``ext_number``'s reserved block, ``negative`` for
+       ``dir="-"``.
+   * - ``alias``
+     - ``alias``, plus the ``canonical`` end of the chain.
+
+The arithmetic for an ``offset`` stays with the target: a tree that registers
+these already has a macro for the registry's formula, and emitting a computed
+number would bypass it.
+
+New enum *types* are separate. Their enumerants come from the registry's own
+``<enums>`` block rather than from the extension's ``<require>``, so they sit
+under ``vk.enums[].enumerants``.
+
+The SPIR-V bridge
+~~~~~~~~~~~~~~~~~
+
+``vk.spirv`` carries the registry's ``<spirvextensions>`` and
+``<spirvcapabilities>`` rows that name this extension. This is where the
+registry itself states which SPIR-V tokens a Vulkan version, extension, feature
+or property turns on, so it is read rather than reconstructed from naming
+coincidences. Every ``enable`` route of a matching row is carried, not only the
+one that matched: a capability is usually reachable several ways and which to
+require is target policy.
+
+.. code-block:: toml
+
+   [[vk.spirv]]
+   kind = "extension"
+   name = "SPV_TEST_widget"
+
+   [[vk.spirv.enables]]
+   kind = "version"
+   version = "VK_VERSION_1_1"
+
+   [[vk.spirv.enables]]
+   kind = "extension"
+   extension = "VK_TEST_widget"
 
 SPIR-V aliases stay on one numeric opcode record so a target registers exactly
 one factory spelling. A sidecar may select either the canonical name or one
@@ -379,11 +473,24 @@ Conditional rules
 
    when = "{{ var.frame }}"
 
-Empty strings, collections, ``false``, and ``0`` are false. Modeled
-collections are always present and use ``[]`` when empty. An unknown path is
-an error rather than false, so a misspelling cannot silently remove a rule. No
-``when`` means the rule always exists. Variables referenced only by a rule
-whose condition is false are not required.
+A condition must be exactly one ``{{ … }}`` expression, and Jinja's own
+truthiness decides it: empty strings, empty collections, ``false`` and ``0`` are
+false. Modeled collections are always present and use ``[]`` when empty. An
+unknown path is an error rather than false, so a misspelling cannot silently
+remove a rule. No ``when`` means the rule always exists. Variables referenced
+only by a rule whose condition is false are not required.
+
+A rule that no longer applies is switched off by recording why, rather than by
+writing a condition that cannot hold:
+
+.. code-block:: toml
+
+   disabled = "the tree generates this from its own tables now"
+
+A non-empty ``disabled`` skips the rule before anything it names is rendered,
+which matters because a rule is usually switched off precisely because what it
+read has gone away. Keeping the rule with its reason attached is the point:
+deleting it loses why the site is no longer scaffolded.
 
 Two forms of iteration
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -448,9 +555,8 @@ never reorders existing text.
 Filters
 ~~~~~~~
 
-In addition to Jinja's built-ins. Everything but ``extension_tag`` and
-``sha256`` comes from the shared dialect in ``wits_util::jinja``, so a
-project config may use those too:
+In addition to Jinja's built-ins. Everything but ``sha256`` comes from the
+shared dialect in ``wits_util::jinja``, so a project config may use those too:
 
 .. list-table::
    :header-rows: 1
@@ -466,9 +572,10 @@ project config may use those too:
      - Remove one leading occurrence of ``s``.
    * - ``pad(n)``
      - Right-pad to at least ``n`` characters without truncating.
-   * - ``extension_tag``
-     - Produce the deterministic three-character tag for a canonical ``VK_``
-       name.
+   * - ``initials(n)``
+     - Abbreviate an ``_``-separated name to ``n`` characters: one letter per
+       word, then filling from the letters passed over. Refuses rather than
+       returning a short result.
    * - ``sha256(n)``
      - Lowercase SHA-256 hex of the exact input, truncated to ``n`` characters.
    * - ``required(message)``
@@ -476,12 +583,10 @@ project config may use those too:
    * - ``fail(message)``
      - Stop rendering immediately with ``message``.
 
-``extension_tag`` validates ``VK_<VENDOR>_<payload>``. With three or more
-payload words it takes their first three initials. With fewer, it prepends the
-vendor initial and then fills from the remaining payload characters. Private
-catalogues combine it with ``sha256(8)`` for a stable ``TAG-xxxxxxxx`` label.
-The hash input is the canonical name exactly as stored, without case
-conversion or a trailing newline.
+``initials`` deliberately knows nothing about extension names: *which* words it
+abbreviates is a tree's own convention and stays in that tree's catalogue. The
+``sha256`` input is the string exactly as given, without case conversion or a
+trailing newline.
 
 The render context contains whichever of ``spv`` and ``vk`` are present,
 ``var``, ``target.name``, ``target.plane``, and any binding introduced by

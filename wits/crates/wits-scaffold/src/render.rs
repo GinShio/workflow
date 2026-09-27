@@ -23,64 +23,16 @@ use anyhow::{bail, Result};
 use minijinja::{Environment, Error, ErrorKind, Value};
 use sha2::{Digest, Sha256};
 
-/// The shared dialect, plus the filters only a specification catalogue needs.
+/// The shared dialect, plus the one filter only a specification catalogue needs.
+///
+/// Deliberately short. A filter here is a piece of vocabulary the tool imposes on
+/// every catalogue, and anything that encodes how one *tree* spells something
+/// belongs in that tree's catalogue instead — where it is also the only half of
+/// this repository that is not published in the clear.
 pub fn environment() -> Environment<'static> {
     let mut env = wits_util::jinja::environment();
-    env.add_filter("extension_tag", extension_tag);
     env.add_filter("sha256", sha256_prefix);
     env
-}
-
-fn extension_tag(value: String) -> std::result::Result<String, Error> {
-    let parts: Vec<&str> = value.split('_').collect();
-    if parts.len() < 3
-        || parts[0] != "VK"
-        || parts[1..]
-            .iter()
-            .any(|part| part.is_empty() || !part.chars().all(|ch| ch.is_ascii_alphanumeric()))
-    {
-        return Err(Error::new(
-            ErrorKind::InvalidOperation,
-            "extension_tag expects VK_<VENDOR>_<name>",
-        ));
-    }
-    let vendor = parts[1];
-    let payload = &parts[2..];
-    let mut tag: Vec<char> = payload
-        .iter()
-        .filter_map(|word| word.chars().next())
-        .map(|ch| ch.to_ascii_uppercase())
-        .collect();
-    if tag.len() < 3 {
-        tag.insert(
-            0,
-            vendor
-                .chars()
-                .next()
-                .expect("non-empty vendor")
-                .to_ascii_uppercase(),
-        );
-    }
-    if tag.len() < 3 {
-        for ch in payload
-            .iter()
-            .flat_map(|word| word.chars().skip(1))
-            .chain(vendor.chars().skip(1))
-        {
-            tag.push(ch.to_ascii_uppercase());
-            if tag.len() == 3 {
-                break;
-            }
-        }
-    }
-    if tag.len() < 3 {
-        return Err(Error::new(
-            ErrorKind::InvalidOperation,
-            "extension name is too short to form a three-character tag",
-        ));
-    }
-    tag.truncate(3);
-    Ok(tag.into_iter().collect())
 }
 
 fn sha256_prefix(value: String, length: usize) -> std::result::Result<String, Error> {
@@ -106,33 +58,38 @@ pub fn one(env: &Environment<'_>, template: &str, ctx: &Value) -> Result<String>
         })
 }
 
-/// Evaluate a condition with Jinja's native truthiness when it is one complete
-/// expression. Other templates retain their rendered-string behavior.
+/// Evaluate a rule's condition with Jinja's own truthiness.
+///
+/// A condition must be exactly one `{{ … }}` expression. Anything else once fell
+/// back to rendering the template and comparing the string against a list of
+/// falsey spellings, which gave two different answers to the same question
+/// depending on how the condition happened to be written: `{{ xs }}` was empty-
+/// list-aware while `{{ xs }}{{ ys }}` compared `"[][]"` and came out true. One
+/// rule for truth is worth more than accepting a form no catalogue used.
 pub fn truthy(env: &Environment<'_>, template: &str, ctx: &Value) -> Result<bool> {
     let trimmed = template.trim();
-    if let Some(expression) = trimmed
+    let Some(expression) = trimmed
         .strip_prefix("{{")
         .and_then(|rest| rest.strip_suffix("}}"))
-    {
-        let value = env
-            .compile_expression(expression.trim())
-            .and_then(|expression| expression.eval(ctx.clone()))
-            .map_err(anyhow::Error::from);
-        let value = value?;
-        if value.is_undefined() {
-            bail!(
-                "condition `{}` evaluated to an unknown path",
-                expression.trim()
-            );
-        }
-        return Ok(value.is_true());
+        // `{{ a }}{{ b }}` also opens and closes with the right delimiters. The
+        // interior check is what separates it from one expression — and it has
+        // to happen here, because handing that text to the expression compiler
+        // panics inside MiniJinja rather than returning an error.
+        .filter(|inner| !inner.contains("{{") && !inner.contains("}}"))
+    else {
+        bail!("condition `{trimmed}` must be a single {{{{ … }}}} expression");
+    };
+    let value = env
+        .compile_expression(expression.trim())
+        .and_then(|expression| expression.eval(ctx.clone()))
+        .map_err(anyhow::Error::from)?;
+    if value.is_undefined() {
+        bail!(
+            "condition `{}` evaluated to an unknown path",
+            expression.trim()
+        );
     }
-    let rendered = one(env, template, ctx)?;
-    let rendered = rendered.trim();
-    Ok(!matches!(
-        rendered,
-        "" | "false" | "0" | "[]" | "{}" | "none"
-    ))
+    Ok(value.is_true())
 }
 
 /// The keys `template` reads out of one namespace, e.g. `var` for `{{ var.tree }}`.
@@ -209,26 +166,6 @@ mod tests {
     }
 
     #[test]
-    fn extension_tags_have_a_stable_three_character_shape() {
-        let env = environment();
-        let ctx = Value::from(());
-        assert_eq!(
-            one(&env, "{{ 'VK_TEST_shader_widget' | extension_tag }}", &ctx).unwrap(),
-            "TSW"
-        );
-        assert_eq!(
-            one(
-                &env,
-                "{{ 'VK_TEST_shader_soft_widget' | extension_tag }}",
-                &ctx
-            )
-            .unwrap(),
-            "SSW"
-        );
-        assert!(one(&env, "{{ 'VK_TEST__bad' | extension_tag }}", &ctx).is_err());
-    }
-
-    #[test]
     fn sha256_hashes_the_exact_string_and_truncates_in_hex() {
         let env = environment();
         let ctx = Value::from(());
@@ -288,5 +225,17 @@ mod tests {
         ]));
         assert!(!truthy(&env, "{{ empty }}", &ctx).unwrap());
         assert!(truthy(&env, "{{ present }}", &ctx).unwrap());
+    }
+
+    #[test]
+    fn a_condition_that_is_not_one_expression_is_refused() {
+        // Two expressions have no truth value of their own, and the string they
+        // render to answers differently from either half.
+        let env = environment();
+        let ctx = Value::from_serialize(BTreeMap::from([("empty", Vec::<String>::new())]));
+        let err = truthy(&env, "{{ empty }}{{ empty }}", &ctx)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("single"), "got: {err}");
     }
 }

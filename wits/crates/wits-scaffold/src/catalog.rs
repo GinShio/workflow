@@ -112,12 +112,32 @@ pub struct Repeat {
     pub binding: String,
 }
 
+/// Where a rule puts its text. Exactly one per rule; see [`RuleSpec::shape`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    Eof,
+    Create,
+    Before,
+    InBlock,
+    AfterLast,
+    Sorted,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuleSpec {
     pub what: String,
     pub path: String,
     pub body: String,
+
+    /// Why this rule is switched off. A non-empty reason skips it.
+    ///
+    /// A rule that has stopped applying is worth keeping with its reason
+    /// attached — deleting it loses why the site is no longer scaffolded, and
+    /// the alternative that grew up here was `when = "{{ x and false }}"`, which
+    /// reads as a condition and says nothing.
+    #[serde(default)]
+    pub disabled: Option<String>,
 
     // --- Anchor. Exactly one shape; `validate` rejects the rest. ---
     /// Append at end of file.
@@ -198,6 +218,24 @@ impl RuleSpec {
             keys.push("before");
         }
         keys
+    }
+
+    /// The single placement this rule names.
+    ///
+    /// The one place a set of keys is turned into a shape. Parsing calls it to
+    /// reject a malformed rule and [`crate::anchor`] calls it to decide what to
+    /// compile, so the two cannot come to different conclusions about the same
+    /// rule — which they could while each read the key combination for itself.
+    pub fn shape(&self) -> Result<Shape> {
+        self.validate()?;
+        Ok(match self {
+            _ if self.eof => Shape::Eof,
+            _ if self.create => Shape::Create,
+            _ if self.sorted.is_some() => Shape::Sorted,
+            _ if self.after_last.is_some() => Shape::AfterLast,
+            _ if !self.scope.is_empty() => Shape::InBlock,
+            _ => Shape::Before,
+        })
     }
 
     /// Reject a rule that names no position or more than one.

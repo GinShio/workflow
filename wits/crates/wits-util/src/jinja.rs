@@ -76,6 +76,41 @@ pub fn environment() -> Environment<'static> {
         }
         padded
     });
+    // Abbreviating `a_b_c` to `ABC` is a shape several kinds of table want. The
+    // filter knows only how to take first letters and then fill from what is
+    // left; *which* words it sees is the caller's rule and stays in the caller's
+    // config, so no tree's naming convention is spelled here.
+    env.add_filter(
+        "initials",
+        |value: String, width: usize| -> Result<String, Error> {
+            let words: Vec<&str> = value.split('_').filter(|word| !word.is_empty()).collect();
+            let mut tag: Vec<char> = words
+                .iter()
+                .filter_map(|word| word.chars().next())
+                .map(|ch| ch.to_ascii_uppercase())
+                .collect();
+            // Too few words to give one letter each: keep going through the letters
+            // already passed over, in the order they appear.
+            if tag.len() < width {
+                for ch in words.iter().flat_map(|word| word.chars().skip(1)) {
+                    tag.push(ch.to_ascii_uppercase());
+                    if tag.len() == width {
+                        break;
+                    }
+                }
+            }
+            if tag.len() < width {
+                return Err(Error::new(
+                    ErrorKind::InvalidOperation,
+                    format!(
+                        "'{value}' has too few characters for a {width}-character abbreviation"
+                    ),
+                ));
+            }
+            tag.truncate(width);
+            Ok(tag.into_iter().collect())
+        },
+    );
     env.add_filter("required", |value: Value, message: String| {
         if value.is_undefined() {
             return Err(Error::new(ErrorKind::InvalidOperation, message));
@@ -133,6 +168,31 @@ mod tests {
             render("{{ 'Foo' | strip_prefix('Op') }}", Value::from(())).unwrap(),
             "Foo"
         );
+    }
+
+    #[test]
+    fn initials_takes_one_letter_per_word() {
+        assert_eq!(
+            render("{{ 'shader_soft_widget' | initials(3) }}", Value::from(())).unwrap(),
+            "SSW"
+        );
+    }
+
+    #[test]
+    fn initials_fills_from_the_letters_it_passed_over() {
+        // Two words cannot give three letters, so the rest comes from what is
+        // left of them, in order.
+        assert_eq!(
+            render("{{ 'hdr_metadata' | initials(3) }}", Value::from(())).unwrap(),
+            "HMD"
+        );
+    }
+
+    #[test]
+    fn initials_refuses_rather_than_returning_a_short_tag() {
+        // A short tag would collide with another entry's, and the table it goes
+        // into has no way to notice.
+        assert!(render("{{ 'ab' | initials(3) }}", Value::from(())).is_err());
     }
 
     #[test]

@@ -126,6 +126,12 @@ pub fn target_context(catalog: &Catalog, opts: &Options, env: &Environment<'_>) 
 
 /// One rule becomes one edit, or one per element of its `repeat` collection.
 fn expand(build: &Build<'_>, rule: &RuleSpec, base: &BTreeMap<String, Value>) -> Result<Vec<Edit>> {
+    // Switched off outright, with its reason recorded in the catalogue. Checked
+    // before anything else: a disabled rule's templates may name things the
+    // descriptor no longer has, which is often why it was switched off.
+    if rule.disabled.as_deref().is_some_and(|why| !why.is_empty()) {
+        return Ok(Vec::new());
+    }
     // Check `var.*` first so a missing run input gets the dedicated catalogue/
     // command-line diagnostic rather than a generic strict-template error.
     if let Some(condition) = &rule.when {
@@ -236,7 +242,6 @@ fn emit_one(
         None
     };
     let spec = AnchorSpec {
-        eof: rule.eof,
         scope: rule
             .scope
             .iter()
@@ -260,7 +265,7 @@ fn emit_one(
         what,
         text: wrapped,
         action: Action::Insert {
-            anchor: anchor::compile(&spec)?,
+            anchor: anchor::compile(rule.shape()?, &spec)?,
             sort_line,
         },
     }))
@@ -407,13 +412,10 @@ mod tests {
         let mut spv = SpvPlane::new("SPV_TEST_widget");
         spv.operations.push(SpvOpcode {
             name: "OpWidgetLoadTEST".into(),
-            aliases: Vec::new(),
             value: 5451,
             class: "Arithmetic".into(),
-            operands: Vec::new(),
             capabilities: vec!["WidgetTEST".into()],
-            encoding: crate::model::SpvEncoding::default(),
-            meta: Default::default(),
+            ..Default::default()
         });
         spv.kinds.push(KindGroup {
             name: "Alpha".into(),
@@ -425,17 +427,17 @@ mod tests {
             enumerants: vec![
                 Enumerant {
                     name: "WidgetTEST".into(),
-                    aliases: Vec::new(),
                     value: 5454,
-                    requires: vec![],
+                    ..Default::default()
                 },
                 Enumerant {
                     name: "WidgetPlusTEST".into(),
-                    aliases: Vec::new(),
                     value: 5455,
                     requires: vec!["WidgetTEST".into(), "BaseTEST".into()],
+                    ..Default::default()
                 },
             ],
+            ..Default::default()
         });
         spv.kinds.push(KindGroup {
             name: "Bravo".into(),
@@ -446,10 +448,11 @@ mod tests {
             ]),
             enumerants: vec![Enumerant {
                 name: "WidgetIdTEST".into(),
-                aliases: Vec::new(),
                 value: 5460,
                 requires: vec!["WidgetTEST".into()],
+                ..Default::default()
             }],
+            ..Default::default()
         });
         Extension {
             spv: Some(spv),
@@ -681,6 +684,20 @@ mod tests {
             build(&catalog, &descriptor(), &Options::default()).unwrap_err()
         );
         assert!(err.contains("--var limit="), "got: {err}");
+    }
+
+    #[test]
+    fn a_disabled_rule_is_skipped_and_its_templates_go_unread() {
+        // A rule is usually switched off *because* what it read is gone, so the
+        // reason has to take effect before anything tries to render it.
+        let catalog = catalog_of(
+            "[[rule]]\nwhat = \"w\"\npath = \"f\"\neof = true\nwrap = []\n\
+             disabled = \"the tree generates this itself now\"\n\
+             body = \"{{ spv.no_such_collection }}\\n\"\n",
+        );
+        assert!(build(&catalog, &descriptor(), &Options::default())
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

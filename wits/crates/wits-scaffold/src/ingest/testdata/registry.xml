@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A synthetic Vulkan registry for the ingest tests.
+
+  The structure is copied from the published vk.xml: same element nesting, same
+  attribute spellings, same indirections. Every name is invented. No test here
+  needs a real one, and the code half of this tool stays clear of the trees it
+  generates into.
+
+  Coverage is measured against registry.rnc rather than against whatever the
+  parser happens to read today, so each block below names the form it exercises.
+  A form with no block is a gap, visible here instead of only in the schema.
+
+  Forms covered:
+    <platforms>            platform -> protect indirection
+    <type category=…>      struct, union, enum, bitmask, handle, funcpointer,
+                           basetype, and an alias of a struct
+    <enums>                a new enum type's own values
+    <enum> value forms     value, bitpos, offset (+extnumber, +dir), alias
+    <command>              recording conditions, a dispatchable first parameter,
+                           and an alias with no body of its own
+    <extension supported=> vulkan and disabled
+    <spirvextension>       the version / extension / feature enable forms
+    <spirvcapability>      the property enable form
+-->
+<registry>
+    <!--
+      platform -> protect. An extension names a platform; the macro guarding its
+      declarations is spelled only here. No <require> in the published registry
+      carries a protect attribute, so this table is the sole route to it.
+    -->
+    <platforms>
+        <platform name="testplatform" protect="VK_USE_PLATFORM_TEST" comment="Synthetic windowing system"/>
+    </platforms>
+
+    <tags>
+        <tag name="TEST" author="Test Authors" contact="nobody"/>
+    </tags>
+
+    <types>
+        <type category="struct" name="VkPhysicalDeviceWidgetFeaturesVND"
+              structextends="VkPhysicalDeviceFeatures2,VkDeviceCreateInfo">
+            <member values="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND"><type>VkStructureType</type> <name>sType</name></member>
+            <member optional="true"><type>void</type>*  <name>pNext</name></member>
+            <member><type>VkBool32</type>  <name>widgetEnabled</name></member>
+            <member>const <type>char</type>* <name>names</name>[4]</member>
+        </type>
+        <type category="struct" name="VkPhysicalDeviceWidgetPropertiesVND"
+              structextends="VkPhysicalDeviceProperties2" returnedonly="true">
+            <member values="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_PROPERTIES_VND"><type>VkStructureType</type> <name>sType</name></member>
+            <member optional="true"><type>void</type>*  <name>pNext</name></member>
+            <member limittype="max"><type>uint64_t</type>  <name>maxThing</name></member>
+        </type>
+        <type category="struct" name="VkWidgetAliasVND"
+              alias="VkPhysicalDeviceWidgetFeaturesVND"/>
+
+        <type category="union" name="VkWidgetPayloadTEST" returnedonly="false">
+            <member selection="VK_WIDGET_KIND_FAST_TEST"><type>uint32_t</type> <name>fast</name></member>
+            <member selection="VK_WIDGET_KIND_EXACT_TEST"><type>float</type> <name>exact</name></member>
+        </type>
+
+        <type category="enum" name="VkWidgetKindTEST"/>
+        <type category="enum" name="VkWidgetUsageFlagBitsTEST"/>
+        <type requires="VkWidgetUsageFlagBitsTEST" category="bitmask">typedef <type>VkFlags</type> <name>VkWidgetUsageFlagsTEST</name>;</type>
+
+        <type category="handle" parent="VkDevice" objtypeenum="VK_OBJECT_TYPE_WIDGET_SESSION_TEST">
+            <type>VK_DEFINE_NON_DISPATCHABLE_HANDLE</type>(<name>VkWidgetSessionTEST</name>)</type>
+
+        <type category="funcpointer">typedef void (VKAPI_PTR *<name>PFN_vkWidgetCallbackTEST</name>)(
+    <type>void</type>*                    pUserData);</type>
+
+        <type category="basetype">typedef <type>uint32_t</type> <name>VkWidgetMaskTEST</name>;</type>
+
+        <!-- Referenced by the extension, defined elsewhere: nothing to declare. -->
+        <type category="enum" name="VkFormat"/>
+    </types>
+
+    <!--
+      A new enum type's values live here, not in the extension's <require>:
+      defining an enum and extending someone else's are different acts and the
+      registry writes them in different places.
+    -->
+    <enums name="VkWidgetKindTEST" type="enum">
+        <enum value="0" name="VK_WIDGET_KIND_FAST_TEST"/>
+        <enum value="1" name="VK_WIDGET_KIND_EXACT_TEST"/>
+    </enums>
+
+    <!--
+      Core. A type is introduced where it is *first* required, so the types
+      already in core have to be required here for a later reference to read as
+      a reference rather than as a definition.
+    -->
+    <feature api="vulkan" name="VK_VERSION_1_0" number="1.0">
+        <require>
+            <type name="VkFormat"/>
+            <type name="VkStructureType"/>
+            <type name="VkResult"/>
+            <type name="VkObjectType"/>
+        </require>
+    </feature>
+
+    <commands>
+        <command successcodes="VK_SUCCESS" errorcodes="VK_ERROR_UNKNOWN"
+                 queues="graphics,compute" cmdbufferlevel="primary" renderpass="both"
+                 tasks="action">
+            <proto><type>VkResult</type> <name>vkWidgetTEST</name></proto>
+            <param externsync="true"><type>VkDevice</type> <name>device</name></param>
+            <param optional="true" len="values">const <type>VkPhysicalDeviceWidgetFeaturesVND</type>* <name>pInfo</name></param>
+            <param><type>uint32_t</type> <name>values</name>[4]</param>
+        </command>
+        <command name="vkWidgetAliasTEST" alias="vkWidgetTEST"/>
+        <command>
+            <proto><type>VkResult</type> <name>vkTestWidgetTEST</name></proto>
+            <param><type>VkDevice</type> <name>device</name></param>
+        </command>
+        <command>
+            <proto><type>VkResult</type> <name>vkTestHiddenTEST</name></proto>
+            <param><type>VkDevice</type> <name>device</name></param>
+        </command>
+    </commands>
+
+    <extensions>
+        <extension name="VK_TEST_widget" number="232" type="device" author="TEST"
+                   contact="nobody" depends="VK_TEST_prerequisite,VK_VERSION_1_1"
+                   supported="vulkan" ratified="vulkan" promotedto="VK_TEST_promoted">
+            <require depends="VK_TEST_condition">
+                <enum value="3" name="VK_TEST_WIDGET_SPEC_VERSION"/>
+                <enum value="&quot;VK_TEST_widget&quot;" name="VK_TEST_WIDGET_EXTENSION_NAME"/>
+
+                <type name="VkPhysicalDeviceWidgetFeaturesVND"/>
+                <type name="VkPhysicalDeviceWidgetPropertiesVND"/>
+                <type name="VkWidgetAliasVND"/>
+                <type name="VkWidgetPayloadTEST"/>
+                <type name="VkWidgetKindTEST"/>
+                <type name="VkWidgetUsageFlagBitsTEST"/>
+                <type name="VkWidgetUsageFlagsTEST"/>
+                <type name="VkWidgetSessionTEST"/>
+                <type name="PFN_vkWidgetCallbackTEST"/>
+                <type name="VkWidgetMaskTEST"/>
+                <type name="VkFormat"/>
+
+                <enum offset="0" extends="VkStructureType" name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND"/>
+                <enum offset="2" extends="VkStructureType" name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_PROPERTIES_VND"/>
+                <enum extends="VkStructureType" name="VK_STRUCTURE_TYPE_WIDGET_ALIAS_VND"
+                      alias="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WIDGET_FEATURES_VND"/>
+
+                <!-- Extending something other than VkStructureType: the majority
+                     case in the published registry, in each value form. -->
+                <enum offset="0" extends="VkFormat" name="VK_FORMAT_WIDGET_TEST"/>
+                <enum offset="4" extnumber="99" extends="VkFormat" name="VK_FORMAT_BORROWED_TEST"/>
+                <enum bitpos="7" extends="VkWidgetUsageFlagBitsTEST" name="VK_WIDGET_USAGE_FAST_BIT_TEST"/>
+                <enum offset="1" dir="-" extends="VkResult" name="VK_ERROR_WIDGET_LOST_TEST"/>
+                <enum offset="3" extends="VkObjectType" name="VK_OBJECT_TYPE_WIDGET_SESSION_TEST"/>
+
+                <command name="vkWidgetTEST"/>
+                <command name="vkWidgetAliasTEST"/>
+                <feature name="widgetEnabled" struct="VkPhysicalDeviceWidgetFeaturesVND"/>
+            </require>
+        </extension>
+
+        <!--
+          A platform extension. `platform` sits on the extension; the macro it
+          resolves to sits in <platforms> above.
+        -->
+        <extension name="VK_TEST_platform_widget" number="233" type="device"
+                   platform="testplatform" author="TEST" contact="nobody"
+                   supported="vulkan">
+            <require>
+                <enum value="1" name="VK_TEST_PLATFORM_WIDGET_SPEC_VERSION"/>
+                <command name="vkTestWidgetTEST"/>
+            </require>
+        </extension>
+
+        <!--
+          supported="disabled": present in the document, part of no API. Carries
+          a full surface so that refusing it can only be about `supported`.
+        -->
+        <extension name="VK_TEST_disabled_widget" number="234" type="device"
+                   author="TEST" contact="nobody" supported="disabled">
+            <require>
+                <enum value="1" name="VK_TEST_DISABLED_WIDGET_SPEC_VERSION"/>
+                <command name="vkTestHiddenTEST"/>
+            </require>
+        </extension>
+    </extensions>
+
+    <!--
+      The registry's own link between the two planes. This is the only place it
+      states which SPIR-V tokens a Vulkan version, extension, feature or property
+      turns on.
+    -->
+    <spirvextensions>
+        <spirvextension name="SPV_TEST_widget">
+            <enable version="VK_VERSION_1_1"/>
+            <enable extension="VK_TEST_widget"/>
+        </spirvextension>
+        <spirvextension name="SPV_TEST_unrelated">
+            <enable extension="VK_TEST_other"/>
+        </spirvextension>
+    </spirvextensions>
+
+    <spirvcapabilities>
+        <spirvcapability name="WidgetTEST">
+            <enable struct="VkPhysicalDeviceWidgetFeaturesVND" feature="widgetEnabled"
+                    requires="VK_TEST_widget"/>
+            <enable extension="VK_TEST_widget"/>
+        </spirvcapability>
+        <spirvcapability name="WidgetLimitTEST">
+            <enable property="VkPhysicalDeviceWidgetPropertiesVND" member="maxThing"
+                    value="VK_TRUE" requires="VK_TEST_other"/>
+        </spirvcapability>
+    </spirvcapabilities>
+</registry>

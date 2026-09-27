@@ -69,8 +69,15 @@ pub fn extract(text: &str, name: &str, table: &KindTable) -> Result<(SpvPlane, V
         if found.is_empty() {
             continue;
         }
+        let definition = kind_definition(&grammar, &kind.name);
         plane.kinds.push(KindGroup {
             name: kind.name.clone(),
+            category: definition
+                .map(|entry| text_field(entry, "category"))
+                .unwrap_or_default(),
+            bases: definition
+                .map(|entry| strings(entry, "bases"))
+                .unwrap_or_default(),
             meta: kind.meta.clone(),
             enumerants: found,
         });
@@ -107,6 +114,15 @@ pub fn extract(text: &str, name: &str, table: &KindTable) -> Result<(SpvPlane, V
             .to_owned(),
     );
     Ok((plane, notes))
+}
+
+/// One operand kind's own entry, which carries its category and any bases.
+fn kind_definition<'a>(grammar: &'a Value, kind: &str) -> Option<&'a Value> {
+    grammar
+        .get("operand_kinds")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|entry| entry.get("kind").and_then(Value::as_str) == Some(kind))
 }
 
 /// Every enumerant of one operand kind.
@@ -155,7 +171,54 @@ fn enumerant(entry: &Value) -> Result<Enumerant> {
         value: number(entry.get("value").context("enumerant has no value")?)
             .with_context(|| format!("enumerant {name}"))?,
         requires: strings(entry, "capabilities"),
+        version: text_field(entry, "version"),
+        last_version: text_field(entry, "lastVersion"),
+        provisional: entry.get("provisional").and_then(Value::as_bool) == Some(true),
+        parameters: operands_of(entry).with_context(|| format!("enumerant {name} parameters"))?,
     })
+}
+
+/// A string field, empty when absent.
+fn text_field(entry: &Value, field: &str) -> String {
+    entry
+        .get(field)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// The `operands` (or `parameters`) list of an entry, in order.
+///
+/// Instructions and enumerants spell the same thing under different keys: an
+/// enumerant's parameters are operands appended to the instruction carrying it.
+fn operands_of(entry: &Value) -> Result<Vec<SpvOperand>> {
+    let Some(items) = entry
+        .get("operands")
+        .or_else(|| entry.get("parameters"))
+        .and_then(Value::as_array)
+    else {
+        return Ok(Vec::new());
+    };
+    items
+        .iter()
+        .map(|operand| {
+            Ok(SpvOperand {
+                kind: operand
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .context("an operand has no kind")?
+                    .to_owned(),
+                name: operand
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                quantifier: operand
+                    .get("quantifier")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            })
+        })
+        .collect()
 }
 
 fn opcode(grammar: &Value, entry: &Value) -> Result<SpvOpcode> {
@@ -163,33 +226,7 @@ fn opcode(grammar: &Value, entry: &Value) -> Result<SpvOpcode> {
         .get("opname")
         .and_then(Value::as_str)
         .context("an instruction has no opname")?;
-    let operands: Vec<SpvOperand> = entry
-        .get("operands")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|operand| {
-                    Ok(SpvOperand {
-                        kind: operand
-                            .get("kind")
-                            .and_then(Value::as_str)
-                            .context("instruction operand has no kind")?
-                            .to_owned(),
-                        name: operand
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
-                        quantifier: operand
-                            .get("quantifier")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
-                    })
-                })
-                .collect::<Result<Vec<_>>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
+    let operands = operands_of(entry).with_context(|| format!("instruction {name}"))?;
     let encoding = encoding_of(grammar, &operands);
     Ok(SpvOpcode {
         name: name.to_owned(),
@@ -201,6 +238,9 @@ fn opcode(grammar: &Value, entry: &Value) -> Result<SpvOpcode> {
             .and_then(Value::as_str)
             .unwrap_or("Unknown")
             .to_owned(),
+        version: text_field(entry, "version"),
+        last_version: text_field(entry, "lastVersion"),
+        provisional: entry.get("provisional").and_then(Value::as_bool) == Some(true),
         operands,
         capabilities: strings(entry, "capabilities"),
         encoding,
@@ -436,7 +476,8 @@ qualified = true
     const GRAMMAR: &str = r#"{
       "instructions": [
         { "opname": "OpFooEXT", "aliases": ["OpFooAliasEXT"], "class": "Arithmetic",
-          "opcode": 6145, "capabilities": ["FooEXT"],
+          "opcode": 6145, "capabilities": ["FooEXT"], "version": "None",
+          "provisional": true,
           "operands": [
             { "kind": "IdResultType" },
             { "kind": "IdResult" },
@@ -457,8 +498,10 @@ qualified = true
               "extensions": ["SPV_TEST_foo", "SPV_OTHER_foo"] },
             { "enumerant": "Shader", "value": 1 }
         ]},
-        { "kind": "BuiltIn", "enumerants": [
-            { "enumerant": "FooIdEXT", "value": 6200, "capabilities": ["FooEXT"] },
+        { "kind": "BuiltIn", "category": "ValueEnum", "enumerants": [
+            { "enumerant": "FooIdEXT", "value": 6200, "capabilities": ["FooEXT"],
+              "version": "None", "provisional": true,
+              "parameters": [{ "kind": "IdRef", "name": "Target" }] },
             { "enumerant": "Position", "value": 0, "capabilities": ["Shader"] }
         ]},
         { "kind": "Decoration", "enumerants": [
@@ -515,6 +558,32 @@ qualified = true
             .expect("BuiltIn group");
         assert_eq!(builtins.enumerants.len(), 1);
         assert_eq!(builtins.enumerants[0].name, "FooIdEXT");
+    }
+
+    #[test]
+    fn an_enumerants_own_operands_travel_with_it() {
+        // An image operand such as `Bias` carries an id of its own. A target
+        // that encodes the enumerant without it writes a short instruction, and
+        // nothing downstream of here can notice.
+        let (plane, _) = extract(GRAMMAR, "SPV_TEST_foo", &table()).unwrap();
+        let builtins = plane.kinds.iter().find(|k| k.name == "BuiltIn").unwrap();
+        assert_eq!(builtins.category, "ValueEnum");
+        assert_eq!(builtins.enumerants[0].parameters.len(), 1);
+        assert_eq!(builtins.enumerants[0].parameters[0].kind, "IdRef");
+    }
+
+    #[test]
+    fn version_and_provisional_status_are_carried_not_dropped() {
+        // `version: None` means the token is reachable only through its
+        // extension, and provisional means the assignment may still move. Both
+        // decide whether a tree may gate on a core version.
+        let (plane, _) = extract(GRAMMAR, "SPV_TEST_foo", &table()).unwrap();
+        assert_eq!(plane.operations[0].version, "None");
+        assert!(plane.operations[0].provisional);
+
+        let builtins = plane.kinds.iter().find(|k| k.name == "BuiltIn").unwrap();
+        assert_eq!(builtins.enumerants[0].version, "None");
+        assert!(builtins.enumerants[0].provisional);
     }
 
     #[test]

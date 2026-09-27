@@ -117,8 +117,12 @@ pub fn extract(
         let rows = dedupe_enumerants(rows, &kind_name, &mut notes);
         plane.kinds.push(KindGroup {
             name: kind.name.clone(),
+            // The prose tables say nothing about a kind's grammar category or
+            // bases. Left empty rather than guessed: the grammar is where those
+            // live, and this reader only runs when the grammar has no entry.
             meta: kind.meta.clone(),
             enumerants: rows,
+            ..Default::default()
         });
     }
 
@@ -223,9 +227,9 @@ fn enum_rows(body: &[&str], re: &Patterns) -> Vec<Enumerant> {
         let Ok(value) = caps[1].parse() else { continue };
         rows.push(Enumerant {
             name: caps[2].to_owned(),
-            aliases: Vec::new(),
             value,
             requires: last_cell_names(&body[start + 1..end], &caps[3], re),
+            ..Default::default()
         });
     }
     rows
@@ -293,9 +297,7 @@ fn instructions(lines: &[&str], re: &Patterns, notes: &mut Vec<String>) -> Vec<S
                     "Unknown".to_owned()
                 },
                 name,
-                aliases: Vec::new(),
                 value,
-                operands: Vec::new(),
                 capabilities,
                 encoding: SpvEncoding {
                     min_word_count,
@@ -305,7 +307,7 @@ fn instructions(lines: &[&str], re: &Patterns, notes: &mut Vec<String>) -> Vec<S
                     ),
                     ..Default::default()
                 },
-                meta: Default::default(),
+                ..Default::default()
             }),
             // Reported, not defaulted: an invented opcode compiles and then
             // mis-encodes every module that uses the instruction.

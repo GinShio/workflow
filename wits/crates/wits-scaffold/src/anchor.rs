@@ -14,8 +14,10 @@
 //! therefore accepts an optional `group` pattern and compares only entries in the
 //! new key's partition.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use regex::Regex;
+
+use crate::catalog::Shape;
 
 /// A resolved insertion point, plus anything about the resolution the user
 /// should not have to discover from the diff.
@@ -352,40 +354,46 @@ fn take_number(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> u64 {
     value
 }
 
-/// Parse the `Anchor` out of an already-rendered catalogue entry.
-pub fn compile(spec: &AnchorSpec) -> Result<Anchor> {
+/// Compile the already-rendered patterns of a rule whose shape is already known.
+///
+/// The shape is a parameter rather than something re-derived from which fields
+/// happen to be set: [`crate::catalog::RuleSpec::placement`] decided it once,
+/// when the catalogue was parsed, and reading the fields again here is how the
+/// two could come to disagree about the same rule.
+pub fn compile(shape: Shape, spec: &AnchorSpec) -> Result<Anchor> {
     let scope = spec
         .scope
         .iter()
         .map(|p| re(p).with_context(|| format!("bad scope pattern /{p}/")))
         .collect::<Result<Vec<_>>>()?;
+    let close = |what: &str| -> Result<&String> {
+        spec.close
+            .as_ref()
+            .with_context(|| format!("a {what} anchor needs 'before'"))
+    };
 
-    match spec {
-        AnchorSpec { eof: true, .. } => Ok(Anchor::Eof),
-        AnchorSpec { key: Some(key), .. } => Ok(Anchor::Sorted {
+    Ok(match shape {
+        Shape::Eof | Shape::Create => Anchor::Eof,
+        Shape::Sorted => Anchor::Sorted {
             scope,
             close: spec.close.as_deref().map(re).transpose()?,
-            key: re(key)?,
+            key: re(spec
+                .key
+                .as_ref()
+                .context("a sorted anchor needs 'sorted'")?)?,
             group: spec.group.as_deref().map(re).transpose()?,
             attached_before: spec.attached_before.as_deref().map(re).transpose()?,
-        }),
-        AnchorSpec {
-            close: Some(close), ..
-        } if !scope.is_empty() => Ok(Anchor::InBlock {
+        },
+        Shape::InBlock => Anchor::InBlock {
             scope,
-            close: re(close)?,
-        }),
-        AnchorSpec {
-            close: Some(close), ..
-        } => Ok(Anchor::Before(re(close)?)),
-        AnchorSpec {
-            after_last: Some(pattern),
-            ..
-        } => Ok(Anchor::AfterLast(re(pattern)?)),
-        _ => bail!(
-            "anchor names no position: expected one of eof, before, after_last, or scope+before"
-        ),
-    }
+            close: re(close("scoped")?)?,
+        },
+        Shape::Before => Anchor::Before(re(close("before")?)?),
+        Shape::AfterLast => Anchor::AfterLast(re(spec
+            .after_last
+            .as_ref()
+            .context("an after_last anchor needs 'after_last'")?)?),
+    })
 }
 
 /// Compile a catalogue pattern in multi-line mode.
@@ -407,7 +415,6 @@ fn re(pattern: &str) -> Result<Regex> {
 /// wrote it rather than surfacing as a regex error from nowhere.
 #[derive(Debug, Default)]
 pub struct AnchorSpec {
-    pub eof: bool,
     pub scope: Vec<String>,
     /// The `before` key of a rule: a bare terminator, or a block's terminator
     /// when `scope` is set.
@@ -440,20 +447,26 @@ mod tests {
 
     #[test]
     fn a_missing_anchor_is_an_error_not_a_guess() {
-        let anchor = compile(&AnchorSpec {
-            close: Some("^nowhere$".into()),
-            ..Default::default()
-        })
+        let anchor = compile(
+            Shape::Before,
+            &AnchorSpec {
+                close: Some("^nowhere$".into()),
+                ..Default::default()
+            },
+        )
         .unwrap();
         assert!(anchor.locate("a\nb\n", None).is_err());
     }
 
     #[test]
     fn after_last_takes_the_final_run() {
-        let anchor = compile(&AnchorSpec {
-            after_last: Some(r"^opt\n".into()),
-            ..Default::default()
-        })
+        let anchor = compile(
+            Shape::AfterLast,
+            &AnchorSpec {
+                after_last: Some(r"^opt\n".into()),
+                ..Default::default()
+            },
+        )
         .unwrap();
         let text = "opt\nx\nopt\ny\n";
         // End of the *second* `opt` line, not the first.
@@ -472,11 +485,14 @@ outer wanted
         B_TWO,
 };
 ";
-        let anchor = compile(&AnchorSpec {
-            scope: vec!["outer wanted".into(), "section Id".into()],
-            close: Some(r"^\};$".into()),
-            ..Default::default()
-        })
+        let anchor = compile(
+            Shape::InBlock,
+            &AnchorSpec {
+                scope: vec!["outer wanted".into(), "section Id".into()],
+                close: Some(r"^\};$".into()),
+                ..Default::default()
+            },
+        )
         .unwrap();
         let placed = anchor.locate(text, None).unwrap();
         // Lands in the second block, after `B_TWO,`.
@@ -495,7 +511,11 @@ outer wanted
         BBB_ZULU,
 };
 ";
-        let anchor = compile(&spec_sorted(r"^\s*([A-Z0-9_]+),", Some("^([A-Z]+)_"))).unwrap();
+        let anchor = compile(
+            Shape::Sorted,
+            &spec_sorted(r"^\s*([A-Z0-9_]+),", Some("^([A-Z]+)_")),
+        )
+        .unwrap();
         let placed = anchor.locate(text, Some("        BBB_MIKE,")).unwrap();
         let before = &text[..placed.offset];
         assert!(before.contains("BBB_ALPHA"), "should follow BBB_ALPHA");
@@ -505,12 +525,15 @@ outer wanted
     #[test]
     fn sorted_without_a_group_treats_the_block_as_flat() {
         let text = "    enum E\n        ALPHA,\n        ZULU,\n};\n";
-        let anchor = compile(&AnchorSpec {
-            scope: vec!["enum E".into()],
-            close: Some(r"^\};$".into()),
-            key: Some(r"^\s*([A-Z0-9_]+),".into()),
-            ..Default::default()
-        })
+        let anchor = compile(
+            Shape::Sorted,
+            &AnchorSpec {
+                scope: vec!["enum E".into()],
+                close: Some(r"^\};$".into()),
+                key: Some(r"^\s*([A-Z0-9_]+),".into()),
+                ..Default::default()
+            },
+        )
         .unwrap();
         let placed = anchor.locate(text, Some("        MIKE,")).unwrap();
         assert!(text[..placed.offset].contains("ALPHA"));
@@ -520,12 +543,15 @@ outer wanted
     #[test]
     fn sorted_after_everything_lands_past_the_last_entry() {
         let text = "    enum E\n        ALPHA,\n        MIKE,\n};\n";
-        let anchor = compile(&AnchorSpec {
-            scope: vec!["enum E".into()],
-            close: Some(r"^\};$".into()),
-            key: Some(r"^\s*([A-Z0-9_]+),".into()),
-            ..Default::default()
-        })
+        let anchor = compile(
+            Shape::Sorted,
+            &AnchorSpec {
+                scope: vec!["enum E".into()],
+                close: Some(r"^\};$".into()),
+                key: Some(r"^\s*([A-Z0-9_]+),".into()),
+                ..Default::default()
+            },
+        )
         .unwrap();
         let placed = anchor.locate(text, Some("        ZULU,")).unwrap();
         assert_eq!(&text[placed.offset..], "};\n");
@@ -542,13 +568,16 @@ END MIKE
         ZULU,
 };
 ";
-        let anchor = compile(&AnchorSpec {
-            scope: vec!["enum E".into()],
-            close: Some(r"^\};$".into()),
-            key: Some(r"^\s*([A-Z0-9_]+),".into()),
-            attached_before: Some(r"^BEGIN ".into()),
-            ..Default::default()
-        })
+        let anchor = compile(
+            Shape::Sorted,
+            &AnchorSpec {
+                scope: vec!["enum E".into()],
+                close: Some(r"^\};$".into()),
+                key: Some(r"^\s*([A-Z0-9_]+),".into()),
+                attached_before: Some(r"^BEGIN ".into()),
+                ..Default::default()
+            },
+        )
         .unwrap();
         // Sorts between ALPHA and MIKE, whose prefix belongs to that entry.
         let placed = anchor.locate(text, Some("        BRAVO,")).unwrap();
@@ -561,18 +590,25 @@ END MIKE
     #[test]
     fn a_new_section_is_reported_rather_than_placed_silently() {
         let text = "    enum Id\n        AAA_ALPHA,\n};\n";
-        let anchor = compile(&spec_sorted(r"^\s*([A-Z0-9_]+),", Some("^([A-Z]+)_"))).unwrap();
+        let anchor = compile(
+            Shape::Sorted,
+            &spec_sorted(r"^\s*([A-Z0-9_]+),", Some("^([A-Z]+)_")),
+        )
+        .unwrap();
         let placed = anchor.locate(text, Some("        CCC_THING,")).unwrap();
         assert!(!placed.notes.is_empty(), "the user has to hear about this");
     }
 
     fn flat_sorted() -> Anchor {
-        compile(&AnchorSpec {
-            scope: vec!["enum E".into()],
-            close: Some(r"^\};$".into()),
-            key: Some(r"^\s*([A-Z0-9_]+),".into()),
-            ..Default::default()
-        })
+        compile(
+            Shape::Sorted,
+            &AnchorSpec {
+                scope: vec!["enum E".into()],
+                close: Some(r"^\};$".into()),
+                key: Some(r"^\s*([A-Z0-9_]+),".into()),
+                ..Default::default()
+            },
+        )
         .unwrap()
     }
 
@@ -613,7 +649,7 @@ END MIKE
 
     #[test]
     fn a_sorted_anchor_without_a_rendered_line_is_a_config_error() {
-        let anchor = compile(&spec_sorted(r"^\s*([A-Z0-9_]+),", None)).unwrap();
+        let anchor = compile(Shape::Sorted, &spec_sorted(r"^\s*([A-Z0-9_]+),", None)).unwrap();
         assert!(anchor.locate("    enum Id\n};\n", None).is_err());
     }
 
@@ -621,10 +657,13 @@ END MIKE
     fn a_whole_file_sorted_list_needs_no_block() {
         // Some of these lists are a whole file of sorted entries.
         let text = "ALPHA = a\nMIKE = m\nZULU = z\n";
-        let anchor = compile(&AnchorSpec {
-            key: Some(r"^([A-Z][A-Z0-9_]*)\s".to_owned()),
-            ..Default::default()
-        })
+        let anchor = compile(
+            Shape::Sorted,
+            &AnchorSpec {
+                key: Some(r"^([A-Z][A-Z0-9_]*)\s".to_owned()),
+                ..Default::default()
+            },
+        )
         .unwrap();
         let placed = anchor.locate(text, Some("NOVEMBER = n")).unwrap();
         assert!(text[..placed.offset].ends_with("MIKE = m\n"));

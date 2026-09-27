@@ -167,10 +167,7 @@ mod tests {
                     aliases: vec!["OpWidgetAliasTEST".into()],
                     value: 1,
                     class: "Arithmetic".into(),
-                    operands: Vec::new(),
-                    capabilities: Vec::new(),
-                    encoding: crate::model::SpvEncoding::default(),
-                    meta: Default::default(),
+                    ..Default::default()
                 }],
                 ..SpvPlane::new("SPV_TEST_widget")
             }),
@@ -181,14 +178,10 @@ mod tests {
                 extension_type: VkExtensionType::Device,
                 commands: vec![VkCommand {
                     name: "vkWidgetTEST".into(),
-                    alias_of: None,
                     canonical_name: "vkWidgetTEST".into(),
                     return_type: "void".into(),
                     dispatch: VkDispatch::Device,
-                    protect: String::new(),
-                    params: Vec::new(),
-                    requirements: Vec::new(),
-                    meta: Default::default(),
+                    ..Default::default()
                 }],
                 ..Default::default()
             }),
