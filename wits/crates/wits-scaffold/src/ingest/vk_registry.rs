@@ -127,7 +127,6 @@ pub fn extract(text: &str, name: &str) -> Result<(VkPlane, Vec<String>)> {
         })
         .collect();
 
-    let protect = plane.protect.clone();
     for requirement in &requirements {
         let condition = VkRequirement {
             depends: requirement
@@ -141,7 +140,7 @@ pub fn extract(text: &str, name: &str) -> Result<(VkPlane, Vec<String>)> {
             .filter(|node| node.has_tag_name("command"))
             .filter_map(|node| node.attribute("name"))
         {
-            let command = command_of(&doc, command_name, condition.clone(), &protect)?;
+            let command = command_of(&doc, command_name, condition.clone())?;
             match plane
                 .commands
                 .iter_mut()
@@ -777,12 +776,7 @@ fn canonical_enum_name(doc: &Document<'_>, name: &str) -> Result<String> {
     }
 }
 
-fn command_of(
-    doc: &Document<'_>,
-    name: &str,
-    requirement: VkRequirement,
-    protect: &str,
-) -> Result<VkCommand> {
+fn command_of(doc: &Document<'_>, name: &str, requirement: VkRequirement) -> Result<VkCommand> {
     let public =
         find_command(doc, name).with_context(|| format!("no command definition for {name}"))?;
     let alias_of = public.attribute("alias").map(str::to_owned);
@@ -836,7 +830,6 @@ fn command_of(
         canonical_name,
         return_type,
         dispatch,
-        protect: protect.to_owned(),
         // Recording conditions comes off the canonical definition: an alias has
         // no body of its own, so it inherits every constraint of what it names.
         success_codes: text_attribute(canonical, "successcodes"),
@@ -1005,12 +998,7 @@ mod tests {
         // it from there yields an empty string for all 44 platform extensions
         // and their declarations are emitted unguarded.
         let (plane, _) = extract(REGISTRY, "VK_TEST_platform_widget").unwrap();
-        let command = plane
-            .commands
-            .iter()
-            .find(|command| command.name == "vkTestWidgetTEST")
-            .expect("the extension requires this command");
-        assert_eq!(command.protect, "VK_USE_PLATFORM_TEST");
+        assert_eq!(plane.protect, "VK_USE_PLATFORM_TEST");
     }
 
     #[test]

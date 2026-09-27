@@ -697,11 +697,6 @@ pub struct VkCommand {
     pub canonical_name: String,
     pub return_type: String,
     pub dispatch: VkDispatch,
-    /// A copy of [`VkPlane::protect`], so a template looping over commands can
-    /// guard each declaration without reaching back out to the plane. Every
-    /// command of one extension carries the same value.
-    #[serde(default)]
-    pub protect: String,
     /// The `VkResult` values the command may return on success, verbatim.
     #[serde(default)]
     pub success_codes: String,

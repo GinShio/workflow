@@ -207,7 +207,6 @@ states: ``success_codes``, ``error_codes``, ``queues``, ``cmd_buffer_level``,
    canonical_name = "vkWidgetTEST"
    return_type = "VkResult"
    dispatch = "device"
-   protect = ""
    success_codes = "VK_SUCCESS"
 
    [[vk.commands.params]]
@@ -218,8 +217,8 @@ states: ``success_codes``, ``error_codes``, ``queues``, ``cmd_buffer_level``,
 Guarding is a plane-level fact. An extension names a ``platform`` and the
 registry's ``<platforms>`` table is the only place the macro is spelled, so
 ``vk.protect`` is resolved through that table; no ``<require>`` carries a
-``protect`` attribute. Every command of one extension repeats the same value for
-the convenience of a template looping over them.
+``protect`` attribute. Commands carry no copy of it: a template guarding each
+declaration reads ``vk.protect``.
 
 An extension that ``supported`` does not list ``vulkan`` for is refused rather
 than extracted: a disabled entry is spelled out in full and nothing else about
