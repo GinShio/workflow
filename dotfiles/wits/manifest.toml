@@ -6,6 +6,13 @@ capabilities = ['develop']
 planes = ['user']
 
 [[install]]
+id = 'wits-scaffold'
+dst = '~/.config/wits/scaffold/'
+path = 'scaffold/'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
 id = 'wits-tmpfiles'
 dst = '~/.config/user-tmpfiles.d/'
 path = 'tmpfiles.d/'
@@ -58,7 +65,9 @@ dxc            = { org = 'khronos',  name = 'dxc' }
 glslang        = { org = 'khronos',  name = 'glslang' }
 slang          = { org = 'khronos',  name = 'slang' }
 spirv-headers  = { org = 'khronos',  name = 'spirv-headers' }
+spirv-registry = { org = 'khronos',  name = 'spirv-registry' }
 spirv-tools    = { org = 'khronos',  name = 'spirv-tools' }
+vulkan-registry = { org = 'khronos', name = 'vulkan-registry' }
 vulkan-samples = { org = 'khronos',  name = 'vulkan-samples' }
 vvl            = { org = 'khronos',  name = 'vvl' }
 
