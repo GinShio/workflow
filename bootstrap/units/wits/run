@@ -28,7 +28,7 @@ printf 'Building wits from %s...\n' "$WITS_SOURCE_DIR"
     meson install -C _build
 )
 
-# Writes the applet symlinks wits dispatches through. Run via the absolute
-# path because a shell that resolved `wits` before this unit ran would have
-# cached its absence.
+# A smoke test that the installed binary runs; `meson install` has already
+# written its applet symlinks. Run via the absolute path because a shell that
+# resolved `wits` before this unit ran would have cached its absence.
 "$HOME/.local/bin/wits" __applets >/dev/null
