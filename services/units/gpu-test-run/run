@@ -1,0 +1,66 @@
+#!/bin/sh
+set -eu
+
+# A test runs only when its driver differs from the build it was last tested
+# against, so a rebuild on a night this unit is not due, or is skipped, is
+# still tested at its next run.
+tested_dir="${XDG_STATE_HOME:-$HOME/.local/state}/wits/gputest/tested"
+
+# driver_fingerprint <driver>
+#
+# One `cksum` line per library `gputest.py list driver` resolves: what `run`
+# loads, by content rather than mtime, which an install or a strip rewrites
+# without the build changing. Empty when none of the libraries is installed.
+driver_fingerprint() {
+    _df_listing=$(python3 "$SERVICES_ROOT/gputest.py" list driver "$1")
+    printf '%s\n' "$_df_listing" |
+        sed -n 's/^[[:space:]]*Library:[[:space:]]*//p' |
+        while IFS= read -r _df_lib; do
+            if [ -f "$_df_lib" ]; then
+                cksum "$_df_lib"
+            fi
+        done
+}
+
+# run_in_runner <test>
+#
+# Types the test into the shell of the tmux session `runner`, which `terminal`
+# starts under resource limits, and blocks until the test ends, pass or fail.
+#
+# The channel's lock is taken first and the typed command releases it when the
+# test ends, so taking it again waits for that.
+run_in_runner() {
+    _rr_channel="gputest-done-$$-$1"
+    tmux wait-for -L "$_rr_channel"
+    if ! tmux send-keys -t runner \
+        "python3 $SERVICES_ROOT/gputest.py run $1; tmux wait-for -U $_rr_channel" ENTER; then
+        tmux wait-for -U "$_rr_channel"
+        echo "$1: the tmux session \`runner\` did not take the test" >&2
+        exit 1
+    fi
+    tmux wait-for -L "$_rr_channel"
+    tmux wait-for -U "$_rr_channel"
+}
+
+python3 "$SERVICES_ROOT/gputest.py" cleanup
+mkdir -p "$tested_dir"
+
+for elem in $SERVICES_PARAM_DRIVERS; do
+    driver=${elem%,*}
+    suite=${elem#*,}
+    test_name="$driver-$suite"
+
+    fingerprint=$(driver_fingerprint "$driver")
+    if [ -z "$fingerprint" ]; then
+        echo "$test_name: $driver has no installed library; skipped"
+        continue
+    fi
+    if [ -f "$tested_dir/$test_name" ] &&
+        [ "$fingerprint" = "$(cat "$tested_dir/$test_name")" ]; then
+        echo "$test_name: unchanged since it was last tested"
+        continue
+    fi
+
+    run_in_runner "$test_name"
+    printf '%s\n' "$fingerprint" > "$tested_dir/$test_name"
+done

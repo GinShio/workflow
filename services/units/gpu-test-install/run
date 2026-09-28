@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+# shellcheck disable=SC1091
+python3 "$SERVICES_ROOT/gputest.py" install
+python3 "$SERVICES_ROOT/gputest.py" restore --days 10

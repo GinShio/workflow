@@ -1,0 +1,3 @@
+runs: nightly
+power: ac
+params: projects, direct, install, install-local

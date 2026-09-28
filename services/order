@@ -1,0 +1,29 @@
+# The order units are considered in, stated rather than derived — the same
+# contract as bootstrap/order. A run keeps the units whose `runs` names it and
+# never reorders them. Every unit directory appears here exactly once.
+
+# ------------------------------------------------------------------ autostart
+terminal
+power-profiles
+samba-mount
+gpu-test-install
+
+# -------------------------------------------------------------------- nightly
+pkg-upgrade
+flatpak-update
+pipx-upgrade
+update-projects
+
+docker-prune
+podman-prune
+system-logs
+user-cache
+ai-agents
+flatpak-cleanup
+npm-cache
+pip-cache
+# After `pkg-upgrade`: it clears the caches and orphans an upgrade leaves.
+pkg-cleanup
+
+# After `update-projects`, so the drivers it tests are tonight's builds.
+gpu-test-run

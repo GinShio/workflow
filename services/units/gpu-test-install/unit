@@ -1,0 +1,5 @@
+# Off until the harness it drives, `gputest.py` at the repository root, exists.
+runs: autostart
+when: gpu:any
+optional: python3
+enable: no

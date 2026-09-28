@@ -67,8 +67,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# shellcheck source=lib/meta.sh
-. "$BOOTSTRAP_DIR/lib/meta.sh"
+# shellcheck source=../scripts/meta.sh
+. "$BOOTSTRAP_SCRIPTS/meta.sh"
 # shellcheck source=lib/unit.sh
 . "$BOOTSTRAP_DIR/lib/unit.sh"
 # shellcheck source=lib/env.sh

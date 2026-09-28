@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+echo "Updating Flatpak packages..."
+flatpak update -y

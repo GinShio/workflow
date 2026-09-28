@@ -4,7 +4,7 @@ Description=Run the script of nightly
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'export NIGHTLY_CURRENT_TIMESTAMP=$(date +%%s); exec {{@@ projects.script_dir @@}}/services/runner.sh nightly'
+ExecStart=/bin/sh {{@@ projects.script_dir @@}}/services/runner.sh nightly
 Restart=no
 
 [Install]

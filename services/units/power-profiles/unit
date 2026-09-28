@@ -1,0 +1,5 @@
+# `amdgpu_dpm` and `amdgpu_panel_power` are power-profiles-daemon actions for
+# the amdgpu driver; on any other GPU they have nothing to act on.
+runs: autostart
+when: hw:laptop, gpu:amd
+optional: powerprofilesctl

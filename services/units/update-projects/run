@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+
+cleanup() {
+    # shellcheck disable=SC1091
+    . "$SERVICES_ROOT/scripts/unproxy.sh"
+}
+trap cleanup EXIT
+
+listed() {
+    case " $2 " in
+        *" $1 "*) return 0 ;;
+    esac
+    return 1
+}
+
+build_projects() {
+    for proj in $1; do
+        if ! wits project exists "$proj" >/dev/null 2>&1; then
+            continue
+        fi
+
+        if listed "$proj" "$SERVICES_PARAM_INSTALL_LOCAL"; then
+            _extra_args="--install-dir $HOME/.local --install"
+        elif listed "$proj" "$SERVICES_PARAM_INSTALL"; then
+            _extra_args="--install"
+        else
+            _extra_args=""
+        fi
+
+        echo "=> Updating $proj..."
+        if wits update "$proj" --with-borrowed; then
+            _main_branch=$(wits project info --get repo.main_branch "$proj")
+            # Release build (word splitting on _extra_args is intended here)
+            wits build "$proj" --build-type release $_extra_args "-b$_main_branch"
+
+            # Debug build
+            wits build "$proj" --build-type debug "-b$_main_branch"
+        fi
+    done
+}
+
+build_projects "$SERVICES_PARAM_DIRECT"
+
+# shellcheck disable=SC1091
+. "$SERVICES_ROOT/scripts/proxy.sh"
+
+build_projects "$SERVICES_PARAM_PROJECTS"

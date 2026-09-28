@@ -291,7 +291,6 @@ whose `optional` tool an earlier unit is about to install shows as skipped.
 ```
 bootstrap.sh          entry point: CLI, selection, failure propagation, report
 order                 the sequence, stated
-lib/meta.sh           the `key: value` parser — the one file format
 lib/unit.sh           unit metadata, validation, platform resolution, selection
 lib/env.sh            the environment a unit declares, and the gate for it
 lib/registry.sh       the machine registry
@@ -305,10 +304,10 @@ units/<id>/packages[.<platform>]
 units/<id>/run[.<platform>]
 ```
 
-`scripts/detect.sh` and `scripts/detect_vps.sh` are shared with
-`services/runner.sh` and supply the facts. `scripts/tags.sh` and
-`scripts/constraints.sh` are **not** used here — those belong to the service
-runner, which still selects on file tags.
+`scripts/meta.sh`, the `key: value` parser, and `scripts/detect.sh`, which
+supplies the hardware facts, are shared with `services/runner.sh`, whose units
+follow the same metadata and payload conventions. `scripts/detect_vps.sh`
+supplies the `vps:` facts, which only bootstrap asks about.
 
 ## What a unit's script may rely on
 

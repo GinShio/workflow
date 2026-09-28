@@ -1,0 +1,5 @@
+#!/bin/sh
+set -u
+
+sudo -A -- pkg clean -y >/dev/null 2>&1
+sudo -A -- pkg autoremove -y >/dev/null 2>&1

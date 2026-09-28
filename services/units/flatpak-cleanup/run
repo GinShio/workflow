@@ -1,0 +1,4 @@
+#!/bin/sh
+set -u
+
+flatpak uninstall --unused -y >/dev/null 2>&1 || true

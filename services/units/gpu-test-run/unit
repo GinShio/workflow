@@ -1,0 +1,8 @@
+# Off until the harness it drives, `gputest.py` at the repository root, exists.
+runs: nightly
+every: 3d
+power: ac
+when: gpu:any
+optional: python3
+enable: no
+params: drivers

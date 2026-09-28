@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+# Only configure power profiles on laptops
+powerprofilesctl configure-action --enable amdgpu_dpm || true
+powerprofilesctl configure-action --enable amdgpu_panel_power || true

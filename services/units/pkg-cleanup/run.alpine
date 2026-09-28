@@ -1,0 +1,4 @@
+#!/bin/sh
+set -u
+
+sudo -A -- apk cache clean >/dev/null 2>&1

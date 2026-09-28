@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+# shellcheck disable=SC1091
+. "$SERVICES_ROOT/scripts/proxy.sh"
+
+cleanup() {
+    sudo -k
+    # shellcheck disable=SC1091
+    . "$SERVICES_ROOT/scripts/unproxy.sh"
+}
+trap cleanup EXIT
+
+sudo -AE -- dnf upgrade -y --refresh
