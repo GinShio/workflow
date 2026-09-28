@@ -232,7 +232,7 @@ ordered_ids() {
         printf 'Error: no order file at %s\n' "$BOOTSTRAP_ORDER" >&2
         return 1
     }
-    sed 's/#.*$//; s/^[ \t]*//; s/[ \t]*$//' "$BOOTSTRAP_ORDER" | grep -v '^$'
+    sed 's/#.*$//; s/^[[:blank:]]*//; s/[[:blank:]]*$//' "$BOOTSTRAP_ORDER" | grep -v '^$'
 }
 
 ORDER_IDS="$BOOTSTRAP_TMP/order"
