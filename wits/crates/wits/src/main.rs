@@ -21,7 +21,7 @@
 //! lists the built-ins and the plugins it finds on `$PATH`.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -97,6 +97,16 @@ enum Commands {
     /// of the applet set.
     #[command(name = "__applets", hide = true)]
     Applets,
+    /// The sequence editor `wits stack slice` hands to `git rebase -i`: git runs
+    /// it on the todo it generated. Hidden like [`Commands::Applets`] — plumbing
+    /// git invokes, not a workflow verb.
+    #[command(name = "__slice-editor", hide = true)]
+    SliceEditor {
+        /// The spec `slice` wrote for this rebase.
+        spec: PathBuf,
+        /// The todo file git hands its sequence editor.
+        todo: PathBuf,
+    },
 
     /// Any other `wits <name>` runs a `wits-<name>` executable from `$PATH`.
     #[command(external_subcommand)]
@@ -130,6 +140,7 @@ fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Commands::SliceEditor { spec, todo } => cmd::stack::slice::edit_todo(spec, todo),
         Commands::External(args) => dispatch_plugin(args),
     }
 }
@@ -339,9 +350,12 @@ mod tests {
 
     #[test]
     fn hidden_plumbing_stays_out_of_the_applet_set() {
-        // `__completions` is consumed by shells, not typed by people: like
-        // `__applets` it must not surface in the applet list.
+        // `__completions` is consumed by shells and `__slice-editor` by git, not
+        // typed by people: like `__applets` they must not surface in the applet
+        // list.
         let names = builtin_names();
-        assert!(!names.iter().any(|name| name == "__completions"));
+        assert!(!names
+            .iter()
+            .any(|name| name == "__completions" || name == "__slice-editor"));
     }
 }

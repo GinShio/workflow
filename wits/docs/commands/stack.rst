@@ -120,8 +120,9 @@ Building a stack with ``slice``
 -------------------------------
 
 ``slice`` cuts the commits sitting on top of your base branch into named
-branches. It opens an interactive rebase todo seeded with your commits and a
-commented branch suggestion under each:
+branches. It opens the interactive rebase todo git itself would give you —
+fixups already folded into their targets if you set ``rebase.autoSquash`` —
+with a commented branch suggestion after each commit:
 
 .. code-block:: sh
 
@@ -130,17 +131,20 @@ commented branch suggestion under each:
 
 ::
 
-   pick a1b2c3d Add the API layer
+   pick a1b2c3d # Add the API layer
+   fixup 9f8e7d6 # fixup! Add the API layer
    # update-ref refs/heads/me/add-the-api-layer
 
-   pick d4e5f6a Wire up the UI
-   # update-ref refs/heads/me/wire-up-the-ui
+   pick d4e5f6a # Wire up the UI
+   # update-ref refs/heads/work
 
-Uncomment the ``update-ref`` lines where you want a branch to start, save, and
-let the rebase finish. The branches are created at the end of the rebase (safe
-even for the branch you are on), and the machete file is written to match.
-Branch-name suggestions use ``wits.stack.prefix`` if set, otherwise a slug of
-your ``user.name``, otherwise ``stack/``.
+Uncomment the ``update-ref`` line after each commit a branch should end on,
+save, and let the rebase finish. The branches move at the end of the rebase,
+and the machete file is written to match. The last line names the branch you
+are on (``work`` here): uncomment it to keep that branch as the top of the
+stack, and leave it last — git moves the checked-out branch to the end of the
+rebase itself. Branch-name suggestions use ``wits.stack.prefix`` if set,
+otherwise a slug of your ``user.name``, otherwise ``stack/``.
 
 You do not *have* to use ``slice`` — any branches you create yourself and
 record in the machete file work identically. And a branch that is not in the
@@ -460,3 +464,9 @@ Troubleshooting
    * - ``rebase did not complete`` (from ``slice``)
      - The interactive rebase was aborted or hit a conflict; finish or
        ``git rebase --abort``, then retry.
+   * - ``stack branch '…' is checked out in …`` (from ``slice``)
+     - Git will not move a branch another worktree has checked out. Switch that
+       worktree to another branch, then retry.
+   * - ``keep the update-ref line of the current branch …`` (from ``slice``)
+     - The branch you are on can only end the stack: leave its line last, or
+       comment it out. Nothing was rewritten.

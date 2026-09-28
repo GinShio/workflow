@@ -13,7 +13,7 @@
 mod anno;
 mod decorate;
 mod resolution;
-mod slice;
+pub mod slice;
 mod submit;
 mod sync;
 mod topology;

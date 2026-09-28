@@ -311,30 +311,40 @@ Per platform, hidden behind ``apply_attributes``:
 slice
 -----
 
-Cut the commits on top of a base into named branches, by driving ``git rebase
--i`` with a sequence editor that seeds the todo with each commit and an
-``update-ref`` line. The refs are set at the *end* of the rebase (safe for the
-current branch and for worktrees). The branch list is read back from the saved
-todo, not from a post-rebase ``base..HEAD`` scan (which misleads when the
-current branch is an intermediate update-ref target).
+Cut the commits on top of a base into named branches. ``slice`` runs ``git
+rebase -i --update-refs`` and edits the todo git generated rather than writing
+its own, so the todo holds what a plain ``git rebase -i`` would under your
+config — fixups folded into their targets when ``rebase.autoSquash`` is set,
+commits already upstream left out — plus the ``update-ref`` lines naming the
+branches. The refs move at the *end* of the rebase. The branch list is read
+back from the saved todo, not from a post-rebase ``base..HEAD`` scan (a branch
+whose line you removed can still point into the range).
 
-What each ``update-ref`` line is, per commit
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+What each ``update-ref`` line is, per position
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The suggestion is chosen from what we know about the commit, so re-slicing an
-existing stack needs no retyping:
+A *position* is the point after a ``pick`` and the fixups folded into it. The
+line there is chosen from what we know, so re-slicing an existing stack needs
+no retyping:
 
-1. **A branch already in the stack** points here → the line is **active**
+1. **A branch already in the stack** ends here → the line is **active**
    (uncommented) under that real name, so the branch is preserved in place.
-2. **No stack branch, but some branch** points here → a **commented** line
-   with that branch name (a suggestion to adopt it).
+2. **No stack branch, but some branch** ends here → a **commented** line with
+   that branch name (a suggestion to adopt it).
 3. **No branch at all** → a **commented** ``<prefix><slug>`` suggestion — the
    name to mint for fresh work.
 
-At most **one** line per commit is ever active. Several branches on one commit
-are not a fork (a fork diverges later); activating two would make the linear
-record collapse them into a bogus parent→child chain (an empty MR), so the
-extras are demoted to commented suggestions. The names you uncomment are
+Where an existing branch ends is git's call (``--update-refs``): after the
+fixups folded into its commit, and for a branch sitting on a fixup commit,
+where that commit stood before it was moved. The **checked-out branch** always
+ends at the last position, because git moves it there itself: its line is
+added at the end, it must stay after the last commit (``slice`` refuses a todo
+that moves it up), and it is kept out of what git executes.
+
+At most **one** line per position is ever active. Several branches at one
+position are not a fork (a fork diverges later); activating two would make the
+linear record collapse them into a bogus parent→child chain (an empty MR), so
+the extras are demoted to commented suggestions. The names you uncomment are
 de-duplicated and the base is dropped before writing.
 
 * **A single slice is linear by nature** — a rebase range is one line of
@@ -346,6 +356,9 @@ de-duplicated and the base is dropped before writing.
 * **Writing** lays the branches as a chain ``base → b1 → … → bn`` via
   ``reparent``, which **refuses any link that would form a cycle** and leaves
   unrelated stacks in the file untouched.
+* **A stack branch checked out in another worktree** stops the slice before
+  the rebase starts: git will not move a branch another worktree has checked
+  out, so the chain could only be recorded without it.
 
 Growing or rebuilding an existing stack
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -453,6 +466,10 @@ Known limitations
   a dead node (auto-pruning inside ``slice`` is unsafe — it cannot be told
   apart from a fork sibling that should survive). Clean it with ``tree prune``
   (once the branch is deleted) or ``tree rm``.
+* **A stack branch mid-rebase in another worktree** slips past the worktree
+  check, since that worktree reports a detached HEAD. Git still leaves the
+  branch unmoved, and ``slice`` records the chain without it, as if its line
+  had been removed.
 * **An MR orphaned by removal** (its branch no longer in the file) keeps its
   old navigation block; ``anno`` no longer touches it.
 * **``tree mv`` is metadata only** — it does not rebase commits; you must

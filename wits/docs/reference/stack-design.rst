@@ -425,15 +425,28 @@ the machete annotations, and reuses them within the run.
 ``slice`` — authoring a stack
 -----------------------------
 
-``slice`` is the local authoring step. We drive ``git rebase -i`` with a
-custom ``GIT_SEQUENCE_EDITOR`` that (a) seeds the todo with the range's
-commits and commented ``update-ref refs/heads/<suggested>`` lines, (b) opens
-the user's real editor, (c) captures the final todo. Branch pointers are set
-by ``update-ref`` at the end of the rebase — safe for the current branch and
-for worktrees, unlike ``branch -f``. The captured todo, not a post-rebase
-``base..HEAD`` scan, is the authoritative list of assigned branches, because
-git leaves HEAD in a misleading position when the checked-out branch is itself
-an intermediate update-ref target. From that list we (re)write
+``slice`` is the local authoring step, and git stays in charge of the rebase.
+We run ``git rebase -i --update-refs --no-rebase-merges`` with ``wits
+__slice-editor`` as the ``GIT_SEQUENCE_EDITOR``, and that editor only layers
+names onto the todo git generated: the commits, their order, the fixups
+``rebase.autoSquash`` folds in and the commits git drops as already upstream
+all stay git's. ``--update-refs`` makes git write the ``update-ref`` line of
+every branch already on the range, after the fixups folded into its commit,
+and withhold the lines it must not write — the checked-out branch's, and those
+of branches checked out in other worktrees. The editor then (a) keeps one
+stack branch active per position and comments the rest, (b) suggests a
+``<prefix><slug>`` where git named no branch, (c) adds the checked-out
+branch's line at the end, (d) opens the user's editor, resolved with ``git var
+GIT_SEQUENCE_EDITOR`` before we take the variable over, and (e) captures the
+saved todo.
+
+The captured todo, not a post-rebase ``base..HEAD`` scan, is the authoritative
+list of assigned branches: a branch whose line was removed still points into
+the range wherever the rebase left commits unrewritten, so the refs alone
+cannot tell. The checked-out branch's line is withheld from what git executes
+— git moves that branch to the end of the rebase itself, and an explicit line
+fails git's final ref update once anything was rewritten — which is also why
+that line must stay after the last commit. From the captured list we (re)write
 ``<common-git-dir>/machete``.
 
 Suggested branch names use a configurable prefix (``wits.stack.prefix``, else

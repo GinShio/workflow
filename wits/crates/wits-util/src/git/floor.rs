@@ -128,6 +128,15 @@ impl Repository {
         self.query(&["symbolic-ref", "--quiet", "--short", "HEAD"])
     }
 
+    /// The editor git would open an interactive rebase's todo in, as the shell
+    /// command string git itself would run, or `None` when git finds no usable
+    /// editor. Git resolves the whole precedence (`GIT_SEQUENCE_EDITOR`,
+    /// `sequence.editor`, then the ordinary editor chain), so a caller never
+    /// re-derives it.
+    pub fn sequence_editor(&self) -> Option<String> {
+        self.query(&["var", "GIT_SEQUENCE_EDITOR"])
+    }
+
     /// Resolve a revision to a full commit hash, or `None` if it doesn't exist.
     pub fn rev_parse(&self, spec: &str) -> Option<String> {
         self.query(&["rev-parse", "--verify", "--quiet", spec])
