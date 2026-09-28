@@ -147,6 +147,15 @@ pub fn save_topology(repo: &Repository, topology: &Topology) -> anyhow::Result<(
 ///
 /// Guard the whole cycle, not just the save: locking the write alone would
 /// still let a stale load overwrite the winner of a race.
+///
+/// The lock file is never removed, and must not be. Unlike git's own `*.lock`
+/// files, whose *existence* is the lock, this one is only the inode every
+/// writer `flock`s, so its presence means nothing. Unlinking it on release
+/// would let a writer already waiting on the old inode proceed while a
+/// newcomer creates a fresh file and locks that instead — two holders at once,
+/// the lost edit this exists to prevent. The same reason rules out locking the
+/// machete file itself: [`save_topology`] replaces it by rename, which unlinks
+/// the inode a waiter is queued on.
 pub struct MacheteLock {
     // Holding the open descriptor *is* holding the lock; dropping it — or the
     // process exiting — releases. Nothing reads or writes through it.

@@ -53,6 +53,12 @@ Here ``feature-api`` and ``feature-docs`` both build on ``main``;
 ``feature-ui`` builds on ``feature-api``. You do not have to hand-write this
 file — ``slice`` generates it — but it is plain text and safe to edit.
 
+Beside it sits an empty ``machete.lock``, which every edit ``flock``\ s so that
+two of them — yours and the ``reference-transaction`` hook's, say — take turns.
+It stays there on purpose: unlike git's ``*.lock`` files its existence means
+nothing, and deleting it while an edit is waiting is the one way to let two
+edits overlap.
+
 .. note::
 
    The file is a *forest*, not just a chain — a branch may fork into several.
