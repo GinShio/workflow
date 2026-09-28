@@ -275,6 +275,9 @@ unit_validate() {
         fi
     done
 
+    # The kind of fact is checked, not the vendor a `gpu:` fact names. That
+    # list is whatever detect.sh reports; mirroring it here would cost more
+    # than the rare typo it catches, which reads as a fact that does not hold.
     for _uv_fact in $(meta_list "$_uv_file" when); do
         case "$_uv_fact" in
             gpu:?*|hw:laptop) ;;

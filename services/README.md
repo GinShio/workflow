@@ -44,9 +44,11 @@ every: 5d
 | `enable` | `no` for a unit a machine has to opt into. Defaults to `yes`. |
 | `params` | Comma-separated names a declaration may set for this unit. |
 
-A misspelled key, an unknown fact, a malformed value or a unit `order` does
-not list fails the run before anything executes: each of them would otherwise
-be a unit that silently never runs.
+A misspelled key, an unknown kind of fact, a malformed value or a unit `order`
+does not list fails the run before anything executes: each of them would
+otherwise be a unit that silently never runs. A misspelled GPU vendor or
+payload suffix is not caught, since the runner keeps no list of either; `-n`
+shows such a unit as skipped.
 
 **`optional` versus a plain dependency.** A command the machine legitimately
 may not have — Flatpak, Docker — goes in `optional`, and its absence is a
