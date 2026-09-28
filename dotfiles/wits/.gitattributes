@@ -1,2 +1,6 @@
 khronos3d/** filter=transcrypt-khronos3d diff=transcrypt-khronos3d merge=transcrypt-khronos3d
 personal/** filter=transcrypt-personal diff=transcrypt-personal merge=transcrypt-personal
+# Service declarations hold nothing that needs protecting, so they stay plain
+# text in every overlay; later lines override the ones above.
+khronos3d/services/** !filter !diff !merge
+personal/services/** !filter !diff !merge

@@ -28,6 +28,13 @@ capabilities = ['develop']
 planes = ['user']
 
 [[install]]
+id = 'wits-services'
+dst = '~/.config/wits/services/'
+path = 'services/'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
 id = 'wits-completions'
 dst = '~/.config/fish/conf.d/wits-dynamic-completions.fish'
 path = 'completions/wits-dynamic.fish'

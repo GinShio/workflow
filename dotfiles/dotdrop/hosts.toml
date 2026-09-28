@@ -30,6 +30,12 @@ workdir = '/var/lib/dotdrop'
 
 [defaults]
 ccache_remote_enabled = false
+# A host's own service declarations, `[hosts.<name>.variables.services_host.<unit>]`
+# with one key per declaration. A top-level name no other layer defines:
+# Dotdrop layers profile variables over imported ones by whole top-level key,
+# so a host writing into a shared table would erase the rest of it. Defaulted
+# here because Dotdrop renders with undefined variables as errors.
+services_host = {}
 
 [hosts.'ginshio-openSUSE-strix']
 capabilities = ['develop', 'desktop']
