@@ -485,10 +485,20 @@ reference-transaction
 
 Fires whenever refs change. The scripts here react to one case in particular —
 a branch that stops existing — and act only once the change is actually
-committed, so a rolled-back transaction never triggers them. An aborted rebase
-is skipped too: it tears down the refs it created through a *committed*
-transaction, which from inside the hook is indistinguishable from a deletion,
-so the presence of the rebase state directory is what tells the two apart.
+committed, so a rolled-back transaction never triggers them.
+
+What the hook is told, though, is what each ref *store* did — not what
+happened to a branch. The default files backend keeps loose refs beside a
+``packed-refs`` file and runs a transaction on each, so
+``git pack-refs --prune`` — part of every ``git gc`` and of git maintenance —
+reaches the hook as the deletion of every loose branch, although each one lives
+on in ``packed-refs``. A ``verify`` in ``git update-ref --stdin`` reads like a
+deletion too, and deleting a packed branch arrives twice. A deletion therefore
+counts only once it has taken effect: the scripts check that the branch no
+longer resolves and that git is not still in the middle of deleting it. A
+plain rebase or commit never deletes a branch, and a rebase in progress changes
+nothing — a branch deleted while a rebase is stopped is cleaned up like any
+other.
 
 .. _rename-blind-spot:
 
@@ -515,6 +525,14 @@ to stay out of the way:
   only ever needs the *old* name: ``build_dir`` templates key on
   ``branch.slug``, so the trees built under the old name are orphaned either
   way.
+
+Two other senders assert a real commit. git-branchless deletes a branch itself
+and then runs this hook with the old commit, marking the call with
+``BRANCHLESS_TRANSACTION_ID``; it never renames, so its deletions are handled as
+deletions. An explicit ``git update-ref -d <ref> <old>``, or a push that deletes
+one of this repository's branches, cannot be told apart from a rename and is
+handled as one — the entry outlives its branch until ``wits stack tree prune``,
+which is the recoverable direction.
 
 The machete cleanup
 ~~~~~~~~~~~~~~~~~~~

@@ -215,9 +215,10 @@ deliberately absent from ``warm_facts``. It is by far the hottest hook — three
 fires per transaction, and a single rebase produces dozens of transactions —
 while its scripts have work only on the rare fire that is a committed branch
 deletion. So they read their stdin first, which costs no subprocess at all, and
-call the resolvers only once they know they have something to do. On every
-other fire not one ``git`` subprocess is spawned, and the hottest hook stays
-cheap without a value cache to invalidate.
+call git only for a line that reads like a deletion — to confirm the branch is
+really gone, since the ref stores report their own housekeeping the same way
+(see the :doc:`guide`). On every other fire not one ``git`` subprocess is
+spawned, and the hottest hook stays cheap without a value cache to invalidate.
 
 Worth stating plainly, because the measurement is easy to assume the other way
 round: this is a correctness-and-clarity argument, not a throughput one. The

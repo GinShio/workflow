@@ -9,10 +9,12 @@
 # costs a `git` subprocess, so both wait behind the cheap tests.
 
 # reference-transaction runs up to three times per transaction:
+#   preparing - updates queued, refs not yet locked
 #   prepared  - refs locked, not yet written
 #   committed - refs written (the only state we act on)
 #   aborted   - transaction rolled back
-# Acting on any other state would corrupt the file mid-rebase/restack.
+# Only committed describes refs that were actually written; the others may still
+# roll back.
 [ "$1" = "committed" ] || exit 0
 
 . "$HOOKS_DIR/core/lib.sh"
@@ -23,14 +25,10 @@
 # silently mangled stack. Without wits this hook does nothing.
 command -v wits >/dev/null 2>&1 || exit 0
 
-# Costs no subprocess, so it is the right thing to ask first: the overwhelming
-# majority of fires update a tip and delete nothing.
+# Free on the fires that delete nothing, which is nearly all of them; it asks git
+# only to confirm a candidate (see branch_deletions).
 deletions=$(branch_deletions)
 [ -n "$deletions" ] || exit 0
-
-if rebase_in_progress; then
-    exit 0
-fi
 
 git_common_dir
 [ -f "$GIT_COMMON_DIR/machete" ] || exit 0

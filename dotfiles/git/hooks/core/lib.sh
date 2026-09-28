@@ -328,31 +328,44 @@ get_main_branch() {
 
 # --- Branch events ---
 #
-# `reference-transaction` reports ref updates, not intent. Every script that acts
-# on branches has to turn the same stdin into the same answer, so the reading of
-# it lives here once rather than once per script.
+# `reference-transaction` reports what each *ref store* did, not what happened to
+# a branch. The files backend keeps two stores, loose files and packed-refs, and
+# runs a transaction on each: one deletion can reach the hook twice, and
+# `git pack-refs --prune` — run by every `git gc` and by git maintenance —
+# reaches it as the deletion of every loose branch, while each one lives on in
+# packed-refs. Every script that acts on branches has to recover the same logical
+# events from that stdin, so the reading of it lives here once rather than once
+# per script.
 
-# True while a rebase is running in this worktree.
+# The branches this transaction deleted, one `<branch> <old-value>` per line, read
+# from the transaction on stdin. Only deletions that have taken effect are
+# reported: the branch no longer resolves, and no deletion of it is in flight.
 #
-# `git rebase --abort` tears down the refs the rebase created, through a
-# *committed* transaction whose new value is all zeros — from inside the hook,
-# indistinguishable from `git branch -D`. The rebase state directory still exists
-# at that moment, so its presence is what separates a transient teardown from a
-# deletion the user meant. The state is per-worktree, hence GIT_DIR and not the
-# common dir.
-rebase_in_progress() {
-    git_dir
-    [ -d "$GIT_DIR/rebase-merge" ] || [ -d "$GIT_DIR/rebase-apply" ]
-}
-
-# The branches this transaction deleted, one `<branch> <old-sha>` per line, read
-# from the transaction on stdin.
+# Candidates are found without a subprocess — an all-zero new value means
+# deletion whatever the hash width, and a symref update (`ref:refs/heads/x`) is
+# not all zeros — so the fires that delete nothing, nearly all of them, stay free.
+# Each candidate is then checked against the refs, because three kinds of line
+# look exactly like a deletion:
 #
-# Costs no subprocess, which is what keeps it usable as a first guard: an all-zero
-# new value means deletion whatever the hash width, so the string test covers
-# sha-1 and sha-256 without asking git for the null OID, and a symref update
-# (`ref:refs/heads/x`, which HEAD gets) is not all zeros so it falls out too.
+# - `git pack-refs --prune` unlinks each loose ref it packed through a
+#   transaction of its own (refs/files-backend.c, prune_ref()). The branch still
+#   resolves.
+# - A verify-only item has no new value, and the hook prints zeros in its place
+#   (refs.c, transaction_hook_feed_stdin(); t1416 pins it for symref-verify). The
+#   branch still resolves.
+# - Deleting a branch that is also packed commits a packed-refs transaction
+#   first, reported as `<zero> <zero>`, while the loose ref is still locked: in
+#   refs/files-backend.c, files_transaction_finish() commits the packed store
+#   before it unlinks the loose ref, and files_transaction_cleanup() releases the
+#   lock after both. lock_raw_ref() takes that lock even when no loose file
+#   exists. The same deletion is reported again once it completes, carrying the
+#   old value it asserted, which is what lets may_be_rename tell `git branch -m`
+#   from `git branch -D`.
+#
+# git 2.36-rc briefly stopped running the hook for both, and was reverted before
+# release (git.git c6da34a), so every released git reports them.
 branch_deletions() {
+    _bd_candidates=
     while read -r _bd_old _bd_new _bd_ref; do
         case "$_bd_ref" in
             refs/heads/*) ;;
@@ -361,12 +374,23 @@ branch_deletions() {
         case "$_bd_new" in
             '' | *[!0]*) continue ;;
         esac
-        printf '%s %s\n' "${_bd_ref#refs/heads/}" "$_bd_old"
+        _bd_candidates="$_bd_candidates${_bd_ref#refs/heads/} $_bd_old$LF"
     done
+    [ -n "$_bd_candidates" ] || return 0
+
+    git_common_dir
+    while read -r _bd_branch _bd_old; do
+        [ -n "$_bd_branch" ] || continue
+        [ -e "$GIT_COMMON_DIR/refs/heads/$_bd_branch.lock" ] && continue
+        git show-ref --verify --quiet "refs/heads/$_bd_branch" && continue
+        printf '%s %s\n' "$_bd_branch" "$_bd_old"
+    done <<_BD_EOF
+$_bd_candidates
+_BD_EOF
 }
 
-# True when a deletion might really be a rename, judged from its old value alone.
-# Usage: may_be_rename <old-sha>
+# True when a deletion might really be a rename.
+# Usage: may_be_rename <old-value>
 #
 # **The new name is not knowable from inside this hook**, and no amount of looking
 # will change that: git deletes the old ref, fires us, and only afterwards creates
@@ -374,15 +398,25 @@ branch_deletions() {
 # in HEAD's reflog and not in packed-refs. So a hook can recognise that a rename
 # may have happened, and cannot learn what it was renamed to.
 #
-# What separates the two is whether the transaction asserted the old value.
-# `git branch -m` deletes the old name with its real SHA; every ordinary deletion
-# path (`git branch -d`, `git branch -D`, `git update-ref -d` without an old
-# value) writes all zeros. The one other way to get a real SHA is an explicit
-# `git update-ref -d <ref> <old>`, which is rare and hand-driven; treating it as
-# "might be a rename" only means a stack entry outlives its branch until
+# What separates the two is whether the deletion asserted an object id.
+# `git branch -m` deletes the old name with its real one; `git branch -d`/`-D`,
+# `git update-ref -d` without an old value and fetch pruning all write zeros.
+# Asserted ids that are certainly not renames:
+#
+# - git-branchless deletes a branch through libgit2, then runs this hook itself
+#   with the real old id and BRANCHLESS_TRANSACTION_ID set (git-branchless-lib,
+#   move_branches() and run_hook_inner()). It never renames.
+# - A symbolic ref, whose old value reads `ref:<target>`: git refuses to rename
+#   one (refs/files-backend.c, files_copy_or_rename_ref()).
+#
+# An explicit `git update-ref -d <ref> <old>`, or a push that deletes one of this
+# repository's branches, looks exactly like a rename. Treating it as "might be a
+# rename" only means a stack entry outlives its branch until
 # `wits stack tree prune` runs, which is the recoverable direction.
 may_be_rename() {
+    [ -z "${BRANCHLESS_TRANSACTION_ID:-}" ] || return 1
     case "$1" in
+        ref:*) return 1 ;;
         '' | *[!0]*) return 0 ;;
         *) return 1 ;;
     esac

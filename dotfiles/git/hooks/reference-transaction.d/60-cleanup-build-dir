@@ -19,12 +19,6 @@ cfg_bool wits.hooks.reference-transaction.cleanup-build-dir-enable || exit 0
 deletions=$(branch_deletions)
 [ -n "$deletions" ] || exit 0
 
-# `git rebase --abort` deletes the refs the rebase created, and restores the ones
-# it rewrote. Those branches live on, so their build trees must too.
-if rebase_in_progress; then
-    exit 0
-fi
-
 while read -r branch _old_sha; do
     [ -n "$branch" ] || continue
 
@@ -38,7 +32,7 @@ while read -r branch _old_sha; do
     set -f
     for build_dir in $build_dirs; do
         if rm -rf -- "$build_dir"; then
-            log_info "cleanup-build-dir: removed $build_dir"
+            log_warn "cleanup-build-dir: removed $build_dir"
         else
             log_warn "cleanup-build-dir: failed to remove $build_dir"
         fi
