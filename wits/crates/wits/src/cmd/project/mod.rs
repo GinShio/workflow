@@ -6,7 +6,8 @@
 //! resolution, and the project-shaped git surface — lives in the read-only core
 //! at [`wits_util::project`]; this module is one of its consumers, alongside the
 //! separate `wits build` and `wits update` commands. See
-//! `docs/project/design.md` §1.4.
+//! `docs/reference/project-design.rst`, "Library shape — core plus actions";
+//! quoted section names below are from the same document.
 //!
 //! It deliberately owns **no** worktree management. That was once `project
 //! context`, which created a branch's worktree and tore down its build dir;
@@ -38,9 +39,10 @@ pub struct ProjectArgs {
     /// The profile axes (branch / build-type / toolchain / …) that shape
     /// resolution. Declared once here as **global** flags, so every `project`
     /// subcommand accepts them uniformly — the way `-v`/`-n` are inherited from
-    /// the process layer (§1.3) — and so a machine-readable path query resolves
-    /// the *same* dir a build would (the one shared `Profile`, §6.3). Being
-    /// global, they may be written on either side of the subcommand.
+    /// the process layer ("CLI surface") — and so a machine-readable path query
+    /// resolves the *same* dir a build would (the one shared `Profile`, "Profile
+    /// vs BuildOptions"). Being global, they may be written on either side of
+    /// the subcommand.
     #[command(flatten)]
     pub profile: ProfileArgs,
 }
@@ -116,7 +118,8 @@ pub struct HashArgs {
 /// so it is stored as one (`levels`): `none` = 0, `direct` = 1, `recursive` =
 /// unbounded. Modelling it as a depth means a future `--depth N` (should a real
 /// need for an exact intermediate depth appear) slots in without a redesign;
-/// until then only the three named modes are exposed, per "do less" (§1.2).
+/// until then only the three named modes are exposed, per "do less" ("We are a
+/// mechanism, not a policy engine").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum SubmoduleScope {
     /// This repo only.
@@ -305,7 +308,8 @@ fn resolve_plan<'a>(
     let branch = branch_or_current(ws, project, &repo, profile.branch.as_deref())?;
     // Carry the *whole* profile (build_type / toolchain / generator / presets),
     // not just focus+branch: a `build_dir`/`install_dir` template may embed any
-    // of them (§6.2), so dropping them would print a dir that no build ever uses.
+    // of them ("Context variables"), so dropping them would print a dir that no
+    // build ever uses.
     let mut resolved = profile.to_profile();
     resolved.focus = Some(repo);
     resolved.branch = Some(branch.clone());
@@ -319,8 +323,9 @@ fn resolve_plan<'a>(
 
 /// The branch to resolve for: the explicit `--branch`, else the identity repo's
 /// current branch. Shared by the path queries and `hash` so they default the same
-/// way `build` does (§6.4) — through the one [`resolve::current_branch`], so a
-/// query and the build it describes can never disagree about which branch is meant.
+/// way `build` does ("Branch identity") — through the one
+/// [`resolve::current_branch`], so a query and the build it describes can never
+/// disagree about which branch is meant.
 fn branch_or_current(
     ws: &Workspace,
     project: &ProjectData,
@@ -385,8 +390,9 @@ fn get_paths(ws: &Workspace, args: &InfoArgs, profile: &ProfileArgs) -> Result<(
 /// registry rather than declared in it.
 ///
 /// This stays a query: it prints what a deletion would orphan and removes
-/// nothing, because `project` is the read-only half of the tool (§1.4) and the
-/// caller that deletes wants its own confirmation and dry-run anyway.
+/// nothing, because `project` is the read-only half of the tool ("The read/act
+/// split") and the caller that deletes wants its own confirmation and dry-run
+/// anyway.
 fn branch_build_dirs(ws: &Workspace, args: &TargetArgs, profile: &ProfileArgs) -> Result<()> {
     let (project, repo) = resolve_repo(ws, args.target.as_deref(), profile.focus.as_deref())?;
     let branch = branch_or_current(ws, project, &repo, profile.branch.as_deref())?;
@@ -890,8 +896,9 @@ fn check_one(ws: &Workspace, project: &ProjectData) -> Vec<String> {
     }
     // Whether a declared `build_system` actually has a backend is `wits build`'s
     // concern (it errors at run time); the core neither knows nor validates the
-    // set of supported build systems (§1.4). Here we only cross-check the
-    // *declared* facts: a toolchain's own `supports` list against `build_system`.
+    // set of supported build systems ("The backend abstraction — the only
+    // extension axis"). Here we only cross-check the *declared* facts: a
+    // toolchain's own `supports` list against `build_system`.
     if let Some(bs) = p.build_system {
         if let Some(tc) = &p.toolchain {
             if let Some(def) = ws.toolchains().get(tc) {

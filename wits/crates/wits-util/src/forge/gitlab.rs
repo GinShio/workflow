@@ -688,7 +688,9 @@ impl Forge for GitLab {
                 resolved,
                 // GitLab exposes no cheap per-note outdated flag; left false in
                 // v1 (see the review docs' capability matrix). Local outdate
-                // computation (design.md §6) supersedes this.
+                // computation (`docs/reference/review-design.rst`, "Outdating —
+                // anchor to what you reviewed, let the forge mark it") supersedes
+                // this.
                 outdated: false,
                 anchor,
                 commit,

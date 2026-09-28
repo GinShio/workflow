@@ -1,4 +1,6 @@
-//! Toolchain selection and resolution (§5.4 inputs).
+//! Toolchain selection and resolution — what the backend's L0 translation
+//! consumes (`docs/reference/project-design.rst`, "Toolchains are *selected*,
+//! not rewritten — and there are no built-ins").
 //!
 //! Selection picks a toolchain *name* by the env → `--toolchain` → project chain;
 //! resolution renders its raw templated fields against the pipeline context and

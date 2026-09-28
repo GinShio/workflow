@@ -93,7 +93,7 @@ endforeach
 
 # Plugin binaries: an in-tree Rust plugin is a bin crate at `crates/wits-<name>`
 # added to the workspace `members`, whose binary is likewise `wits-<name>` so the
-# umbrella's git-style dispatch finds it on `$PATH` (docs/plugins.md). Cargo
+# umbrella's git-style dispatch finds it on `$PATH` (docs/plugins.rst). Cargo
 # builds it into the same target dir, so each one is a custom_target + install
 # mirroring `wits` above.
 plugins = [

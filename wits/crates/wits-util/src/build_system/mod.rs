@@ -3,20 +3,22 @@
 //! These live under `util`, alongside the read-only project core they build on,
 //! not inside a command: a backend is a self-contained subsystem `cmd::build`
 //! *composes*, not part of the CLI itself. Emitting build steps is a purely
-//! build-time concern, so the read-only core never needs to see a backend
-//! (§1.4): the dependency runs one way, `build_system` → `project`. The single
-//! thing the core *does* need — translating a toolchain into native
-//! env/definitions at L0 (§5.4) — is expressed through the core-owned
-//! [`ToolchainInjector`] seam, which every [`Backend`] also implements;
-//! `cmd::build` hands the selected backend to `resolve::plan` as the injector.
+//! build-time concern, so the read-only core never needs to see a backend: the
+//! dependency runs one way, `build_system` → `project`. The single thing the
+//! core *does* need — translating a toolchain into native env/definitions at
+//! L0 — is expressed through the core-owned [`ToolchainInjector`] seam, which
+//! every [`Backend`] also implements; `cmd::build` hands the selected backend
+//! to `resolve::plan` as the injector. The reasoning is in
+//! `docs/reference/project-design.rst`, "Library shape — core plus actions".
 //!
 //! A new build system is a new [`Backend`] impl (plus a `ToolchainInjector`
 //! impl), a variant on [`crate::project::model::BuildSystem`], and a line in
-//! [`backend_for`]. A backend does exactly three things
-//! (§7): translate the *canonical* toolchain vocabulary into its native form,
-//! emit the ordered command steps for a build mode, and detect prior
-//! configuration. The definition→argv *spelling* (`-DK:TYPE=V` vs `-Dk=v`) is
-//! private to each backend, never leaked outward.
+//! [`backend_for`]. A backend does exactly three things: translate the
+//! *canonical* toolchain vocabulary into its native form ("Single source of
+//! truth for compilers, realised by the backend"), emit the ordered command
+//! steps for a build mode, and detect prior configuration. The
+//! definition→argv *spelling* (`-DK:TYPE=V` vs `-Dk=v`) is private to each
+//! backend, never leaked outward.
 
 mod cargo;
 mod cmake;

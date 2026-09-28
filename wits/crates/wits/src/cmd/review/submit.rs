@@ -3,10 +3,11 @@
 //! The one network write. It reads `local.json`, merges and de-duplicates the
 //! recorded actions, and hands the whole review to the forge as one
 //! [`ReviewBatch`]. The forge folds as many actions as its native primitive
-//! allows into one notification and reports a granular [`BatchOutcome`] keyed by
-//! action, so reconciliation is **per action**: whatever landed is cleared,
-//! whatever failed stays in the draft to retry. Only a fully-flushed draft
-//! triggers a re-fetch, so a partial failure never loses unposted work.
+//! allows into one notification and reports a granular
+//! [`BatchOutcome`](wits_util::forge::BatchOutcome) keyed by action, so
+//! reconciliation is **per action**: whatever landed is cleared, whatever
+//! failed stays in the draft to retry. Only a fully-flushed draft triggers a
+//! re-fetch, so a partial failure never loses unposted work.
 
 use anyhow::{Context, Result};
 
@@ -109,7 +110,7 @@ fn submit_one(ctx: &Online, id: &str) -> Result<()> {
 }
 
 /// Flush a non-empty draft. `stale` is any deferred in-flight cleanup to run
-/// first (see [`Store::load_inflight`]).
+/// first (see [`Store::load_inflight`](super::store::Store::load_inflight)).
 fn submit_draft(ctx: &Online, id: &str, mut local: Local, stale: Vec<String>) -> Result<()> {
     let store = &ctx.local.store;
     let forge = ctx.forge.as_ref();

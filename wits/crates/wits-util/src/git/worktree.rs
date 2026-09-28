@@ -380,7 +380,7 @@ impl Repository {
     /// `refs/remotes/<name>/*`, which is what upstream-tracking, `origin/HEAD`,
     /// and therefore trunk detection all read. It cannot un-invent the local
     /// branches an earlier `clone --bare` created; see the migration note in
-    /// `docs/worktree.md`.
+    /// `docs/commands/worktree.rst`, "A bare repository made by `git clone --bare`".
     pub fn ensure_fetch_refspec(&self, name: &str) -> Result<(), GitError> {
         if !self
             .get_config_all(&format!("remote.{name}.fetch"))
@@ -416,8 +416,9 @@ impl Repository {
     /// Move one already-materialised submodule to the commit this checkout's
     /// index pins, **without descending** into its own submodules.
     ///
-    /// The shallow counterpart to [`submodule_update`], for a caller walking the
-    /// nesting itself because each level needs its own decision — which is what
+    /// The shallow counterpart to [`submodule_update`](Self::submodule_update),
+    /// for a caller walking the nesting itself because each level needs its own
+    /// decision — which is what
     /// [`crate::worktree::sync_submodules`] does, since every level borrows from a
     /// different object store.
     pub fn submodule_follow_pin(&self, path: &str) -> Result<(), GitError> {

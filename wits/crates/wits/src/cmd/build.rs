@@ -1,16 +1,18 @@
 //! `wits build` — resolve a plan, honour the branch strategy, run the backend's
 //! steps.
 //!
-//! Its own top-level command (§1.3 of `docs/project/design.md`), but entirely
-//! built on `project`'s read-only core: `project` is the component that knows
-//! what a project *is*; this module only knows how to *build* one.
+//! Its own top-level command (`docs/reference/project-design.rst`, "CLI
+//! surface"; quoted section names below are from the same document), but
+//! entirely built on `project`'s read-only core: `project` is the component that
+//! knows what a project *is*; this module only knows how to *build* one.
 //!
 //! The build systems live in [`wits_util::build_system`], beside the
 //! read-only core they build on: they are purely a build-time concern, so
-//! `project` need not expose them (§1.4). The one thing the core resolver still
-//! needs — translating a toolchain into native env/definitions at L0 (§5.4) —
-//! it gets through the `ToolchainInjector` seam, which each backend implements
-//! and `build` hands to `resolve::plan`.
+//! `project` need not expose them ("Library shape — core plus actions"). The
+//! one thing the core resolver still needs — translating a toolchain into
+//! native env/definitions at L0 ("Single source of truth for compilers,
+//! realised by the backend") — it gets through the `ToolchainInjector` seam,
+//! which each backend implements and `build` hands to `resolve::plan`.
 //!
 //! Under worktree/hybrid the target worktree must already exist — hybrid first
 //! discovers it from Git's inventory — and `build` never creates one
@@ -70,7 +72,8 @@ pub struct BuildArgs {
     /// Override the resolved build directory, ignoring the focus/anchor
     /// `build_dir` template — e.g. to build a `review checkout` in an isolated
     /// dir without touching config. The symmetric partner of `--install-dir`;
-    /// highest priority, verbatim (§5.5).
+    /// highest priority, verbatim ("The CLI override layer and the review
+    /// interaction").
     #[arg(long = "build-dir", value_name = "DIR")]
     pub build_dir: Option<PathBuf>,
     /// Build a specific target.
@@ -92,7 +95,8 @@ pub struct BuildArgs {
 }
 
 /// What a build *does*, not where it resolves to (that is `project::Profile`).
-/// Extra args are verbatim and applied last, at the highest priority (§5.5).
+/// Extra args are verbatim and applied last, at the highest priority (L3 in
+/// "The pipeline").
 /// Lives here, not in `project::model`, because nothing outside this module
 /// reads it — `resolve::plan` receives only its path/extra-argument fields,
 /// passed separately so `project` doesn't need to know this type exists.
@@ -100,11 +104,12 @@ pub struct BuildArgs {
 pub struct BuildOptions {
     pub mode: BuildMode,
     pub install: bool,
-    /// A command-line override of the resolved install prefix (§5.5); `None`
-    /// leaves the resolved focus/anchor `install_dir` in force.
+    /// A command-line override of the resolved install prefix ("The CLI
+    /// override layer and the review interaction"); `None` leaves the resolved
+    /// focus/anchor `install_dir` in force.
     pub install_dir: Option<PathBuf>,
-    /// A command-line override of the resolved build dir (§5.5); `None` leaves
-    /// the resolved focus/anchor `build_dir` template in force.
+    /// A command-line override of the resolved build dir (same section); `None`
+    /// leaves the resolved focus/anchor `build_dir` template in force.
     pub build_dir: Option<PathBuf>,
     pub target: Option<String>,
     pub extra_config_args: Vec<String>,
@@ -360,8 +365,9 @@ fn make_plan(
     branch: Option<&str>,
     be: Option<&dyn Backend>,
 ) -> Result<Plan> {
-    // Select-vs-inject (§5.3): in auto/build-only, an already-configured build
-    // dir with no explicit toolchain request is *trusted* — we skip toolchain
+    // Select-vs-inject ("Selection vs injection, and trusting an existing
+    // config"): in auto/build-only, an already-configured build dir with no
+    // explicit toolchain request is *trusted* — we skip toolchain
     // injection so a rerun does not reconfigure. Injection only shapes the L0
     // env/definitions, never the paths, so the build dir is the same either way.
     //
@@ -430,9 +436,10 @@ fn plan_with(
 ///   the classic stash → switch → build → restore dance.
 /// - **worktree/hybrid** keeps one checkout per branch, so the resolved workdir
 ///   already *is* the answer: either it holds the branch, or the worktree has to be
-///   created, which `build` never does implicitly (§3.4). Switching would be wrong
-///   twice over — there may be no working tree to switch, and moving a worktree onto
-///   another branch pulls it out from under whoever else is in it.
+///   created, which `build` never does implicitly ("What the strategies still
+///   decide"). Switching would be wrong twice over — there may be no working
+///   tree to switch, and moving a worktree onto another branch pulls it out from
+///   under whoever else is in it.
 fn prepare_branch<'a>(
     project: &ProjectData,
     git: &'a Repository,

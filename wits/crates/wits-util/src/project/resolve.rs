@@ -1,5 +1,7 @@
-//! The resolution pipeline (§5): turn a project + a [`Profile`] into concrete
+//! The resolution pipeline: turn a project + a [`Profile`] into concrete
 //! paths and one accumulated [`LogicalConfig`], in a single left-to-right pass.
+//! Quoted section names below are from `docs/reference/project-design.rst`,
+//! whose "Build configuration layering" is this pipeline.
 //!
 //! The pass is strictly one-directional — toolchain → org → project → presets → CLI —
 //! and no later layer can overwrite a toolchain's compiler identity, so nothing
@@ -55,7 +57,8 @@ pub struct Plan {
     pub branch: Option<BranchIdentity>,
     pub build_type: String,
     pub generator: Option<String>,
-    /// The resolved build system. Part of the read-only query surface (§11);
+    /// The resolved build system. Part of the read-only query surface ("The
+    /// crate API (read-only, consumer-driven)");
     /// `build` reads it from project config pre-planning (to pick a backend
     /// before it has a plan), so this copy is currently for consumers/`info`.
     #[allow(dead_code)]
@@ -83,15 +86,15 @@ pub struct Plan {
     /// The resolved focus-over-anchor `install_dir`, if either declared one.
     pub install_dir: Option<PathBuf>,
     /// The presets that applied, in application order — `default_presets`, then
-    /// `applies_when` matches, then `--preset` (§5.6). Reported rather than
+    /// `applies_when` matches, then `--preset` ("Presets"). Reported rather than
     /// recomputed by a caller, because it is the answer to "why is this
     /// definition set" and re-deriving it would be a second implementation of
     /// the selection rules.
     pub presets: Vec<String>,
     pub logical: LogicalConfig,
     /// The final context, so callers can resolve arbitrary templates or inspect
-    /// one path — the read-only query surface (§11) that
-    /// `wits project info --get` is built on.
+    /// one path — the read-only query surface ("The crate API (read-only,
+    /// consumer-driven)") that `wits project info --get` is built on.
     ///
     /// The whole [`Ctx`] rather than its flattened bindings: a binding's value
     /// may itself be a template, so a caller handed the raw map would read
@@ -110,11 +113,12 @@ impl Plan {
 
 /// The one build-system responsibility the pipeline needs: translate a selected
 /// [`Toolchain`]'s canonical fields into a backend's native env/definitions at
-/// L0 (§5.4). This is the *only* seam between the read-only core and the build
-/// systems — the core owns the trait, but the concrete backends that implement
-/// it live entirely in `crate::build_system` (§1.4). The core never names
-/// a backend, and
-/// callers that only resolve *paths* (the `*-dir` queries, `info`) inject nothing.
+/// L0 ("Single source of truth for compilers, realised by the backend"). This
+/// is the *only* seam between the read-only core and the build systems — the
+/// core owns the trait, but the concrete backends that implement it live
+/// entirely in `crate::build_system` ("Library shape — core plus actions"). The
+/// core never names a backend, and callers that only resolve *paths* (the
+/// `*-dir` queries, `info`) inject nothing.
 pub trait ToolchainInjector {
     /// Merge the toolchain's native env/definitions into `cfg`. Runs at L0, so a
     /// later preset or CLI override of the same key wins.
@@ -134,9 +138,11 @@ pub struct PlanInput<'a> {
     /// it merely because branch discovery failed.
     pub branch: Option<&'a str>,
     /// Whether to inject the toolchain's env/definitions (skipped when trusting
-    /// an already-configured build dir; §5.3). Selection still happens.
+    /// an already-configured build dir; "Selection vs injection, and trusting an
+    /// existing config"). Selection still happens.
     pub inject_toolchain: bool,
-    /// The build system's toolchain translator (§5.4). `None` for path-only
+    /// The build system's toolchain translator ("Single source of truth for
+    /// compilers, realised by the backend"). `None` for path-only
     /// resolves; L0 is skipped when it is absent even if `inject_toolchain`.
     pub injector: Option<&'a dyn ToolchainInjector>,
     /// L3 — verbatim overrides, applied last, at the highest priority.
@@ -233,8 +239,9 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
     }
     // CLI-registered `--spec K=V` values, as the `spec.*` namespace. Only what
     // was passed is bound, so a template that references an unsupplied
-    // `{{spec.X}}` fails loudly (the engine errors on an unknown path, §6.1) —
-    // the "must be specified to be used" contract, enforced rather than guessed.
+    // `{{spec.X}}` fails loudly (the engine errors on an unknown path, "Template
+    // engine (Jinja)") — the "must be specified to be used" contract, enforced
+    // rather than guessed.
     for (key, value) in &profile.specs {
         ctx.set(&format!("spec.{key}"), Value::from(value));
     }
@@ -246,10 +253,11 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
     };
 
     // --- Paths -------------------------------------------------------------
-    // A `--work-dir` override wins over the strategy (§5.5, highest priority,
-    // verbatim): the caller has a checkout in hand and wants the build sourced
-    // from it, so we neither resolve `worktree_dir` nor assume the in-place
-    // clone. The resolved checkout is stored under the build repo's namespace,
+    // A `--work-dir` override wins over the strategy (highest priority, verbatim;
+    // "The CLI override layer and the review interaction"): the caller has a
+    // checkout in hand and wants the build sourced from it, so we neither
+    // resolve `worktree_dir` nor assume the in-place clone. The resolved
+    // checkout is stored under the build repo's namespace,
     // so a bare repository's `path` remains the Git common directory rather than
     // being mistaken for a source tree.
     // Resolve a workdir for every named repo. `path` remains the repository
@@ -337,8 +345,8 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
     // --- Pipeline ----------------------------------------------------------
     let mut logical = LogicalConfig::default();
 
-    // L0 — toolchain injection. The build system's translator (§5.4) is supplied
-    // by the caller; a path-only resolve has none, and simply skips this layer.
+    // L0 — toolchain injection. The build system's translator is supplied by the
+    // caller; a path-only resolve has none, and simply skips this layer.
     if input.inject_toolchain {
         if let (Some(tc), Some(inj)) = (&toolchain, input.injector) {
             inj.apply_toolchain(tc, &mut logical);
@@ -347,7 +355,8 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
     }
 
     // L0.5 — org config. An org's environment/definitions are its unconditional
-    // contribution to every project that joins it (§5.6), the way a project's own
+    // contribution to every project that joins it ("Org config — inherited
+    // unconditionally; org presets still need naming"), the way a project's own
     // are to its build; only its presets (L2) have to be named to take effect.
     // Applied below the project so any inherited key can be overridden simply by
     // declaring it. An org that was never declared contributes nothing, exactly

@@ -20,12 +20,12 @@
 //! ## Declared, applied once, then only verified
 //!
 //! Applying the mask to a tree that already has the content is destructive, and
-//! `update` never touches a working tree (`docs/project/design.md` §7). So the
-//! split is: `clone` **applies** it (the tree is ours, still being built, so
-//! removing what config says not to keep is finishing construction, not
-//! repairing reality), while `update` and `project check` only **verify** and
-//! fail loudly. Converting an existing checkout is your `git` call —
-//! [`remedy`] prints exactly which.
+//! `update` never touches a working tree (`docs/reference/project-design.rst`,
+//! "update / clone semantics"). So the split is: `clone` **applies** it
+//! (the tree is ours, still being built, so removing what config says not to
+//! keep is finishing construction, not repairing reality), while `update` and
+//! `project check` only **verify** and fail loudly. Converting an existing
+//! checkout is your `git` call — [`remedy`] prints exactly which.
 //!
 //! Verification is deliberately **behavioural, not textual**: it asks "is
 //! anything a skip pattern excludes still materialised?", never "does the sparse

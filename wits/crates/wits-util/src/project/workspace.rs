@@ -1,10 +1,12 @@
 //! Loading the project registry: find the config root, scan it, and route each
 //! file's sections into projects, toolchains, and orgs.
 //!
-//! Configuration is content-addressed (§10): files live anywhere under one root
-//! and declare what they are by their sections, so loading is "read every
-//! `*.toml`, look at what's inside, file it accordingly". A project's *name* is
-//! its file stem; its *org* is explicit (`project.org`). The same `(org, name)`
+//! Configuration is content-addressed (`docs/reference/project-design.rst`,
+//! "Configuration topology"; quoted section names below are from the same
+//! document): files live anywhere under one root and declare what they are by
+//! their sections, so loading is "read every `*.toml`, look at what's inside,
+//! file it accordingly". A project's *name* is its file stem; its *org* is
+//! explicit (`project.org`). The same `(org, name)`
 //! twice is a conflict, not a silent override — cross-file layering of one
 //! project was a foot-gun we don't reproduce.
 //!
@@ -183,7 +185,7 @@ impl Workspace {
         self.projects.values()
     }
 
-    /// Load the registry from the resolved config root (§10.1).
+    /// Load the registry from the resolved config root ("Config-root resolution").
     pub fn load() -> Result<Self> {
         let root = crate::config::resolve_root(&CONFIG_ROOT)?;
         Self::load_from(&root)
@@ -662,8 +664,9 @@ impl Workspace {
     }
 }
 
-/// Where `project` keeps its config tree (§10.1): `$WITS_PROJECT_CONFIG`, then
-/// `$XDG_CONFIG_HOME/wits/project`, then `$HOME/.wits/project`.
+/// Where `project` keeps its config tree ("Config-root resolution"):
+/// `$WITS_PROJECT_CONFIG`, then `$XDG_CONFIG_HOME/wits/project`, then
+/// `$HOME/.wits/project`.
 const CONFIG_ROOT: crate::config::Root<'static> = crate::config::Root {
     env: "WITS_PROJECT_CONFIG",
     xdg: "wits/project",
@@ -671,7 +674,7 @@ const CONFIG_ROOT: crate::config::Root<'static> = crate::config::Root {
 };
 
 /// Classify a CLI positional as a filesystem path rather than a name: `.`/`..`
-/// or a leading `.`, `/`, or `~` (§1). Everything else is a name.
+/// or a leading `.`, `/`, or `~` ("CLI contract"). Everything else is a name.
 pub fn looks_like_path(token: &str) -> bool {
     token == "."
         || token == ".."

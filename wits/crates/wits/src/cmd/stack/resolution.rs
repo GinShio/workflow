@@ -275,7 +275,8 @@ pub fn plan_scoped(
 }
 
 /// The scope decision, factored out from git so it can be exercised on literal
-/// forests. See the design doc, §2, for the rationale behind each branch.
+/// forests. The rationale behind each branch is in
+/// `docs/reference/stack-design.rst`, "Scope: which branches a verb touches".
 fn select(
     topology: Topology,
     base_branch: String,

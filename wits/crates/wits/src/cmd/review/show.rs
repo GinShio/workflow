@@ -282,10 +282,12 @@ fn pending_comment(id: &str, body: &str) -> Comment {
     }
 }
 
-/// Recompute each line thread's `outdated` locally (design.md §6): a thread is
-/// outdated when the line(s) it is anchored to fall inside a region the file
-/// changed between the commit the comment was written on and the current head.
-/// Uniform across forges and offline, from the objects `fetch` already pins.
+/// Recompute each line thread's `outdated` locally: a thread is outdated when
+/// the line(s) it is anchored to fall inside a region the file changed between
+/// the commit the comment was written on and the current head. Uniform across
+/// forges and offline, from the objects `fetch` already pins
+/// (`docs/reference/review-design.rst`, "Outdating — anchor to what you
+/// reviewed, let the forge mark it").
 ///
 /// The anchor's line number is a line in *its own* commit — which is the **old**
 /// side of the `commit..head` diff — so a `New`-side anchor intersects the diff's

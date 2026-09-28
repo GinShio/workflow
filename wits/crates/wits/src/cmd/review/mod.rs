@@ -10,7 +10,7 @@
 //! repo can be reviewed without a local branch. And you **author by editing a
 //! local file**, not by running commands — only two verbs touch the network,
 //! `fetch` (read) and `submit` (write); in between you edit `local.json` and
-//! `submit` flushes it as one batch. See `docs/review/design.md`.
+//! `submit` flushes it as one batch. See `docs/reference/review-design.rst`.
 
 mod checkout;
 mod config;

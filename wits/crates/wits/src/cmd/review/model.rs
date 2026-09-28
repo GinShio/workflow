@@ -1,8 +1,8 @@
 //! The review model: the JSON types that back the three-file store and the
 //! `--json` read contract.
 //!
-//! Every MR is described by three files (see `docs/review/store.md`), all JSON
-//! because they are API-shaped data:
+//! Every MR is described by three files (see `docs/reference/review-store.rst`),
+//! all JSON because they are API-shaped data:
 //!
 //! - [`Info`]    — the MR's necessary metadata and diff state (drives the inbox).
 //! - [`Comments`] — everything that happened on the forge (a refetchable cache).

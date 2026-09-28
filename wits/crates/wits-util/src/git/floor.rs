@@ -389,7 +389,7 @@ impl Repository {
 
     /// Whether the working tree has uncommitted **tracked** changes — staged or
     /// modified files, untracked excluded. This is the "would moving HEAD bury
-    /// work?" question for a *re-point* ([`repoint`](super::Repository::repoint)):
+    /// work?" question for a *re-point* ([`repoint`](crate::worktree::repoint)):
     /// an untracked file is scratch a HEAD move cannot bury, so it must not block
     /// one, where the broader [`is_dirty`](Self::is_dirty) — which feeds the
     /// auto-stash and the reclaim guards — must count it.

@@ -4,17 +4,18 @@
 //! This is the one place that knows what a project *is* — `model`, `workspace`,
 //! and `resolve` describe and resolve without side effects. The git surface
 //! those actions drive is *not* here: it moved to the unified [`crate::git`]
-//! module (as [`crate::git::Git`]), beside the read/ref floor it shares a binary
-//! with. This core lives under `util` (not `cmd`) because it is a self-contained
-//! subsystem the commands *compose*, not a command itself: the `wits project`
-//! CLI shell (`cmd::project`), and the separate `wits build` / `wits update`
-//! commands, are all consumers of this public API ([`resolve_target`],
-//! `resolve::plan`), not peers sharing its internals.
+//! module (as [`crate::git::Repository`]), beside the read/ref floor it shares
+//! a binary with. This core lives under `util` (not `cmd`) because it is a
+//! self-contained subsystem the commands *compose*, not a command itself: the
+//! `wits project` CLI shell (`cmd::project`), and the separate `wits build` /
+//! `wits update` commands, are all consumers of this public API
+//! ([`resolve_target`], `resolve::plan`), not peers sharing its internals.
 //!
 //! The build systems are *not* here either: they are a build-time concern, so
 //! the core never names a backend. Its only tie to them is the
 //! `resolve::ToolchainInjector` seam, which the core owns and each backend in
-//! [`crate::build_system`] implements. See `docs/project/design.md` §1.4.
+//! [`crate::build_system`] implements. See `docs/reference/project-design.rst`,
+//! "Library shape — core plus actions".
 
 pub mod context;
 pub mod model;
@@ -34,7 +35,7 @@ use workspace::{expand_tilde, looks_like_path, ProjectData, Workspace};
 /// The core's public entry point for turning a `--target`-shaped positional
 /// into a project: `wits project` (`info`/path queries), `wits build`, and `wits update`
 /// all funnel through here, so the name-vs-path rules stay in one place
-/// (§1.4 of `docs/project/design.md`).
+/// (`docs/reference/project-design.rst`, "CLI contract").
 pub fn resolve_target<'a>(ws: &'a Workspace, target: Option<&str>) -> Result<&'a ProjectData> {
     match target {
         Some(t) if looks_like_path(t) => {

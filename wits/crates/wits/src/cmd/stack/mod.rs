@@ -7,8 +7,9 @@
 //! re-run that step, not a monolith. `slice` is the one local authoring verb.
 //!
 //! All four share a single notion of *scope* (which branches this invocation
-//! touches), computed once in `resolution`; see `docs/stack/design.md` for the
-//! reasoning behind the topology rules and the forge abstraction.
+//! touches), computed once in `resolution`; see
+//! `docs/reference/stack-design.rst` for the reasoning behind the topology
+//! rules and the forge abstraction.
 
 mod anno;
 mod decorate;

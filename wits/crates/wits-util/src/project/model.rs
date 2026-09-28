@@ -18,6 +18,8 @@
 //! names the paths this checkout never materialises, which is what makes the
 //! borrow usable — the borrower's own copy of the component stays unmaterialised
 //! rather than shadowing the one it borrowed.
+//!
+//! Quoted section names below are from `docs/reference/project-design.rst`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -28,8 +30,9 @@ use serde::Deserialize;
 use crate::remote::Role;
 
 /// A whole config file, parsed. Every section is optional so one file may carry
-/// a project, toolchains, and an org at once (§10.2). Unknown keys are rejected
-/// so a typo like `[toolchian]` fails loudly instead of being silently ignored.
+/// a project, toolchains, and an org at once ("One project per file; registries
+/// merge"). Unknown keys are rejected so a typo like `[toolchian]` fails loudly
+/// instead of being silently ignored.
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct RawFile {
@@ -495,8 +498,8 @@ impl BranchStrategy {
 /// The axes that affect *resolution* (paths, identity). Built from CLI flags,
 /// never from a file. Separated from `build::BuildOptions` on purpose: these
 /// change what `build_dir`/repo `workdir` resolve to; those change only the
-/// commands, and are the build action's own business (§1) — the core neither
-/// defines nor reads them.
+/// commands, and are the build action's own business ("The read/act split") —
+/// the core neither defines nor reads them.
 #[derive(Debug, Clone, Default)]
 pub struct Profile {
     pub build_type: Option<String>,
@@ -522,8 +525,9 @@ pub struct Profile {
 }
 
 /// A toolchain after selection: canonical fields plus verbatim pass-through
-/// blocks. Backends translate the canonical fields into native form (§7); the
-/// pass-through blocks are applied as-is.
+/// blocks. Backends translate the canonical fields into native form ("Single
+/// source of truth for compilers, realised by the backend"); the pass-through
+/// blocks are applied as-is.
 #[derive(Debug, Clone, Default)]
 pub struct Toolchain {
     pub name: String,
@@ -543,7 +547,8 @@ pub struct Toolchain {
     pub definitions: Vec<(String, minijinja::Value)>,
 }
 
-/// The accumulated, resolved build configuration produced by the pipeline (§5).
+/// The accumulated, resolved build configuration produced by the pipeline
+/// ("Build configuration layering").
 /// `definitions` keep their type (bool/int/string) so a backend can spell each
 /// one the way its tool expects.
 #[derive(Debug, Clone, Default)]

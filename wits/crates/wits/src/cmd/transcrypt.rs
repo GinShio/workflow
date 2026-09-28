@@ -16,7 +16,8 @@
 //! would be worse than stopping.
 //!
 //! These subcommands are meant to be invoked by git, not by hand. Configure
-//! them in `.git/config` and `.gitattributes`; see `docs/transcrypt.md`.
+//! them in `.git/config` and `.gitattributes`; see
+//! `docs/commands/transcrypt.rst`.
 
 use std::io::{Read, Write};
 

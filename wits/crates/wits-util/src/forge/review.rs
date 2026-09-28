@@ -4,8 +4,8 @@
 //! Where the MR half (in `super`) is four small primitives, review touches
 //! corners of the platforms that do *not* normalize cleanly — batched reviews,
 //! approve-as-a-separate-call, GraphQL-only thread resolution. Those differences
-//! are trapped inside each host module and surfaced honestly in
-//! `docs/review/design.md`'s capability matrix; here we define only the shapes
+//! are trapped inside each host module and surfaced honestly in the capability
+//! matrix of `docs/reference/review-design.rst`; here we define only the shapes
 //! that cross the boundary. Nothing above the [`Forge`](super::Forge) trait ever
 //! sees raw JSON.
 
@@ -268,7 +268,9 @@ impl BatchAction {
 /// attempt left behind (a GitHub pending-review id, GitLab draft-note ids), so
 /// this attempt can clean them up **before** doing anything — the "delete next
 /// time, keyed to what we recorded" discipline that makes retries idempotent
-/// without ever touching drafts the user created by hand (§ failure handling).
+/// without ever touching drafts the user created by hand
+/// (`docs/reference/review-design.rst`, "Submit — batched, concurrent,
+/// reconciled per action").
 #[derive(Debug, Clone)]
 pub struct ReviewBatch {
     pub verdict: Option<Verdict>,

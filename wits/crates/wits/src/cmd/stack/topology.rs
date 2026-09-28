@@ -189,8 +189,9 @@ impl Topology {
         out
     }
 
-    /// The navigation chains to render in a node's MR description (§8 of the
-    /// design). A fork-point yields one chain per child; a linear node yields
+    /// The navigation chains to render in a node's MR description
+    /// (`docs/reference/stack-design.rst`, "Annotation rendering (anno)"). A
+    /// fork-point yields one chain per child; a linear node yields
     /// one; a leaf yields just its own lineage. Each downstream walk stops at the
     /// next fork-point, because that fork renders its own multi-chain block and
     /// repeating its subtree here would explode the description.
