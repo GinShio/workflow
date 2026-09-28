@@ -6,7 +6,7 @@ toolchain = "clang"
 default_presets = ["common"]
 
 [repos.main]
-path = "/home/russell/Projects/{{project.org}}/{{project.name}}"
+path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
 build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
 install_dir = "{{build_dir}}"
 main_branch = "master"

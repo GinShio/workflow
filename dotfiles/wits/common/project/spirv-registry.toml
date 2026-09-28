@@ -1,5 +1,5 @@
 [project]
-org = "khronos"
+org = "{{@@ wits.projects.source_info['spirv-registry'].org @@}}"
 
 [repos.main]
 path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
