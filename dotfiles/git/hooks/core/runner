@@ -66,6 +66,12 @@ warm_staged_cache() {
 # `[^.]+$` branch catches — and nothing belonging to *other* hooks. A twin the
 # user already set (their one-shot override) always wins, so we fill only the
 # unset ones; _WITS_CONFIG_WARMED then tells cfg_* an unset twin means "unset".
+#
+# The list is read last line first. --get-regexp prints every occurrence of a
+# key in file order (system, global, local, worktree, then `-c`), and git
+# answers a repeated key with the last one (git-config(1), "the last value found
+# taking precedence"); since only the first twin exported for a key sticks,
+# reading backwards is what makes a repository's own setting beat the global one.
 warm_config() {
     [ -n "${_WITS_CONFIG_WARMED:-}" ] && return 0
     _re="^wits\.hooks\.([^.]+\$|$1\.)"
@@ -74,7 +80,9 @@ warm_config() {
         _cfg_key=${_cfg_line%% *}
         case "$_cfg_line" in
             *' '*) _cfg_val=${_cfg_line#* } ;;   # value keeps its trailing spaces
-            *)     _cfg_val= ;;
+            # A key written without `= <value>` is git's boolean true
+            # (git-config(1), "Values"); --get-regexp prints just its name.
+            *)     _cfg_val=true ;;
         esac
         _cfg_twin=$(_cfg_env_name "$_cfg_key")
         # A crafted config subsection could produce a twin that isn't a clean
@@ -86,7 +94,8 @@ warm_config() {
             export "$_cfg_twin=$_cfg_val"
         fi
     done <<_WITS_CFG_EOF
-$(git config --get-regexp "$_re" 2>/dev/null)
+$(git config --get-regexp "$_re" 2>/dev/null |
+    awk '{ line[NR] = $0 } END { for (i = NR; i > 0; i--) print line[i] }')
 _WITS_CFG_EOF
     _WITS_CONFIG_WARMED=1
     export _WITS_CONFIG_WARMED
