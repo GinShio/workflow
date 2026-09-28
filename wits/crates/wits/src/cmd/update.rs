@@ -3,9 +3,10 @@
 //! The default action never switches branches. A conventional feature checkout
 //! fast-forwards the `main_branch` ref without touching its tree. A bare-backed
 //! repo fast-forwards the linked worktree already holding main, or updates only
-//! the bare ref when no such worktree remains. Remote reconciliation is
-//! additive: missing remotes, mirror push-URLs, and a missing fetch refspec are
-//! added, existing ones never touched.
+//! the bare ref when no such worktree remains. Remote reconciliation converges
+//! the remotes the config declares — a missing one is added, a drifted URL is
+//! corrected, the push-URL set is replaced — repairs a missing fetch refspec,
+//! and never touches a remote the config does not name.
 //!
 //! A submodule is just a nested repo, so it gets the same treatment; undeclared
 //! nested submodules are refreshed to their recorded commit (never `--init`,

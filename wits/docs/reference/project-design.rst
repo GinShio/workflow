@@ -134,7 +134,8 @@ The rule the layout follows: an action with its own top-level verb has no
 business reaching into ``project``'s private internals, only its public API.
 ``build`` and ``update`` moved out for exactly that reason, and it is why
 ``wits worktree`` — which took over the one mutating action ``project`` used
-to nest — shares no code with ``project`` at all, only a path.
+to nest — shares nothing with ``project`` but a path and the remote-role lookup
+(``project::remotes::for_checkout``) every command makes.
 
 Out of scope
 ~~~~~~~~~~~~
@@ -1365,7 +1366,8 @@ The ``--work-dir`` override is what remains of the seam, and it is enough:
 ``project info --get repo.workdir`` returns the deterministic path (worktree) or the
 discovered path/fallback suggestion (hybrid), ``wits worktree create`` makes
 one anywhere, and ``build --work-dir`` builds from whatever you hand it. The
-two components meet at a path and share no code.
+two components meet at a path; the only project code ``wits worktree`` runs is
+the remote-role lookup every command shares.
 
 What genuinely went away is the **build-dir teardown** — nothing else deletes
 a branch's ``build_dir``, because ``wits worktree`` is project-agnostic by
@@ -1404,8 +1406,8 @@ and ``update`` actions. The surface as it exists (the annotated form lives in
 The consumers are the ``wits`` commands themselves: ``build``/``update`` and
 the ``project`` CLI drive ``resolve::plan``/``resolve_target``; git hooks and
 cleanup scripts lean on ``work_dir``/``build_dir`` resolution for an arbitrary
-branch. (``stack`` deliberately resolves its base branch from the remote HEAD,
-not from this registry — see :doc:`stack-design`.)
+branch. (``stack`` resolves its base branch from the remote HEAD, not from
+this registry — see :doc:`stack-design`.)
 
 CLI contract
 ~~~~~~~~~~~~

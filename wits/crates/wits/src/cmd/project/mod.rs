@@ -13,7 +13,8 @@
 //! context`, which created a branch's worktree and tore down its build dir;
 //! worktrees are now [`wits worktree`](crate::cmd::worktree)'s, which does the
 //! job for any repository rather than only a registered one. `project` and
-//! worktrees meet at a path and nowhere else — see `build`'s `--work-dir`.
+//! worktrees meet at a path — see `build`'s `--work-dir` — and at the remote
+//! roles `wits worktree` asks the registry for, like every other command.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

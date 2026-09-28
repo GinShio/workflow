@@ -156,10 +156,11 @@ fn mv(repo: &Repository, roles: &RemoteRoles, args: &MvArgs) -> anyhow::Result<(
 /// Follow a branch that changed its name, keeping its entry otherwise untouched.
 ///
 /// `git branch -m` leaves the forest naming a branch that no longer exists, and
-/// the file is the only record of where that line of work sat. This is the verb
-/// the `reference-transaction` hook reaches for when it recognises a deletion as
-/// a rename, and it is a pure file edit: the git rename has already happened, and
-/// this command never performs one (see `docs/commands/stack.rst`).
+/// the file is the only record of where that line of work sat. The
+/// `reference-transaction` hook can recognise that a deletion may be a rename but
+/// never what the new name is, so it leaves the entry and points the user here.
+/// It is a pure file edit: the git rename has already happened, and this command
+/// never performs one (see `docs/commands/stack.rst`).
 ///
 /// Unlike `rm` and `mv`, the base branch is **not** protected. A renamed base is
 /// exactly the case where refusing would leave the forest naming a dead branch,
@@ -172,8 +173,7 @@ fn rename(repo: &Repository, args: &RenameArgs) -> anyhow::Result<()> {
         anyhow::bail!("'{from}' is already the entry's name");
     }
     // The same guard `mv` applies, for the same reason: the new name has to be a
-    // branch that exists, so a typo cannot mint a phantom entry. The hook path
-    // satisfies it inherently — it reads the new name off a live ref.
+    // branch that exists, so a typo cannot mint a phantom entry.
     if !repo.branch_tips().contains_key(to) {
         anyhow::bail!("branch '{to}' does not exist locally");
     }

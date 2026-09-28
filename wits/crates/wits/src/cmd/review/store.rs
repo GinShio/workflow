@@ -3,8 +3,9 @@
 //! Each MR gets a directory holding `info.json` (metadata + diff state),
 //! `comments.json` (the forge's discussion, a cache), and `local.json` (your
 //! unsubmitted actions — the one file you edit). The root is resolved on the
-//! `WITS_REVIEW_DIR` → `$XDG_STATE_HOME/wits/review` → `$GIT_DIR/wits/review`
-//! ladder, then keyed by the repo's `host/owner/repo` so one central root can
+//! `WITS_REVIEW_DIR` → `$XDG_STATE_HOME/wits/review` →
+//! `<common-git-dir>/wits/review` ladder, then keyed by the repo's
+//! `host/owner/repo` so one central root can
 //! hold many repos and a store migrates cleanly between roots.
 
 use std::fs;

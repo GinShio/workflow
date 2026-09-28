@@ -389,7 +389,7 @@ worktree to exist and never creates one implicitly:
 
 Creating and reclaiming worktrees belongs to :doc:`worktree`, which does it
 for **any** repository rather than only a registered one. ``project`` and
-worktrees meet at a path and nowhere else: ask ``project info --get
+worktrees meet at a path: ask ``project info --get
 ``repo.workdir`` where the
 strategy says the checkout goes, or skip the registry entirely and point
 ``build --work-dir`` at a worktree you made yourself.

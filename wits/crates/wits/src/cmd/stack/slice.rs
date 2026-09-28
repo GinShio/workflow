@@ -127,7 +127,7 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, base: Option<&str>) -> anyhow
     let branches = chain_branches(parse_assignments(&saved), &base);
 
     if branches.is_empty() {
-        log::info!("no update-ref lines were uncommented; .git/machete left unchanged");
+        log::info!("no update-ref lines were uncommented; the machete file is unchanged");
         return Ok(());
     }
 

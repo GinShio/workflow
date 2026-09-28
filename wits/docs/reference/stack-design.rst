@@ -210,23 +210,20 @@ scope.
 Base branch resolution
 ~~~~~~~~~~~~~~~~~~~~~~
 
-In order: the ``project`` subcommand → the **merge target's** default branch
-(its remote HEAD) → first existing of ``main``/``master``/``trunk``. Resolved
-once per run.
+In order: the **merge target's** default branch (its remote HEAD) → first
+existing of ``main``/``master``/``trunk``. Resolved once per run.
 
 Only the merge target is consulted, not both remotes in turn. An MR at the root
 of the tree targets the base branch *in the repository it merges into*, so the
 push side's default branch answers a different question; asking it as a fallback
 was only ever a way to paper over an unresolved merge target.
 
-The right source of truth is the future ``project`` subcommand: given a
-checkout's source path it will answer "what project is this, and what is its
-main branch?". Until it exists we skip straight to the two mechanical
-fallbacks above. We deliberately do **not** add a ``wits.stack.base-branch``
-config key — the answer should come from project identity, not a
-hand-maintained per-repo setting, and an override now would only be a thing to
-migrate away from later. If nothing resolves, that is a hard error, not a
-guess.
+The project registry is not consulted, although :doc:`/commands/project` can
+answer "what project is this checkout, and what is its main branch?"; whether
+the base should come from there is recorded under `Open questions / future`_.
+We deliberately do **not** add a ``wits.stack.base-branch`` config key — the
+answer should come from project identity, not a hand-maintained per-repo
+setting. If nothing resolves, that is a hard error, not a guess.
 
 MR base mapping
 ~~~~~~~~~~~~~~~
@@ -480,6 +477,8 @@ invocation, not a standing preference.
 Open questions / future
 -----------------------
 
-* a future ``project``-subcommand integration: derive base/main branch (and
-  more) from a source path once that tool exists.
+* **open** whether a declared checkout's base branch should be the project
+  registry's ``main_branch`` rather than the merge target's remote HEAD — the
+  git hooks' branchless bootstrap already asks the registry first, so the two
+  can disagree today.
 * future CI status read-back into the annotation block.

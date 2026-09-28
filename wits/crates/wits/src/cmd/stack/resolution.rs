@@ -187,11 +187,11 @@ fn machete_lock_path(repo: &Repository) -> anyhow::Result<PathBuf> {
     Ok(PathBuf::from(path))
 }
 
-/// Resolve the base branch. The authoritative source is the future `project`
-/// subcommand; until it exists we fall back to the merge target's remote HEAD,
-/// then to whichever conventional trunk name actually exists locally. There is
-/// no config override on purpose — the answer should come from project identity,
-/// not a hand-maintained setting (see the design doc, §5.1).
+/// Resolve the base branch: the merge target's remote HEAD, then whichever
+/// conventional trunk name actually exists locally. There is no config override
+/// on purpose — the answer should come from project identity, not a
+/// hand-maintained setting (`docs/reference/stack-design.rst`, "Base branch
+/// resolution").
 pub fn base_branch(repo: &Repository, roles: &RemoteRoles) -> anyhow::Result<String> {
     // An MR at the root of the tree targets the base branch *in the repository it
     // merges into*. Only that one remote is consulted — the push side's default
@@ -265,7 +265,7 @@ pub fn plan_scoped(
             let known = repo.rev_parse(branch).is_some() || load_topology(repo)?.contains(branch);
             if !known {
                 anyhow::bail!(
-                    "no such branch '{branch}': not a local branch and not recorded in .git/machete"
+                    "no such branch '{branch}': not a local branch and not recorded in the machete file"
                 );
             }
             plan(repo, roles, Some(branch), false)
@@ -285,7 +285,7 @@ fn select(
 ) -> anyhow::Result<StackPlan> {
     if all {
         if topology.is_empty() {
-            anyhow::bail!("no .git/machete stacks to operate on");
+            anyhow::bail!("no stacks are recorded in the machete file");
         }
         let selected = topology
             .all()

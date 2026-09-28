@@ -117,8 +117,8 @@ Base resolution and per-branch base
 The **base branch** is resolved once: the merge target's remote HEAD (the
 ``upstream`` role's holder, else ``origin``'s), then the first of
 ``main``/``master``/``trunk``
-that exists. (A future ``project`` subcommand will supply it from project
-identity; there is deliberately no config key.) If nothing resolves, that is a
+that exists. (The project registry is not consulted — see :doc:`stack-design`
+— and there is deliberately no config key.) If nothing resolves, that is a
 hard error.
 
 A branch's **MR base** is its parent in the forest, or the base branch when the

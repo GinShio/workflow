@@ -5,10 +5,12 @@
 
 Make, inspect, and reclaim git worktrees — in **any** repository.
 
-``wits worktree`` reads nothing from the project registry and keeps no state of
-its own. It works on whatever repo you are standing in, asking git for
-everything it needs, so it serves a registered project and a repo you cloned
-five minutes ago equally well.
+``wits worktree`` needs no project declaration and keeps no state of its own. It
+works on whatever repo you are standing in, asking git for everything it needs
+— the project registry is consulted only for which remote holds the ``origin``
+and ``upstream`` roles, the question every ``wits`` command asks, and a repo no
+project declares answers it by remote name — so it serves a registered project
+and a repo you cloned five minutes ago equally well.
 
 It is deliberately *not* a wrapper around ``git worktree``. Each verb does
 **one** thing, and each exists because git leaves a gap:
@@ -381,9 +383,10 @@ does not exist yet and re-downloads the nested module in full — exactly the
 cost a recursive layout exists to avoid. Walking one level at a time seeds each
 level's store before the level is materialised.
 
-Every later ``wits update`` is the same discipline: ensure remotes
-(additive), one ``git fetch`` of the sync remote, fast-forward the worktree
-holding ``main`` (or ``update-ref`` the bare ref when none does), and refresh
+Every later ``wits update`` is the same discipline: converge the declared
+remotes, fetch each of them (only the merge target's fetch may fail the run),
+fast-forward the worktree holding ``main`` (or ``update-ref`` the bare ref when
+none does), and refresh
 submodules only at already-materialised paths. No branch is ever switched, no
 sparse cone expanded, no ``--init`` issued. ``--init`` appears only on a
 *fresh working-tree event* — clone, or worktree creation.

@@ -1,9 +1,12 @@
 //! `wits worktree` — make, inspect, and reclaim git worktrees, in any repo.
 //!
 //! Deliberately **project-agnostic**: it works on whatever repository you are
-//! standing in, reads nothing from the project registry, and keeps no state of
-//! its own. Everything it needs it asks git. That is what lets it serve both a
-//! registered project and a repo you cloned five minutes ago.
+//! standing in and keeps no state of its own. Everything it needs it asks git,
+//! except which remote holds the `origin` and `upstream` roles — the trunk
+//! `merged` is judged against — which comes from [`remotes::for_checkout`] like
+//! in every other command, and answers by remote name where no project declares
+//! the checkout. That is what lets it serve both a registered project and a
+//! repo you cloned five minutes ago.
 //!
 //! It is not a wrapper around `git worktree`. Three verbs exist because git
 //! leaves three gaps:

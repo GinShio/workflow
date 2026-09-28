@@ -1,6 +1,6 @@
 //! The machete forest: the dependency tree, and the tree algebra over it.
 //!
-//! `.git/machete` is the one piece of state the stack tool reads to know how
+//! The machete file is the one piece of state the stack tool reads to know how
 //! branches relate — who sits on whom. It is a forest, not just a chain: a branch
 //! can fork into several. This module owns parsing that file, writing it back,
 //! and the handful of tree queries the verbs need. It is deliberately free of any
@@ -552,7 +552,7 @@ mod tests {
     #[test]
     fn deleting_a_middle_line_reattaches_the_child_to_the_grandparent() {
         // The recommended way to drop a middle branch is to delete its line in
-        // .git/machete. Parsing is indent-agnostic, so the orphaned child does
+        // the machete file. Parsing is indent-agnostic, so the orphaned child does
         // not even need re-indenting: C, left at its old depth with B gone,
         // still attaches to A (the nearest shallower line).
         let t = Topology::parse("main\n    A\n            C\n");
