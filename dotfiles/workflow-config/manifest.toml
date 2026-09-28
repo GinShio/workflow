@@ -1,6 +1,6 @@
 [[install]]
 id = 'workflow-config'
-dst = '~/.config/workflow/gputest/'
+dst = '~/.config/wits/gputest/'
 path = 'gputest/'
 capabilities = ['develop']
 planes = ['user']
