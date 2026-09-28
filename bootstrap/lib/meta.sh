@@ -41,8 +41,8 @@ meta_field() {
 # A comma-separated field, one item per line. Prints nothing when the field is
 # absent or empty.
 meta_list() {
-    meta_field "$1" "$2" | tr ',' '\n' | sed 's/^[ \t]*//; s/[ \t]*$//' |
-        grep -v '^$' || true
+    meta_field "$1" "$2" | tr ',' '\n' |
+        sed 's/^[[:blank:]]*//; s/[[:blank:]]*$//' | grep -v '^$' || true
 }
 
 # meta_keys <file>
