@@ -19,22 +19,10 @@
 # relative paths -- both `git ls-files`' output and the chmod targets.
 #
 # One batched scan over the whole index instead of a per-file `git check-attr`.
-# Output is one `path: filter: <value>` line per path; a value the crypt-filter
-# predicate accepts earns its path a chmod. Paths the attribute never touched
-# are skipped.
-git ls-files |
-    git check-attr --stdin filter 2>/dev/null |
-while IFS= read -r _line || [ -n "$_line" ]; do
-    case "$_line" in
-        *": filter: "*) ;;
-        *) continue ;;
-    esac
-    _filter=${_line##*: filter: }
-    if is_crypt_filter "$_filter"; then
-        _path=${_line%: filter: *}
-        chmod 0600 "$_path" 2>/dev/null ||
-            log_debug "encrypted-modes: chmod failed for $_path"
-    fi
+git ls-files | crypt_filtered |
+while IFS= read -r _path || [ -n "$_path" ]; do
+    chmod 0600 "$_path" 2>/dev/null ||
+        log_debug "encrypted-modes: chmod failed for $_path"
 done
 
 exit 0

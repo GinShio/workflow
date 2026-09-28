@@ -479,9 +479,9 @@ is_staged_text() {
 }
 
 # True when a filter name is an encrypting clean/smudge filter (transcrypt,
-# git-crypt). A predicate over the *name* rather than a path, so a batch
-# `check-attr` scan over the whole tree and the per-file `is_encrypted` share
-# one definition of what counts as encrypted.
+# git-crypt). A predicate over the *name* rather than a path, so the batched
+# `crypt_filtered` and the per-file `is_encrypted` share one definition of what
+# counts as encrypted.
 is_crypt_filter() {
     case "$1" in
         transcrypt|transcrypt-*|git-crypt|git-crypt-*|crypt|crypt-*) return 0 ;;
@@ -489,10 +489,36 @@ is_crypt_filter() {
     esac
 }
 
+# Echo which of the paths on stdin (one per line) an encrypting filter owns, in
+# one batched `check-attr` rather than one per path. The batch is the point: a
+# check-attr fork per path is what a commit or an index of thousands of files
+# cannot afford, and every caller that asks about many paths goes through here.
+crypt_filtered() {
+    git check-attr --stdin filter 2>/dev/null |
+        while IFS= read -r _cf_line || [ -n "$_cf_line" ]; do
+            case "$_cf_line" in
+                *": filter: "*) ;;
+                *) continue ;;
+            esac
+            is_crypt_filter "${_cf_line##*: filter: }" || continue
+            printf '%s\n' "${_cf_line%: filter: *}"
+        done
+}
+
 # True when a file is managed by an encrypting clean/smudge filter (transcrypt,
 # git-crypt): its staged blob is ciphertext, not content we should format or
-# inspect, so content hooks skip it.
+# inspect, so content hooks skip it. A staged path is answered from the
+# pre-commit cache; any other path, which the cache says nothing about, is
+# asked of git.
 is_encrypted() {
+    if [ -n "${_WITS_STAGED_CACHED:-}" ]; then
+        case "$LF$STAGED_ENCRYPTED_FILES$LF" in
+            *"$LF$1$LF"*) return 0 ;;
+        esac
+        case "$LF$STAGED_FILES$LF" in
+            *"$LF$1$LF"*) return 1 ;;
+        esac
+    fi
     _encrypted_attr=$(git check-attr filter -- "$1" 2>/dev/null)
     _encrypted_filter=${_encrypted_attr##*: filter: }
     is_crypt_filter "$_encrypted_filter"
@@ -502,13 +528,19 @@ is_encrypted() {
 # skipping binary and encrypted blobs. This is the one line every per-language
 # formatter/linter shares, so a new language is just a new one-concern script
 # that calls this with its extensions. Usage: staged_lang_files .py .pyi
+#
+# The extension is matched first because it is the cheap test: the cached text
+# and encryption answers are each a scan over the whole staged list, which is
+# worth paying only for the few files a language actually claims.
 staged_lang_files() {
     staged_files | while IFS= read -r _slf; do
-        is_staged_text "$_slf" || continue
-        is_encrypted "$_slf" && continue
         for _ext in "$@"; do
             case "$_slf" in
-                *"$_ext") printf '%s\n' "$_slf"; break ;;
+                *"$_ext")
+                    is_staged_text "$_slf" && ! is_encrypted "$_slf" &&
+                        printf '%s\n' "$_slf"
+                    break
+                    ;;
             esac
         done
     done
