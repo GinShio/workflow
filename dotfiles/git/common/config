@@ -4,6 +4,7 @@
         path = config.d/blame.conf
         path = config.d/branch.conf
         path = config.d/color.conf
+        path = config.d/commitgraph.conf
         path = config.d/core.conf
         path = config.d/diff.conf
         path = config.d/fetch.conf
@@ -21,3 +22,5 @@
         path = config.d/push.conf
         path = config.d/rebase.conf
         path = config.d/rerere.conf
+        path = config.d/stash.conf
+        path = config.d/status.conf
