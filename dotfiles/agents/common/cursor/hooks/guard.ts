@@ -92,7 +92,7 @@ function main() {
 
 	const verdict = intent && evaluate(intent, { cwd, home: homedir(), projectRoot: workspaceRoot(cwd) });
 	if (!verdict) {
-		await respond("allow");
+		respond("allow");
 		return;
 	}
 
