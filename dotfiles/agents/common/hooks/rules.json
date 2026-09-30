@@ -238,7 +238,7 @@
 				"\\b(gh|glab)\\s+api\\b",
 				"\\brsync\\b[^;&|]*\\S+:",
 				"\\b(scp|sftp)\\b",
-				"\\bssh(?![.\\w-])",
+				"{{cmd}}ssh(?![.\\w-])",
 				"\\b(nc|socat|telnet)\\b"
 			]
 		},

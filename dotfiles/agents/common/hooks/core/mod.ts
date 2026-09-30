@@ -187,14 +187,33 @@ interface Rules {
 let cached: Rules | undefined;
 
 /**
- * Named prefix anchors substitutable into bash patterns as {{name}}. The git
- * anchor pins the subcommand to the first token after `git` that is not a
- * flag: flag tokens are absorbed one per repetition (with one value apiece,
- * recovered by backtracking), so words in a `commit -m "..."` message body
- * never sit in subcommand position. An unknown anchor fails loudly at load.
+ * Where the shell runs a word as a command: at the start, after a separator
+ * (`;`, `&`, `|`, newline, `(`, `{`, backtick, `$(`), or after an operator that
+ * executes its operand (a shell's `-c`, `eval`, `xargs`, `find -exec`), then an
+ * optional quote opening that operand, any mix of env assignments, control
+ * keywords and wrappers that run their operand, and a backslash or directory
+ * prefix. A wrapper may carry its own flags, each with one value, and one
+ * numeric argument (`nice -n 5`, `timeout -k 5 60`); `command` counts only as
+ * `command -p`, since `command -v` names its operand without running it. A word
+ * inside a quoted argument — a commit message, an echo, a grep pattern — sits in
+ * none of these places, so it reads as data rather than as a command.
+ */
+const COMMAND_POSITION =
+	"(?:^|[;&|({\\n`]|\\$\\(|\\b(?:ba|z|da|k|fi|a)?sh\\s+(?:-\\S+\\s+)*-\\w*c\\w*\\s+|\\beval\\s+|\\bxargs\\s+(?:-\\S+\\s+)*|\\s-exec\\s+)" +
+	"\\s*['\"]?\\s*(?:(?:[A-Za-z_]\\w*=\\S*|if|then|do|else|elif|while|until|!|builtin|command(?:\\s+-p)?|" +
+	"(?:exec|nohup|time|env|nice|timeout|stdbuf|ionice|setsid)(?:\\s+-\\S+(?:\\s+[^\\s-]\\S*)?)*(?:\\s+\\d\\S*)?)\\s+)*" +
+	"\\\\?(?:[^\\s;&|(){}'\"`]*/)?";
+
+/**
+ * Named prefix anchors substitutable into bash patterns as {{name}}. `cmd` is
+ * COMMAND_POSITION; `git` adds the git command and absorbs its flag tokens one
+ * per repetition (with one value apiece, recovered by backtracking), so the
+ * subcommand is the first token after `git` that is not a flag. An unknown
+ * anchor fails loudly at load.
  */
 const BASH_ANCHORS: Record<string, string> = {
-	git: "\\bgit\\s+(?:-\\S+\\s+(?:\\S+\\s+)?)*",
+	cmd: COMMAND_POSITION,
+	git: `${COMMAND_POSITION}git\\s+(?:-\\S+\\s+(?:\\S+\\s+)?)*`,
 };
 
 function expandAnchors(pattern: string): string {
