@@ -1,2 +1,3 @@
 # Crate names, identical on every platform, so no suffix.
+git-absorb
 git-branchless
