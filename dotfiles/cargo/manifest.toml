@@ -1,6 +1,8 @@
+# cargo reads its user configuration only from $CARGO_HOME/config.toml; it has
+# no XDG lookup, so a copy under ~/.config/cargo is never read.
 [[install]]
 id = 'cargo'
-dst = '~/.config/cargo/'
+dst = '{{@@ sysenv.cargo_home @@}}/'
 path = '.'
 capabilities = ['develop']
 planes = ['user']
