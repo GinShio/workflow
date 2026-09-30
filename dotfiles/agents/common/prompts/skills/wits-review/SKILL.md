@@ -14,6 +14,7 @@ Apply `review-protocol` for what to flag, how to weigh and word it, and any repo
 - Treat the checked-out source as read-only, and keep the main worktree's files and `HEAD` unchanged. Use `wits review checkout` for every review-worktree `HEAD` change; never use `checkout --in-place` or raw `git checkout`/`switch`/`reset`/`restore` in either worktree.
 - Let `fetch` be the only forge access, and use it only to read. Keep authored output local: never `submit`, `push`, or write through `gh`/`glab`.
 - Draft commentary only: set `verdict` to `comment`, emit no `resolve` action, and use `reply` only when the review calls for a response to an existing thread. The tool supports other verdicts and resolution; this workflow leaves those decisions to the author.
+- Check `craft/UPSTREAMS.md` for the MR's upstream before step 3: where review comments stay the user's own words, the review ends with the `review-protocol` report handed to the user, and `local.json` stays as it is.
 
 ## 1. Refresh and materialize the review
 

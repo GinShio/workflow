@@ -2,6 +2,8 @@
 
 The diff shows what changed. The message exists for what the diff cannot show: the problem, the motivation, the reasoning a reviewer needs now and a contributor needs years from now — often the author themself (FreeBSD: imagine revisiting the change a year or two in the future, and write the message that provides that context). So write **what and why**, not how — a message that narrates the diff ("update X", "clean up Y") repeats what is already visible and carries nothing to a reader who cannot see it. A body that keeps growing is the signal to split the change, not to compress it.
 
+**Upstream trees.** Check `craft/UPSTREAMS.md` first: where the upstream keeps commit messages the user's own, this standard shapes the raw material you hand over in place of a message.
+
 ## Subject
 
 `<area>: <imperative summary>`

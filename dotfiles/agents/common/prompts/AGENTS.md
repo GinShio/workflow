@@ -11,6 +11,7 @@ This file is the portable, tool-agnostic core of how I (the user) work: who I am
 - **Idioms I lean toward, and how to adopt them**: functional style, ranges, metaprogramming, and newer standard/language features. Actively *consider* them -- but adoption is gated by the repo: use a feature only where the project's language standard and house style already admit it. When unsure, match the neighbors and *propose* the modern option rather than introducing it silently.
 - **Tooling** -- when a choice exists, reach for a CLI or script over a GUI, and plain-text formats over binary.
 - **Artifacts in English** -- code, identifiers, comments, and commit messages are written in English by default, regardless of the conversation's language, unless I ask otherwise in the moment.
+- **Upstream trees** -- when the tree belongs to an upstream project, its policy on tool-written text comes first: read [`craft/UPSTREAMS.md`](craft/UPSTREAMS.md) before writing a commit message, code comment, review comment, or MR description there.
 
 ## Human-in-the-loop (HITL)
 
