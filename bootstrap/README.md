@@ -322,9 +322,11 @@ supplies the `vps:` facts, which only bootstrap asks about.
 | `BOOTSTRAP_OS`, `BOOTSTRAP_DISTRO` | |
 | `BOOTSTRAP_GPUS`, `BOOTSTRAP_CPU` | |
 
-`PATH` already carries `~/.local/bin`. Everything else comes from the ambient
-environment, which `sudo -E` carries across escalation — that is how a unit
-sees `DNS_API_TOKEN`, `VPS_DOMAIN_NAME` or the transcrypt passwords, and each
-of those is declared in the `env` file of the unit that reads it.
+`PATH` already carries `~/.local/bin`, and `CARGO_INSTALL_ROOT` names
+`~/.local`, so `cargo install` lands there as well — the same root the cargo
+config names once `dotfiles` has deployed it. Everything else comes from the
+ambient environment, which `sudo -E` carries across escalation — that is how
+a unit sees `DNS_API_TOKEN`, `VPS_DOMAIN_NAME` or the transcrypt passwords,
+and each of those is declared in the `env` file of the unit that reads it.
 
 Scripts are invoked with `sh -eu` whatever they set themselves.

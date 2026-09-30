@@ -22,6 +22,12 @@ git-fetch-with-cli = true
 # Use the sparse index protocol (faster updates, default in newer Cargo)
 protocol = "sparse"
 
+# Install configuration
+[install]
+# `cargo install` puts binaries in <root>/bin: ~/.local/bin, which is on PATH
+# and where bootstrap installs crates too. cargo expands neither ~ nor $HOME.
+root = "{{@@ env['HOME'] @@}}/.local"
+
 # Build configuration
 [build]
 # Use sccache for caching builds (requires sccache installed)

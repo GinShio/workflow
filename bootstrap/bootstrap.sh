@@ -213,9 +213,12 @@ BOOTSTRAP_USER=$(id -un)
 
 # pipx, cargo and deno all install into ~/.local/bin, and later units run what
 # they installed. Putting it on PATH once here is what lets `wits` and
-# `dotfiles` find their tools without each one re-exporting it.
+# `dotfiles` find their tools without each one re-exporting it. cargo lands
+# there only when told: its default root is CARGO_HOME, and `cargo-apps` runs
+# before `dotfiles` deploys the cargo config that names ~/.local.
 PATH="$HOME/.local/bin:$PATH"
-export PATH
+CARGO_INSTALL_ROOT="$HOME/.local"
+export PATH CARGO_INSTALL_ROOT
 
 # The contract a unit's script may rely on. Everything else a unit needs comes
 # from the ambient environment, which `sudo -E` carries across escalation.
