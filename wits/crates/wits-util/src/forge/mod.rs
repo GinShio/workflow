@@ -1,10 +1,10 @@
 //! Talking to a git hosting platform — the MR *and* review APIs, behind one
 //! hard boundary.
 //!
-//! One job stated many ways: for a stack, find an MR for a branch, create one,
-//! move its base, rewrite its body; for review, list/fetch MRs, read threads,
-//! and flush a whole review. The temptation — and the mistake the earlier
-//! tooling made — is to let each platform's quirks (`number` vs `iid`,
+//! One job stated many ways: for a stack, find a branch's MRs, create one, move
+//! its base, keep its navigation comment; for review, list/fetch MRs, read
+//! threads, and flush a whole review. The temptation — and the mistake the
+//! earlier tooling made — is to let each platform's quirks (`number` vs `iid`,
 //! `base.ref` vs `target_branch`, GraphQL vs REST, draft-by-field vs
 //! draft-by-title-prefix) seep into the code that drives the workflow. So the
 //! boundary is deliberately hard: [`MergeRequest`]/[`MrSummary`] and the review
@@ -97,6 +97,20 @@ pub struct NewMr {
     pub draft: bool,
 }
 
+/// One conversation comment on an MR — neither a review thread nor a system
+/// note.
+#[derive(Debug, Clone)]
+pub struct MrComment {
+    /// What the platform needs to address the comment again: GitHub's node id,
+    /// GitLab's note id, Gitea's comment id.
+    pub id: String,
+    pub body: String,
+    /// Where a person can see the comment.
+    pub url: String,
+    /// Whether the authenticated user wrote it.
+    pub own: bool,
+}
+
 /// Attributes layered onto an existing MR by `decorate`. Applied *additively*:
 /// the platform adds what's listed and never removes anything, so a project's own
 /// label/reviewer automation is never fought. The literal `@me` resolves to the
@@ -167,6 +181,19 @@ pub trait Forge: Send + Sync {
     /// best-effort: a sub-item that fails (an unknown label, a self-review the
     /// platform forbids) is logged and skipped rather than aborting the rest.
     fn apply_attributes(&self, id: &str, attrs: &Attributes) -> anyhow::Result<()>;
+
+    /// The MR's conversation comments, oldest first, from every page, each
+    /// marked with whether the authenticated user wrote it. Complete, so a
+    /// comment that is not in the list does not exist.
+    fn list_comments(&self, mr: &str) -> anyhow::Result<Vec<MrComment>>;
+
+    /// Post a conversation comment on the MR.
+    fn add_comment(&self, mr: &str, body: &str) -> anyhow::Result<()>;
+
+    /// Replace the body of a comment [`list_comments`](Forge::list_comments)
+    /// returned. The MR is passed too, because GitLab addresses a note through
+    /// its MR.
+    fn edit_comment(&self, mr: &str, comment: &str, body: &str) -> anyhow::Result<()>;
 
     // -- Review half ---------------------------------------------------------
     //

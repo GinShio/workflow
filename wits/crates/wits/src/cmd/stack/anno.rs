@@ -1,15 +1,25 @@
-//! `wits stack anno` — keep each MR's description pointing at its neighbours.
+//! `wits stack anno` — keep each MR's navigation comment pointing at its
+//! neighbours.
 //!
 //! A reviewer landing on one MR should be able to see the whole stack and where
-//! this change sits in it. So for every in-scope MR we (re)generate a navigation
-//! block and splice it into the description, leaving the human-written part
-//! alone. The block is delimited by a fixed marker pair, and there is exactly
-//! one pair per description — that single-pair rule is what makes replacing the
-//! old block reliable instead of guesswork.
+//! this change sits in it. So for every in-scope MR we (re)generate a
+//! navigation block and keep it in one conversation comment of that MR,
+//! written by the token's user and edited in place. A comment, never the
+//! description: in a squash-merging repository the description becomes the
+//! landed commit's message (LLVM's, for one), while a comment is part of no
+//! commit under any merge method — so wits needs to know none of them.
+//!
+//! The comment is found again on every run by the marker its body starts with,
+//! among the user's own comments. Its id is cached nowhere: whether to edit it
+//! depends on its current text, and reading that costs the same request as
+//! finding it. Nothing else on the MR is written, except that a block an older
+//! wits put into the description is stripped out once the comment holds it;
+//! nothing on the forge is ever deleted.
 
 use std::collections::HashMap;
 
-use wits_util::forge::MergeRequest;
+use anyhow::Context;
+use wits_util::forge::{Forge, MergeRequest, MrComment};
 use wits_util::git::Repository;
 use wits_util::log as wits_log;
 use wits_util::remote::RemoteRoles;
@@ -17,6 +27,11 @@ use wits_util::remote::RemoteRoles;
 use super::topology::Topology;
 use super::{fail_if_any, find_open_mrs, map_parallel, resolution, ForgeSession, ScopeArgs};
 
+/// The first line of every navigation comment, and how one is recognised. It
+/// must never change: the comments already posted are found by it, and a new
+/// marker would leave each of them behind as a stale duplicate. It also opened
+/// the block older versions wrote into descriptions, which is how that block
+/// is found to strip it.
 const HEADER: &str = "<!-- wits stack: generated navigation, do not edit below -->";
 const FOOTER: &str = "<!-- wits stack: end navigation -->";
 
@@ -35,7 +50,7 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, scope: &ScopeArgs) -> anyhow:
     let session = ForgeSession::open(repo, roles)?;
     let noun = session.noun;
 
-    // Discover the open MR for each branch up front; everything else is local.
+    // Discover the open MR for each branch up front; rendering is local.
     let (found, mut failures) = find_open_mrs(&session, &plan.selected, |branch| {
         Some(plan.base_for(branch))
     });
@@ -65,48 +80,221 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, scope: &ScopeArgs) -> anyhow:
     }
     drop(_lock);
 
-    // Build the new description for each MR whose body actually changes.
-    let mut updates: Vec<(String, String, String, String)> = Vec::new();
-    for branch in &plan.selected {
-        let Some(mr) = mrs.get(branch) else { continue };
-        let Some(block) = render_navigation(&plan.topology, branch, &mrs, noun, &plan.base_branch)
-        else {
-            continue;
-        };
-        let new_body = splice(&mr.body, &block);
-        if new_body.trim() != mr.body.trim() {
-            updates.push((branch.clone(), mr.id.clone(), new_body, mr.display.clone()));
-        }
-    }
+    let jobs: Vec<(&String, &MergeRequest, String)> = plan
+        .selected
+        .iter()
+        .filter_map(|branch| {
+            let mr = mrs.get(branch)?;
+            let block = render_navigation(&plan.topology, branch, &mrs, noun, &plan.base_branch)?;
+            Some((branch, mr, block))
+        })
+        .collect();
 
-    if updates.is_empty() {
-        log::info!("descriptions already up to date");
-        return fail_if_any(failures);
-    }
-
-    let results = map_parallel(&updates, |item| {
-        let (branch, id, body, display) = (&item.0, &item.1, &item.2, &item.3);
-        if wits_log::is_dry_run() {
-            wits_log::dry_run(&format!("update {noun} {display} description ({branch})"));
-            return Ok(());
-        }
-        session.forge.set_body(id, body)
+    let results = map_parallel(&jobs, |(branch, mr, block)| {
+        annotate(session.forge.as_ref(), noun, branch, mr, block)
     });
-    for (item, result) in updates.iter().zip(results) {
+    let mut changed = 0usize;
+    for ((branch, mr, _), result) in jobs.iter().zip(results) {
         match result {
-            Ok(()) => log::info!("updated {noun} {} ({})", item.3, item.0),
+            Ok(done) => {
+                changed += usize::from(done.changed());
+                report(noun, branch, mr, &done);
+            }
             Err(e) => {
                 failures += 1;
-                log::warn!("{}: {e}", item.0);
+                log::warn!("{branch}: {e:#}");
             }
         }
     }
-
+    if changed == 0 && failures == 0 {
+        log::info!("navigation already up to date");
+    }
     fail_if_any(failures)
+}
+
+/// What to do about an MR's navigation comment.
+#[derive(Debug, PartialEq, Eq)]
+enum NavAction {
+    Create,
+    Edit { id: String },
+    Keep,
+}
+
+/// The decision for one MR, borrowing from the comments it was made from.
+struct NavPlan<'a> {
+    action: NavAction,
+    /// The user's further navigation comments, beyond the one kept current.
+    extra: Vec<&'a MrComment>,
+    /// Navigation comments another account wrote.
+    foreign: Vec<&'a MrComment>,
+}
+
+/// Decide what an MR's navigation needs, from its comments (oldest first) and
+/// the block it should show. Only the user's own comments are candidates:
+/// wits never edits what someone else wrote. Of several, the oldest is kept
+/// current, since it sits highest in the conversation; the rest are only
+/// reported, because wits deletes nothing on the forge.
+fn decide<'a>(comments: &'a [MrComment], block: &str) -> NavPlan<'a> {
+    let (mut own, foreign): (Vec<&MrComment>, Vec<&MrComment>) = comments
+        .iter()
+        .filter(|comment| is_navigation(&comment.body))
+        .partition(|comment| comment.own);
+    let action = match own.first() {
+        None => NavAction::Create,
+        Some(kept) if same_text(&kept.body, block) => NavAction::Keep,
+        Some(kept) => NavAction::Edit {
+            id: kept.id.clone(),
+        },
+    };
+    let extra = if own.is_empty() {
+        Vec::new()
+    } else {
+        own.split_off(1)
+    };
+    NavPlan {
+        action,
+        extra,
+        foreign,
+    }
+}
+
+/// Whether a comment is a navigation comment: one whose body starts with the
+/// marker. Merely containing it is not enough — a reply quoting the comment
+/// contains it too.
+fn is_navigation(body: &str) -> bool {
+    body.trim_start().starts_with(HEADER)
+}
+
+/// Whether two bodies say the same, ignoring the line endings and outer
+/// whitespace a forge may rewrite when it stores a body.
+fn same_text(stored: &str, wanted: &str) -> bool {
+    let normalize = |text: &str| text.replace("\r\n", "\n").trim().to_owned();
+    normalize(stored) == normalize(wanted)
+}
+
+/// What [`annotate`] did, or under `--dry-run` would do, to one MR.
+#[derive(Debug)]
+struct Annotated {
+    action: NavAction,
+    /// The old block was stripped out of the description.
+    stripped: bool,
+    /// Links to the user's further navigation comments, left in place.
+    extra: Vec<String>,
+    /// Links to navigation comments another account wrote, left alone.
+    foreign: Vec<String>,
+}
+
+impl Annotated {
+    fn changed(&self) -> bool {
+        self.action != NavAction::Keep || self.stripped
+    }
+}
+
+/// Bring one MR's navigation comment to `block`, then strip the block an older
+/// wits left in its description.
+fn annotate(
+    forge: &dyn Forge,
+    noun: &str,
+    branch: &str,
+    mr: &MergeRequest,
+    block: &str,
+) -> anyhow::Result<Annotated> {
+    let display = &mr.display;
+    // A failed listing stops this MR: taking it for "no comment yet" is how a
+    // second navigation comment would get posted. A failed create is not
+    // retried either, since it may have landed after all; the next run lists
+    // the comments and finds it.
+    let comments = forge
+        .list_comments(&mr.id)
+        .with_context(|| format!("listing the comments of {noun} {display}"))?;
+    let plan = decide(&comments, block);
+    match &plan.action {
+        NavAction::Create if wits_log::is_dry_run() => wits_log::dry_run(&format!(
+            "create {noun} {display} navigation comment ({branch})"
+        )),
+        NavAction::Create => forge
+            .add_comment(&mr.id, block)
+            .with_context(|| format!("posting the navigation comment on {noun} {display}"))?,
+        NavAction::Edit { .. } if wits_log::is_dry_run() => wits_log::dry_run(&format!(
+            "update {noun} {display} navigation comment ({branch})"
+        )),
+        NavAction::Edit { id } => forge
+            .edit_comment(&mr.id, id, block)
+            .with_context(|| format!("updating the navigation comment on {noun} {display}"))?,
+        NavAction::Keep => {}
+    }
+    // Only now that the comment holds the navigation may the description give
+    // up its copy, so a failure part-way never leaves the MR without one.
+    let stripped = mr.body.contains(HEADER);
+    if stripped {
+        if wits_log::is_dry_run() {
+            wits_log::dry_run(&format!(
+                "strip navigation from {noun} {display} description ({branch})"
+            ));
+        } else {
+            // The comment already holds the navigation, so say so: the step
+            // that failed is only the clean-up the next run retries.
+            forge
+                .set_body(&mr.id, &strip_generated(&mr.body))
+                .with_context(|| {
+                    format!(
+                        "the navigation comment is in place, but stripping the old block from \
+                         the description of {noun} {display} failed"
+                    )
+                })?;
+        }
+    }
+    Ok(Annotated {
+        action: plan.action,
+        stripped,
+        extra: plan.extra.iter().map(|c| c.url.clone()).collect(),
+        foreign: plan.foreign.iter().map(|c| c.url.clone()).collect(),
+    })
+}
+
+/// Log what [`annotate`] did to one MR, and warn about the navigation comments
+/// it leaves alone.
+fn report(noun: &str, branch: &str, mr: &MergeRequest, done: &Annotated) {
+    let display = &mr.display;
+    if !wits_log::is_dry_run() {
+        match done.action {
+            NavAction::Create => {
+                log::info!("created the navigation comment on {noun} {display} ({branch})")
+            }
+            NavAction::Edit { .. } => {
+                log::info!("updated the navigation comment on {noun} {display} ({branch})")
+            }
+            NavAction::Keep => {}
+        }
+        if done.stripped {
+            log::info!(
+                "stripped the old navigation out of the description of {noun} {display} \
+                 ({branch})"
+            );
+        }
+    }
+    if !done.extra.is_empty() {
+        log::warn!(
+            "{branch}: {noun} {display} has further navigation comments of yours ({}); only the \
+             oldest is kept current, so delete the others",
+            done.extra.join(", ")
+        );
+    }
+    if !done.foreign.is_empty() {
+        log::warn!(
+            "{branch}: {noun} {display} also carries navigation another account wrote ({}); wits \
+             leaves it alone",
+            done.foreign.join(", ")
+        );
+    }
 }
 
 /// Render the full navigation block for one branch's MR: one "Stack List"
 /// section per downstream chain, all inside a single marker pair.
+///
+/// No line may start with `/`: GitLab runs a note's quick actions on every edit
+/// as well as on creation (`Notes::UpdateService`), so such a line would act as
+/// a command instead of being shown.
 fn render_navigation(
     topology: &Topology,
     branch: &str,
@@ -166,18 +354,8 @@ fn render_section(
     Some(lines.join("\n"))
 }
 
-/// Replace any existing generated block in `body` with `block`, preserving the
-/// human-written remainder. Relies on the single-pair invariant: there is at
-/// most one HEADER…FOOTER region.
-fn splice(body: &str, block: &str) -> String {
-    let stripped = strip_generated(body);
-    if stripped.is_empty() {
-        block.to_owned()
-    } else {
-        format!("{stripped}\n\n{block}")
-    }
-}
-
+/// `body` without the navigation block older versions kept in descriptions,
+/// the rest of the text untouched.
 fn strip_generated(body: &str) -> String {
     let Some(start) = body.find(HEADER) else {
         return body.trim().to_owned();
@@ -186,8 +364,8 @@ fn strip_generated(body: &str) -> String {
     // for the FOOTER *after* the header so a footer accidentally left earlier in
     // the prose can't be mistaken for ours. If the footer is intact, drop exactly
     // that span; if it was torn off by a hand-edit, the block is unterminated —
-    // and since `anno` always appends the block at the tail, everything from the
-    // header onward is ours to drop. Either way exactly one marker pair survives.
+    // and since it was always appended at the tail, everything from the header
+    // onward is ours to drop.
     let after_header = &body[start + HEADER.len()..];
     let tail = match after_header.find(FOOTER) {
         Some(rel) => &after_header[rel + FOOTER.len()..],
@@ -201,8 +379,10 @@ fn strip_generated(body: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
-    use wits_util::forge::MrState;
+    use wits_util::forge::{Attributes, HeadRepo, MrState, NewMr};
 
     fn mr(display: &str) -> MergeRequest {
         MergeRequest {
@@ -215,6 +395,19 @@ mod tests {
             body: String::new(),
             web_url: String::new(),
         }
+    }
+
+    fn comment(id: &str, body: &str, own: bool) -> MrComment {
+        MrComment {
+            id: id.into(),
+            body: body.into(),
+            url: format!("u/{id}"),
+            own,
+        }
+    }
+
+    fn block(nav: &str) -> String {
+        format!("{HEADER}\n\n{nav}\n\n{FOOTER}")
     }
 
     #[test]
@@ -237,60 +430,6 @@ mod tests {
         assert!(section.contains("[1/2] PR #1"));
         assert!(section.contains("`main` ← `a`"));
         assert!(section.contains("[2/2] PR #2  ⬅️ **current**"));
-    }
-
-    #[test]
-    fn splice_replaces_old_block_and_keeps_prose() {
-        let block = format!("{HEADER}\n\nnew\n\n{FOOTER}");
-        let old = format!("Intro text.\n\n{HEADER}\n\nstale\n\n{FOOTER}");
-        let result = splice(&old, &block);
-        assert!(result.starts_with("Intro text."));
-        assert!(result.contains("new"));
-        assert!(!result.contains("stale"));
-        // Still exactly one marker pair.
-        assert_eq!(result.matches(HEADER).count(), 1);
-    }
-
-    #[test]
-    fn splice_into_empty_body_is_just_the_block() {
-        let block = format!("{HEADER}\n\nnav\n\n{FOOTER}");
-        assert_eq!(splice("", &block), block);
-    }
-
-    // Multi-round anno: re-splicing identical content must be a no-op, which is
-    // what lets a second `anno` run decide "already up to date".
-    #[test]
-    fn splice_is_idempotent() {
-        let block = format!("{HEADER}\n\nnav v1\n\n{FOOTER}");
-        let once = splice("Hello.", &block);
-        let twice = splice(&once, &block);
-        assert_eq!(once, twice);
-    }
-
-    // A torn marker pair (footer hand-deleted) must not defeat stripping and
-    // leave two HEADERs behind — the generated block always sits at the tail, so
-    // everything from a lone HEADER onward is ours to drop.
-    #[test]
-    fn splice_recovers_from_a_torn_footer() {
-        let block = format!("{HEADER}\n\nfresh\n\n{FOOTER}");
-        // Body whose previous block lost its footer to a manual edit.
-        let torn = format!("Prose.\n\n{HEADER}\n\nstale nav with no footer");
-        let result = splice(&torn, &block);
-        assert!(result.starts_with("Prose."));
-        assert!(result.contains("fresh") && !result.contains("stale nav"));
-        assert_eq!(result.matches(HEADER).count(), 1);
-        assert_eq!(result.matches(FOOTER).count(), 1);
-    }
-
-    // Re-anno after the numbers change: the old block is replaced, not stacked.
-    #[test]
-    fn splice_swaps_a_regenerated_block_in_place() {
-        let v1 = format!("{HEADER}\n\nold nav\n\n{FOOTER}");
-        let v2 = format!("{HEADER}\n\nnew nav\n\n{FOOTER}");
-        let body = splice("Body.", &v1);
-        let updated = splice(&body, &v2);
-        assert!(updated.contains("new nav") && !updated.contains("old nav"));
-        assert_eq!(updated.matches(HEADER).count(), 1);
     }
 
     // A fork yields one section per downstream chain, all under one wrapper.
@@ -326,5 +465,203 @@ mod tests {
         assert!(section.contains("[1/2] PR #1"));
         assert!(section.contains("[2/2] PR #3"));
         assert!(section.contains("`B` ← `C`"));
+    }
+
+    #[test]
+    fn stripping_keeps_the_prose_around_the_old_block() {
+        let body = format!("Intro text.\n\n{}\n\nA later note.", block("stale"));
+        let stripped = strip_generated(&body);
+        assert!(stripped.starts_with("Intro text."));
+        assert!(stripped.ends_with("A later note."));
+        assert!(!stripped.contains(HEADER) && !stripped.contains("stale"));
+    }
+
+    // A torn marker pair (footer hand-deleted) must not defeat stripping: the
+    // generated block always sat at the tail, so everything from a lone HEADER
+    // onward is ours to drop.
+    #[test]
+    fn stripping_recovers_from_a_torn_footer() {
+        let torn = format!("Prose.\n\n{HEADER}\n\nstale nav with no footer");
+        assert_eq!(strip_generated(&torn), "Prose.");
+    }
+
+    #[test]
+    fn with_no_navigation_comment_one_is_created() {
+        // Comments that are not navigation do not count, whoever wrote them.
+        let comments = [comment("1", "LGTM", false), comment("2", "thanks", true)];
+        assert_eq!(decide(&comments, &block("nav")).action, NavAction::Create);
+    }
+
+    #[test]
+    fn an_identical_comment_is_left_alone() {
+        // As a forge may hand it back: CRLF line endings and a trailing newline.
+        let stored = block("nav").replace('\n', "\r\n") + "\r\n";
+        let comments = [comment("1", &stored, true)];
+        assert_eq!(decide(&comments, &block("nav")).action, NavAction::Keep);
+    }
+
+    #[test]
+    fn the_oldest_navigation_comment_is_edited_and_the_rest_reported() {
+        let comments = [
+            comment("1", "hello", false),
+            comment("2", &block("old"), true),
+            comment("3", &block("a second copy"), true),
+        ];
+        let plan = decide(&comments, &block("new"));
+        assert_eq!(plan.action, NavAction::Edit { id: "2".into() });
+        let extra: Vec<&str> = plan.extra.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(extra, ["3"]);
+        assert!(plan.foreign.is_empty());
+    }
+
+    #[test]
+    fn a_quoted_marker_is_not_a_navigation_comment() {
+        let quoted = format!("> {}\n\nWhy is this here?", block("nav"));
+        let comments = [comment("1", &quoted, true)];
+        assert_eq!(decide(&comments, &block("nav")).action, NavAction::Create);
+    }
+
+    #[test]
+    fn another_accounts_navigation_is_reported_but_never_taken_over() {
+        let comments = [comment("1", &block("nav"), false)];
+        let plan = decide(&comments, &block("nav"));
+        assert_eq!(plan.action, NavAction::Create);
+        assert_eq!(plan.foreign.len(), 1);
+    }
+
+    /// A forge that serves canned comments and records every write it is asked
+    /// for — successful or not — so the order of the writes, and the ones that
+    /// must not happen, can be checked. The tests using it rely on the
+    /// process-wide dry-run flag being off, as no test in this binary sets it.
+    struct FakeForge {
+        comments: Result<Vec<MrComment>, String>,
+        /// The writes, by name, that fail.
+        refuse: &'static [&'static str],
+        writes: Mutex<Vec<String>>,
+    }
+
+    impl FakeForge {
+        fn new(comments: Result<Vec<MrComment>, String>) -> Self {
+            Self {
+                comments,
+                refuse: &[],
+                writes: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn write(&self, name: &str, details: &str) -> anyhow::Result<()> {
+            self.writes
+                .lock()
+                .unwrap()
+                .push(format!("{name} {details}"));
+            if self.refuse.contains(&name) {
+                anyhow::bail!("refused");
+            }
+            Ok(())
+        }
+
+        fn writes(&self) -> Vec<String> {
+            self.writes.lock().unwrap().clone()
+        }
+    }
+
+    impl Forge for FakeForge {
+        fn noun(&self) -> &'static str {
+            "PR"
+        }
+        fn mrs_for_branch(
+            &self,
+            _head: HeadRepo,
+            _branch: &str,
+        ) -> anyhow::Result<Vec<MergeRequest>> {
+            unreachable!("annotate looks up no MR")
+        }
+        fn create(&self, _req: &NewMr) -> anyhow::Result<MergeRequest> {
+            unreachable!("annotate opens no MR")
+        }
+        fn set_base(&self, _id: &str, _base: &str) -> anyhow::Result<()> {
+            unreachable!("annotate moves no base")
+        }
+        fn set_body(&self, _id: &str, body: &str) -> anyhow::Result<()> {
+            self.write("set_body", body)
+        }
+        fn apply_attributes(&self, _id: &str, _attrs: &Attributes) -> anyhow::Result<()> {
+            unreachable!("annotate sets no attributes")
+        }
+        fn list_comments(&self, _mr: &str) -> anyhow::Result<Vec<MrComment>> {
+            self.comments.clone().map_err(anyhow::Error::msg)
+        }
+        fn add_comment(&self, _mr: &str, body: &str) -> anyhow::Result<()> {
+            self.write("add_comment", body)
+        }
+        fn edit_comment(&self, _mr: &str, comment: &str, body: &str) -> anyhow::Result<()> {
+            self.write("edit_comment", &format!("{comment} {body}"))
+        }
+    }
+
+    fn with_body(body: &str) -> MergeRequest {
+        MergeRequest {
+            body: body.into(),
+            ..mr("#1")
+        }
+    }
+
+    #[test]
+    fn an_old_description_block_moves_into_a_comment_first() {
+        let forge = FakeForge::new(Ok(Vec::new()));
+        let mr = with_body(&format!("Prose.\n\n{}", block("old")));
+        let done = annotate(&forge, "PR", "b", &mr, &block("new")).unwrap();
+        assert!(done.changed() && done.stripped);
+        assert_eq!(
+            forge.writes(),
+            [
+                format!("add_comment {}", block("new")),
+                "set_body Prose.".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failed_listing_writes_nothing() {
+        let forge = FakeForge::new(Err("timed out".into()));
+        let mr = with_body(&block("old"));
+        assert!(annotate(&forge, "PR", "b", &mr, &block("new")).is_err());
+        assert!(forge.writes().is_empty());
+    }
+
+    #[test]
+    fn a_failed_comment_leaves_the_description_alone() {
+        let mut forge = FakeForge::new(Ok(Vec::new()));
+        forge.refuse = &["add_comment"];
+        let mr = with_body(&format!("Prose.\n\n{}", block("old")));
+        let err = annotate(&forge, "PR", "b", &mr, &block("new")).unwrap_err();
+        assert!(format!("{err:#}").contains("posting the navigation comment"));
+        // The comment was attempted and nothing after it.
+        assert_eq!(forge.writes(), [format!("add_comment {}", block("new"))]);
+    }
+
+    #[test]
+    fn a_failed_strip_says_the_comment_is_in_place() {
+        let mut forge = FakeForge::new(Ok(Vec::new()));
+        forge.refuse = &["set_body"];
+        let mr = with_body(&format!("Prose.\n\n{}", block("old")));
+        let err = annotate(&forge, "PR", "b", &mr, &block("new")).unwrap_err();
+        assert!(format!("{err:#}").contains("the navigation comment is in place"));
+        assert_eq!(forge.writes().len(), 2);
+    }
+
+    #[test]
+    fn an_up_to_date_mr_is_not_written() {
+        let forge = FakeForge::new(Ok(vec![comment("7", &block("nav"), true)]));
+        let done = annotate(&forge, "PR", "b", &with_body("Prose."), &block("nav")).unwrap();
+        assert!(!done.changed());
+        assert!(forge.writes().is_empty());
+    }
+
+    #[test]
+    fn a_changed_navigation_edits_the_kept_comment() {
+        let forge = FakeForge::new(Ok(vec![comment("7", &block("old"), true)]));
+        annotate(&forge, "PR", "b", &with_body(""), &block("new")).unwrap();
+        assert_eq!(forge.writes(), [format!("edit_comment 7 {}", block("new"))]);
     }
 }

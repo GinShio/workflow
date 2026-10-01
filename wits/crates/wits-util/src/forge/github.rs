@@ -13,8 +13,8 @@ use serde_json::{json, Value};
 use super::RemoteInfo;
 use super::{
     request, ActionKey, Anchor, Attributes, Auth, BatchAction, BatchOutcome, DiffVersion,
-    FeedQuery, Forge, HeadRepo, LineRef, MergeRequest, MrDetails, MrState, MrSummary, NewMr,
-    RemoteComment, RemoteThread, ReviewBatch, Side, Verdict, EVERY_PAGE_LIMIT, SELF_REF,
+    FeedQuery, Forge, HeadRepo, LineRef, MergeRequest, MrComment, MrDetails, MrState, MrSummary,
+    NewMr, RemoteComment, RemoteThread, ReviewBatch, Side, Verdict, EVERY_PAGE_LIMIT, SELF_REF,
 };
 
 pub struct GitHub {
@@ -147,39 +147,53 @@ impl GitHub {
         Ok(Some(self.push_repo_id.get_or_init(|| id).clone()))
     }
 
-    /// Run a `pullRequests` connection query over every page, keeping the nodes
-    /// `keep` accepts. The loop owns the `$after` variable.
-    fn every_pr_page(
+    /// Every node of a connection, page after page: `path` leads from a
+    /// response's `data` to the connection, and the loop owns `$after`.
+    fn every_node(
         &self,
         query: &str,
         mut vars: Value,
-        keep: impl Fn(&Value) -> bool,
-    ) -> anyhow::Result<Vec<MergeRequest>> {
-        let mut out = Vec::new();
+        path: &[&str],
+    ) -> anyhow::Result<Vec<Value>> {
+        let mut nodes = Vec::new();
         for _ in 0..EVERY_PAGE_LIMIT {
             let data = self.graphql(query, vars.clone())?;
-            let connection = &data["repository"]["pullRequests"];
-            out.extend(
+            let connection = path.iter().fold(&data, |value, key| &value[*key]);
+            nodes.extend(
                 connection["nodes"]
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .filter(|node| keep(node))
-                    .filter_map(parse_pr_mr),
+                    .cloned(),
             );
             let page = &connection["pageInfo"];
             if !page["hasNextPage"].as_bool().unwrap_or(false) {
-                return Ok(out);
+                return Ok(nodes);
             }
-            let cursor = page["endCursor"].as_str().ok_or_else(|| {
-                anyhow::anyhow!("a pull request page has a next page but no cursor")
-            })?;
+            let cursor = page["endCursor"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("a page claims a next page but has no cursor"))?;
             vars["after"] = json!(cursor);
         }
         anyhow::bail!(
-            "the pull request list runs past {EVERY_PAGE_LIMIT} pages; refusing to answer from \
-             part of it"
+            "the list runs past {EVERY_PAGE_LIMIT} pages; refusing to answer from part of it"
         )
+    }
+
+    /// Every pull request a `pullRequests` connection query lists, keeping the
+    /// nodes `keep` accepts.
+    fn every_pr(
+        &self,
+        query: &str,
+        vars: Value,
+        keep: impl Fn(&Value) -> bool,
+    ) -> anyhow::Result<Vec<MergeRequest>> {
+        Ok(self
+            .every_node(query, vars, &["repository", "pullRequests"])?
+            .iter()
+            .filter(|node| keep(node))
+            .filter_map(parse_pr_mr)
+            .collect())
     }
 
     /// A pull request's node id (needed by update / label / assignee / reviewer
@@ -303,6 +317,17 @@ impl GitHub {
         }
         parts.join(" ")
     }
+}
+
+/// A conversation (`IssueComment`) node as an [`MrComment`]. Its node id, not
+/// its `databaseId`, is what `updateIssueComment` takes.
+fn parse_issue_comment(node: &Value) -> Option<MrComment> {
+    Some(MrComment {
+        id: node["id"].as_str()?.to_owned(),
+        body: node["body"].as_str().unwrap_or_default().to_owned(),
+        url: node["url"].as_str().unwrap_or_default().to_owned(),
+        own: node["viewerDidAuthor"].as_bool().unwrap_or(false),
+    })
 }
 
 /// Whether a `PullRequest` node's head lives in the expected repository: the
@@ -492,6 +517,13 @@ mod gql {
         addLabelsToLabelable(input:$input){clientMutationId}}";
     pub const ADD_ASSIGNEES: &str = "mutation($input:AddAssigneesToAssignableInput!){\
         addAssigneesToAssignable(input:$input){clientMutationId}}";
+    pub const COMMENTS_QUERY: &str =
+        "query($owner:String!,$repo:String!,$number:Int!,$after:String){\
+        repository(owner:$owner,name:$repo){pullRequest(number:$number){\
+          comments(first:100,after:$after){pageInfo{hasNextPage endCursor}\
+            nodes{id url body createdAt viewerDidAuthor}}}}}";
+    pub const UPDATE_COMMENT: &str = "mutation($input:UpdateIssueCommentInput!){\
+        updateIssueComment(input:$input){issueComment{id}}}";
     pub const REQUEST_REVIEWS: &str = "mutation($input:RequestReviewsInput!){\
         requestReviews(input:$input){clientMutationId}}";
 }
@@ -552,7 +584,7 @@ impl Forge for GitHub {
 
     fn mrs_for_branch(&self, head: HeadRepo, branch: &str) -> anyhow::Result<Vec<MergeRequest>> {
         let head_repo = self.head_repo_id(head)?;
-        self.every_pr_page(
+        self.every_pr(
             gql::FIND_QUERY,
             json!({ "owner": self.owner, "repo": self.repo, "branch": branch }),
             |node| heads_in(node, head_repo.as_deref()),
@@ -560,7 +592,7 @@ impl Forge for GitHub {
     }
 
     fn find_children(&self, base_branch: &str) -> anyhow::Result<Vec<MergeRequest>> {
-        self.every_pr_page(
+        self.every_pr(
             gql::CHILDREN_QUERY,
             json!({ "owner": self.owner, "repo": self.repo, "base": base_branch }),
             |_| true,
@@ -642,6 +674,36 @@ impl Forge for GitHub {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn list_comments(&self, mr: &str) -> anyhow::Result<Vec<MrComment>> {
+        let number = self.number(mr)?;
+        let mut nodes = self.every_node(
+            gql::COMMENTS_QUERY,
+            json!({ "owner": self.owner, "repo": self.repo, "number": number }),
+            &["repository", "pullRequest", "comments"],
+        )?;
+        // The connection documents no order, so oldest-first is made here;
+        // `createdAt` is UTC ISO 8601, which sorts as text.
+        nodes.sort_by(|a, b| a["createdAt"].as_str().cmp(&b["createdAt"].as_str()));
+        Ok(nodes.iter().filter_map(parse_issue_comment).collect())
+    }
+
+    fn add_comment(&self, mr: &str, body: &str) -> anyhow::Result<()> {
+        let pr_id = self.pr_node_id(mr)?;
+        self.graphql(
+            gql::ADD_COMMENT,
+            json!({ "input": { "subjectId": pr_id, "body": body } }),
+        )?;
+        Ok(())
+    }
+
+    fn edit_comment(&self, _mr: &str, comment: &str, body: &str) -> anyhow::Result<()> {
+        self.graphql(
+            gql::UPDATE_COMMENT,
+            json!({ "input": { "id": comment, "body": body } }),
+        )?;
         Ok(())
     }
 
@@ -1060,6 +1122,19 @@ mod tests {
             "t".into(),
             None,
         )
+    }
+
+    #[test]
+    fn a_conversation_comment_keeps_its_node_id_and_author_flag() {
+        let node = json!({
+            "id": "IC_kwDO", "url": "https://github.com/o/r/pull/1#issuecomment-9",
+            "body": "hi", "createdAt": "2026-10-01T00:00:00Z", "viewerDidAuthor": true
+        });
+        let comment = parse_issue_comment(&node).unwrap();
+        assert_eq!(comment.id, "IC_kwDO");
+        assert!(comment.own);
+        let theirs = json!({ "id": "IC_x", "body": "", "viewerDidAuthor": false });
+        assert!(!parse_issue_comment(&theirs).unwrap().own);
     }
 
     #[test]

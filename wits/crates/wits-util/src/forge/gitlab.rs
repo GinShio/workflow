@@ -15,7 +15,7 @@
 //! we stay on the cheap single-project path.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Value};
 
@@ -23,8 +23,8 @@ use super::RemoteInfo;
 use super::{
     dedup_mrs, encode, request, request_every_page, ActionKey, Anchor, Attributes, Auth,
     BatchAction, BatchOutcome, DiffVersion, FeedQuery, Forge, HeadRepo, LineRef, MergeRequest,
-    MrDetails, MrState, MrSummary, NewMr, RemoteComment, RemoteThread, ReviewBatch, Side, Verdict,
-    SELF_REF,
+    MrComment, MrDetails, MrState, MrSummary, NewMr, RemoteComment, RemoteThread, ReviewBatch,
+    Side, Verdict, SELF_REF,
 };
 
 const DRAFT_PREFIX: &str = "Draft: ";
@@ -44,6 +44,8 @@ pub struct GitLab {
     auth: Auth,
     /// Present only for a fork MR (source project differs from target).
     fork: Option<Fork>,
+    /// The authenticated user's id, read by the first comment listing.
+    me: OnceLock<u64>,
 }
 
 /// The extra coordinates a cross-project MR needs, resolved once at construction.
@@ -88,7 +90,21 @@ impl GitLab {
             target_path,
             auth,
             fork,
+            me: OnceLock::new(),
         })
+    }
+
+    /// The authenticated user's id, read once.
+    fn my_id(&self) -> anyhow::Result<u64> {
+        if let Some(id) = self.me.get() {
+            return Ok(*id);
+        }
+        let v = request("GET", &format!("{}/user", self.api_base), &self.auth, None)?;
+        let id = v["id"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("could not read the authenticated user"))?;
+        // Listings run in parallel, so another one may have stored the same id first.
+        Ok(*self.me.get_or_init(|| id))
     }
 
     /// Resolve or unresolve a discussion (a separate call — a GitLab draft note
@@ -199,6 +215,22 @@ impl GitLab {
     fn draft_notes_url(&self, id: &str) -> String {
         format!("{}/{id}/draft_notes", self.mrs_url())
     }
+}
+
+/// A conversation note as an [`MrComment`], or `None` for a system note (a
+/// label or state change) or a diff note, which belongs to a review thread.
+/// `mr_url` is the MR's web page, which the note's anchor is relative to.
+fn parse_comment(note: &Value, mr_url: &str, me: u64) -> Option<MrComment> {
+    if note["system"].as_bool().unwrap_or(false) || note["type"].as_str() == Some("DiffNote") {
+        return None;
+    }
+    let id = note["id"].as_u64()?;
+    Some(MrComment {
+        id: id.to_string(),
+        body: note["body"].as_str().unwrap_or_default().to_owned(),
+        url: format!("{mr_url}#note_{id}"),
+        own: note["author"]["id"].as_u64() == Some(me),
+    })
 }
 
 /// Whether an MR comes from the expected source project: `project` when given
@@ -556,6 +588,41 @@ impl Forge for GitLab {
         }
         let url = format!("{}/{}", self.mrs_url(), id);
         request("PUT", &url, &self.auth, Some(&Value::Object(body)))?;
+        Ok(())
+    }
+
+    fn list_comments(&self, mr: &str) -> anyhow::Result<Vec<MrComment>> {
+        let me = self.my_id()?;
+        let mr_url = format!("{}/-/merge_requests/{mr}", self.web_base);
+        let url = format!(
+            "{}/{mr}/notes?sort=asc&order_by=created_at&per_page=100",
+            self.mrs_url()
+        );
+        request_every_page(&url, &self.auth, |v, headers| {
+            let notes = v
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|note| parse_comment(note, &mr_url, me))
+                        .collect()
+                })
+                .unwrap_or_default();
+            (notes, next_page(&url, headers))
+        })
+    }
+
+    fn add_comment(&self, mr: &str, body: &str) -> anyhow::Result<()> {
+        // A note posted here is a standard comment, not a thread, and a
+        // standard comment cannot be resolved (GitLab's "Comments and threads"
+        // docs), so it never holds up "all threads must be resolved".
+        let url = format!("{}/{mr}/notes", self.mrs_url());
+        request("POST", &url, &self.auth, Some(&json!({ "body": body })))?;
+        Ok(())
+    }
+
+    fn edit_comment(&self, mr: &str, comment: &str, body: &str) -> anyhow::Result<()> {
+        let url = format!("{}/{mr}/notes/{comment}", self.mrs_url());
+        request("PUT", &url, &self.auth, Some(&json!({ "body": body })))?;
         Ok(())
     }
 
@@ -984,6 +1051,27 @@ mod tests {
         assert_eq!(s.base, "main");
         assert_eq!(s.source, "feat");
         assert_eq!(s.labels, ["bug", "vk"]);
+    }
+
+    #[test]
+    fn a_conversation_note_is_kept_and_marked_by_its_author() {
+        let mr_url = "https://gitlab.com/g/r/-/merge_requests/7";
+        let note = |id: u64, author: u64, system: bool, kind: Value| {
+            json!({ "id": id, "body": "b", "system": system, "type": kind,
+                    "author": { "id": author } })
+        };
+        let mine = parse_comment(&note(11, 5, false, Value::Null), mr_url, 5).unwrap();
+        assert!(mine.own);
+        assert_eq!(mine.id, "11");
+        assert_eq!(
+            mine.url,
+            "https://gitlab.com/g/r/-/merge_requests/7#note_11"
+        );
+        let theirs = parse_comment(&note(12, 6, false, json!("DiscussionNote")), mr_url, 5);
+        assert!(!theirs.unwrap().own);
+        // A label change and a review comment on the diff are not conversation.
+        assert!(parse_comment(&note(13, 5, true, Value::Null), mr_url, 5).is_none());
+        assert!(parse_comment(&note(14, 5, false, json!("DiffNote")), mr_url, 5).is_none());
     }
 
     #[test]

@@ -190,12 +190,38 @@ never re-titled.
 anno
 ----
 
-Rewrite each operable MR's description with a generated navigation block,
-preserving the human-written remainder. The block is one delimited region
-(``<!-- wits stack: generated navigation … -->`` …
-``<!-- wits stack: end navigation -->``) containing one or more
+Keep one navigation comment on each operable MR, written by the token's user.
+Its body is one delimited region (``<!-- wits stack: generated navigation …
+-->`` … ``<!-- wits stack: end navigation -->``) containing one or more
 ``### Stack List`` sections. Discovered MR numbers are cached back into the
 machete annotations.
+
+The comment
+~~~~~~~~~~~
+
+Per MR, ``anno`` lists the conversation comments — every page — and takes as
+candidates the ones the token's user wrote whose body *starts* with the
+opening marker (one that merely quotes it is a reply, not the navigation):
+
+1. **No candidate** → post the navigation as a new comment.
+2. **Candidates** → the oldest is the navigation comment: edit it if its text
+   differs (line endings and outer whitespace aside), otherwise leave it.
+   Further candidates are warned about with their links and left in place.
+3. A navigation comment written by **another account** (an earlier token's
+   user, say) is never edited; it is warned about, and the user's own comment
+   is created beside it.
+4. **Migration:** if the MR's description still holds the block older
+   versions wrote there, it is stripped from the description — the rest of the
+   text kept, a torn footer recovered — *after* step 1 or 2 succeeded, so a
+   failure part-way never leaves the MR without navigation.
+
+Nothing on the forge is ever deleted, pinned, or posted beyond that one
+comment. A failed listing fails that MR, never counting as "no comment yet",
+and a failed create is not retried, since it may have landed; either way the
+next run sees the truth. Each MR is independent: a failure is warned about and
+counted, and the others proceed. ``--dry-run`` prints one line per action:
+``create <noun> <display> navigation comment (<branch>)``, ``update …`` or
+``strip navigation from <noun> <display> description (<branch>)``.
 
 Block generation
 ~~~~~~~~~~~~~~~~
@@ -212,7 +238,7 @@ fork-point.
    N is a leaf:                      one block             → prefix
 
 A downstream walk stops at the next fork-point because that fork renders its
-own multi-section description; expanding it here would grow descriptions
+own multi-section navigation; expanding it here would grow navigation comments
 combinatorially.
 
 Rendering rules
@@ -229,10 +255,10 @@ Rendering rules
   and its ancestors; ``--all`` brings every line in, as the rendered example
   below assumes.
 * The current MR's own line is marked ``⬅️ **current**``.
-* **Idempotent:** regenerating identical content replaces the old block byte
-  for byte, so a second ``anno`` run reports "already up to date" and writes
-  nothing. (A forge that rewrites a description's whitespace/line-endings on
-  its side can defeat this and cause a harmless re-write each run.)
+* **Idempotent:** a comment whose text already matches is not edited — line
+  endings and outer whitespace a forge rewrites do not count as a change — so a
+  second ``anno`` run reports "navigation already up to date" and writes
+  nothing.
 
 Block table for the sample forest
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -262,8 +288,8 @@ Block table for the sample forest
 
 (``main`` is the base: not annotated, shown only as a parent.)
 
-Rendered output (B's description, B current)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Rendered output (B's navigation comment, B current)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ::
 
@@ -489,7 +515,11 @@ Known limitations
   branch unmoved, and ``slice`` records the chain without it, as if its line
   had been removed.
 * **An MR orphaned by removal** (its branch no longer in the file) keeps its
-  old navigation block; ``anno`` no longer touches it.
+  last navigation comment; ``anno`` no longer touches it.
+* **A navigation comment keeps the place it was posted at.** Run ``anno``
+  right after ``submit`` and it sits directly under the description; an MR
+  that already has a discussion when it is first annotated (one migrated from
+  the description, say) gets it at the end of that discussion.
 * **``tree mv`` is metadata only** — it does not rebase commits; you must
   restack the branch yourself for the MR to be meaningful.
 * **Cross-fork MRs** are supported on all three: GitHub/Gitea via the
@@ -522,7 +552,7 @@ Where the logic lives
      - ``crates/wits/src/cmd/stack/sync.rs``
    * - MR reconcile decision
      - ``crates/wits/src/cmd/stack/submit.rs`` (``decide``)
-   * - navigation rendering + splice
+   * - navigation rendering, the navigation comment, description migration
      - ``crates/wits/src/cmd/stack/anno.rs``
    * - attribute application (labels/assignees/reviewers)
      - ``crates/wits/src/cmd/stack/decorate.rs`` and
@@ -545,9 +575,12 @@ Invariants
 1. ``sync``, ``submit``, ``anno`` (and ``decorate --all``) must share one
    scope computation — never fork the fork-point rule across verbs.
 2. ``anno_blocks`` must stop at the next fork-point; expanding it grows
-   descriptions combinatorially.
-3. Exactly one navigation marker pair per description; stripping relies on
-   it.
+   navigation comments combinatorially.
+3. Each MR carries one wits navigation comment, written by the token's user
+   and recognised by the marker its body starts with; ``anno`` keeps the
+   oldest current, never edits another account's, and deletes none. After the
+   first ``anno`` the description carries no navigation. The marker never
+   changes, or every comment already posted would be orphaned.
 4. The base branch is excluded from the operable set but included in
    ``anno`` chains.
 5. An MR lookup matches the head — branch *and* repository, by identity —

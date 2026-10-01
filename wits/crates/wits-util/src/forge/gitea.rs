@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 use super::RemoteInfo;
 use super::{
     current_user, dedup_mrs, encode, next_link, request, request_every_page, resolve_self,
-    Attributes, Auth, Forge, HeadRepo, MergeRequest, MrState, NewMr, SELF_REF,
+    Attributes, Auth, Forge, HeadRepo, MergeRequest, MrComment, MrState, NewMr, SELF_REF,
 };
 
 const WIP_PREFIX: &str = "WIP: ";
@@ -28,6 +28,8 @@ pub struct Gitea {
     push_repo: Option<RemoteInfo>,
     /// `push_repo`'s numeric id, resolved by the first lookup that needs it.
     push_repo_id: OnceLock<i64>,
+    /// The authenticated user's id, read by the first comment listing.
+    me: OnceLock<i64>,
     auth: Auth,
 }
 
@@ -47,8 +49,22 @@ impl Gitea {
             head_owner,
             push_repo,
             push_repo_id: OnceLock::new(),
+            me: OnceLock::new(),
             auth: Auth::Token(token),
         }
+    }
+
+    /// The authenticated user's id, read once.
+    fn my_id(&self) -> anyhow::Result<i64> {
+        if let Some(id) = self.me.get() {
+            return Ok(*id);
+        }
+        let v = request("GET", &format!("{}/user", self.api_base), &self.auth, None)?;
+        let id = v["id"]
+            .as_i64()
+            .ok_or_else(|| anyhow::anyhow!("could not read the authenticated user"))?;
+        // Listings run in parallel, so another one may have stored the same id first.
+        Ok(*self.me.get_or_init(|| id))
     }
 
     fn head_ref(&self, branch: &str) -> String {
@@ -136,7 +152,20 @@ fn next_page(base: &str, headers: &[(String, String)]) -> Option<String> {
     let page = query
         .split('&')
         .find_map(|pair| pair.strip_prefix("page="))?;
-    Some(format!("{base}&page={page}"))
+    let join = if base.contains('?') { '&' } else { '?' };
+    Some(format!("{base}{join}page={page}"))
+}
+
+/// A comment as an [`MrComment`], `own` when user `me` wrote it.
+fn parse_comment(comment: &Value, me: i64) -> Option<(i64, MrComment)> {
+    let id = comment["id"].as_i64()?;
+    let parsed = MrComment {
+        id: id.to_string(),
+        body: comment["body"].as_str().unwrap_or_default().to_owned(),
+        url: comment["html_url"].as_str().unwrap_or_default().to_owned(),
+        own: comment["user"]["id"].as_i64() == Some(me),
+    };
+    Some((id, parsed))
 }
 
 /// Whether a PR's head is `branch` in the expected repository: the one with id
@@ -209,6 +238,37 @@ impl Forge for Gitea {
             (prs, next_page(&url, headers))
         })
         .map(dedup_mrs)
+    }
+
+    fn list_comments(&self, mr: &str) -> anyhow::Result<Vec<MrComment>> {
+        let me = self.my_id()?;
+        // The endpoint takes no paging parameters and answers with every
+        // comment (`issueGetComments` in Gitea's and Forgejo's API spec); a
+        // `Link` header, should a server page it after all, is still followed.
+        let url = format!("{}/issues/{mr}/comments", self.repo_url());
+        let mut comments = request_every_page(&url, &self.auth, |v, headers| {
+            let comments = v
+                .as_array()
+                .map(|arr| arr.iter().filter_map(|c| parse_comment(c, me)).collect())
+                .unwrap_or_default();
+            (comments, next_page(&url, headers))
+        })?;
+        // Ids grow with time, so they order the comments oldest first whatever
+        // order the server lists them in.
+        comments.sort_by_key(|(id, _)| *id);
+        Ok(comments.into_iter().map(|(_, comment)| comment).collect())
+    }
+
+    fn add_comment(&self, mr: &str, body: &str) -> anyhow::Result<()> {
+        let url = format!("{}/issues/{mr}/comments", self.repo_url());
+        request("POST", &url, &self.auth, Some(&json!({ "body": body })))?;
+        Ok(())
+    }
+
+    fn edit_comment(&self, _mr: &str, comment: &str, body: &str) -> anyhow::Result<()> {
+        let url = format!("{}/issues/comments/{comment}", self.repo_url());
+        request("PATCH", &url, &self.auth, Some(&json!({ "body": body })))?;
+        Ok(())
     }
 
     fn create(&self, req: &NewMr) -> anyhow::Result<MergeRequest> {
@@ -335,6 +395,23 @@ mod tests {
             Some("https://git.example/api/v1/repos/o/r/pulls?state=all&head=feat&limit=50&page=2")
         );
         assert_eq!(next_page(base, &[]), None);
+        // A base without a query of its own starts one.
+        assert_eq!(
+            next_page(
+                "https://git.example/api/v1/repos/o/r/issues/3/comments",
+                &headers
+            )
+            .as_deref(),
+            Some("https://git.example/api/v1/repos/o/r/issues/3/comments?page=2")
+        );
+    }
+
+    #[test]
+    fn a_comment_is_marked_by_its_author_id() {
+        let comment = |id: i64, user: i64| json!({ "id": id, "body": "b", "html_url": "u", "user": { "id": user, "login": "x" } });
+        let (id, mine) = parse_comment(&comment(4, 9), 9).unwrap();
+        assert_eq!((id, mine.id.as_str(), mine.own), (4, "4", true));
+        assert!(!parse_comment(&comment(5, 8), 9).unwrap().1.own);
     }
 
     #[test]

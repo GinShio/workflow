@@ -28,8 +28,8 @@ of diff. The hard part was never the local commit surgery — ``git rebase``,
 ``git-branchless``, ``git-machete`` already do that well. The hard part is the
 *remote* bookkeeping: pushing the right branches, opening each MR against the
 right base, keeping those bases correct as the stack is reordered, and keeping
-every MR's description pointing at its neighbours so a reviewer can navigate.
-That remote bookkeeping is the entire job of this tool.
+a navigation comment on every MR pointing at its neighbours so a reviewer can
+navigate. That remote bookkeeping is the entire job of this tool.
 
 (On naming: the user-facing label is per-host — GitHub calls it a PR, GitLab
 an MR. Internally, and throughout this document, we call it an **MR**. The
@@ -45,8 +45,8 @@ The division of labour:
 * **Local refs are the source of truth for content.** If ``feature-b`` points
   at a commit locally, that is what gets pushed. We assume the user (or
   ``git-branchless``) has kept the pointers sane.
-* **We own the remote.** Pushing, opening MRs, fixing MR bases, rewriting MR
-  descriptions — that is what lives here.
+* **We own the remote.** Pushing, opening MRs, fixing MR bases, keeping each
+  MR's navigation comment current — that is what lives here.
 
 Non-goals, stated once: no rebase/restack engine and no conflict resolution —
 those have good tools already. We *do* edit the topology metadata (``slice``
@@ -63,7 +63,7 @@ distinct intents::
 
    wits stack sync      [scope]   # push to the origin role (git only; no forge)
    wits stack submit    [scope]   # reconcile MRs: create missing, fix drifted bases
-   wits stack anno      [scope]   # rewrite MR descriptions with stack navigation
+   wits stack anno      [scope]   # keep each MR's navigation comment current
    wits stack decorate  [branch]  # add labels/assignees/reviewers to an MR (additive)
    wits stack slice     [--base B] # interactively cut HEAD's commits into a stack
    wits stack tree      {prune|rm|mv|rename}  # direct edits to the stack's structure
@@ -87,7 +87,7 @@ commit — very likely a rename — but never what it became, so following it is
 necessarily a separate, explicit act.
 
 The three remote verbs are orthogonal facets of remote state — branch content
-(``sync``), MR existence and base (``submit``), MR description (``anno``) —
+(``sync``), MR existence and base (``submit``), MR navigation (``anno``) —
 and each is an idempotent reconcile you can re-run on its own.
 
 Scope: which branches a verb touches
@@ -206,8 +206,8 @@ The tree algebra is small and total:
 
 One invariant a future change will be tempted to break: ``anno_blocks`` stops
 a chain at the next fork-point rather than expanding it, because that nested
-fork-point renders its own multi-chain description; expanding it here would
-grow descriptions combinatorially.
+fork-point renders its own multi-chain navigation; expanding it here would
+grow navigation comments combinatorially.
 
 Stack resolution
 ----------------
@@ -252,7 +252,7 @@ Branches not in the file — synthetic one-node stack
 When the current branch is absent from ``<common-git-dir>/machete``,
 resolution synthesizes a trivial tree: ``base → branch``. ``sync`` and
 ``submit`` then operate on exactly that branch. ``anno`` **skips** it: a lone
-MR has no neighbours to navigate to, so a navigation block would be pure
+MR has no neighbours to navigate to, so a navigation comment would be pure
 noise. This single-node path requires zero machete setup and is the common
 case for an ordinary one-off MR.
 
@@ -354,6 +354,10 @@ No provider JSON shape (``number`` vs ``iid``, ``base.ref`` vs
        fn set_base(&self, id: &str, base: &str) -> Result<()>;
        fn set_body(&self, id: &str, body: &str) -> Result<()>;
        fn apply_attributes(&self, id: &str, attrs: &Attributes) -> Result<()>;
+       // conversation comments, oldest first, each marked `own` when the token's user wrote it
+       fn list_comments(&self, mr: &str) -> Result<Vec<MrComment>>;
+       fn add_comment(&self, mr: &str, body: &str) -> Result<()>;
+       fn edit_comment(&self, mr: &str, comment: &str, body: &str) -> Result<()>;
        // …plus the review half (list_mrs / mr_details / mr_ref / list_threads /
        // submit) and find_children/permalink, documented in review-design.
    }
@@ -403,7 +407,8 @@ and that is cleaner than a mode flag:
   by default (a mid-stack change should not be reviewed/merged before what it
   sits on), overridable per-invocation with a ``--no-draft`` flag — a CLI
   option, not a config key, because it is a per-run intent.
-* **``anno``** → ``set_body``.
+* **``anno``** → ``list_comments``, then ``add_comment`` or ``edit_comment``;
+  ``set_body`` only strips a block an older version left in a description.
 
 **Closed-MR guard** (submit only): if no open MR exists but a closed/merged
 one does, do not silently recreate it — recreate only when its head SHA
@@ -443,15 +448,59 @@ root: a Forgejo host falls back to ``GITEA_TOKEN``.
 Annotation rendering (``anno``)
 -------------------------------
 
-For each in-scope MR, ``anno`` rebuilds a single generated block delimited by
-a fixed HEADER/FOOTER comment pair, replacing any previous one (the
-single-pair invariant is what makes stripping reliable). Inside, one
-navigation section per chain from ``anno_blocks``; each line names the MR and
-its ``parent ← child`` flow, with the current MR marked. A fork-point MR
-therefore shows one section per downstream branch, so a reviewer sees every
-path the stack takes from here. The MRs it numbers are the ones in scope — the
-same selection ``sync`` and ``submit`` act on — so those sections are complete
-for the lines in scope, and ``anno --all`` puts every line of the stack there.
+For each in-scope MR, ``anno`` renders one generated block delimited by a
+fixed HEADER/FOOTER comment pair. Inside, one navigation section per chain from
+``anno_blocks``; each line names the MR and its ``parent ← child`` flow, with
+the current MR marked. A fork-point MR therefore shows one section per
+downstream branch, so a reviewer sees every path the stack takes from here. The
+MRs it numbers are the ones in scope — the same selection ``sync`` and
+``submit`` act on — so those sections are complete for the lines in scope, and
+``anno --all`` puts every line of the stack there.
+
+**Where it lives: one conversation comment per MR.** Not the description: in a
+squash-merging repository the description becomes the landed commit's message
+— LLVM's documentation says as much — so a block there would end up in the
+project's history. Repositories differ in how they merge, and wits must not
+model that; a comment is part of no commit under any merge method, which makes
+it the one placement that is safe everywhere. It also leaves the description
+entirely the author's, which is what a squash-merge repository wants of it.
+
+**Who writes it, and how it is found again.** Only ``anno`` writes navigation;
+``submit`` posts nothing but the MR. Each run lists the MR's conversation
+comments and takes, among the token's user's own, those whose body *starts*
+with the HEADER — a reply quoting the block contains it without being it. None:
+the comment is created. Otherwise the oldest is the one kept current, as it
+sits highest in the conversation, and is edited only when its text differs
+(line endings and outer whitespace aside), so a second run writes nothing. The
+comment's id is not cached in the machete file: deciding whether to edit needs
+the current body anyway, which costs the same request as listing, and a cache
+would go stale the moment someone deleted the comment.
+
+**What it never does.** It never touches another account's comment, never
+pins, and never deletes. Further navigation comments of the user's own — from
+two runs at once, say — are reported with their links and left for the user
+to remove, as are navigation comments another account wrote (after a token
+change). Preventing duplicates is left to the lookup instead: every page is
+read before "there is none" is concluded, a failed listing fails the MR rather
+than passing for an empty one, and a failed create is not retried (the
+transport never resends a POST after a gateway error), since it may have
+landed; the next run finds it.
+
+**Placement.** A comment keeps the place in the conversation it was posted at,
+and no API moves it; nor can any forge pin one on an MR — GitHub pins comments
+on issues only, and GitLab, Gitea and Forgejo pin none. ``anno`` therefore
+belongs right after ``submit``, before anyone else has commented, which puts
+the navigation directly under the description for good (on LLVM, nobody else
+commented within 9 s of a PR opening, in a sample of 73). Having ``submit``
+post the comment itself was rejected to keep each verb to one facet. Editing in
+place costs no noise — no forge notifies anyone of an edit, short of a newly
+added @mention, which navigation never holds — whereas a reposted comment
+would notify every subscriber again.
+
+**Migration.** A description that still holds the block an older version wrote
+is stripped of it — the rest of the text kept, a torn footer recovered — but
+only after the comment holds the navigation, so a failure part-way never
+leaves the MR without one.
 
 Identity: ``anno`` discovers MR numbers from the forge, caches them back into
 the machete annotations, and reuses them within the run.
@@ -518,4 +567,4 @@ Open questions / future
   registry's ``main_branch`` rather than the merge target's remote HEAD — the
   git hooks' branchless bootstrap already asks the registry first, so the two
   can disagree today.
-* future CI status read-back into the annotation block.
+* future CI status read-back into the navigation comment.

@@ -7,7 +7,7 @@ Turn a chain of local branches into a set of merge requests that reviewers can
 actually navigate — and keep them in sync as you reshape the stack. You do the
 local work however you like (``git rebase``, ``git-branchless``, plain
 commits); ``wits stack`` handles the remote half: pushing the branches, opening
-an MR for each against the right base, and writing a navigation block into
+an MR for each against the right base, and keeping a navigation comment on
 every MR so a reviewer can walk the whole stack.
 
 The mental model
@@ -31,7 +31,7 @@ re-run it freely; each only reconciles its own slice of the world:
      - MR **existence** and **base**
      - the forge API
    * - ``wits stack anno``
-     - MR **descriptions**
+     - each MR's **navigation comment**
      - the forge API
 
 Plus a few helpers: ``wits stack slice`` cuts commits into the stack in the
@@ -183,11 +183,30 @@ After reworking your commits:
 
    wits stack sync       # push every branch in the stack to the origin remote
    wits stack submit     # open MRs that don't exist; fix bases that moved
-   wits stack anno       # refresh the navigation block in each MR description
+   wits stack anno       # keep each MR's navigation comment current
 
 Run them in that order the first time; afterwards run whichever matches what
 changed. Reordered the stack but did not touch code? ``submit`` alone fixes the
 MR bases. Just amended a commit? ``sync`` alone re-pushes.
+
+Where the navigation lives
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The navigation is one comment on each MR, written by you (the token's user)
+and edited in place — never part of the description. In a repository that
+squash-merges, the description becomes the landed commit's message, while a
+comment is part of no commit whatever the merge method.
+
+A comment keeps the place in the conversation it was posted at, so run
+``anno`` right after ``submit``, as above: the navigation then sits directly
+under the description, ahead of anyone else's comments. ``anno`` only edits its
+own comment, never anyone else's, and deletes nothing; if a second navigation
+comment of yours ever appears (two runs at once, say), it keeps the oldest
+current and tells you where the other one is.
+
+An MR whose description still holds the block an older ``wits`` wrote there is
+migrated by the next ``anno``: the comment is written first, then the block is
+stripped from the description, the rest of your text untouched.
 
 Scope — which branches each verb touches
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -383,7 +402,7 @@ Previewing with ``--dry-run``
 
 ``-n``/``--dry-run`` is global. It still reads from git and the forge to work
 out what it *would* do, then prints the pushes, MR creations, base changes, and
-description edits instead of performing them:
+navigation comments instead of performing them:
 
 .. code-block:: sh
 

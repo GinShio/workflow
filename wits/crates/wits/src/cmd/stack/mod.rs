@@ -1,10 +1,11 @@
 //! `wits stack` — turning a chain of local branches into a navigable set of MRs.
 //!
 //! The verbs are deliberately orthogonal facets of remote state: `sync` is
-//! branch content (push), `submit` is MR existence and base, `anno` is the MR
-//! description. Each is an idempotent reconcile that can be re-run on its own,
-//! which is what makes a stack workflow recoverable — when one step fails you
-//! re-run that step, not a monolith. `slice` is the one local authoring verb.
+//! branch content (push), `submit` is MR existence and base, `anno` is each
+//! MR's navigation comment. Each is an idempotent reconcile that can be re-run
+//! on its own, which is what makes a stack workflow recoverable — when one step
+//! fails you re-run that step, not a monolith. `slice` is the one local
+//! authoring verb.
 //!
 //! All four share a single notion of *scope* (which branches this invocation
 //! touches), computed once in `resolution`; see
@@ -44,7 +45,7 @@ pub enum StackAction {
     Sync(ScopeArgs),
     /// Create missing MRs and correct drifted bases.
     Submit(SubmitArgs),
-    /// Rewrite MR descriptions with stack navigation.
+    /// Keep each MR's stack navigation comment current.
     Anno(ScopeArgs),
     /// Add labels / assignees / reviewers to an MR (additive).
     Decorate(DecorateArgs),
