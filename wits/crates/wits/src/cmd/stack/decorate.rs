@@ -17,7 +17,9 @@ use wits_util::git::Repository;
 use wits_util::log as wits_log;
 use wits_util::remote::RemoteRoles;
 
-use super::{fail_if_any, find_open_mrs, map_parallel, resolution, DecorateArgs, ForgeSession};
+use super::{
+    fail_if_any, find_open_mrs, map_parallel, resolution, DecorateArgs, ForgeSession, ScopeArgs,
+};
 
 pub fn run(repo: &Repository, roles: &RemoteRoles, args: &DecorateArgs) -> anyhow::Result<()> {
     let attrs = Attributes {
@@ -66,16 +68,20 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, args: &DecorateArgs) -> anyho
     fail_if_any(failures)
 }
 
-/// One branch (the named one, or the current) by default; the whole in-scope
-/// stack under `--all`.
+/// One branch (the named one, or the current) by default; under `--all`, every
+/// branch of that branch's whole stack, exactly as the other verbs' `--all`
+/// scopes it.
 fn target_branches(
     repo: &Repository,
     roles: &RemoteRoles,
     args: &DecorateArgs,
 ) -> anyhow::Result<Vec<String>> {
     if args.all {
-        let current = repo.current_branch();
-        return Ok(resolution::plan(repo, roles, current.as_deref(), true)?.selected);
+        let scope = ScopeArgs {
+            branch: args.branch.clone(),
+            all: true,
+        };
+        return Ok(resolution::plan_scoped(repo, roles, &scope)?.selected);
     }
     let branch = match &args.branch {
         Some(b) => b.clone(),

@@ -219,68 +219,45 @@ pub fn base_branch(repo: &Repository, roles: &RemoteRoles) -> anyhow::Result<Str
     anyhow::bail!("could not determine the base branch: no remote HEAD and no main/master/trunk")
 }
 
-/// Build the plan for this invocation. `current` is the checked-out branch
-/// (`None` on a detached HEAD); `all` widens the scope to every recorded stack.
-pub fn plan(
+/// Build the plan for one invocation. `anchor` is the branch the scope is
+/// computed from (`None` on a detached HEAD with no branch named); `all` widens
+/// the scope from the anchor's line of work to its whole stack.
+fn plan(
     repo: &Repository,
     roles: &RemoteRoles,
-    current: Option<&str>,
+    anchor: Option<&str>,
     all: bool,
 ) -> anyhow::Result<StackPlan> {
     let base_branch = base_branch(repo, roles)?;
     let topology = load_topology(repo)?;
-    select(topology, base_branch, current, all)
-}
-
-/// The parsed scope selector, after CLI parsing but before touching git. clap's
-/// `conflicts_with` guarantees the positional branch and `--all` never co-occur,
-/// so the fourth (illegal) combination is simply not representable here — the
-/// exclusion is enforced at the parser and the domain sees only the three legal
-/// states.
-enum Scope<'a> {
-    /// Neither given: anchor on the checked-out branch (`None` = detached HEAD).
-    Current,
-    /// A named anchor branch.
-    Branch(&'a str),
-    /// Every recorded stack.
-    All,
-}
-
-impl<'a> Scope<'a> {
-    fn from_args(args: &'a super::ScopeArgs) -> Self {
-        match (args.branch.as_deref(), args.all) {
-            (Some(branch), _) => Scope::Branch(branch),
-            (None, true) => Scope::All,
-            (None, false) => Scope::Current,
-        }
-    }
+    select(topology, base_branch, anchor, all)
 }
 
 /// Build the plan from CLI scope args. The positional branch is a *scope
 /// anchor*: it replaces the checked-out branch as the point the stack is
 /// computed from, so a stack can be driven without checking it out (handy with
-/// worktrees or a dirty tree). It is mutually exclusive with `--all` (enforced by
-/// clap), and — when given explicitly — must name a real branch (a live local
-/// ref, or one recorded in the file) so a typo cannot masquerade as an empty
-/// synthetic stack.
+/// worktrees or a dirty tree). When given explicitly it must name a real branch
+/// (a live local ref, or one recorded in the file) so a typo cannot masquerade
+/// as an empty synthetic stack. `--all` widens the scope around whichever
+/// anchor is in force to that anchor's whole stack.
 pub fn plan_scoped(
     repo: &Repository,
     roles: &RemoteRoles,
     scope: &super::ScopeArgs,
 ) -> anyhow::Result<StackPlan> {
-    match Scope::from_args(scope) {
-        Scope::All => plan(repo, roles, None, true),
-        Scope::Branch(branch) => {
+    let anchor = match scope.branch.as_deref() {
+        Some(branch) => {
             let known = repo.rev_parse(branch).is_some() || load_topology(repo)?.contains(branch);
             if !known {
                 anyhow::bail!(
                     "no such branch '{branch}': not a local branch and not recorded in the machete file"
                 );
             }
-            plan(repo, roles, Some(branch), false)
+            Some(branch.to_owned())
         }
-        Scope::Current => plan(repo, roles, repo.current_branch().as_deref(), false),
-    }
+        None => repo.current_branch(),
+    };
+    plan(repo, roles, anchor.as_deref(), scope.all)
 }
 
 /// The scope decision, factored out from git so it can be exercised on literal
@@ -289,53 +266,39 @@ pub fn plan_scoped(
 fn select(
     topology: Topology,
     base_branch: String,
-    current: Option<&str>,
+    anchor: Option<&str>,
     all: bool,
 ) -> anyhow::Result<StackPlan> {
-    if all {
-        if topology.is_empty() {
-            anyhow::bail!("no stacks are recorded in the machete file");
-        }
-        let selected = topology
-            .all()
-            .iter()
-            .filter(|n| **n != base_branch)
-            .cloned()
-            .collect();
-        return Ok(StackPlan {
-            topology,
-            base_branch,
-            selected,
-            standalone: false,
-        });
-    }
-
-    let current = current
-        .ok_or_else(|| anyhow::anyhow!("detached HEAD: check out a stack branch or pass --all"))?;
-    if current == base_branch {
+    let anchor = anchor
+        .ok_or_else(|| anyhow::anyhow!("detached HEAD: check out a stack branch or name one"))?;
+    if anchor == base_branch {
         anyhow::bail!("on the base branch '{base_branch}': check out a stack branch first");
     }
 
     // A branch the file never mentions is treated as its own one-node stack on
     // the base branch — the zero-setup path for an ordinary single MR.
-    if !topology.contains(current) {
-        let topology = Topology::synthetic(&base_branch, current);
+    if !topology.contains(anchor) {
+        let topology = Topology::synthetic(&base_branch, anchor);
         return Ok(StackPlan {
             topology,
             base_branch,
-            selected: vec![current.to_owned()],
+            selected: vec![anchor.to_owned()],
             standalone: true,
         });
     }
 
-    // Standing on a fork means "I manage this whole tree"; standing on a linear
-    // node means "this one line of work" and siblings are left alone.
-    let names = if topology.is_fork_point(current) {
-        let mut names = topology.ancestors(current);
-        names.extend(topology.subtree(current));
+    // `--all` takes every line of the anchor's stack, but no other stack on the
+    // base. Otherwise, standing on a fork means "I manage this whole tree";
+    // standing on a linear node means "this one line of work" and siblings are
+    // left alone.
+    let names = if all {
+        topology.whole_stack(anchor, &base_branch)
+    } else if topology.is_fork_point(anchor) {
+        let mut names = topology.ancestors(anchor);
+        names.extend(topology.subtree(anchor));
         names
     } else {
-        topology.linear_stack(current)
+        topology.linear_stack(anchor)
     };
 
     let mut seen = HashSet::new();
@@ -359,14 +322,42 @@ mod tests {
     fn sample() -> Topology {
         // main → A → B(fork) → C → E
         //                        → D
-        Topology::parse("main\n    A\n        B\n            C\n                E\n            D\n")
+        //      → X → Y          (a second stack on the same base)
+        Topology::parse(
+            "main\n    A\n        B\n            C\n                E\n            D\n    X\n        Y\n",
+        )
     }
 
     #[test]
-    fn all_mode_takes_every_branch_but_the_base() {
-        let plan = select(sample(), "main".into(), None, true).unwrap();
-        assert_eq!(plan.selected, ["A", "B", "C", "E", "D"]);
-        assert!(!plan.standalone);
+    fn all_takes_the_whole_stack_around_the_anchor() {
+        // From a leaf below the fork, from the stack's root, or from the fork's
+        // other side: always every line of A's stack, never the X stack.
+        for anchor in ["E", "A", "D"] {
+            let plan = select(sample(), "main".into(), Some(anchor), true).unwrap();
+            assert_eq!(
+                plan.selected,
+                ["A", "B", "C", "E", "D"],
+                "anchored on {anchor}"
+            );
+            assert!(!plan.standalone);
+        }
+        let plan = select(sample(), "main".into(), Some("Y"), true).unwrap();
+        assert_eq!(plan.selected, ["X", "Y"]);
+    }
+
+    #[test]
+    fn all_leaves_a_branch_outside_the_file_on_its_own() {
+        let plan = select(sample(), "main".into(), Some("hotfix"), true).unwrap();
+        assert!(plan.standalone);
+        assert_eq!(plan.selected, ["hotfix"]);
+    }
+
+    #[test]
+    fn all_still_needs_a_stack_branch_to_anchor_on() {
+        // The whole stack is relative to the anchor, so neither a detached HEAD
+        // nor the base branch, which every stack shares, can choose one.
+        assert!(select(sample(), "main".into(), None, true).is_err());
+        assert!(select(sample(), "main".into(), Some("main"), true).is_err());
     }
 
     #[test]

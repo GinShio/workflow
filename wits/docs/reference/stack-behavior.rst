@@ -61,6 +61,9 @@ Definitions
      - N and all descendants, DFS pre-order
    * - **linear stack(N)**
      - ancestors(N) + N + the first-child chain down to a leaf
+   * - **whole stack(N)**
+     - subtree(S), where S is N's outermost ancestor short of the base branch
+       (N itself when it sits on the base branch)
 
 Scope — which branches a verb touches
 -------------------------------------
@@ -79,14 +82,17 @@ never disagree. Given the checked-out branch N:
    * - N is **linear** (≤ 1 child)
      - linear stack(N) — this one line of work; sibling forks are left alone
    * - N is **not in the file**
-     - just N, as a synthetic one-node stack on the base branch
+     - just N, as a synthetic one-node stack on the base branch, with or
+       without ``--all``
    * - ``--all``
-     - every node in every tree, file order — the base branch excepted (below)
+     - whole stack(N), DFS pre-order — every line of N's stack; the other
+       stacks on the base branch are left alone
 
 The base branch is always removed from the operable set (it is never pushed
 and never gets its own MR), but it still appears inside ``anno`` chains so
-reviewers see the full lineage. A detached HEAD with no ``--all`` is an error
-(there is no branch to scope from).
+reviewers see the full lineage. A detached HEAD is an error unless a branch is
+named (there is no branch to scope from), and so is standing on the base
+branch, ``--all`` included: every stack shares it, so it chooses none.
 
 Anchoring on a named branch
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -95,10 +101,11 @@ N above is normally the checked-out branch, but ``sync``/``submit``/``anno``
 accept an optional positional branch that replaces it as the anchor — the
 stack is then computed around *that* branch without checking it out. It is a
 scope anchor, not a single target: an anchor mid-line still selects its
-ancestors and downstream chain (the same set standing on it would). The anchor
-and ``--all`` are mutually exclusive, and an explicitly named anchor must be a
-real branch — a live local ref, or a name recorded in the file — so a typo
-fails loudly instead of quietly resolving to an empty synthetic stack. (An
+ancestors and downstream chain (the same set standing on it would), and
+``--all`` widens that to its whole stack, as it would for the checked-out
+branch. An explicitly named anchor must be a real branch — a live local ref,
+or a name recorded in the file — so a typo fails loudly instead of quietly
+resolving to an empty synthetic stack. (An
 anchor that *is* a valid branch but absent from the file still becomes the
 synthetic one-node stack of the next section, just as the checked-out branch
 would.) A named anchor also lifts the detached-HEAD restriction, since scope
@@ -110,6 +117,8 @@ Worked examples, on the sample forest above:
   subtree of ``B``); ``main`` dropped as base.
 * Standing on **D** (linear): operable = ``A, B, D, F`` (the linear stack);
   ``C`` is *not* touched — it is a sibling line.
+* Standing on **D** with ``--all``: operable = ``A, B, C, D, F`` (the whole
+  stack ``A`` roots); a second stack on ``main`` would be left alone.
 
 Base resolution and per-branch base
 -----------------------------------
@@ -211,6 +220,11 @@ Rendering rules
   not given a line, but still appears as the *parent* in its child's flow
   line, so the chain reads correctly. A root branch with no parent shows the
   base branch as its parent rather than a placeholder.
+* **Only MRs in scope are looked up**, so an MR outside the scope drops out of
+  the numbering the same way. A fork-point reached from one of its lines keeps
+  a section for each of its other lines, but those number only the fork-point
+  and its ancestors; ``--all`` brings every line in, as the rendered example
+  below assumes.
 * The current MR's own line is marked ``⬅️ **current**``.
 * **Idempotent:** regenerating identical content replaces the old block byte
   for byte, so a second ``anno`` run reports "already up to date" and writes
@@ -281,8 +295,9 @@ Add labels, assignees, and reviewers to MRs — additively, and per MR.
 
 Attributes differ from one MR to the next, so this verb is **single-MR by
 default**: it acts on the named branch (or the current one). ``--all`` applies
-the *same* set across the whole in-scope stack, for a uniform label like
-``stacked``. Per-branch differences are expressed by running it once per
+the *same* set to every MR in that branch's whole stack — the scope ``--all``
+gives the other verbs — for a uniform label like ``stacked``. Per-branch
+differences are expressed by running it once per
 branch with that branch's flags — typically from a per-repo script; the tool
 keeps no defaults and reads no config. Flags ``--label`` / ``--assignee`` /
 ``--reviewer`` are each repeatable, and ``@me`` resolves to the authenticated
@@ -493,7 +508,7 @@ Where the logic lives
      - Location
    * - forest parse/serialize, tree algebra
      - ``crates/wits/src/cmd/stack/topology.rs`` (``ancestors``, ``subtree``,
-       ``linear_stack``, ``anno_blocks``, ``reparent``)
+       ``linear_stack``, ``whole_stack``, ``anno_blocks``, ``reparent``)
    * - scope selection, base resolution, per-branch base
      - ``crates/wits/src/cmd/stack/resolution.rs``
    * - push
@@ -520,8 +535,8 @@ Where the logic lives
 Invariants
 ----------
 
-1. ``sync``, ``submit``, ``anno`` must share one scope computation — never
-   fork the fork-point rule across verbs.
+1. ``sync``, ``submit``, ``anno`` (and ``decorate --all``) must share one
+   scope computation — never fork the fork-point rule across verbs.
 2. ``anno_blocks`` must stop at the next fork-point; expanding it grows
    descriptions combinatorially.
 3. Exactly one navigation marker pair per description; stripping relies on

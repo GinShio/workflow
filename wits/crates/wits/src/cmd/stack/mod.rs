@@ -107,17 +107,20 @@ pub struct RenameArgs {
 }
 
 /// Scope shared by the verbs that walk the stack. The optional branch is a
-/// *scope anchor*: the whole stack around it is operated on, not just that one
-/// branch (that is the per-stack semantics, unlike `decorate`'s per-MR branch).
-/// It defaults to the checked-out branch and is mutually exclusive with `--all`.
+/// *scope anchor*: the stack around it is operated on, not just that one branch
+/// (that is the per-stack semantics, unlike `decorate`'s per-MR branch). It
+/// defaults to the checked-out branch; `--all` widens the scope from the
+/// anchor's line of work to its whole stack.
 #[derive(Debug, Args)]
 pub struct ScopeArgs {
-    /// Branch to anchor the stack on (default: the current branch). The whole
-    /// stack around it is operated on, not just this branch. Not valid with --all.
+    /// Branch to anchor the stack on (default: the current branch). Its line of
+    /// work is operated on, or at a fork-point the tree below it, not just this
+    /// branch.
     pub branch: Option<String>,
 
-    /// Operate on every recorded stack, not just the current branch's.
-    #[arg(long, conflicts_with = "branch")]
+    /// Operate on the anchor's whole stack: every line of it, but no other stack
+    /// on the base branch.
+    #[arg(long)]
     pub all: bool,
 }
 
@@ -153,11 +156,13 @@ pub enum TitleSource {
 
 #[derive(Debug, Args)]
 pub struct DecorateArgs {
-    /// The branch whose MR to decorate (default: current). Not valid with --all.
+    /// The branch whose MR to decorate (default: current). With --all, the
+    /// branch whose stack to decorate.
     pub branch: Option<String>,
 
-    /// Apply the same attributes to every MR in the current stack instead of one.
-    #[arg(long, conflicts_with = "branch")]
+    /// Apply the same attributes to every MR in the branch's whole stack instead
+    /// of one.
+    #[arg(long)]
     pub all: bool,
 
     /// A label to add (repeatable).

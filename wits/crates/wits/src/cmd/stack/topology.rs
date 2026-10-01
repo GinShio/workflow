@@ -189,6 +189,19 @@ impl Topology {
         out
     }
 
+    /// The whole stack the node sits in: the subtree, DFS pre-order, of its
+    /// outermost ancestor short of `base` — the node itself when it sits
+    /// directly on the base, or the root of a tree the base does not root.
+    /// Stopping short of the base is what keeps the other stacks on the same
+    /// base out.
+    pub fn whole_stack(&self, name: &str, base: &str) -> Vec<String> {
+        let mut top = name;
+        while let Some(parent) = self.parent(top).filter(|parent| *parent != base) {
+            top = parent;
+        }
+        self.subtree(top)
+    }
+
     /// The navigation chains to render in a node's MR description
     /// (`docs/reference/stack-design.rst`, "Annotation rendering (anno)"). A
     /// fork-point yields one chain per child; a linear node yields
@@ -431,6 +444,23 @@ mod tests {
         let t = sample();
         // From D: ancestors main,A,B + D + first-child chain F.
         assert_eq!(t.linear_stack("D"), ["main", "A", "B", "D", "F"]);
+    }
+
+    #[test]
+    fn whole_stack_stops_below_the_base() {
+        // Two stacks on one base: A's, which forks at B, and X's.
+        let t = Topology::parse(
+            "main\n    A\n        B\n            C\n            D\n    X\n        Y\n",
+        );
+        // From its root or from either side of its fork, A's stack is all of A's
+        // subtree and none of X's.
+        for name in ["A", "C", "D"] {
+            assert_eq!(t.whole_stack(name, "main"), ["A", "B", "C", "D"]);
+        }
+        assert_eq!(t.whole_stack("Y", "main"), ["X", "Y"]);
+        // A tree whose root is not the base is one stack from that root.
+        let other = Topology::parse("develop\n    X\n        Y\n");
+        assert_eq!(other.whole_stack("Y", "main"), ["develop", "X", "Y"]);
     }
 
     #[test]

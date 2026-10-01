@@ -201,28 +201,34 @@ one rule that is worth knowing:
 * **On a fork-point** (two or more children): it acts on the *whole tree* you
   are the root of — every branch below you, plus your ancestors.
 
-Pass ``--all`` to act on every stack recorded in the machete file, regardless
-of where you are standing:
+Pass ``--all`` to act on the *whole stack* you are in — every line of it, from
+the branch sitting on the base branch upward — whichever of its branches you
+are standing on. Other stacks on the same base branch are left alone:
 
 .. code-block:: sh
 
    wits stack sync --all
    wits stack submit --all
 
+``anno`` only looks up the MRs in scope, so on a stack that forks, run
+``wits stack anno --all`` to give each fork-point the navigation of all its
+lines.
+
 You can also name a branch to anchor on, instead of checking it out — useful
 for driving another stack from a worktree or a dirty tree:
 
 .. code-block:: sh
 
-   wits stack submit feature-api     # submit the whole stack around feature-api
-   wits stack sync feature-api       # push that stack, without switching to it
+   wits stack submit feature-api         # submit the stack around feature-api
+   wits stack sync feature-api           # push that stack, without switching to it
+   wits stack anno feature-api --all     # refresh feature-api's whole stack
 
-The branch is a **scope anchor**, not the single target: the whole stack around
-it is operated on, exactly as if you had checked it out (an anchor mid-line
-still pulls in its ancestors and downstream chain). That is the per-stack
-meaning — different from ``decorate``, whose branch names the one MR to touch.
-The anchor must be a real branch (a local ref, or a name recorded in the
-machete file), and it cannot be combined with ``--all``.
+The branch is a **scope anchor**, not the single target: the stack around it is
+operated on exactly as if you had checked it out (an anchor mid-line still
+pulls in its ancestors and downstream chain), and ``--all`` widens that to the
+anchor's whole stack. That is the per-stack meaning — different from
+``decorate``, whose branch names the one MR to touch. The anchor must be a real
+branch (a local ref, or a name recorded in the machete file).
 
 The base branch (``main``/``master``/…) is never pushed and never gets an MR,
 but it does appear in the navigation chains so reviewers see the full lineage.
@@ -280,10 +286,11 @@ a time** by default (the named branch, or the current one):
 
    wits stack decorate feature-api --label api --reviewer alice --assignee @me
    wits stack decorate              --label wip            # the current branch's MR
-   wits stack decorate --all        --label stacked        # the same label on every MR in the stack
+   wits stack decorate --all        --label stacked        # every MR of the current branch's whole stack
 
 ``--label``, ``--reviewer``, and ``--assignee`` are each repeatable; ``@me``
-means you.
+means you. ``--all`` covers the whole stack of the named branch, or of the
+current one.
 
 There is no config and no stored defaults on purpose. To make a project's
 "always add these" behaviour, put the flags in a small per-repo script or your
@@ -294,9 +301,9 @@ repeatedly is exactly equivalent to a default:
 
    # a repo's dev script
    wits stack sync && wits stack submit && wits stack anno
-   wits stack decorate feature-api --label api --reviewer alice
-   wits stack decorate feature-ui  --label ui  --reviewer bob
-   wits stack decorate --all       --label stacked
+   wits stack decorate feature-api       --label api --reviewer alice
+   wits stack decorate feature-ui        --label ui  --reviewer bob
+   wits stack decorate feature-api --all --label stacked
 
 Attribute changes are best-effort: an unknown label or a reviewer the platform
 will not accept is warned about and skipped, without failing the rest — but a
@@ -460,10 +467,10 @@ Troubleshooting
      - Intended: a closed/merged MR at the current commit is left alone. Pass
        ``--force`` to recreate.
    * - ``on the base branch '…'``
-     - You are standing on ``main``. Check out a stack branch (or use
-       ``--all``).
+     - You are standing on ``main``. Check out a stack branch, or name one as
+       the anchor.
    * - ``detached HEAD``
-     - Check out a branch, or use ``--all`` to act on all recorded stacks.
+     - Check out a branch, or name one as the anchor.
    * - ``could not determine the base branch``
      - No remote HEAD and no ``main``/``master``/``trunk``. Create the branch
        or set the remote's HEAD (``git remote set-head origin -a``).

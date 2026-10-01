@@ -69,8 +69,8 @@ distinct intents::
    wits stack tree      {prune|rm|mv|rename}  # direct edits to the stack's structure
 
 ``decorate`` is single-MR by default (attributes differ per MR; ``--all``
-applies one set across the stack) and additive-only, so it never fights a
-project's own label/reviewer automation.
+applies one set across that branch's whole stack) and additive-only, so it
+never fights a project's own label/reviewer automation.
 
 ``tree`` is a separate group on purpose: ``prune``/``rm``/``mv``/``rename``
 change *what the stack is* (structure edits to ``<common-git-dir>/machete``),
@@ -114,7 +114,9 @@ dynamic-edit examples). Given the current branch **N**:
      - N alone, as a one-node stack on the base branch. This is what makes
        single-branch MRs work with zero machete setup.
    * - ``--all``
-     - every branch in every tree in the file. No filtering.
+     - N's **whole stack**: every line under N's outermost ancestor short of
+       the base branch. The other stacks on the base are left alone — "I'm
+       managing this stack, all of it."
 
 The base branch (usually ``main``) is never itself pushed or given an MR, but
 it *does* appear in annotation chains so reviewers see the full lineage.
@@ -129,12 +131,21 @@ defaulting to the checked-out branch. It replaces ``HEAD``, nothing more — so
 it flows through the same planning code and cannot fork the fork-point rule,
 and it lets a stack be driven without a checkout (worktrees, a dirty tree). It
 is deliberately *not* like ``decorate``'s ``[branch]``: that one names the
-single MR to touch (per-MR), this one names where a whole stack is read from
+single MR to touch (per-MR), this one names where a stack is read from
 (per-stack). It is branch-only, never a commit — the topology is keyed by
 branch name and a commit can carry several branches, so a commit anchor would
-be ambiguous. Anchor and ``--all`` are mutually exclusive; a named anchor must
-resolve to a real branch (local ref or a file entry) so a typo fails loudly
-instead of resolving to an empty synthetic stack.
+be ambiguous. A named anchor must resolve to a real branch (local ref or a
+file entry) so a typo fails loudly instead of resolving to an empty synthetic
+stack.
+
+``--all`` widens the selection to the anchor's whole stack and never past it.
+Several unrelated stacks on one base branch is the ordinary shape of the file,
+so an ``--all`` meaning "every stack in the file" would push, open MRs for, or
+label work the invocation has nothing to do with; what a stack needs at once is
+all of its own lines — the navigation of a fork-point, or a label the whole
+stack shares. Being relative to the anchor, it combines with a named one, and
+on a detached HEAD or on the base branch (which every stack shares) it has no
+stack to choose.
 
 Global ``-v/--verbose``` and ``-n/--dry-run`` come from the ``wits`` process
 layer for free; every mutating git/forge call respects dry-run, every read
@@ -189,6 +200,8 @@ The tree algebra is small and total:
 * ``ancestors(n)`` — root→…→parent, excluding n.
 * ``subtree(n)`` — n and all descendants, DFS pre-order.
 * ``linear_stack(n)`` — ancestors + n + first-child chain.
+* ``whole_stack(n, base)`` — the subtree of n's outermost ancestor short of
+  the base: n's stack, every line of it.
 * ``anno_blocks(n)`` — the set of navigation chains to render for n's MR.
 
 One invariant a future change will be tempted to break: ``anno_blocks`` stops
@@ -414,7 +427,9 @@ single-pair invariant is what makes stripping reliable). Inside, one
 navigation section per chain from ``anno_blocks``; each line names the MR and
 its ``parent ← child`` flow, with the current MR marked. A fork-point MR
 therefore shows one section per downstream branch, so a reviewer sees every
-path the stack takes from here.
+path the stack takes from here. The MRs it numbers are the ones in scope — the
+same selection ``sync`` and ``submit`` act on — so those sections are complete
+for the lines in scope, and ``anno --all`` puts every line of the stack there.
 
 Identity: ``anno`` discovers MR numbers from the forge, caches them back into
 the machete annotations, and reuses them within the run.
