@@ -21,9 +21,10 @@ use serde_json::{json, Value};
 
 use super::RemoteInfo;
 use super::{
-    encode, pick, request, ActionKey, Anchor, Attributes, Auth, BatchAction, BatchOutcome,
-    DiffVersion, FeedQuery, Forge, LineRef, MergeRequest, MrDetails, MrState, MrSummary, NewMr,
-    RemoteComment, RemoteThread, ReviewBatch, Side, StateFilter, Verdict, SELF_REF,
+    dedup_mrs, encode, request, request_every_page, ActionKey, Anchor, Attributes, Auth,
+    BatchAction, BatchOutcome, DiffVersion, FeedQuery, Forge, HeadRepo, LineRef, MergeRequest,
+    MrDetails, MrState, MrSummary, NewMr, RemoteComment, RemoteThread, ReviewBatch, Side, Verdict,
+    SELF_REF,
 };
 
 const DRAFT_PREFIX: &str = "Draft: ";
@@ -198,24 +199,20 @@ impl GitLab {
     fn draft_notes_url(&self, id: &str) -> String {
         format!("{}/{id}/draft_notes", self.mrs_url())
     }
+}
 
-    /// The branch's candidate MRs, one fetch, all states. Match by source branch,
-    /// never target, so a drifted base is still found. For a fork, the same
-    /// branch name can exist in several source projects, so we pin to ours with
-    /// `source_project_id`.
-    fn candidates(&self, branch: &str) -> anyhow::Result<Vec<MergeRequest>> {
-        let mut url = format!(
-            "{}?source_branch={}&state=all",
-            self.mrs_url(),
-            encode(branch),
-        );
-        if let Some(fork) = &self.fork {
-            url += &format!("&source_project_id={}", fork.source_id);
-        }
-        let v = request("GET", &url, &self.auth, None)?;
-        Ok(v.as_array()
-            .map(|arr| arr.iter().filter_map(parse_mr).collect())
-            .unwrap_or_default())
+/// Whether an MR comes from the expected source project: `project` when given
+/// (a fork), else the very project it merges into. The branch name alone
+/// matches every fork's same-named branch too. `source_project_id` is honoured
+/// by the project endpoint even though only the group endpoint documents it
+/// (`lib/api/helpers/merge_requests_helpers.rb`, `MergeRequestsFinder`); the
+/// check is repeated here so a server that ignored it still could not widen
+/// the answer.
+fn sourced_from(mr: &Value, project: Option<u64>) -> bool {
+    let source = mr["source_project_id"].as_u64();
+    match project {
+        Some(id) => source == Some(id),
+        None => source.is_some() && source == mr["target_project_id"].as_u64(),
     }
 }
 
@@ -429,24 +426,49 @@ impl Forge for GitLab {
         "MR"
     }
 
-    fn find(&self, branch: &str, state: StateFilter) -> anyhow::Result<Option<MergeRequest>> {
-        Ok(pick(&self.candidates(branch)?, state))
-    }
-
-    fn find_any(&self, branch: &str) -> anyhow::Result<Option<MergeRequest>> {
-        Ok(super::pick_any(&self.candidates(branch)?))
+    fn mrs_for_branch(&self, head: HeadRepo, branch: &str) -> anyhow::Result<Vec<MergeRequest>> {
+        // A fork MR comes from the fork's project; any other from the project it
+        // merges into.
+        let source = match (head, &self.fork) {
+            (HeadRepo::Origin, Some(fork)) => Some(fork.source_id),
+            _ => None,
+        };
+        let mut url = format!(
+            "{}?source_branch={}&state=all&order_by=updated_at&sort=desc&per_page=100",
+            self.mrs_url(),
+            encode(branch),
+        );
+        if let Some(id) = source {
+            url += &format!("&source_project_id={id}");
+        }
+        request_every_page(&url, &self.auth, |v, headers| {
+            let mrs = v
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter(|mr| sourced_from(mr, source))
+                        .filter_map(parse_mr)
+                        .collect()
+                })
+                .unwrap_or_default();
+            (mrs, next_page(&url, headers))
+        })
+        .map(dedup_mrs)
     }
 
     fn find_children(&self, base_branch: &str) -> anyhow::Result<Vec<MergeRequest>> {
         let url = format!(
-            "{}?target_branch={}&state=opened",
+            "{}?target_branch={}&state=opened&per_page=100",
             self.mrs_url(),
             encode(base_branch),
         );
-        let v = request("GET", &url, &self.auth, None)?;
-        Ok(v.as_array()
-            .map(|arr| arr.iter().filter_map(parse_mr).collect())
-            .unwrap_or_default())
+        request_every_page(&url, &self.auth, |v, headers| {
+            let mrs = v
+                .as_array()
+                .map(|arr| arr.iter().filter_map(parse_mr).collect())
+                .unwrap_or_default();
+            (mrs, next_page(&url, headers))
+        })
     }
 
     fn create(&self, req: &NewMr) -> anyhow::Result<MergeRequest> {
@@ -962,6 +984,20 @@ mod tests {
         assert_eq!(s.base, "main");
         assert_eq!(s.source, "feat");
         assert_eq!(s.labels, ["bug", "vk"]);
+    }
+
+    #[test]
+    fn an_mr_counts_only_from_the_expected_source_project() {
+        let mr = |source: Value, target: u64| json!({ "source_project_id": source, "target_project_id": target });
+        // Same project: the MR must come from the project it merges into, so a
+        // fork's same-named branch does not count.
+        assert!(sourced_from(&mr(json!(7), 7), None));
+        assert!(!sourced_from(&mr(json!(9), 7), None));
+        // A fork: only the fork's project counts, not the target's own branch.
+        assert!(sourced_from(&mr(json!(9), 7), Some(9)));
+        assert!(!sourced_from(&mr(json!(7), 7), Some(9)));
+        // A deleted fork leaves no source project, which never matches.
+        assert!(!sourced_from(&mr(Value::Null, 7), None));
     }
 
     #[test]

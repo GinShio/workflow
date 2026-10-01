@@ -75,6 +75,16 @@ impl RemoteInfo {
     pub fn project_path(&self) -> String {
         format!("{}/{}", self.owner, self.repo)
     }
+
+    /// Whether `other` names the same repository. Hosts and paths compare
+    /// case-insensitively: a remote URL may spell them in any case the forge
+    /// accepts.
+    pub fn same_repository(&self, other: &RemoteInfo) -> bool {
+        self.host.eq_ignore_ascii_case(&other.host)
+            && self
+                .project_path()
+                .eq_ignore_ascii_case(&other.project_path())
+    }
 }
 
 /// A few hosts publish a dedicated SSH endpoint that is the same service under a

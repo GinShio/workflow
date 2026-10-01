@@ -22,7 +22,7 @@ mod tree;
 
 use clap::{Args, Subcommand, ValueEnum};
 
-use wits_util::forge::{self, Forge, MergeRequest, Remotes, StateFilter};
+use wits_util::forge::{self, Forge, HeadRepo, MergeRequest, MrState, Remotes};
 use wits_util::git::Repository;
 use wits_util::project::remotes;
 use wits_util::remote::RemoteRoles;
@@ -260,27 +260,89 @@ impl ForgeSession {
     }
 }
 
+/// A branch's MRs, sorted into what the verbs act on. The platforms refuse a
+/// second open MR only into the *same* base, so a branch can have several open
+/// ones: one is acted on, and the rest are kept to be reported rather than
+/// silently ignored — closing an MR is not wits' call to make.
+pub(crate) struct BranchMrs {
+    /// The open MR to act on.
+    pub open: Option<MergeRequest>,
+    /// Any further open MRs from the same branch.
+    pub other_open: Vec<MergeRequest>,
+    /// The most recently updated closed or merged MR.
+    pub newest_closed: Option<MergeRequest>,
+}
+
+impl BranchMrs {
+    /// Sort `mrs`, most recently updated first as `Forge::mrs_for_branch`
+    /// returns them. Of several open MRs the one already targeting `base` is
+    /// acted on, so a stray duplicate can never make `submit` retarget the right
+    /// one away; failing that, the most recently updated.
+    pub(crate) fn sort(mrs: Vec<MergeRequest>, base: Option<&str>) -> Self {
+        let (mut open, closed): (Vec<_>, Vec<_>) =
+            mrs.into_iter().partition(|mr| mr.state == MrState::Open);
+        let pick = base
+            .and_then(|base| open.iter().position(|mr| mr.base == base))
+            .unwrap_or(0);
+        let chosen = (!open.is_empty()).then(|| open.remove(pick));
+        Self {
+            open: chosen,
+            other_open: open,
+            newest_closed: closed.into_iter().next(),
+        }
+    }
+
+    /// Warn that `branch` has open MRs besides the one acted on.
+    pub(crate) fn warn_other_open(&self, noun: &str, branch: &str) {
+        let Some(kept) = &self.open else { return };
+        if self.other_open.is_empty() {
+            return;
+        }
+        let others: Vec<&str> = self
+            .other_open
+            .iter()
+            .map(|mr| mr.display.as_str())
+            .collect();
+        log::warn!(
+            "{branch}: also has open {noun} {}; only {noun} {} follows the stack, so close the \
+             others",
+            others.join(", "),
+            kept.display
+        );
+    }
+}
+
 /// Find the open MR for each branch, in parallel, applying the verbs' shared
-/// reconciliation: a branch with no open MR logs a "no open <noun>" note, an
-/// error is counted and warned. Returns the `(branch, MR)` pairs that were found
-/// (in `branches` order) and the failure tally — the common front half of `anno`
-/// and `decorate`, which then each do their own thing with the MRs that exist.
+/// reconciliation: `base_for` names the base a branch's MR should target,
+/// where known, so the right one of several open MRs is chosen
+/// ([`BranchMrs::sort`]); further open MRs are warned about, a branch with none
+/// logs a "no open <noun>" note, and an error is counted and warned. Returns the
+/// `(branch, MR)` pairs that were found (in `branches` order) and the failure
+/// tally — the common front half of `anno` and `decorate`, which then each do
+/// their own thing with the MRs that exist.
 pub(crate) fn find_open_mrs(
     session: &ForgeSession,
     branches: &[String],
+    base_for: impl Fn(&str) -> Option<String>,
 ) -> (Vec<(String, MergeRequest)>, usize) {
     let found = map_parallel(branches, |branch| {
         (
             branch.clone(),
-            session.forge.find(branch, StateFilter::Open),
+            session.forge.mrs_for_branch(HeadRepo::Origin, branch),
         )
     });
     let mut mrs = Vec::new();
     let mut failures = 0usize;
     for (branch, result) in found {
         match result {
-            Ok(Some(mr)) => mrs.push((branch, mr)),
-            Ok(None) => log::info!("{branch}: no open {}", session.noun),
+            Ok(candidates) => {
+                let sorted = BranchMrs::sort(candidates, base_for(&branch).as_deref());
+                sorted.warn_other_open(session.noun, &branch);
+                match sorted.open {
+                    Some(mr) => mrs.push((branch, mr)),
+                    None => log::info!("{branch}: no open {}", session.noun),
+                }
+            }
             Err(e) => {
                 failures += 1;
                 log::warn!("{branch}: {e}");
@@ -288,4 +350,65 @@ pub(crate) fn find_open_mrs(
         }
     }
     (mrs, failures)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mr(id: &str, base: &str, state: MrState) -> MergeRequest {
+        MergeRequest {
+            id: id.into(),
+            display: format!("#{id}"),
+            state,
+            base: base.into(),
+            source: String::new(),
+            head_sha: None,
+            body: String::new(),
+            web_url: String::new(),
+        }
+    }
+
+    fn ids(mrs: &[MergeRequest]) -> Vec<&str> {
+        mrs.iter().map(|mr| mr.id.as_str()).collect()
+    }
+
+    #[test]
+    fn the_open_mr_on_the_planned_base_wins_over_a_newer_one() {
+        let sorted = BranchMrs::sort(
+            vec![
+                mr("3", "other", MrState::Open),
+                mr("2", "main", MrState::Open),
+                mr("1", "main", MrState::Merged),
+            ],
+            Some("main"),
+        );
+        assert_eq!(sorted.open.unwrap().id, "2");
+        assert_eq!(ids(&sorted.other_open), ["3"]);
+        assert_eq!(sorted.newest_closed.unwrap().id, "1");
+    }
+
+    #[test]
+    fn otherwise_the_most_recently_updated_open_mr_wins() {
+        let mrs = || vec![mr("3", "a", MrState::Open), mr("2", "b", MrState::Open)];
+        assert_eq!(BranchMrs::sort(mrs(), None).open.unwrap().id, "3");
+        // A planned base that no open MR targets yet leaves the newest one to
+        // retarget.
+        let sorted = BranchMrs::sort(mrs(), Some("main"));
+        assert_eq!(sorted.open.unwrap().id, "3");
+        assert_eq!(ids(&sorted.other_open), ["2"]);
+    }
+
+    #[test]
+    fn with_nothing_open_the_newest_closed_mr_remains() {
+        let sorted = BranchMrs::sort(
+            vec![
+                mr("3", "main", MrState::Closed),
+                mr("1", "main", MrState::Merged),
+            ],
+            Some("main"),
+        );
+        assert!(sorted.open.is_none() && sorted.other_open.is_empty());
+        assert_eq!(sorted.newest_closed.unwrap().id, "3");
+    }
 }

@@ -338,15 +338,18 @@ No provider JSON shape (``number`` vs ``iid``, ``base.ref`` vs
        display: String,       // "!123" — presentation only
        state: MrState,        // Open | Merged | Closed
        base: String,          // current merge target
+       source: String,        // the head branch
        head_sha: Option<String>,
        body: String,
        web_url: String,
    }
 
+   enum HeadRepo { Origin, Target }   // whose branch: the push repository's, or the merge target's
+
    trait Forge: Send + Sync {
        fn noun(&self) -> &str;                                    // "PR" | "MR"
-       fn find(&self, branch: &str, state: StateFilter) -> Result<Option<MergeRequest>>;
-       fn find_any(&self, branch: &str) -> Result<Option<MergeRequest>>;  // one open-preferring fetch
+       // every MR whose head is `branch` in `head`'s repository, any state, newest first
+       fn mrs_for_branch(&self, head: HeadRepo, branch: &str) -> Result<Vec<MergeRequest>>;
        fn create(&self, req: &NewMr) -> Result<MergeRequest>;
        fn set_base(&self, id: &str, base: &str) -> Result<()>;
        fn set_body(&self, id: &str, body: &str) -> Result<()>;
@@ -355,12 +358,30 @@ No provider JSON shape (``number`` vs ``iid``, ``base.ref`` vs
        // submit) and find_children/permalink, documented in review-design.
    }
 
-``find`` matches on the **branch alone**, not the base: the base a branch
-*should* target is the topology's business, so the verb compares
-``MergeRequest.base`` against the plan itself rather than asking the forge to
-filter by it (an early version filtered by base and missed drifted MRs — the
-regression that motivated this signature). ``apply_attributes`` is the
-additive labels/assignees/reviewers primitive ``decorate`` composes.
+A lookup matches on the **head** — the branch *and* the repository it lives
+in — never on the base: the base a branch *should* target is the topology's
+business, so the verb compares ``MergeRequest.base`` against the plan itself
+rather than asking the forge to filter by it (an early version filtered by base
+and missed drifted MRs — the regression that motivated this signature). The
+repository belongs to the head because a branch name alone does not identify
+one: every fork has a ``main``, and a stack branch can share its name with
+someone else's. It is matched by identity — GitHub's ``headRepository.id`` or
+``isCrossRepository``, GitLab's ``source_project_id``, Gitea's ``head.repo_id``
+— never by owner name, which stopped identifying a fork once an organisation
+could fork its own repository.
+
+The answer is also **complete**. Every page is read, and a server-side filter
+is only a hint, each result being checked again on the client: Gitea, and
+Forgejo before 16, ignore ``head=`` without a word, so trusting the filter
+would take an unfiltered first page for the whole answer. Completeness is what
+lets an empty answer mean "there is none" — an MR missed on page two is a
+duplicate ``submit`` opens. Several open MRs can come back, since every
+platform refuses a second open MR only into the *same* base; the verbs act on
+the one already targeting the planned base, else the most recently updated,
+and warn about the rest without closing them.
+
+``apply_attributes`` is the additive labels/assignees/reviewers primitive
+``decorate`` composes.
 
 A host impl (``github``/``gitlab``/``gitea``) is then *only* a mapping: base
 API URL from host, auth header style, endpoint paths, and the JSON↔
@@ -373,8 +394,9 @@ and that is cleaner than a mode flag:
 
 * **``sync``** uses no forge primitives at all — it is a git push. Nothing
   MR-shaped happens here.
-* **``submit``** → ``find_any`` (one open-preferring fetch); an open MR with a drifted base gets ``set_base``;
-  if none, consult the closed-MR guard, else ``create`` with title/body
+* **``submit``** → ``mrs_for_branch`` (one lookup, every state); an open MR
+  with a drifted base gets ``set_base``; if none is open, consult the
+  closed-MR guard, else ``create`` with title/body
   derived from the branch's commits (default: the latest commit's
   subject/body; ``--title-source first|last``). The MR's draft state is
   decided here: an MR whose base is *not* the stack base starts as **draft**

@@ -36,7 +36,9 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, scope: &ScopeArgs) -> anyhow:
     let noun = session.noun;
 
     // Discover the open MR for each branch up front; everything else is local.
-    let (found, mut failures) = find_open_mrs(&session, &plan.selected);
+    let (found, mut failures) = find_open_mrs(&session, &plan.selected, |branch| {
+        Some(plan.base_for(branch))
+    });
     let mrs: HashMap<String, MergeRequest> = found.into_iter().collect();
     if mrs.is_empty() {
         log::info!("no open {noun}s to annotate");

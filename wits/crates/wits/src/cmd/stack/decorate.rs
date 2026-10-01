@@ -17,6 +17,7 @@ use wits_util::git::Repository;
 use wits_util::log as wits_log;
 use wits_util::remote::RemoteRoles;
 
+use super::resolution::StackPlan;
 use super::{
     fail_if_any, find_open_mrs, map_parallel, resolution, DecorateArgs, ForgeSession, ScopeArgs,
 };
@@ -30,7 +31,7 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, args: &DecorateArgs) -> anyho
     if attrs.is_empty() {
         anyhow::bail!("nothing to set: pass at least one --label / --assignee / --reviewer");
     }
-    let branches = target_branches(repo, roles, args)?;
+    let (branches, plan) = target_branches(repo, roles, args)?;
     if branches.is_empty() {
         log::info!("no branches in scope");
         return Ok(());
@@ -42,7 +43,9 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, args: &DecorateArgs) -> anyho
     // Find the open MRs (shared with `anno`), then apply attributes to each in
     // parallel — independent per MR, so a slow forge call for one doesn't stall
     // the rest.
-    let (mrs, mut failures) = find_open_mrs(&session, &branches);
+    let (mrs, mut failures) = find_open_mrs(&session, &branches, |branch| {
+        plan.as_ref().map(|plan| plan.base_for(branch))
+    });
     let results = map_parallel(&mrs, |(branch, mr)| {
         if wits_log::is_dry_run() {
             wits_log::dry_run(&format!(
@@ -70,18 +73,20 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, args: &DecorateArgs) -> anyho
 
 /// One branch (the named one, or the current) by default; under `--all`, every
 /// branch of that branch's whole stack, exactly as the other verbs' `--all`
-/// scopes it.
+/// scopes it — together with that plan, which knows the base each MR should
+/// target.
 fn target_branches(
     repo: &Repository,
     roles: &RemoteRoles,
     args: &DecorateArgs,
-) -> anyhow::Result<Vec<String>> {
+) -> anyhow::Result<(Vec<String>, Option<StackPlan>)> {
     if args.all {
         let scope = ScopeArgs {
             branch: args.branch.clone(),
             all: true,
         };
-        return Ok(resolution::plan_scoped(repo, roles, &scope)?.selected);
+        let plan = resolution::plan_scoped(repo, roles, &scope)?;
+        return Ok((plan.selected.clone(), Some(plan)));
     }
     let branch = match &args.branch {
         Some(b) => b.clone(),
@@ -89,5 +94,5 @@ fn target_branches(
             .current_branch()
             .ok_or_else(|| anyhow::anyhow!("detached HEAD: name a branch to decorate"))?,
     };
-    Ok(vec![branch])
+    Ok((vec![branch], None))
 }

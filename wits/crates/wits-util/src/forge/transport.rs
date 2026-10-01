@@ -172,14 +172,50 @@ pub(crate) fn request_paginated<T>(
     initial_url: &str,
     auth: &Auth,
     max_pages: usize,
-    mut parse_page: impl FnMut(&Value, &[(String, String)]) -> (Vec<T>, Option<String>),
+    parse_page: impl FnMut(&Value, &[(String, String)]) -> (Vec<T>, Option<String>),
 ) -> anyhow::Result<Vec<T>> {
+    Ok(paginate(initial_url, auth, max_pages, parse_page)?.0)
+}
+
+/// How many pages [`request_every_page`] reads before giving up. No list a
+/// stack asks about — the MRs of one branch, the comments on one MR — comes
+/// near it, so reaching it means something is wrong, not that the list is long.
+pub(crate) const EVERY_PAGE_LIMIT: usize = 1000;
+
+/// Read a paginated list to its end, for a caller whose answer is only right
+/// once every item has been seen — above all "there is none", which a
+/// truncated list asserts falsely. So unlike [`request_paginated`] it never
+/// answers from part of the list: one longer than [`EVERY_PAGE_LIMIT`] pages is
+/// an error.
+pub(crate) fn request_every_page<T>(
+    initial_url: &str,
+    auth: &Auth,
+    parse_page: impl FnMut(&Value, &[(String, String)]) -> (Vec<T>, Option<String>),
+) -> anyhow::Result<Vec<T>> {
+    let (items, truncated) = paginate(initial_url, auth, EVERY_PAGE_LIMIT, parse_page)?;
+    if truncated {
+        anyhow::bail!(
+            "{initial_url}: the list runs past {EVERY_PAGE_LIMIT} pages; refusing to answer from \
+             part of it"
+        );
+    }
+    Ok(items)
+}
+
+/// The page loop behind [`request_paginated`] and [`request_every_page`]: the
+/// items read, and whether a next page was left unread at `max_pages`.
+fn paginate<T>(
+    initial_url: &str,
+    auth: &Auth,
+    max_pages: usize,
+    mut parse_page: impl FnMut(&Value, &[(String, String)]) -> (Vec<T>, Option<String>),
+) -> anyhow::Result<(Vec<T>, bool)> {
     let mut all = Vec::new();
     let mut url = Some(initial_url.to_owned());
     let mut pages = 0;
     while let Some(u) = url {
         if pages >= max_pages {
-            break;
+            return Ok((all, true));
         }
         let response = send_with_retry("GET", &u, auth, None)?;
         let headers: Vec<(String, String)> = response
@@ -197,7 +233,29 @@ pub(crate) fn request_paginated<T>(
         url = next;
         pages += 1;
     }
-    Ok(all)
+    Ok((all, false))
+}
+
+/// The `rel="next"` target of an RFC 8288 `Link` header — how Gitea and Forgejo
+/// (and GitHub's REST API) point at the following page — or `None` on the last
+/// page. `headers` are lowercased, as [`request_paginated`] hands them over.
+///
+/// Entries are split on `<` rather than `,`: a URL cannot hold an unescaped `<`
+/// (RFC 3986), but its query can hold a comma.
+pub(crate) fn next_link(headers: &[(String, String)]) -> Option<String> {
+    let (_, link) = headers.iter().find(|(name, _)| name == "link")?;
+    link.split('<').skip(1).find_map(|entry| {
+        let (target, params) = entry.split_once('>')?;
+        let rel = params
+            .split(';')
+            .find_map(|param| param.trim().strip_prefix("rel="))?;
+        // A relation may list several types (`rel="next last"`), and the last
+        // parameter carries the `,` that separates it from the next entry.
+        let rel = rel.trim_end_matches([',', ' ']).trim_matches('"');
+        rel.split_whitespace()
+            .any(|kind| kind == "next")
+            .then(|| target.to_owned())
+    })
 }
 
 /// Replace any `@me` in `items` with the resolved name. Used by hosts that take
@@ -256,6 +314,37 @@ mod tests {
     fn resolve_self_replaces_only_the_marker() {
         let out = resolve_self(&["@me".into(), "alice".into()], "russell");
         assert_eq!(out, ["russell", "alice"]);
+    }
+
+    fn link(value: &str) -> Vec<(String, String)> {
+        vec![("link".to_owned(), value.to_owned())]
+    }
+
+    #[test]
+    fn next_link_follows_the_next_relation_only() {
+        // The shape Gitea and Forgejo send on a middle page.
+        let headers = link(
+            "<https://h/api/v1/repos/o/r/pulls?limit=50&page=3&state=all>; rel=\"next\",\
+             <https://h/api/v1/repos/o/r/pulls?limit=50&page=15&state=all>; rel=\"last\",\
+             <https://h/api/v1/repos/o/r/pulls?limit=50&page=1&state=all>; rel=\"first\"",
+        );
+        assert_eq!(
+            next_link(&headers).as_deref(),
+            Some("https://h/api/v1/repos/o/r/pulls?limit=50&page=3&state=all")
+        );
+        // The last page links back but not forward.
+        let last = link("<https://h/x?page=14>; rel=\"prev\", <https://h/x?page=1>; rel=\"first\"");
+        assert_eq!(next_link(&last), None);
+        assert_eq!(next_link(&[]), None);
+    }
+
+    #[test]
+    fn next_link_reads_a_relation_list_and_a_comma_in_the_query() {
+        let headers = link("<https://h/x?head=a,b&page=2>; rel=\"next last\"");
+        assert_eq!(
+            next_link(&headers).as_deref(),
+            Some("https://h/x?head=a,b&page=2")
+        );
     }
 
     #[test]

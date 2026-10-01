@@ -35,8 +35,8 @@ pub use review::{
 // The transport primitives the host backends build on. Re-exported at the crate
 // level so a backend writes `super::request` rather than `super::transport::…`.
 pub(crate) use transport::{
-    current_user, delete_idempotent, encode, encode_path, request, request_paginated, resolve_self,
-    Auth, SELF_REF,
+    current_user, delete_idempotent, encode, encode_path, next_link, request, request_every_page,
+    request_paginated, resolve_self, Auth, EVERY_PAGE_LIMIT, SELF_REF,
 };
 
 use crate::git::Repository;
@@ -51,22 +51,20 @@ pub enum MrState {
     Closed,
 }
 
-/// Which lifecycle states a `find` should accept. Kept separate from [`MrState`]
-/// because callers think in terms of intent ("is there one open?", "is there any
-/// closed leftover?") rather than enumerating states.
-#[derive(Debug, Clone, Copy)]
-pub enum StateFilter {
-    Open,
-    NotOpen,
-}
-
-impl StateFilter {
-    fn accepts(self, state: MrState) -> bool {
-        match self {
-            StateFilter::Open => state == MrState::Open,
-            StateFilter::NotOpen => state != MrState::Open,
-        }
-    }
+/// Which repository the head of a looked-up MR lives in. A branch name alone
+/// does not identify a branch — every fork has its own `main`, and a stack
+/// branch can share its name with someone else's — so a lookup always says
+/// whose branch it means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeadRepo {
+    /// The repository this checkout pushes to (the `origin` role), where a
+    /// stack's own branches live. That is the merge target itself when it
+    /// holds the role too, or when no remote holds it.
+    Origin,
+    /// The merge target. Every MR's base is a branch there, so this is where
+    /// the MR whose source branch is another MR's base comes from: the step up
+    /// a stack, whoever pushed it.
+    Target,
 }
 
 /// The platform-independent view of one merge request. `id` is whatever opaque
@@ -131,32 +129,32 @@ impl Attributes {
     }
 }
 
-/// The four primitives every platform must provide. The workflow verbs are
-/// written once against this trait; see the module note for why the surface is
-/// this small.
+/// Everything the workflow verbs need from a platform: a small MR half, used by
+/// `stack`, and a review half, used by `review`. The verbs are written once
+/// against this trait; see the module note for why the surface is this small.
 pub trait Forge: Send + Sync {
     /// The user-facing noun for a merge request here — GitHub's "PR",
     /// GitLab's "MR", Gitea's "PR".
     fn noun(&self) -> &'static str;
 
-    /// The MR for `branch` matching the state filter, regardless of its current
-    /// base. Base is deliberately *not* a match criterion: a caller fixing a
-    /// drifted base needs to find the MR precisely when its base no longer
-    /// matches, then compare and retarget it.
-    fn find(&self, branch: &str, state: StateFilter) -> anyhow::Result<Option<MergeRequest>>;
+    /// Every MR in the merge target whose head is `branch` in the `head`
+    /// repository, in any state, most recently updated first.
+    ///
+    /// The answer is complete and exact. Every page is read, so an empty list
+    /// means there is none, and the head repository is matched by identity
+    /// rather than by name, so a same-named branch elsewhere never counts. The
+    /// base is deliberately *not* a criterion: a caller fixing a drifted base
+    /// needs the MR precisely when its base no longer matches. Several open
+    /// MRs can come back — every platform refuses a second open MR only into
+    /// the *same* base — so choosing among them is left to the caller.
+    fn mrs_for_branch(&self, head: HeadRepo, branch: &str) -> anyhow::Result<Vec<MergeRequest>>;
 
-    /// The MR for `branch` in *any* state, preferring an open one. This is the
-    /// single-fetch form of [`find`](Forge::find): a caller that has to inspect
-    /// the state itself (stack `submit` deciding create-vs-retarget-vs-skip) does
-    /// one round trip instead of the two a paired `find(Open)` + `find(NotOpen)`
-    /// would cost — every backend's list query already returns all states at once.
-    fn find_any(&self, branch: &str) -> anyhow::Result<Option<MergeRequest>>;
-
-    /// The open MRs whose *target* branch is `base_branch` — the children of a
-    /// stack node. Used by `review fetch --stack` to walk a stack downward toward
-    /// its leaves (the upward walk is [`find_any`](Forge::find_any) on the base).
-    /// Defaults to empty for a backend that can't enumerate them, so stack
-    /// completion degrades to the upward direction rather than failing.
+    /// The open MRs whose *target* branch is `base_branch`, from every page —
+    /// the children of a stack node. Used by `review fetch --stack` to walk a
+    /// stack downward toward its leaves (the upward walk is
+    /// [`mrs_for_branch`](Forge::mrs_for_branch) on the base). Defaults to empty
+    /// for a backend that can't enumerate them, so stack completion degrades to
+    /// the upward direction rather than failing.
     fn find_children(&self, _base_branch: &str) -> anyhow::Result<Vec<MergeRequest>> {
         Ok(Vec::new())
     }
@@ -296,6 +294,13 @@ pub fn detect(repo: &Repository, remotes: &Remotes) -> anyhow::Result<Box<dyn Fo
     } else {
         None
     };
+    // The repository a stack's branches live in when it is not the merge target
+    // itself — what an MR lookup pins a branch's head to. Compared by full
+    // identity rather than by owner: an organisation can fork its own repository.
+    let push_repo = remotes
+        .origin
+        .clone()
+        .filter(|origin| !origin.same_repository(&target));
 
     let api_url_override = repo
         .get_config(&format!("wits.forge.{}.api-url", target.host))
@@ -306,6 +311,7 @@ pub fn detect(repo: &Repository, remotes: &Remotes) -> anyhow::Result<Box<dyn Fo
         Service::GitHub => Ok(Box::new(github::GitHub::new(
             target,
             head_owner,
+            push_repo,
             token,
             api_url_override,
         ))),
@@ -314,6 +320,7 @@ pub fn detect(repo: &Repository, remotes: &Remotes) -> anyhow::Result<Box<dyn Fo
         Service::Gitea | Service::Forgejo | Service::Codeberg => Ok(Box::new(gitea::Gitea::new(
             target,
             head_owner,
+            push_repo,
             token,
             api_url_override,
         ))),
@@ -359,38 +366,38 @@ fn resolve_token(repo: &Repository, host: &str, service: Service) -> Option<Stri
     env_vars.iter().find_map(|v| std::env::var(v).ok())
 }
 
-/// Shared helper for host modules: from a list of candidate MRs (already parsed),
-/// return the first that satisfies the state filter. A branch has at most one MR
-/// in a given state for our purposes, so "first" is unambiguous.
-pub(crate) fn pick<'a>(
-    candidates: impl IntoIterator<Item = &'a MergeRequest>,
-    state: StateFilter,
-) -> Option<MergeRequest> {
-    candidates
-        .into_iter()
-        .find(|mr| state.accepts(mr.state))
-        .cloned()
-}
-
-/// Shared helper for [`Forge::find_any`]: from the branch's candidate MRs, return
-/// the open one if there is one, else the first non-open leftover. A branch has
-/// at most one relevant MR per state, so this is unambiguous.
-pub(crate) fn pick_any<'a>(
-    candidates: impl IntoIterator<Item = &'a MergeRequest>,
-) -> Option<MergeRequest> {
-    let mut leftover = None;
-    for mr in candidates {
-        if mr.state == MrState::Open {
-            return Some(mr.clone());
-        }
-        leftover.get_or_insert_with(|| mr.clone());
-    }
-    leftover
+/// Drop repeats of an MR, keeping its first — most recently updated —
+/// occurrence. Offset pagination over a list that changes while it is read can
+/// show one MR on two pages: an MR updated meanwhile moves to the front, and
+/// everything behind it shifts back a place.
+pub(crate) fn dedup_mrs(mut mrs: Vec<MergeRequest>) -> Vec<MergeRequest> {
+    let mut seen = std::collections::HashSet::new();
+    mrs.retain(|mr| seen.insert(mr.id.clone()));
+    mrs
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_repeated_mr_is_kept_once_in_its_first_place() {
+        let mr = |id: &str| MergeRequest {
+            id: id.into(),
+            display: format!("#{id}"),
+            state: MrState::Open,
+            base: String::new(),
+            source: String::new(),
+            head_sha: None,
+            body: String::new(),
+            web_url: String::new(),
+        };
+        let kept: Vec<String> = dedup_mrs(vec![mr("3"), mr("1"), mr("3"), mr("2")])
+            .into_iter()
+            .map(|mr| mr.id)
+            .collect();
+        assert_eq!(kept, ["3", "1", "2"]);
+    }
 
     #[test]
     fn attributes_emptiness_and_summary() {

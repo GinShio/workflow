@@ -692,7 +692,7 @@ fixed shape:
 
 .. code-block:: rust
 
-   // Added to Forge, alongside find/find_any/create/set_base/set_body/apply_attributes:
+   // Added to Forge, alongside mrs_for_branch/create/set_base/set_body/apply_attributes:
    fn list_mrs(&self, q: &FeedQuery) -> Result<Vec<MrSummary>>;   // feed
    fn mr_details(&self, mr: &str) -> Result<MrDetails>;
    fn mr_ref(&self, mr: &str) -> Result<String>;   // the fetchable head ref (e.g. pull/<n>/head)
@@ -945,7 +945,9 @@ fluid without inventing anything the forge cannot store.
   hand.** A label/limit feed can match only part of a stack, which would
   leave the reconstruction stopping at the first unfetched node. So ``fetch``
   closes that itself: from each fetched MR it walks the same ``base``↔``source``
-  links *on the forge* — ``find_any(base)`` climbs to the parent,
+  links *on the forge* — ``mrs_for_branch(Target, base)`` climbs to the
+  parent, whose head is in the merge target because its branch is someone's
+  base (so a fork checkout climbs as well as a same-repo one), and
   ``find_children(source)`` descends to the children — out to the whole
   connected stack, and pulls in any member the filter missed (a feed does
   this **lightly**, summary-only; ``fetch <mr>`` does it **fully**). The walk

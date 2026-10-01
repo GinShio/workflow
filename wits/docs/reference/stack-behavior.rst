@@ -166,8 +166,11 @@ refuses to open its MR (reported per-branch, not fatal).
 Per branch, with desired base B = its parent:
 
 1. **Open MR exists** → if its base ≠ B, retarget it to B; otherwise nothing
-   to do. *Finding the MR is by branch only, never filtered by base* — that
-   is what lets a drifted base be detected at all.
+   to do. *Finding the MR is by its head — branch and repository — never
+   filtered by base* — that is what lets a drifted base be detected at all. A
+   branch with several open MRs (a platform refuses a second one only into the
+   same base) keeps the one already targeting B, else retargets the most
+   recently updated; the others are warned about, never closed.
 2. **No open MR, a closed/merged one exists** → recreate only if our local tip
    differs from that MR's head commit, or ``--force`` is given; otherwise
    leave it (a merged branch being reused should not silently spawn a
@@ -496,6 +499,10 @@ Known limitations
 * **Gitea/Forgejo base changes** depend on the server version honouring the
   ``base`` field; a server that doesn't degrades to a per-branch warning,
   never a corruption.
+* **On Gitea, and Forgejo before 16, finding a branch's MR reads the
+  repository's whole PR list**: those servers cannot filter PRs by head
+  branch, so the answer stays complete only by scanning. Forgejo 16 and later
+  (Codeberg included) filter on the server and answer in one request.
 
 Where the logic lives
 ---------------------
@@ -543,9 +550,11 @@ Invariants
    it.
 4. The base branch is excluded from the operable set but included in
    ``anno`` chains.
-5. ``find`` matches an MR by its branch only, never by base — otherwise a
-   drifted base becomes invisible and ``submit`` would create a duplicate
-   instead of retargeting.
+5. An MR lookup matches the head — branch *and* repository, by identity —
+   never the base, and reads every page. Matching the base hides a drifted
+   MR, matching the branch name alone takes another fork's MR for ours, and a
+   partial list hides one that exists; each ends with ``submit`` acting on the
+   wrong MR or opening a duplicate.
 6. ``reparent`` must refuse cycles; it is the only operation that can
    introduce one (parsing yields a forest by construction).
 7. ``remove`` must splice children up, never drop the subtree; removing a

@@ -6,14 +6,15 @@
 //! the cross-fork head form (`owner:branch`).
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use serde_json::{json, Value};
 
 use super::RemoteInfo;
 use super::{
-    pick, request, ActionKey, Anchor, Attributes, Auth, BatchAction, BatchOutcome, DiffVersion,
-    FeedQuery, Forge, LineRef, MergeRequest, MrDetails, MrState, MrSummary, NewMr, RemoteComment,
-    RemoteThread, ReviewBatch, Side, StateFilter, Verdict, SELF_REF,
+    request, ActionKey, Anchor, Attributes, Auth, BatchAction, BatchOutcome, DiffVersion,
+    FeedQuery, Forge, HeadRepo, LineRef, MergeRequest, MrDetails, MrState, MrSummary, NewMr,
+    RemoteComment, RemoteThread, ReviewBatch, Side, Verdict, EVERY_PAGE_LIMIT, SELF_REF,
 };
 
 pub struct GitHub {
@@ -31,6 +32,11 @@ pub struct GitHub {
     repo: String,
     /// Set only when the head lives in a different fork.
     head_owner: Option<String>,
+    /// The repository a stack's branches are pushed to when it is not the
+    /// target; `None` when they live in the target itself.
+    push_repo: Option<RemoteInfo>,
+    /// `push_repo`'s node id, resolved by the first lookup that needs it.
+    push_repo_id: OnceLock<String>,
     auth: Auth,
 }
 
@@ -38,6 +44,7 @@ impl GitHub {
     pub fn new(
         target: RemoteInfo,
         head_owner: Option<String>,
+        push_repo: Option<RemoteInfo>,
         token: String,
         api_url_override: Option<String>,
     ) -> Self {
@@ -67,6 +74,8 @@ impl GitHub {
             repo: target.repo.clone(),
             project: target.project_path(),
             head_owner,
+            push_repo,
+            push_repo_id: OnceLock::new(),
             auth: Auth::Bearer(token),
         }
     }
@@ -108,14 +117,69 @@ impl GitHub {
 
     /// The target repository's node id (needed by `createPullRequest`).
     fn repo_node_id(&self) -> anyhow::Result<String> {
+        self.node_id_of(&self.owner, &self.repo)
+    }
+
+    /// A repository's node id.
+    fn node_id_of(&self, owner: &str, repo: &str) -> anyhow::Result<String> {
         let data = self.graphql(
             "query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){id}}",
-            json!({ "owner": self.owner, "repo": self.repo }),
+            json!({ "owner": owner, "repo": repo }),
         )?;
         data["repository"]["id"]
             .as_str()
             .map(str::to_owned)
-            .ok_or_else(|| anyhow::anyhow!("could not resolve repository node id"))
+            .ok_or_else(|| anyhow::anyhow!("could not resolve the node id of {owner}/{repo}"))
+    }
+
+    /// The node id a lookup pins `head`'s branches to: the push repository's,
+    /// resolved once, or `None` when the head lives in the target, which a pull
+    /// request node tells by itself.
+    fn head_repo_id(&self, head: HeadRepo) -> anyhow::Result<Option<String>> {
+        let Some(push) = self.push_repo.as_ref().filter(|_| head == HeadRepo::Origin) else {
+            return Ok(None);
+        };
+        if let Some(id) = self.push_repo_id.get() {
+            return Ok(Some(id.clone()));
+        }
+        let id = self.node_id_of(&push.owner, &push.repo)?;
+        // Lookups run in parallel, so another one may have stored the same id first.
+        Ok(Some(self.push_repo_id.get_or_init(|| id).clone()))
+    }
+
+    /// Run a `pullRequests` connection query over every page, keeping the nodes
+    /// `keep` accepts. The loop owns the `$after` variable.
+    fn every_pr_page(
+        &self,
+        query: &str,
+        mut vars: Value,
+        keep: impl Fn(&Value) -> bool,
+    ) -> anyhow::Result<Vec<MergeRequest>> {
+        let mut out = Vec::new();
+        for _ in 0..EVERY_PAGE_LIMIT {
+            let data = self.graphql(query, vars.clone())?;
+            let connection = &data["repository"]["pullRequests"];
+            out.extend(
+                connection["nodes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|node| keep(node))
+                    .filter_map(parse_pr_mr),
+            );
+            let page = &connection["pageInfo"];
+            if !page["hasNextPage"].as_bool().unwrap_or(false) {
+                return Ok(out);
+            }
+            let cursor = page["endCursor"].as_str().ok_or_else(|| {
+                anyhow::anyhow!("a pull request page has a next page but no cursor")
+            })?;
+            vars["after"] = json!(cursor);
+        }
+        anyhow::bail!(
+            "the pull request list runs past {EVERY_PAGE_LIMIT} pages; refusing to answer from \
+             part of it"
+        )
     }
 
     /// A pull request's node id (needed by update / label / assignee / reviewer
@@ -239,25 +303,18 @@ impl GitHub {
         }
         parts.join(" ")
     }
+}
 
-    /// The branch's candidate PRs, one fetch, all states. GraphQL has no
-    /// `head=owner:branch` filter, so we match on the head branch name and
-    /// disambiguate a fork client-side by `headRepositoryOwner.login`.
-    fn candidates(&self, branch: &str) -> anyhow::Result<Vec<MergeRequest>> {
-        let data = self.graphql(
-            gql::FIND_QUERY,
-            json!({ "owner": self.owner, "repo": self.repo, "branch": branch }),
-        )?;
-        let want = self.head_owner.as_deref().unwrap_or(&self.owner);
-        Ok(data["repository"]["pullRequests"]["nodes"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter(|n| n["headRepositoryOwner"]["login"].as_str() == Some(want))
-                    .filter_map(parse_pr_mr)
-                    .collect()
-            })
-            .unwrap_or_default())
+/// Whether a `PullRequest` node's head lives in the expected repository: the
+/// one with node id `repo` when given, else the target itself. GraphQL can only
+/// filter by head *branch*, so the repository is checked here — by id, since
+/// an owner's login no longer identifies a fork once an organisation may fork
+/// its own repository, even several times (GitHub changelog, 2022-06-27 and
+/// 2023-02-16).
+fn heads_in(node: &Value, repo: Option<&str>) -> bool {
+    match repo {
+        Some(id) => node["headRepository"]["id"].as_str() == Some(id),
+        None => node["isCrossRepository"].as_bool() == Some(false),
     }
 }
 
@@ -414,14 +471,19 @@ mod gql {
         "mutation($id:ID!){unresolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}";
 
     // --- Stack half (find / create / retarget / decorate). ---
-    pub const FIND_QUERY: &str = "query($owner:String!,$repo:String!,$branch:String!){\
+    pub const FIND_QUERY: &str =
+        "query($owner:String!,$repo:String!,$branch:String!,$after:String){\
         repository(owner:$owner,name:$repo){pullRequests(headRefName:$branch,\
-          states:[OPEN,MERGED,CLOSED],first:50,orderBy:{field:UPDATED_AT,direction:DESC}){\
-          nodes{number state url baseRefName headRefName body headRefOid headRepositoryOwner{login}}}}}";
-    pub const CHILDREN_QUERY: &str = "query($owner:String!,$repo:String!,$base:String!){\
+          states:[OPEN,MERGED,CLOSED],first:100,after:$after,\
+          orderBy:{field:UPDATED_AT,direction:DESC}){pageInfo{hasNextPage endCursor}\
+          nodes{number state url baseRefName headRefName body headRefOid \
+            isCrossRepository headRepository{id}}}}}";
+    pub const CHILDREN_QUERY: &str =
+        "query($owner:String!,$repo:String!,$base:String!,$after:String){\
         repository(owner:$owner,name:$repo){pullRequests(baseRefName:$base,\
-          states:[OPEN],first:50,orderBy:{field:UPDATED_AT,direction:DESC}){\
-          nodes{number state url baseRefName headRefName body headRefOid headRepositoryOwner{login}}}}}";
+          states:[OPEN],first:100,after:$after,\
+          orderBy:{field:UPDATED_AT,direction:DESC}){pageInfo{hasNextPage endCursor}\
+          nodes{number state url baseRefName headRefName body headRefOid}}}}";
     pub const CREATE_PR: &str = "mutation($input:CreatePullRequestInput!){\
         createPullRequest(input:$input){pullRequest{number state url baseRefName headRefName body headRefOid}}}";
     pub const UPDATE_PR: &str = "mutation($input:UpdatePullRequestInput!){\
@@ -488,23 +550,21 @@ impl Forge for GitHub {
         "PR"
     }
 
-    fn find(&self, branch: &str, state: StateFilter) -> anyhow::Result<Option<MergeRequest>> {
-        Ok(pick(&self.candidates(branch)?, state))
-    }
-
-    fn find_any(&self, branch: &str) -> anyhow::Result<Option<MergeRequest>> {
-        Ok(super::pick_any(&self.candidates(branch)?))
+    fn mrs_for_branch(&self, head: HeadRepo, branch: &str) -> anyhow::Result<Vec<MergeRequest>> {
+        let head_repo = self.head_repo_id(head)?;
+        self.every_pr_page(
+            gql::FIND_QUERY,
+            json!({ "owner": self.owner, "repo": self.repo, "branch": branch }),
+            |node| heads_in(node, head_repo.as_deref()),
+        )
     }
 
     fn find_children(&self, base_branch: &str) -> anyhow::Result<Vec<MergeRequest>> {
-        let data = self.graphql(
+        self.every_pr_page(
             gql::CHILDREN_QUERY,
             json!({ "owner": self.owner, "repo": self.repo, "base": base_branch }),
-        )?;
-        Ok(data["repository"]["pullRequests"]["nodes"]
-            .as_array()
-            .map(|arr| arr.iter().filter_map(parse_pr_mr).collect())
-            .unwrap_or_default())
+            |_| true,
+        )
     }
 
     fn create(&self, req: &NewMr) -> anyhow::Result<MergeRequest> {
@@ -996,9 +1056,29 @@ mod tests {
                 service: Service::GitHub,
             },
             None,
+            None,
             "t".into(),
             None,
         )
+    }
+
+    #[test]
+    fn a_head_is_pinned_to_its_repository_not_its_owner() {
+        let node = |cross: bool, repo: Value| json!({ "isCrossRepository": cross, "headRepository": repo });
+        // Without a push repository the head must live in the target itself.
+        assert!(heads_in(&node(false, json!({ "id": "R_target" })), None));
+        assert!(!heads_in(&node(true, json!({ "id": "R_fork" })), None));
+        // With one, only that repository's id counts — a second fork the same
+        // organisation owns does not, and neither does a deleted fork.
+        assert!(heads_in(
+            &node(true, json!({ "id": "R_fork" })),
+            Some("R_fork")
+        ));
+        assert!(!heads_in(
+            &node(true, json!({ "id": "R_other" })),
+            Some("R_fork")
+        ));
+        assert!(!heads_in(&node(true, Value::Null), Some("R_fork")));
     }
 
     #[test]

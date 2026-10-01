@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use anyhow::{Context, Result};
 
-use wits_util::forge::{MergeRequest, MrState, MrSummary};
+use wits_util::forge::{HeadRepo, MergeRequest, MrState, MrSummary};
 use wits_util::git::Repository;
 use wits_util::time::now_secs;
 
@@ -155,16 +155,22 @@ fn fetch_mr(ctx: &Online, remote: &str, seed_id: &str, mode: StackMode) -> Resul
 /// `branch`, or `None` when `branch` is a trunk — a trunk has no parent MR, so
 /// this skips the forge call entirely rather than paying for a query that can
 /// only come back empty.
+///
+/// The parent's head is looked up in the merge target, not in this checkout's
+/// push repository: `branch` is another MR's base, so it lives in the target,
+/// and a fork checkout's own repository holds none of someone else's stack. Of
+/// several MRs from it, an open one wins, else the most recently updated.
 fn climb(
     forge: &dyn wits_util::forge::Forge,
     branch: &str,
     trunk: Option<&str>,
 ) -> Result<Option<MergeRequest>> {
     if is_trunk(branch, trunk) {
-        Ok(None)
-    } else {
-        forge.find_any(branch)
+        return Ok(None);
     }
+    let mrs = forge.mrs_for_branch(HeadRepo::Target, branch)?;
+    // The list is newest first, and `min_by_key` keeps the first of equals.
+    Ok(mrs.into_iter().min_by_key(|mr| mr.state != MrState::Open))
 }
 
 /// The ids of every MR in the stack(s) containing the given seeds, each a

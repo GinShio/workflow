@@ -10,14 +10,14 @@
 //! forges race on their own duplicate detection when sibling MRs are opened at
 //! the same instant, and a serial create side-steps that for no real cost.
 
-use std::collections::HashMap;
-
-use wits_util::forge::{Forge, MrState, NewMr};
+use wits_util::forge::{HeadRepo, NewMr};
 use wits_util::git::Repository;
 use wits_util::log as wits_log;
 use wits_util::remote::RemoteRoles;
 
-use super::{fail_if_any, map_parallel, resolution, ForgeSession, SubmitArgs, TitleSource};
+use super::{
+    fail_if_any, map_parallel, resolution, BranchMrs, ForgeSession, SubmitArgs, TitleSource,
+};
 
 /// What a branch needs, decided from its current remote MR state.
 enum Decision {
@@ -39,30 +39,38 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, args: &SubmitArgs) -> anyhow:
     let tips = repo.branch_tips();
 
     // Phase 1 — read existing MR state for every branch, in parallel.
-    let decisions = map_parallel(&plan.selected, |branch| {
-        let base = plan.base_for(branch);
-        let decision = decide(forge.as_ref(), branch, &base, &tips, args.force);
-        (branch.clone(), base, decision)
+    let found = map_parallel(&plan.selected, |branch| {
+        (
+            branch.clone(),
+            plan.base_for(branch),
+            forge.mrs_for_branch(HeadRepo::Origin, branch),
+        )
     });
 
-    // Phase 2 — sort into the two execution lanes.
+    // Phase 2 — decide, and sort into the two execution lanes.
     let mut fixes = Vec::new();
     let mut creates = Vec::new();
     let mut failures = 0usize;
-    for (branch, base, decision) in decisions {
-        match decision {
-            Ok(Decision::AlreadyOpen(display)) => {
-                log::info!("{noun} {display} already targets {base} ({branch})")
-            }
-            Ok(Decision::FixBase { id, display }) => fixes.push((branch, base, id, display)),
-            Ok(Decision::Create) => creates.push((branch, base)),
-            Ok(Decision::SkipClosed(display)) => log::info!(
-                "{branch}: a closed {noun} {display} sits at this commit; not reopening (use --force)"
-            ),
+    for (branch, base, mrs) in found {
+        let mrs = match mrs {
+            Ok(mrs) => BranchMrs::sort(mrs, Some(&base)),
             Err(e) => {
                 failures += 1;
                 log::warn!("{branch}: {e}");
+                continue;
             }
+        };
+        mrs.warn_other_open(noun, &branch);
+        let local_tip = tips.get(&branch).map(String::as_str);
+        match decide(mrs, &base, local_tip, args.force) {
+            Decision::AlreadyOpen(display) => {
+                log::info!("{noun} {display} already targets {base} ({branch})")
+            }
+            Decision::FixBase { id, display } => fixes.push((branch, base, id, display)),
+            Decision::Create => creates.push((branch, base)),
+            Decision::SkipClosed(display) => log::info!(
+                "{branch}: a closed {noun} {display} sits at this commit; not reopening (use --force)"
+            ),
         }
     }
 
@@ -112,46 +120,32 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, args: &SubmitArgs) -> anyhow:
     fail_if_any(failures)
 }
 
-/// Decide a branch's fate from its remote MR state. An open MR is either correct
-/// or needs its base moved; otherwise we look for a closed/merged leftover and
-/// only recreate when our local tip has moved past it (or `--force`), so a branch
-/// that was merged and is being reused doesn't spawn a duplicate.
-fn decide(
-    forge: &dyn Forge,
-    branch: &str,
-    base: &str,
-    tips: &HashMap<String, String>,
-    force: bool,
-) -> anyhow::Result<Decision> {
-    // One fetch (open-preferring) rather than a paired find(Open)+find(NotOpen):
-    // the branch has at most one relevant MR, so we pull it once and branch on
-    // its state locally.
-    let Some(mr) = forge.find_any(branch)? else {
-        return Ok(Decision::Create);
-    };
-
-    if mr.state == MrState::Open {
+/// Decide a branch's fate from its MRs. An open MR is either correct or needs
+/// its base moved; otherwise the newest closed/merged leftover decides, and the
+/// branch is recreated only when our local tip has moved past it (or `--force`),
+/// so a branch that was merged and is being reused doesn't spawn a duplicate.
+fn decide(mrs: BranchMrs, base: &str, local_tip: Option<&str>, force: bool) -> Decision {
+    if let Some(mr) = mrs.open {
         if mr.base == base {
-            return Ok(Decision::AlreadyOpen(mr.display));
+            return Decision::AlreadyOpen(mr.display);
         }
-        return Ok(Decision::FixBase {
+        return Decision::FixBase {
             id: mr.id,
             display: mr.display,
-        });
+        };
     }
-
-    // A merged/closed leftover: recreate only when our local tip has moved past
-    // it (or `--force`), so reusing a merged branch doesn't spawn a duplicate.
-    let local_tip = tips.get(branch).map(String::as_str);
+    let Some(mr) = mrs.newest_closed else {
+        return Decision::Create;
+    };
     let moved_on = match (mr.head_sha.as_deref(), local_tip) {
         (Some(remote), Some(local)) => remote != local,
         // Can't compare — assume it moved rather than silently skip.
         _ => true,
     };
     if force || moved_on {
-        Ok(Decision::Create)
+        Decision::Create
     } else {
-        Ok(Decision::SkipClosed(mr.display))
+        Decision::SkipClosed(mr.display)
     }
 }
 
@@ -179,55 +173,10 @@ mod tests {
     use super::*;
     use wits_util::forge::{MergeRequest, MrState};
 
-    /// A stand-in forge that returns canned answers, so the decision logic — the
-    /// part that was once subtly wrong about a drifted base — can be tested
-    /// without a network.
-    struct MockForge {
-        open: Option<MergeRequest>,
-        closed: Option<MergeRequest>,
-    }
-
-    impl Forge for MockForge {
-        fn noun(&self) -> &'static str {
-            "PR"
-        }
-        fn find(
-            &self,
-            _branch: &str,
-            state: wits_util::forge::StateFilter,
-        ) -> anyhow::Result<Option<MergeRequest>> {
-            use wits_util::forge::StateFilter;
-            Ok(match state {
-                StateFilter::Open => self.open.clone(),
-                StateFilter::NotOpen => self.closed.clone(),
-            })
-        }
-        fn find_any(&self, _branch: &str) -> anyhow::Result<Option<MergeRequest>> {
-            // Open-preferring, mirroring the real backends' `pick_any`.
-            Ok(self.open.clone().or_else(|| self.closed.clone()))
-        }
-        fn create(&self, _req: &NewMr) -> anyhow::Result<MergeRequest> {
-            unreachable!("decide never creates")
-        }
-        fn set_base(&self, _id: &str, _base: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn set_body(&self, _id: &str, _body: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn apply_attributes(
-            &self,
-            _id: &str,
-            _attrs: &wits_util::forge::Attributes,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    fn mr(base: &str, sha: Option<&str>, state: MrState) -> MergeRequest {
+    fn mr(id: &str, base: &str, sha: Option<&str>, state: MrState) -> MergeRequest {
         MergeRequest {
-            id: "1".into(),
-            display: "#1".into(),
+            id: id.into(),
+            display: format!("#{id}"),
             state,
             base: base.into(),
             source: String::new(),
@@ -237,71 +186,77 @@ mod tests {
         }
     }
 
-    fn tips_of(branch: &str, sha: &str) -> HashMap<String, String> {
-        HashMap::from([(branch.to_owned(), sha.to_owned())])
+    /// A branch's MRs, newest first as the forge returns them, sorted for `base`.
+    fn mrs(base: &str, list: Vec<MergeRequest>) -> BranchMrs {
+        BranchMrs::sort(list, Some(base))
     }
 
-    // The regression that motivated the find() fix: an open MR whose base no
-    // longer matches the topology must be detected and scheduled for a retarget,
-    // not missed (which would have created a duplicate).
+    // The regression that motivated matching by head only: an open MR whose base
+    // no longer matches the topology must be detected and scheduled for a
+    // retarget, not missed (which would have created a duplicate).
     #[test]
     fn open_mr_with_drifted_base_is_retargeted() {
-        let forge = MockForge {
-            open: Some(mr("stale-base", None, MrState::Open)),
-            closed: None,
-        };
-        let d = decide(&forge, "b", "wanted-base", &HashMap::new(), false).unwrap();
+        let open = vec![mr("1", "stale-base", None, MrState::Open)];
+        let d = decide(mrs("wanted-base", open), "wanted-base", None, false);
         assert!(matches!(d, Decision::FixBase { .. }));
     }
 
     #[test]
     fn open_mr_with_correct_base_is_a_noop() {
-        let forge = MockForge {
-            open: Some(mr("base", None, MrState::Open)),
-            closed: None,
-        };
-        let d = decide(&forge, "b", "base", &HashMap::new(), false).unwrap();
+        let open = vec![mr("1", "base", None, MrState::Open)];
+        let d = decide(mrs("base", open), "base", None, false);
         assert!(matches!(d, Decision::AlreadyOpen(_)));
     }
 
     #[test]
     fn no_mr_means_create() {
-        let forge = MockForge {
-            open: None,
-            closed: None,
-        };
-        let d = decide(&forge, "b", "base", &HashMap::new(), false).unwrap();
+        let d = decide(mrs("base", Vec::new()), "base", None, false);
         assert!(matches!(d, Decision::Create));
     }
 
     #[test]
     fn closed_mr_at_current_tip_is_skipped_unless_forced() {
-        let forge = MockForge {
-            open: None,
-            closed: Some(mr("base", Some("abc"), MrState::Merged)),
-        };
-        let tips = tips_of("b", "abc");
+        let merged = || vec![mr("1", "base", Some("abc"), MrState::Merged)];
         assert!(matches!(
-            decide(&forge, "b", "base", &tips, false).unwrap(),
+            decide(mrs("base", merged()), "base", Some("abc"), false),
             Decision::SkipClosed(_)
         ));
         // --force overrides the guard.
         assert!(matches!(
-            decide(&forge, "b", "base", &tips, true).unwrap(),
+            decide(mrs("base", merged()), "base", Some("abc"), true),
             Decision::Create
         ));
     }
 
     #[test]
     fn closed_mr_left_behind_by_new_commits_is_recreated() {
-        let forge = MockForge {
-            open: None,
-            closed: Some(mr("base", Some("old-sha"), MrState::Closed)),
-        };
-        let tips = tips_of("b", "new-sha");
+        let closed = vec![mr("1", "base", Some("old-sha"), MrState::Closed)];
         assert!(matches!(
-            decide(&forge, "b", "base", &tips, false).unwrap(),
+            decide(mrs("base", closed), "base", Some("new-sha"), false),
             Decision::Create
         ));
+    }
+
+    // Two open MRs from one branch, the more recently updated one into another
+    // base: the one already on the planned base is left alone rather than its
+    // stray twin being retargeted onto it.
+    #[test]
+    fn an_open_mr_on_the_base_is_kept_over_a_newer_stray() {
+        let open = vec![
+            mr("9", "other", None, MrState::Open),
+            mr("4", "main", None, MrState::Open),
+        ];
+        let d = decide(mrs("main", open), "main", None, false);
+        assert!(matches!(d, Decision::AlreadyOpen(ref display) if display == "#4"));
+    }
+
+    #[test]
+    fn an_open_mr_outranks_a_newer_closed_one() {
+        let list = vec![
+            mr("5", "main", Some("abc"), MrState::Merged),
+            mr("4", "old", None, MrState::Open),
+        ];
+        let d = decide(mrs("main", list), "main", Some("abc"), false);
+        assert!(matches!(d, Decision::FixBase { ref id, .. } if id == "4"));
     }
 }
