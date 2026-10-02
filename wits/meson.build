@@ -75,6 +75,7 @@ wits = custom_target(
 # runtime cross-check is `wits __applets`.
 builtins = [
   'build',
+  'devenv',
   'dotfiles',
   'project',
   'review',

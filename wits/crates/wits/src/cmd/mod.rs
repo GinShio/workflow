@@ -6,6 +6,7 @@
 //! that don't exist yet.
 
 pub mod build;
+pub mod devenv;
 pub mod dotfiles;
 pub mod project;
 pub mod review;

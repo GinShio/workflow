@@ -49,3 +49,7 @@ path = "tests/cmd/dotfiles.rs"
 [[test]]
 name = "cmd_stack"
 path = "tests/cmd/stack.rs"
+
+[[test]]
+name = "cmd_devenv"
+path = "tests/cmd/devenv.rs"

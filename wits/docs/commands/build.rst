@@ -65,10 +65,16 @@ These change *resolution* — what ``repos.<name>.workdir``, ``build_dir``, and
 ``--work-dir`` and ``--spec`` are profile axes, so they work on the ``project``
 read queries (``build-dir``, …) as well as ``build``.
 
+The profile flags together with ``--detach``, ``--build-dir`` and
+``--install-dir`` below say *which build* is meant. :doc:`devenv` takes exactly
+that group, so a program run against a build names the tree ``build`` produces
+for the same flags.
+
 The build-only flags
 --------------------
 
-These control the build *steps*.
+These control the build *steps* — and three of them, as above, also select the
+build.
 
 .. list-table::
    :header-rows: 1

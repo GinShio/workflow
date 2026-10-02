@@ -5,8 +5,8 @@
 //! binary (rather than a pile of scripts) buys a shared library ([`wits_util`]),
 //! consistent flags, and a single thing to build and put on `$PATH`. The
 //! built-ins are `transcrypt`, `stack`, `review`, `worktree`, `project`, `build`,
-//! `update`, and `dotfiles`; adding one is a module under `cmd/` and a match arm
-//! below.
+//! `devenv`, `update`, and `dotfiles`; adding one is a module under `cmd/` and a
+//! match arm below.
 //!
 //! There are two ways to invoke a built-in, the way `mount` accepts either
 //! `mount -t xfs` or `mount.xfs`: the umbrella form `wits foo` and the direct
@@ -73,6 +73,8 @@ enum Commands {
     Project(cmd::project::ProjectArgs),
     /// Configure and build a project.
     Build(cmd::build::BuildArgs),
+    /// Run a program, or a shell, in the runtime environment of a project's build.
+    Devenv(cmd::devenv::DevenvArgs),
     /// Refresh git for every repo of a project.
     Update(cmd::update::UpdateArgs),
     /// Compile a dotfiles manifest tree into Dotdrop's inputs.
@@ -107,6 +109,14 @@ enum Commands {
         /// The todo file git hands its sequence editor.
         todo: PathBuf,
     },
+    /// The program `wits devenv` runs inside a build system's own developer
+    /// environment, to read that environment back as data. Hidden like
+    /// [`Commands::Applets`] — plumbing a build tool invokes, not a workflow verb.
+    #[command(name = "__devenv-capture", hide = true)]
+    DevenvCapture {
+        /// Where to write the inherited environment.
+        file: PathBuf,
+    },
 
     /// Any other `wits <name>` runs a `wits-<name>` executable from `$PATH`.
     #[command(external_subcommand)]
@@ -131,6 +141,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Worktree(args) => cmd::worktree::run(args),
         Commands::Project(args) => cmd::project::run(args),
         Commands::Build(args) => cmd::build::run(args),
+        Commands::Devenv(args) => cmd::devenv::run(args),
         Commands::Update(args) => cmd::update::run(args),
         Commands::Dotfiles(args) => cmd::dotfiles::run(args),
         Commands::Completions { shell } => print_completions(*shell),
@@ -141,6 +152,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Commands::SliceEditor { spec, todo } => cmd::stack::slice::edit_todo(spec, todo),
+        Commands::DevenvCapture { file } => cmd::devenv::capture(file),
         Commands::External(args) => dispatch_plugin(args),
     }
 }
@@ -350,12 +362,12 @@ mod tests {
 
     #[test]
     fn hidden_plumbing_stays_out_of_the_applet_set() {
-        // `__completions` is consumed by shells and `__slice-editor` by git, not
-        // typed by people: like `__applets` they must not surface in the applet
-        // list.
+        // `__completions` is consumed by shells, `__slice-editor` by git, and
+        // `__devenv-capture` by a build tool, not typed by people: like
+        // `__applets` they must not surface in the applet list.
         let names = builtin_names();
-        assert!(!names
-            .iter()
-            .any(|name| name == "__completions" || name == "__slice-editor"));
+        assert!(!names.iter().any(|name| {
+            name == "__completions" || name == "__slice-editor" || name == "__devenv-capture"
+        }));
     }
 }

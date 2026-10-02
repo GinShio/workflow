@@ -22,6 +22,8 @@ CLI
 
    project <verb> [<name|path>] [--focus <repo>] [profile flags]
    build   [<name|path>] [--focus <repo>] [profile flags] [--detach] [build options]
+   devenv  [<name|path>] [--focus <repo>] [profile flags] [--detach]
+           [--build-dir D] [--install-dir D] [--dump[=sh|fish|json]] [-- <cmd>…]
    update  [<name|path>] [--with-borrowed]
 
 ``project`` has one verb per *shape* of question, and nothing else:
@@ -284,7 +286,8 @@ then build).
      repo separately, strategy, ``branch.slug``, build system, generator,
      toolchain, the presets that applied, every resolved path, and every
      ``repos.<name>.workdir`` — followed by the accumulated ``definitions``,
-     ``environment`` and ``extra_*_args``.
+     ``environment``, ``devenv`` (with the base it lands on) and
+     ``extra_*_args``.
 
   Templates and resolution are both printed. They answer different questions,
   and a mismatch between them is the bug the report exists to expose. Section 4
@@ -350,7 +353,8 @@ The rule is the same one that governs a project: a level's bare
 ``environment`` / ``definitions`` are that level's unconditional
 contribution, while its ``presets`` apply only when named. Definitions keep
 their TOML type through inheritance, so an org's ``false`` reaches a backend
-as a boolean, not the string ``"false"``.
+as a boolean, not the string ``"false"``. An ``[org.devenv]`` table is
+inherited the same way, as the first of the operations that accumulate.
 
 The same values are *also* exposed as ``org.environment.*`` /
 ``org.definitions.*`` in the template context — which is what you want when a
@@ -411,6 +415,9 @@ build; ``definitions`` are build-system ``-D`` parameters.
 ``extra_config_args``, ``extra_build_args``, ``extra_install_args`` —
 templated lists appended to the respective commands.
 
+``[project.devenv]`` — the runtime environment, which ``wits devenv`` applies
+and ``build`` never does; see `devenv — the runtime environment`_.
+
 ``[project.presets.<name>]`` — project-level presets.
 
 Presets
@@ -444,6 +451,9 @@ Preset keys
    * - ``definitions``
      - table
      - Templated build definitions.
+   * - ``devenv``
+     - table
+     - Runtime-environment operations (`devenv — the runtime environment`_).
    * - ``extra_config_args``
      - list
      - Appended to configure.
@@ -463,6 +473,8 @@ A referenced name is the merge of the same-named preset at each level:
   **nearest** (repo > project > org) level wins.
 * **Lists** (``extra_*_args``): the **nearest** level's list **replaces** the
   others (not appended).
+* **``devenv``**: every level's operations **accumulate**, org first, then
+  project, then repo.
 
 The merged definition's ``extends`` are then resolved.
 
@@ -485,6 +497,67 @@ Application order
 combined list is de-duplicated by name keeping the **last** position, so an
 explicitly-passed preset moves late and wins. CLI ``-X``/``--extra-*-args``
 (pipeline L3) sit above all presets.
+
+``devenv`` — the runtime environment
+------------------------------------
+
+``devenv`` tables declare what a program run against a build needs —
+``wits devenv`` applies them, ``build`` never does. They exist at the levels
+``environment`` does: ``[org.devenv]``, ``[project.devenv]``, and the ``devenv``
+of a preset at any level.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Entry
+     - Meaning
+   * - ``NAME = V``
+     - Set ``NAME``. ``V`` is a scalar or a list of scalars.
+   * - ``NAME = { set = V }``
+     - The same, in table form.
+   * - ``NAME = { prepend = V }``
+     - ``V``, the separator, then the existing value.
+   * - ``NAME = { append = V }``
+     - The existing value, the separator, then ``V``.
+   * - ``separator = S``
+     - In a table: joins a list ``V``, and ``V`` with the existing value.
+       Default ``:``.
+
+A table names exactly one of ``set``/``prepend``/``append``; any other key is a
+load-time error. A prepend or append onto a variable that is absent yields ``V``
+alone, and onto one that is present — even empty — joins them: Meson's
+run-mode rule.
+
+**Templates.** Values are templates resolved against the plan's context at the
+layer that declares them, so ``{{build_dir}}``, ``{{install_dir}}``,
+``{{repos.<name>.workdir}}`` and ``{{spec.*}}`` mean what they mean everywhere
+else. A ``devenv`` entry is **never** written into ``env.*``: ``{{env.PATH}}`` in
+one reads the ``PATH`` the context already holds, which is why
+``PATH = "/opt/bin:{{env.PATH}}"`` is not a cycle here, as it would be in
+``environment``. Being part of the plan, a ``devenv`` template that does not
+resolve fails it like any other — ``build``'s and ``info``'s too — and
+``check`` reports it.
+
+**Accumulation.** Operations apply in the pipeline's layer order — L0.5 org,
+L1 project, L2 each applied preset with its ``extends`` first — and a same-named
+preset's levels in org → project → repo order. They accumulate rather than
+replace, with two rules:
+
+* a ``set`` discards the earlier operations on its variable;
+* a prepend or append identical to one still in force is not added again, so a
+  preset reached twice through ``extends`` adds its entries once.
+
+**Composition at run time.** The operations land on a base: the build system's
+own developer environment where it keeps one (meson: ``meson devenv -C
+<build_dir>``, read back through ``wits __devenv-capture``), else the caller's
+environment. ``WITS_DEVENV`` is then set to the project's key (``org/name``,
+or the bare name). Neither the build ``environment`` nor the toolchain's
+variables are part of it.
+
+``--dump[=sh|fish|json]`` prints the difference from the caller's environment
+instead of running a program. ``wits devenv`` needs ``build_dir`` to exist and,
+for meson, to be configured; it never switches a branch.
 
 ``[toolchains.<name>]``
 -----------------------
@@ -649,7 +722,9 @@ Backends
 
 ``build_system`` selects a backend. A backend does three things: translates
 the selected toolchain's canonical fields to native form, emits the command
-steps for a mode, and detects prior configuration.
+steps for a mode, and detects prior configuration. One may also name its own
+developer environment, which ``wits devenv`` uses as the base: meson's is
+``meson devenv -C <build_dir>``; cmake and cargo have none.
 
 Canonical-field translation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

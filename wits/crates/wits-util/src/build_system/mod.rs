@@ -96,6 +96,15 @@ pub trait Backend: ToolchainInjector {
 
     /// Whether `build_dir` already holds a configured build.
     fn is_configured(&self, build_dir: &Path) -> bool;
+
+    /// The argv prefix that runs a program inside this build system's own
+    /// developer environment for a configured `build_dir`; the program and its
+    /// arguments follow it. `None` when the build system has none, in which case
+    /// a program runs against the caller's environment instead. This is what
+    /// `wits devenv` layers a project's declared `devenv` on top of.
+    fn devenv_runner(&self, _build_dir: &Path) -> Option<Vec<String>> {
+        None
+    }
 }
 
 /// The backend for a [`BuildSystem`]. Total: the enum only exists for values

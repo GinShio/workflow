@@ -30,6 +30,9 @@ you have in front of you.
        configure flags and watching the same build dirs collide.
    * - :doc:`build`
      - you want to configure and compile one of those projects.
+   * - :doc:`devenv`
+     - you want to run a program — a test, ``vulkaninfo``, a shell — against one
+       particular build of one of them.
    * - :doc:`update`
      - you want every repository a project owns refreshed from upstream in one
        safe step.
@@ -43,6 +46,6 @@ you have in front of you.
    a command says it does — ``stack`` (push / MR API), ``review``
    (``fetch`` / ``submit``), ``project`` / ``update`` (clone / fetch), and the
    forge detection that reads remote URLs. ``transcrypt``, ``worktree``,
-   ``dotfiles``, and the read side of ``review`` / ``project`` never touch the
-   network at all. One caveat: ``build`` itself is local, but it drives your
-   build tool, and cargo / meson may fetch dependencies on their own.
+   ``dotfiles``, ``devenv``, and the read side of ``review`` / ``project``
+   never touch the network at all. One caveat: ``build`` itself is local, but it
+   drives your build tool, and cargo / meson may fetch dependencies on their own.

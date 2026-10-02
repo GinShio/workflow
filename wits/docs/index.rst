@@ -44,6 +44,8 @@ Command         What it does
                 and git hooks.
 ``build``       Configure and build a project on top of that registry
                 (cmake / meson / cargo).
+``devenv``      Run a program, or a shell, in the runtime environment of one
+                build of a project.
 ``update``      Refresh git for every repository a project owns.
 ``dotfiles``    Compile a TOML manifest tree into per-host Dotdrop
                 configurations.
@@ -110,6 +112,7 @@ are written in the ``NAME`` form and also appear in the references as
    commands/worktree
    commands/project
    commands/build
+   commands/devenv
    commands/update
    commands/dotfiles
    plugins

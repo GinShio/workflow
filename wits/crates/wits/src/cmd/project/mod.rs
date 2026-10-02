@@ -24,9 +24,10 @@ use clap::{Args, Subcommand, ValueEnum};
 
 use anyhow::Context;
 
+use wits_util::build_system::backend_for;
 use wits_util::git;
 use wits_util::project::context::value_to_string;
-use wits_util::project::model::{Kind, Profile};
+use wits_util::project::model::{DevenvOp, Kind, Profile, DEVENV_SEPARATOR};
 use wits_util::project::skip;
 use wits_util::project::workspace::{expand_tilde, looks_like_path, ProjectData, Workspace};
 use wits_util::project::{resolve, resolve_target};
@@ -797,6 +798,36 @@ fn describe(ws: &Workspace, project: &ProjectData, profile: &ProfileArgs) -> Res
         println!("environment:");
         for (key, value) in &logical.environment {
             println!("  {key} = {value}");
+        }
+    }
+    // The runtime half, which `build` never applies: what `wits devenv` puts on
+    // top of its base. The base is named rather than run — what a build system
+    // puts in it is a fact of the configured tree, not of the registry.
+    let runner = plan
+        .build_system
+        .zip(plan.build_dir.as_deref())
+        .and_then(|(bs, dir)| backend_for(bs).devenv_runner(dir));
+    if runner.is_some() || !logical.devenv.is_empty() {
+        println!();
+        println!("devenv:");
+        match (&runner, &plan.build_dir) {
+            (Some(argv), _) => println!("  base: {}", argv.join(" ")),
+            (None, Some(_)) => println!("  base: the caller's environment"),
+            // An org's devenv reaches every project joining it, built or not.
+            (None, None) => println!("  base: none — no build_dir to run against"),
+        }
+        for entry in &logical.devenv {
+            let separator = if entry.op != DevenvOp::Set && entry.separator != DEVENV_SEPARATOR {
+                format!(" (separator {:?})", entry.separator)
+            } else {
+                String::new()
+            };
+            println!(
+                "  {} {} {}{separator}",
+                entry.name,
+                entry.op.as_str(),
+                entry.value
+            );
         }
     }
     for (label, args) in [

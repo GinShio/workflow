@@ -46,6 +46,21 @@ impl Backend for Meson {
             .exists()
     }
 
+    /// `meson devenv`, the environment the project itself maintains through
+    /// `meson.add_devenv()` — Mesa's build-tree ICD manifests among it — so
+    /// nothing here re-derives what Meson already knows.
+    fn devenv_runner(&self, build_dir: &Path) -> Option<Vec<String>> {
+        // No `--` before the program: `meson devenv` gathers its command with
+        // argparse's REMAINDER, which keeps a `--` as the command itself
+        // (Meson 1.12: "ERROR: Command not found: --").
+        Some(vec![
+            "meson".into(),
+            "devenv".into(),
+            "-C".into(),
+            build_dir.display().to_string(),
+        ])
+    }
+
     fn steps(&self, ctx: &EmitContext<'_>) -> anyhow::Result<Vec<Step>> {
         let build = ctx.build_dir.display().to_string();
         let source = ctx.source_dir.display().to_string();

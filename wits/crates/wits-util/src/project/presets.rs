@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
 
-use super::context::{apply_def_map, apply_env_map, resolve_replace, Ctx};
+use super::context::{apply_def_map, apply_devenv_map, apply_env_map, resolve_replace, Ctx};
 use super::model::{LogicalConfig, Profile, RawPreset, Toolchain};
 use super::workspace::{ProjectData, Workspace};
 
@@ -75,8 +75,9 @@ fn candidate_preset_names(ws: &Workspace, project: &ProjectData, focus: &str) ->
 }
 
 /// Merge the same-named preset across org → project → repo (maps: nearest wins;
-/// lists/extends/applies_when: nearest non-empty wins). A qualified `org/preset`
-/// reference reaches one org's presets directly, without merging.
+/// lists/extends/applies_when: nearest non-empty wins; `devenv` operations
+/// accumulate in level order). A qualified `org/preset` reference reaches one
+/// org's presets directly, without merging.
 fn effective_preset(
     ws: &Workspace,
     project: &ProjectData,
@@ -109,6 +110,7 @@ fn effective_preset(
         for (k, v) in &layer.definitions {
             merged.definitions.insert(k.clone(), v.clone());
         }
+        merged.devenv.0.extend(layer.devenv.0.iter().cloned());
         if !layer.extends.0.is_empty() {
             merged.extends = layer.extends.clone();
         }
@@ -161,6 +163,7 @@ pub(crate) fn resolve_preset_into(
         &format!("preset.{name}.definitions"),
         &preset.definitions,
     )?;
+    apply_devenv_map(ctx, logical, &preset.devenv)?;
     // Preset lists replace what earlier layers set (they are the nearest-level
     // contribution for this preset); different presets still accumulate in order.
     resolve_replace(

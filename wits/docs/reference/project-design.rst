@@ -77,6 +77,7 @@ all.
    wits project info  [<name|path>] [--get <path>]…    # describe one, or print resolved values
    wits project check [<name|path>]                    # validate configuration
    wits build   [<name|path>]                          # configure + build + (un)install
+   wits devenv  [<name|path>] [-- <cmd>…]              # run a program against a build
    wits update  [<name|path>]                          # refresh git for a project's repos
 
 Worktrees are ``wits worktree``'s, not ``project``'s: the act is not
@@ -105,9 +106,9 @@ the crate-module grouping. ``project``'s read-only **core** (``model``,
 lives under ``util`` as ``wits_util::project``, not inside a command; the
 build systems live beside it as ``wits_util::build_system``. The ``cmd`` layer
 is then thin CLI shells: ``cmd::project`` (describe / ``--check`` / path
-queries), ``cmd::build``, and ``cmd::update`` all consume the core's public
-API — ``resolve_target``, ``resolve::plan``, ``git`` — the same way an
-external tool would::
+queries), ``cmd::build``, ``cmd::devenv``, and ``cmd::update`` all consume the
+core's public API — ``resolve_target``, ``resolve::plan``, ``git`` — the same
+way an external tool would::
 
                             wits_util::project
               (read-only core: model / workspace / resolve / git)
@@ -1310,6 +1311,9 @@ the half it needs — the L0 toolchain translation — via the core-owned
        fn name(&self) -> &str;                        // "cmake" | "meson" | "cargo"
        fn steps(&self, ctx: &EmitContext) -> anyhow::Result<Vec<Step>>;
        fn is_configured(&self, build_dir: &Path) -> bool;
+       // argv prefix that runs a program in the build system's own developer
+       // environment; None (the default) when it keeps none
+       fn devenv_runner(&self, build_dir: &Path) -> Option<Vec<String>>;
    }
 
 ``apply_toolchain`` runs at **L0** (so overrides can win) and is the *only*
@@ -1374,6 +1378,110 @@ a branch's ``build_dir``, because ``wits worktree`` is project-agnostic by
 design and knows nothing about build dirs. ``project info --get build_dir`` prints the
 path to delete. Install prefixes were never in scope either way; install
 reversal is ``build --uninstall``.
+
+The runtime environment — ``devenv``
+------------------------------------
+
+The registry resolves *where* every build lives; running a program against one
+also needs the environment a program uses it with — loader manifests, library
+paths, tool paths. Without a home that knowledge lived in hand-written run notes
+(``mesa.toml``'s, which kept ``LIBGL_DRIVERS_PATH`` long after Mesa stopped
+reading it) and in a test harness's separate copy, each drifting on its own.
+
+A separate map, not ``environment``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``devenv`` sits beside ``environment``, at the same levels, and the two never
+mix: a build-time value (``CC``, ``CFLAGS``) has no business in the program
+under test, and a runtime selector has none in a configure step. ``build``
+ignores ``devenv``; ``devenv`` ignores ``environment`` and the toolchain.
+
+Its entries are resolved in the same pipeline pass and against the same context
+as everything else, so ``{{build_dir}}`` means the build's own directory — but
+they are never written into ``env.*``. ``environment`` writes its entries there
+so siblings can name each other, which makes ``PATH = "x:{{env.PATH}}"`` a cycle;
+a runtime value is an input to no template, and keeping it out is what lets an
+entry read its own variable as the value already in the context.
+
+The backend supplies the base
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Meson already maintains a developer environment, and Mesa fills it upstream
+(``meson.add_devenv()``: build-tree ICD manifests, ``LD_LIBRARY_PATH``,
+``DRIRC_CONFIGDIR``). Re-deriving any of that in a registry file would be the
+hand-maintained copy this exists to remove, so a backend may name its own
+developer environment through ``Backend::devenv_runner``, and the declared
+operations land on top of it. cmake and cargo keep none; their base is the
+caller's environment. This is mechanism, not policy: wits applies what the
+project declares and what the build system provides, and guesses no driver.
+
+Read back as data, not wrapped around the program
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The obvious composition is to nest processes — ``meson devenv -C B -- env K=V
+cmd``. It fails three ways. As written it does not run at all: Meson gathers its
+command with argparse's ``REMAINDER``, which keeps the ``--`` as the command's
+name (Meson 1.12: ``Command not found: --``). Fixed, it can still only *set*: a
+prepend onto a value Meson composed needs that value, which exists only inside
+Meson's process. And its inspectable form is Meson's ``--dump``, which is shell
+text whose prepends are literal ``$VAR`` placeholders — unreadable to fish and
+to an editor, two of the readers a dump exists for.
+
+So the base is captured instead: ``meson devenv`` runs this binary's hidden
+``__devenv-capture FILE``, which writes the environment it inherited — the one
+Meson composed, in its own process, by its own rules — as NUL-terminated
+``NAME=VALUE`` bytes. Parsing that is not a second implementation of Meson's
+value model, the objection to parsing ``--dump``: the composition already
+happened, and this reads its result. A file rather than stdout, because Meson
+writes its own messages to stdout, errors included. The cost is one Meson
+start-up per invocation, which nesting would pay as well.
+
+With real values in hand the declared operations apply in-process, ``-n`` can
+describe the exact result, and ``--dump`` prints the difference from the
+caller's environment in whichever syntax its reader takes.
+
+Operations accumulate
+~~~~~~~~~~~~~~~~~~~~~
+
+``environment`` merges by key, the nearest level winning. ``devenv`` operations
+**accumulate** instead — every layer's prepend or append takes effect in order,
+as Meson's own ``environment()`` operations do — so a preset can add one entry
+to a list a project declared rather than having to restate it. Accumulating
+needs two rules a replacing merge never did:
+
+* A ``set`` discards the operations before it on the same variable. They built
+  a value the set overwrites; keeping them would only make the order of later
+  operations depend on dead ones.
+* A prepend or append identical to one still in force is not added again. A
+  preset reached through two ``extends`` paths is applied twice — harmless for
+  ``environment``, where the second application rewrites the same values — but
+  an accumulated ``VK_DRIVER_FILES`` would list one ICD twice, and the loader
+  would load the driver twice. The repeat is judged only against what is still
+  in force, which is why a ``set`` resets it.
+
+It never switches, and it shares ``build``'s identity
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A program must run against the tree ``build`` makes from the same flags, so
+the two commands flatten one argument group — the ``Profile`` flags,
+``--detach``, ``--build-dir``, ``--install-dir`` — and select the branch through
+one function. What ``devenv`` does *not* share is the in-place branch dance: a
+switch would have to hold for as long as the program runs, a shell included, so
+an in-place ``--branch`` selects that branch's build directory and leaves the
+checkout alone.
+
+Out of scope
+~~~~~~~~~~~~
+
+* **Installed layouts.** The registry does not know where a build was
+  installed: the nightly installs mesa with ``--install-dir ~/.local``, a CLI
+  override, while ``mesa.toml`` says ``install_dir = "{{build_dir}}"``. Making
+  the registry that authority is a separate decision; until then the harness
+  that runs installed drivers keeps its own layout.
+* **Nested devenvs.** Starting one inside another is not detected. The base is
+  the caller's environment, and Mesa *appends* to ``VK_DRIVER_FILES``, so the
+  inner one loads both builds' drivers — the caller's environment is honoured,
+  as Meson's own ``meson devenv`` honours it.
 
 Crate API and CLI contract
 --------------------------

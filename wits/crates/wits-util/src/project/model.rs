@@ -22,6 +22,7 @@
 //! Quoted section names below are from `docs/reference/project-design.rst`.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
@@ -58,6 +59,8 @@ pub struct RawProject {
     pub environment: BTreeMap<String, toml::Value>,
     #[serde(default)]
     pub definitions: BTreeMap<String, toml::Value>,
+    #[serde(default)]
+    pub devenv: RawDevenvTable,
     #[serde(default)]
     pub extra_config_args: Vec<String>,
     #[serde(default)]
@@ -288,6 +291,8 @@ pub struct RawPreset {
     #[serde(default)]
     pub definitions: BTreeMap<String, toml::Value>,
     #[serde(default)]
+    pub devenv: RawDevenvTable,
+    #[serde(default)]
     pub extra_config_args: Vec<String>,
     #[serde(default)]
     pub extra_build_args: Vec<String>,
@@ -331,6 +336,125 @@ pub struct RawOrg {
     pub environment: BTreeMap<String, toml::Value>,
     #[serde(default)]
     pub definitions: BTreeMap<String, toml::Value>,
+    #[serde(default)]
+    pub devenv: RawDevenvTable,
+}
+
+/// What a `devenv` entry does to its variable — Meson's `environment()`
+/// vocabulary, since Meson's own developer environment is the base the
+/// operations land on for a meson build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DevenvOp {
+    Set,
+    Prepend,
+    Append,
+}
+
+impl DevenvOp {
+    /// The config spelling, which is also how a report names the operation.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DevenvOp::Set => "set",
+            DevenvOp::Prepend => "prepend",
+            DevenvOp::Append => "append",
+        }
+    }
+}
+
+/// The separator a `prepend`/`append` joins with unless one is declared: the
+/// path-list separator, as Meson's `environment()` defaults to.
+pub const DEVENV_SEPARATOR: &str = ":";
+
+/// One `devenv` entry as written. A bare scalar or list sets the variable; a
+/// table names exactly one of `set`/`prepend`/`append`, with an optional
+/// `separator` that joins a list and, for prepend/append, the existing value.
+/// The values are templates, resolved by the pipeline like `environment`'s.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawDevenv {
+    pub op: DevenvOp,
+    pub values: Vec<toml::Value>,
+    pub separator: String,
+}
+
+impl RawDevenv {
+    fn from_value(value: toml::Value) -> Result<Self, String> {
+        let table = match value {
+            toml::Value::Table(table) => table,
+            bare => {
+                return Ok(RawDevenv {
+                    op: DevenvOp::Set,
+                    values: devenv_parts(bare)?,
+                    separator: DEVENV_SEPARATOR.to_owned(),
+                })
+            }
+        };
+        let mut operation = None;
+        let mut separator = None;
+        for (key, value) in table {
+            let op = match key.as_str() {
+                "separator" => {
+                    let text = value.as_str().ok_or("separator must be a string")?;
+                    separator = Some(text.to_owned());
+                    continue;
+                }
+                "set" => DevenvOp::Set,
+                "prepend" => DevenvOp::Prepend,
+                "append" => DevenvOp::Append,
+                other => {
+                    return Err(format!(
+                        "unknown key '{other}' (use one of set, prepend, append, and optionally separator)"
+                    ))
+                }
+            };
+            if operation.replace((op, value)).is_some() {
+                return Err("names more than one of set, prepend, append".to_owned());
+            }
+        }
+        let (op, value) = operation.ok_or("names none of set, prepend, append")?;
+        Ok(RawDevenv {
+            op,
+            values: devenv_parts(value)?,
+            separator: separator.unwrap_or_else(|| DEVENV_SEPARATOR.to_owned()),
+        })
+    }
+}
+
+/// A `devenv` value's parts: one scalar, or a list of them. A table has no
+/// spelling as part of an environment variable.
+fn devenv_parts(value: toml::Value) -> Result<Vec<toml::Value>, String> {
+    let parts = match value {
+        toml::Value::Array(items) => items,
+        scalar => vec![scalar],
+    };
+    if parts
+        .iter()
+        .any(|part| matches!(part, toml::Value::Table(_) | toml::Value::Array(_)))
+    {
+        return Err("a value must be a scalar or a list of scalars".to_owned());
+    }
+    Ok(parts)
+}
+
+impl<'de> Deserialize<'de> for RawDevenv {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        RawDevenv::from_value(toml::Value::deserialize(d)?).map_err(de::Error::custom)
+    }
+}
+
+/// A `devenv` table's entries, in key order.
+///
+/// A list rather than a map because a preset merged across org/project/repo
+/// carries every level's operation on the same variable, in level order: the
+/// operations accumulate, as Meson's do, rather than the nearest replacing the
+/// rest.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RawDevenvTable(pub Vec<(String, RawDevenv)>);
+
+impl<'de> Deserialize<'de> for RawDevenvTable {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let entries = BTreeMap::<String, RawDevenv>::deserialize(d)?;
+        Ok(RawDevenvTable(entries.into_iter().collect()))
+    }
 }
 
 /// A field that may be written as a single string or a list of strings
@@ -551,16 +675,72 @@ pub struct Toolchain {
 /// ("Build configuration layering").
 /// `definitions` keep their type (bool/int/string) so a backend can spell each
 /// one the way its tool expects.
+///
+/// `devenv` is the runtime twin of `environment`, kept apart because the two
+/// must never mix: a build-time value (`CC`, `CFLAGS`) has no business in the
+/// program under test, and a runtime selector none in a configure step.
 #[derive(Debug, Clone, Default)]
 pub struct LogicalConfig {
     pub environment: Vec<(String, String)>,
     pub definitions: Vec<(String, minijinja::Value)>,
+    pub devenv: Vec<DevenvEntry>,
     pub extra_config_args: Vec<String>,
     pub extra_build_args: Vec<String>,
     pub extra_install_args: Vec<String>,
 }
 
+/// One resolved `devenv` operation, applied at run time on top of the
+/// backend's base environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevenvEntry {
+    pub name: String,
+    pub op: DevenvOp,
+    /// The rendered parts, already joined with `separator`.
+    pub value: String,
+    pub separator: String,
+}
+
+impl DevenvEntry {
+    /// Apply this operation to `env` with Meson's run-mode semantics: a
+    /// prepend/append onto a variable that is absent yields the value alone,
+    /// while one onto a variable that is present — even empty — joins with the
+    /// separator.
+    pub fn apply(&self, env: &mut BTreeMap<OsString, OsString>) {
+        let key = OsString::from(&self.name);
+        let joined = match (self.op, env.get(&key)) {
+            (DevenvOp::Set, _) | (_, None) => OsString::from(&self.value),
+            (DevenvOp::Prepend, Some(current)) => {
+                let mut out = OsString::from(&self.value);
+                out.push(&self.separator);
+                out.push(current);
+                out
+            }
+            (DevenvOp::Append, Some(current)) => {
+                let mut out = current.clone();
+                out.push(&self.separator);
+                out.push(&self.value);
+                out
+            }
+        };
+        env.insert(key, joined);
+    }
+}
+
 impl LogicalConfig {
+    /// Accumulate a `devenv` operation. A `set` discards the operations on its
+    /// variable that came before it, since it overwrites whatever they built;
+    /// a prepend/append repeating one still in force is not added again, so a
+    /// preset reached twice through `extends` cannot add the same entry twice
+    /// (two copies of one ICD in `VK_DRIVER_FILES` load the driver twice).
+    pub fn add_devenv(&mut self, entry: DevenvEntry) {
+        if entry.op == DevenvOp::Set {
+            self.devenv.retain(|e| e.name != entry.name);
+        } else if self.devenv.contains(&entry) {
+            return;
+        }
+        self.devenv.push(entry);
+    }
+
     /// Set an environment variable, replacing any earlier value for the key.
     /// Order is preserved by keeping the first insertion position.
     pub fn set_env(&mut self, key: impl Into<String>, value: impl Into<String>) {
@@ -775,5 +955,112 @@ mod tests {
             err.to_string().contains("build_dir"),
             "unknown field should name build_dir: {err}"
         );
+    }
+
+    fn devenv(body: &str) -> Result<RawDevenvTable, String> {
+        toml::from_str::<RawProject>(&format!("[devenv]\n{body}"))
+            .map(|p| p.devenv)
+            .map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn a_bare_devenv_value_sets_and_a_table_names_its_operation() {
+        let table = devenv(
+            r#"
+            A = "one"
+            B = 1
+            C = ["x", "y"]
+            D = { prepend = "{{build_dir}}/bin" }
+            E = { append = ["p", "q"], separator = ";" }
+            F = { set = "s" }
+            "#,
+        )
+        .unwrap();
+        let op = |name: &str| {
+            let (_, raw) = table.0.iter().find(|(n, _)| n == name).unwrap();
+            (raw.op, raw.values.len(), raw.separator.clone())
+        };
+        assert_eq!(op("A"), (DevenvOp::Set, 1, ":".into()));
+        assert_eq!(op("B"), (DevenvOp::Set, 1, ":".into()));
+        assert_eq!(op("C"), (DevenvOp::Set, 2, ":".into()));
+        assert_eq!(op("D"), (DevenvOp::Prepend, 1, ":".into()));
+        assert_eq!(op("E"), (DevenvOp::Append, 2, ";".into()));
+        assert_eq!(op("F"), (DevenvOp::Set, 1, ":".into()));
+    }
+
+    #[test]
+    fn a_devenv_table_names_exactly_one_known_operation() {
+        for (body, needle) in [
+            (r#"A = { prepend = "a", append = "b" }"#, "more than one"),
+            (r#"A = { separator = ";" }"#, "none of"),
+            (r#"A = { prepnd = "a" }"#, "prepnd"),
+            (
+                r#"A = { set = "a", separator = 1 }"#,
+                "separator must be a string",
+            ),
+            (r#"A = { set = { x = 1 } }"#, "scalar"),
+            (r#"A = [["nested"]]"#, "scalar"),
+        ] {
+            let err = devenv(body).unwrap_err();
+            assert!(err.contains(needle), "{body}: {err}");
+        }
+    }
+
+    fn entry(name: &str, op: DevenvOp, value: &str) -> DevenvEntry {
+        DevenvEntry {
+            name: name.into(),
+            op,
+            value: value.into(),
+            separator: ":".into(),
+        }
+    }
+
+    /// The semantics of Meson's own run mode, which is the base these land on:
+    /// absent means the value alone, present — even empty — means joined.
+    #[test]
+    fn devenv_operations_apply_with_mesons_run_mode_semantics() {
+        let mut env = BTreeMap::from([
+            (OsString::from("PATH"), OsString::from("/usr/bin")),
+            (OsString::from("EMPTY"), OsString::new()),
+        ]);
+        entry("PATH", DevenvOp::Prepend, "/b").apply(&mut env);
+        entry("PATH", DevenvOp::Append, "/z").apply(&mut env);
+        entry("FRESH", DevenvOp::Append, "/only").apply(&mut env);
+        entry("EMPTY", DevenvOp::Prepend, "/e").apply(&mut env);
+        entry("SET", DevenvOp::Set, "v").apply(&mut env);
+        let get = |k: &str| env[&OsString::from(k)].to_str().unwrap().to_owned();
+        assert_eq!(get("PATH"), "/b:/usr/bin:/z");
+        assert_eq!(get("FRESH"), "/only");
+        assert_eq!(get("EMPTY"), "/e:");
+        assert_eq!(get("SET"), "v");
+    }
+
+    #[test]
+    fn a_set_discards_earlier_operations_and_a_repeat_in_force_is_not_added() {
+        let mut cfg = LogicalConfig::default();
+        cfg.add_devenv(entry("P", DevenvOp::Prepend, "/a"));
+        cfg.add_devenv(entry("Q", DevenvOp::Set, "q"));
+        // A preset reached twice through `extends` repeats its prepend.
+        cfg.add_devenv(entry("P", DevenvOp::Prepend, "/a"));
+        assert_eq!(cfg.devenv.len(), 2);
+
+        // A set wipes what came before it, so a later prepend that matches one
+        // the set discarded is in force again rather than a repeat.
+        cfg.add_devenv(entry("P", DevenvOp::Set, "/base"));
+        cfg.add_devenv(entry("P", DevenvOp::Prepend, "/a"));
+        let on_p: Vec<_> = cfg.devenv.iter().filter(|e| e.name == "P").collect();
+        assert_eq!(
+            on_p,
+            vec![
+                &entry("P", DevenvOp::Set, "/base"),
+                &entry("P", DevenvOp::Prepend, "/a")
+            ]
+        );
+
+        // Last writer wins for a set, however many times the value recurs.
+        cfg.add_devenv(entry("Q", DevenvOp::Set, "other"));
+        cfg.add_devenv(entry("Q", DevenvOp::Set, "q"));
+        let on_q: Vec<_> = cfg.devenv.iter().filter(|e| e.name == "Q").collect();
+        assert_eq!(on_q, vec![&entry("Q", DevenvOp::Set, "q")]);
     }
 }

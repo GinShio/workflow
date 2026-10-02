@@ -37,8 +37,8 @@ use super::context::Ctx;
 use crate::git::Repository;
 
 use super::model::{
-    infer_kind, is_nested, parse_borrow, BranchStrategy, Kind, RawFile, RawPreset, RawProject,
-    RawRepo, RawToolchain,
+    infer_kind, is_nested, parse_borrow, BranchStrategy, Kind, RawDevenvTable, RawFile, RawPreset,
+    RawProject, RawRepo, RawToolchain,
 };
 
 /// Org-level data retained after loading: shared environment/definitions plus
@@ -50,6 +50,7 @@ use super::model::{
 pub struct OrgData {
     pub environment: std::collections::BTreeMap<String, toml::Value>,
     pub definitions: std::collections::BTreeMap<String, toml::Value>,
+    pub devenv: RawDevenvTable,
     pub presets: std::collections::BTreeMap<String, RawPreset>,
 }
 
@@ -362,6 +363,7 @@ impl Workspace {
             let data = OrgData {
                 environment: org.environment,
                 definitions: org.definitions,
+                devenv: org.devenv,
                 presets: org.presets,
             };
             if self.orgs.insert(org.name.clone(), data).is_some() {

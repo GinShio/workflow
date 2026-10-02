@@ -37,7 +37,7 @@ use minijinja::value::ValueKind;
 use minijinja::{Error, ErrorKind, Value};
 use thiserror::Error as ThisError;
 
-use super::model::{infer_kind, LogicalConfig};
+use super::model::{infer_kind, DevenvEntry, LogicalConfig, RawDevenvTable};
 use super::workspace::{ProjectData, Workspace};
 
 /// The names a template can see: values nested through maps, built
@@ -453,6 +453,34 @@ pub(crate) fn apply_def_map(
     for k in raw.keys() {
         let value = ctx.get(&format!("{ns}.{k}"))?;
         logical.set_definition(k, value);
+    }
+    Ok(())
+}
+
+/// Fold one layer's `devenv` entries into `logical`, each rendered against the
+/// context as it stands at that layer.
+///
+/// Unlike [`apply_env_map`], nothing is written back into the context. A
+/// runtime value is an input to no build template, and leaving `env.*` alone is
+/// what lets an entry name its own variable — `PATH = "{{env.PATH}}…"` — without
+/// becoming a cycle.
+pub(crate) fn apply_devenv_map(
+    ctx: &Ctx,
+    logical: &mut LogicalConfig,
+    raw: &RawDevenvTable,
+) -> Result<()> {
+    for (name, entry) in &raw.0 {
+        let parts = entry
+            .values
+            .iter()
+            .map(|part| ctx.render_value(&from_toml(part)))
+            .collect::<Result<Vec<_>, _>>()?;
+        logical.add_devenv(DevenvEntry {
+            name: name.clone(),
+            op: entry.op,
+            value: parts.join(&entry.separator),
+            separator: entry.separator.clone(),
+        });
     }
     Ok(())
 }

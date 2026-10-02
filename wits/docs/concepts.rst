@@ -37,6 +37,11 @@ and returns only an exit code — for a command that *is* an interaction.
 Anything that opens an editor or drives an interactive rebase must own the
 terminal, so capturing its output would break it. Both honour dry-run.
 
+A third replaces the process outright (``exec(2)``), for a command that is the
+rest of the run: the program ``devenv`` hands over to has to receive its own
+signals and report its own exit status, with no ``wits`` left waiting on it.
+Under dry-run it too is printed instead.
+
 Git — driven through the CLI, deliberately
 ------------------------------------------
 

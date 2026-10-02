@@ -206,6 +206,30 @@ impl Command {
             })?;
         Ok(status.code().unwrap_or(-1))
     }
+
+    /// Replace this process with the command (`exec(2)`).
+    ///
+    /// For a command that *is* the rest of the run: it then owns the terminal,
+    /// receives its signals directly, and its exit status is the caller's, with
+    /// no parent left waiting on it. Returns only when the exec failed — or under
+    /// dry-run, where the command is printed instead and `Ok` comes back.
+    #[cfg(unix)]
+    pub fn exec_replace(&self) -> Result<(), ProcessError> {
+        use std::os::unix::process::CommandExt;
+
+        if wits_log::is_dry_run() && !self.force_run {
+            wits_log::dry_run(&self.format_cmd());
+            return Ok(());
+        }
+        if wits_log::is_verbose() {
+            log::debug!("exec: {}", self.format_cmd());
+        }
+        let source = self.build_std_command().exec();
+        Err(ProcessError::Spawn {
+            program: self.program.clone(),
+            source,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -245,6 +269,16 @@ mod tests {
         let result = Command::new("false").exec().unwrap();
         assert!(result.is_success());
         crate::log::init(false, false);
+    }
+
+    #[test]
+    fn dry_run_describes_an_exec_instead_of_replacing_the_process() {
+        let _guard = crate::log::test_flag_guard();
+        crate::log::init(false, true);
+        // Were this to exec, the test process itself would become `false`.
+        let result = Command::new("false").exec_replace();
+        crate::log::init(false, false);
+        assert!(result.is_ok());
     }
 
     #[test]

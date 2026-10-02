@@ -19,7 +19,7 @@ function __wits_projects
         printf '%s\t%s\n' (string split -m 1 -f 2 / -- $orgname) $orgname
     end
 end
-complete -c wits -f -n '__fish_seen_subcommand_from build update' -a '(__wits_projects)'
+complete -c wits -f -n '__fish_seen_subcommand_from build devenv update' -a '(__wits_projects)'
 complete -c wits -f -n '__fish_seen_subcommand_from project' -a '(__wits_projects)'
 
 # `project info --get` paths: a dotted lookup into the template context

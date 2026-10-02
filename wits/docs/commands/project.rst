@@ -8,11 +8,11 @@ declarative registry that knows *what each project is* — where its repos live,
 which branches, which toolchain, how to build it — and drives cmake / meson /
 cargo on your behalf without you re-typing the same flags.
 
-Three commands share that registry: **``wits project``** describes and
-validates (read-only), :doc:`build` configures and builds, and :doc:`update`
-refreshes git. Per-branch worktrees belong to :doc:`worktree`, which is
-project-agnostic. This page is the **usage guide** for the registry and for
-``project`` itself.
+Four commands share that registry: **``wits project``** describes and
+validates (read-only), :doc:`build` configures and builds, :doc:`devenv` runs a
+program against a build, and :doc:`update` refreshes git. Per-branch worktrees
+belong to :doc:`worktree`, which is project-agnostic. This page is the **usage
+guide** for the registry and for ``project`` itself.
 
 For the exhaustive list of every config key and every flag, see
 :doc:`/reference/project-reference`. For *why* the tool is shaped this way, see
@@ -171,6 +171,25 @@ auto-apply itself:
   specific winning. Reach another org with ``-p llvm/base``.
 
 See the reference for the exact merge and match rules.
+
+The runtime environment: ``devenv``
+-----------------------------------
+
+``environment`` is what the *build* runs with. What a program needs in order to
+*use* a build — loader manifests, library paths, a selector — is a separate
+table, ``devenv``, at the same levels:
+
+.. code-block:: toml
+
+   [project.devenv]
+   VK_DRIVER_FILES = "{{install_dir}}/vulkan/icd.d/amd_icd64.json"
+   PATH = { prepend = "{{build_dir}}/bin" }
+
+``build`` never applies it, and :doc:`devenv` never applies ``environment``.
+For a meson project the build system already keeps one of its own — Mesa's
+``meson.add_devenv()`` — which ``wits devenv`` uses as the base, so there is
+often nothing to declare at all. :doc:`devenv` has the operations and how they
+accumulate.
 
 Multiple repos: monorepos, submodules, subtrees
 -----------------------------------------------

@@ -22,8 +22,8 @@ use crate::git::Repository;
 use minijinja::Value;
 
 use super::context::{
-    self, apply_def_map, apply_env_map, fold_env, insert_path, resolve_args, Bindings, Ctx,
-    TemplateError,
+    self, apply_def_map, apply_devenv_map, apply_env_map, fold_env, insert_path, resolve_args,
+    Bindings, Ctx, TemplateError,
 };
 use super::model::{infer_kind, BranchStrategy, BuildSystem, LogicalConfig, Profile, Toolchain};
 use super::presets::{applied_presets, resolve_preset_into};
@@ -375,6 +375,7 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
                 "org.definitions",
                 &org_data.definitions,
             )?;
+            apply_devenv_map(&ctx, &mut logical, &org_data.devenv)?;
         }
     }
 
@@ -391,6 +392,7 @@ pub fn plan(ws: &Workspace, project: &ProjectData, input: &PlanInput<'_>) -> Res
         "project.definitions",
         &project.project.definitions,
     )?;
+    apply_devenv_map(&ctx, &mut logical, &project.project.devenv)?;
     resolve_args(
         &ctx,
         &project.project.extra_config_args,
@@ -1803,6 +1805,86 @@ anchor = "main"
         let plan = plan(&ws, project, &input).unwrap();
         assert!(plan.logical.has_definition("WERROR"));
         assert!(plan.logical.has_definition("ASSERTS")); // auto-applied for debug
+    }
+
+    /// `devenv` accumulates through the same layers `environment` passes
+    /// through — org, project, then presets with their `extends` first — but
+    /// never enters `env.*` or the build environment, so an entry may read its
+    /// own variable without a cycle.
+    #[test]
+    fn devenv_accumulates_through_the_layers_and_stays_out_of_the_build() {
+        let body = r#"
+            [org]
+            name = "acme"
+            [org.devenv]
+            LIST = { append = "org" }
+            [org.presets.shared.devenv]
+            LIST = { append = "org-shared" }
+
+            [project]
+            org = "acme"
+            default_presets = ["left", "right"]
+            [project.devenv]
+            LIST = { append = "{{build_dir}}" }
+            VK = "{{install_dir}}/icd.json"
+            PATH = "/opt/bin:{{env.PATH}}"
+
+            [project.presets.base.devenv]
+            LIST = { append = "base" }
+            [project.presets.left]
+            extends = ["base"]
+            [project.presets.right]
+            extends = ["base", "shared"]
+            [project.presets.shared.devenv]
+            LIST = { append = "project-shared" }
+
+            [repos.main]
+            path = "/src/x"
+            main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/_build"
+            install_dir = "{{build_dir}}/inst"
+        "#;
+        let (_d, ws) = ws_with(body, "x");
+        let project = ws.project("acme/x").unwrap();
+        let plan = plan(
+            &ws,
+            project,
+            &PlanInput::paths_only(&Profile::default(), "main"),
+        )
+        .unwrap();
+        let ops = |name: &str| -> Vec<(&str, &str)> {
+            plan.logical
+                .devenv
+                .iter()
+                .filter(|e| e.name == name)
+                .map(|e| (e.op.as_str(), e.value.as_str()))
+                .collect()
+        };
+
+        // `base` is reached through both `left` and `right`; its append lands
+        // once. The same-named `shared` carries its org and project levels in
+        // that order.
+        assert_eq!(
+            ops("LIST"),
+            vec![
+                ("append", "org"),
+                ("append", "/src/x/_build"),
+                ("append", "base"),
+                ("append", "org-shared"),
+                ("append", "project-shared"),
+            ]
+        );
+        assert_eq!(ops("VK"), vec![("set", "/src/x/_build/inst/icd.json")]);
+
+        let caller_path = std::env::var("PATH").unwrap();
+        assert_eq!(
+            ops("PATH"),
+            vec![("set", format!("/opt/bin:{caller_path}").as_str())]
+        );
+        // Neither the context nor the build environment learned of any of it.
+        assert_eq!(plan.ctx.get_scalar("env.PATH").unwrap(), caller_path);
+        assert!(plan.ctx.get("env.VK").is_err());
+        assert!(plan.logical.env_entry("VK").is_none());
     }
 
     /// The anchor supplies output defaults, but a focus may name its own output
