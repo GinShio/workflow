@@ -252,6 +252,30 @@ impl GitLab {
         format!("{}/{id}/draft_notes", self.mrs_url())
     }
 
+    /// The first `limit` MRs an MR list query answers with, page after page.
+    fn newest_mrs(&self, url: &str, limit: usize) -> anyhow::Result<Vec<MrSummary>> {
+        let mut collected = 0usize;
+        let mut mrs = super::request_paginated(url, &self.auth, 10, |v, headers| {
+            if collected >= limit {
+                return (Vec::new(), None);
+            }
+            let items: Vec<MrSummary> = v
+                .as_array()
+                .map(|arr| arr.iter().filter_map(parse_summary).collect())
+                .unwrap_or_default();
+            collected += items.len();
+            let next = if collected >= limit {
+                None
+            } else {
+                next_page(url, headers)
+            };
+            (items, next)
+        })?;
+        // A hard cap: the final page can overshoot `limit`, so truncate.
+        mrs.truncate(limit);
+        Ok(mrs)
+    }
+
     /// The ids of the user's draft notes still pending on the MR — what a
     /// publish did not take. The list comes whole (`load_draft_notes`, no
     /// paging).
@@ -426,6 +450,27 @@ fn position_line(old: Option<u32>, new: Option<u32>) -> Option<LineRef> {
         }),
         (None, None) => None,
     }
+}
+
+/// The `limit` most recently updated MRs of several lists, each MR once. A
+/// single list passes through as it came — already newest first.
+fn newest_of(mut lists: Vec<Vec<MrSummary>>, limit: usize) -> Vec<MrSummary> {
+    let mut mrs = if lists.len() == 1 {
+        lists.remove(0)
+    } else {
+        let mut seen = HashSet::new();
+        let mut all: Vec<MrSummary> = lists
+            .into_iter()
+            .flatten()
+            .filter(|mr| seen.insert(mr.id.clone()))
+            .collect();
+        // GitLab's ISO 8601 timestamps sort as text — the order the inbox
+        // already shows them in.
+        all.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        all
+    };
+    mrs.truncate(limit);
+    mrs
 }
 
 /// One draft note a submission posts, and the actions it carries: a comment's
@@ -849,10 +894,6 @@ impl Forge for GitLab {
             (false, true) => url += "&draft=true",
             _ => {}
         }
-        // Multiple labels are AND on GitLab too (all must be present).
-        if !query.labels.is_empty() {
-            url += &format!("&labels={}", encode(&query.labels.join(",")));
-        }
         if !query.exclude_labels.is_empty() {
             url += &format!("&not[labels]={}", encode(&query.exclude_labels.join(",")));
         }
@@ -868,27 +909,24 @@ impl Forge for GitLab {
         if let Some(s) = &query.search {
             url += &format!("&search={}", encode(s));
         }
-        let limit = query.limit;
-        let mut collected = 0usize;
-        let mut mrs = super::request_paginated(&url, &self.auth, 10, |v, headers| {
-            if collected >= limit {
-                return (Vec::new(), None);
-            }
-            let items: Vec<MrSummary> = v
-                .as_array()
-                .map(|arr| arr.iter().filter_map(parse_summary).collect())
-                .unwrap_or_default();
-            collected += items.len();
-            let next = if collected >= limit {
-                None
-            } else {
-                next_page(&url, headers)
-            };
-            (items, next)
-        })?;
-        // A hard cap: the final page can overshoot `limit`, so truncate.
-        mrs.truncate(limit);
-        Ok(mrs)
+        // The feed's labels are any-of, and GitLab's `labels` is all-of
+        // (`Issuables::LabelFilter`, a condition per label) with no OR form,
+        // so each label is its own query and the answers are merged. Each is
+        // capped at `limit` too, which bounds the cost.
+        let urls: Vec<String> = if query.labels.is_empty() {
+            vec![url]
+        } else {
+            query
+                .labels
+                .iter()
+                .map(|label| format!("{url}&labels={}", encode(label)))
+                .collect()
+        };
+        let mut lists = Vec::with_capacity(urls.len());
+        for url in &urls {
+            lists.push(self.newest_mrs(url, query.limit)?);
+        }
+        Ok(newest_of(lists, query.limit))
     }
 
     fn mr_details(&self, id: &str) -> anyhow::Result<MrDetails> {
@@ -1406,6 +1444,38 @@ mod tests {
                 Some(line)
             );
         }
+    }
+
+    /// The per-label lists of an any-of feed merge newest first, each MR once,
+    /// to the feed's limit.
+    #[test]
+    fn label_lists_merge_newest_first() {
+        let mr = |id: &str, at: &str| MrSummary {
+            id: id.into(),
+            display: format!("!{id}"),
+            state: MrState::Open,
+            draft: false,
+            title: String::new(),
+            author: String::new(),
+            base: String::new(),
+            source: String::new(),
+            head_sha: None,
+            updated_at: at.into(),
+            labels: Vec::new(),
+            web_url: String::new(),
+        };
+        let ids = |mrs: Vec<MrSummary>| mrs.into_iter().map(|m| m.id).collect::<Vec<_>>();
+        let bug = vec![
+            mr("3", "2026-09-30T10:00:00Z"),
+            mr("1", "2026-09-01T10:00:00Z"),
+        ];
+        let ui = vec![
+            mr("2", "2026-09-15T10:00:00Z"),
+            mr("1", "2026-09-01T10:00:00Z"),
+        ];
+        assert_eq!(ids(newest_of(vec![bug.clone(), ui], 10)), ["3", "2", "1"]);
+        assert_eq!(ids(newest_of(vec![bug.clone()], 1)), ["3"]);
+        assert_eq!(ids(newest_of(vec![bug], 10)), ["3", "1"]);
     }
 
     /// GitLab keeps one draft per author and thread, so the replies into one

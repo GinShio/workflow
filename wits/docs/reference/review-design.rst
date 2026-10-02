@@ -670,13 +670,15 @@ feed is a named set of faceted filters:
 * **Fields:** ``state`` (defaults to ``open+draft``; ``merged``/``closed``
   are not fetched), ``label``, ``author``, ``assignee``, ``reviewer``.
 * **Semantics:** different fields are **AND** (``reviewer=@me`` *and*
-  ``label∈{…}`` *and* ``state∈{open,draft}``). This is the faceted model
-  ``gh pr list`` / ``glab mr list`` and the forges' own search use; a full
-  expression language would be over-built for the need. (In v1 multiple
-  *labels* are AND-ed on both GitHub and GitLab — that is the platforms'
-  behaviour for one list/search query; the earlier hope of within-field OR
-  for labels is not natively available and client-side union was rejected for
-  scale.)
+  ``label∈{…}`` *and* ``state∈{open,draft}``), and the values within a field
+  are **OR**. This is the faceted model ``gh pr list`` / ``glab mr list`` and
+  the forges' own search use; a full expression language would be over-built
+  for the need. GitHub search takes the labels as one comma list
+  (``label:"help wanted",bug``), which it reads as OR. GitLab's list filter
+  is all-of, with no OR form, so it is asked once per label and the answers
+  are merged newest first; each answer is capped at ``limit`` as well, which
+  keeps the client-side union an earlier version rejected for scale bounded
+  by labels × ``limit``.
 * **Exclusion:** an ``exclude-labels`` list drops MRs carrying any of them,
   the one extension that pays for itself (bot/WIP noise).
 * **Escape hatch:** a ``search = "..."`` string is passed straight to the

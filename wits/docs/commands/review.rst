@@ -869,9 +869,9 @@ The file is a single global TOML, found at ``$WITS_REVIEW_CONFIG``, else
        ``"draft"``. Merged and closed MRs are never fetched — a review inbox is
        about live work.
    * - ``labels`` *(list, default ``[]``)*
-     - Only MRs carrying **all** of these labels. Multiple labels are AND-ed on
-       both GitHub and GitLab (the platforms' own behaviour for a single list
-       query); use separate feeds when you want either-or.
+     - Only MRs carrying **any** of these labels. GitHub matches them in one
+       search; GitLab, whose list filter takes only all-of, is asked once per
+       label and the answers are merged, newest first, up to ``limit``.
    * - ``exclude-labels`` *(list, default ``[]``)*
      - Drop MRs carrying **any** of these labels — the way to filter out
        ``wip``/bot noise.

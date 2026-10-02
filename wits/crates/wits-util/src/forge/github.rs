@@ -325,10 +325,10 @@ impl GitHub {
     /// Build a GitHub search query string from a feed's filter. `@me` in a user
     /// qualifier is passed through — GitHub resolves it server-side.
     ///
-    /// One deviation from the tool's within-field-OR model: GitHub search has no
-    /// label-OR qualifier, so multiple labels are AND-ed here (each `label:` is a
-    /// separate, conjunctive term). GitLab honours OR. This is noted in the
-    /// review docs.
+    /// The feed's labels are any-of: one `label:` qualifier listing them all,
+    /// comma-separated, which GitHub search reads as OR ("`label:bug,resolved`
+    /// matches issues with the label "bug" or the label "resolved"", its
+    /// search docs), quoted entries included.
     fn search_query(&self, q: &FeedQuery) -> String {
         let mut parts = vec![format!("repo:{}", self.project), "is:pr".to_owned()];
         // merged/closed are never fetched; drafts are open PRs flagged draft.
@@ -338,8 +338,9 @@ impl GitHub {
             (false, true) => parts.push("draft:true".to_owned()),
             _ => {}
         }
-        for l in &q.labels {
-            parts.push(format!("label:{}", search_quote(l)));
+        if !q.labels.is_empty() {
+            let any: Vec<String> = q.labels.iter().map(|l| search_quote(l)).collect();
+            parts.push(format!("label:{}", any.join(",")));
         }
         for l in &q.exclude_labels {
             parts.push(format!("-label:{}", search_quote(l)));
@@ -641,10 +642,11 @@ fn gh_side(side: Side) -> &'static str {
     }
 }
 
-/// Quote a search term when it contains whitespace, so `label:needs review`
-/// reaches GitHub as `label:"needs review"` rather than two qualifiers.
+/// Quote a search term when it contains whitespace or a comma, so `label:needs
+/// review` reaches GitHub as `label:"needs review"` rather than two qualifiers,
+/// and a comma in a label is not read as the list separator.
 fn search_quote(term: &str) -> String {
-    if term.contains(char::is_whitespace) {
+    if term.contains(|c: char| c.is_whitespace() || c == ',') {
         format!("\"{term}\"")
     } else {
         term.to_owned()
@@ -1327,6 +1329,20 @@ mod tests {
         for term in ["repo:o/r", "is:pr", "is:open", "label:bug", "author:alice"] {
             assert!(s.contains(term), "missing {term} in {s}");
         }
+    }
+
+    /// Several labels are any-of: one comma list, which GitHub search reads
+    /// as OR, a multi-word label quoted whole; exclusions stay one each.
+    #[test]
+    fn several_labels_are_one_or_list() {
+        let q = FeedQuery {
+            labels: vec!["help wanted".into(), "bug".into()],
+            exclude_labels: vec!["wip".into(), "do not merge".into()],
+            ..Default::default()
+        };
+        let s = gh().search_query(&q);
+        assert!(s.contains(r#" label:"help wanted",bug"#), "{s}");
+        assert!(s.contains(r#"-label:wip -label:"do not merge""#), "{s}");
     }
 
     #[test]
