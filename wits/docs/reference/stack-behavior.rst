@@ -338,19 +338,30 @@ Semantics:
   anything, so a project's own label/reviewer automation is never clobbered
   and re-running is safe.
 * **Best-effort.** A sub-item that fails — an unknown label, a self-review the
-  platform forbids — is logged and skipped; the rest still apply.
+  platform forbids — is logged and skipped; the rest still apply. So is one
+  the platform accepts and then drops without an error, where its answer
+  shows it: an assignee past the first on a GitLab tier that allows one, an
+  assignee set without write access on Gitea.
+* **Labels are added, never created.** A label must already exist (on GitHub
+  in the repository; on GitLab in the project or a group above it; on Gitea
+  in the repository or its organisation); a missing one is warned about.
 * Unlike ``anno``, it does **not** skip a standalone branch: a lone MR still
   wants labels.
 
 Per platform, hidden behind ``apply_attributes``:
 
-* **GitHub** uses add-only endpoints (issue labels/assignees, requested
-  reviewers) — naturally additive, no read-merge.
-* **GitLab** uses ``add_labels`` for labels; assignees/reviewers are id lists
-  with no add verb, so it reads the current ids and unions ours in. Usernames
-  (and ``@me``) resolve to numeric ids.
-* **Gitea** resolves label names to ids and uses add-only label/reviewer
-  endpoints; assignees are unioned through an issue edit.
+* **GitHub** looks each label up by name and uses add-only mutations (labels,
+  assignees, requested reviewers) — naturally additive, no read-merge.
+* **GitLab** checks each label exists before ``add_labels``, which would
+  otherwise create it; assignees/reviewers are id lists with no add verb, so
+  it reads the current ids, unions ours in, and checks the answer for any
+  GitLab dropped. Usernames (and ``@me``) resolve to numeric ids.
+* **Gitea** adds labels by name (Gitea 1.22, Forgejo 8; an organisation's
+  labels from Gitea 1.23, Forgejo 10) and checks the answer for any it did
+  not know; reviewers are requested one at a time, since the server stops at
+  the first it refuses; assignees are unioned through an issue edit and
+  checked in its answer. An exclusive scoped label still displaces the other
+  labels of its scope — Gitea's own rule.
 
 slice
 -----

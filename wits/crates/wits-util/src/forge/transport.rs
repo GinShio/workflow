@@ -444,16 +444,6 @@ pub(crate) fn resolve_self(items: &[String], me: &str) -> Vec<String> {
         .collect()
 }
 
-/// Read one string field off `GET {api_base}/user`. The field name differs by
-/// platform (`login` on GitHub/Gitea), so it is passed in.
-pub(crate) fn current_user(api_base: &str, auth: &Auth, field: &str) -> anyhow::Result<String> {
-    let v = request("GET", &format!("{api_base}/user"), auth, None)?;
-    v[field]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow::anyhow!("could not read the authenticated user"))
-}
-
 /// Percent-encode a repo-relative path for a blob URL, preserving the `/`
 /// separators (each segment is encoded on its own). A path like `dir/a file.c`
 /// must survive, but its slashes must stay real path separators.

@@ -35,7 +35,7 @@ pub use review::{
 // The transport primitives the host backends build on. Re-exported at the crate
 // level so a backend writes `super::request` rather than `super::transport::…`.
 pub(crate) use transport::{
-    current_user, delete_idempotent, encode, encode_path, next_link, request, request_every_page,
+    delete_idempotent, encode, encode_path, next_link, request, request_every_page,
     request_paginated, request_with_headers, resolve_self, status_of, wait_out_rate_limit, Auth,
     EVERY_PAGE_LIMIT, SELF_REF,
 };
@@ -114,8 +114,11 @@ pub struct MrComment {
 
 /// Attributes layered onto an existing MR by `decorate`. Applied *additively*:
 /// the platform adds what's listed and never removes anything, so a project's own
-/// label/reviewer automation is never fought. The literal `@me` resolves to the
-/// authenticated user.
+/// label/reviewer automation is never fought — short of the platform's own
+/// rules, such as a Gitea or Forgejo exclusive scoped label displacing the other
+/// labels of its scope. Only labels that exist are added: a missing one is
+/// warned about, never created. The literal `@me` resolves to the authenticated
+/// user.
 #[derive(Debug, Clone, Default)]
 pub struct Attributes {
     pub labels: Vec<String>,
@@ -180,7 +183,9 @@ pub trait Forge: Send + Sync {
 
     /// Add labels/assignees/reviewers to an existing MR, additively and
     /// best-effort: a sub-item that fails (an unknown label, a self-review the
-    /// platform forbids) is logged and skipped rather than aborting the rest.
+    /// platform forbids) is logged and skipped rather than aborting the rest,
+    /// and so is one the platform accepts but silently drops, where its answer
+    /// shows it.
     fn apply_attributes(&self, id: &str, attrs: &Attributes) -> anyhow::Result<()>;
 
     /// The MR's conversation comments, oldest first, from every page, each

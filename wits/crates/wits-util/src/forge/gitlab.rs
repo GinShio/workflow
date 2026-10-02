@@ -45,8 +45,9 @@ pub struct GitLab {
     /// Present only when a stack's branches are pushed to another project — a
     /// fork — than the one MRs merge into.
     fork: Option<Fork>,
-    /// The authenticated user's id, read by the first comment listing.
-    me: OnceLock<u64>,
+    /// The authenticated user's id and username, read once by the first
+    /// request that needs either.
+    me: OnceLock<(u64, String)>,
 }
 
 /// The source project of a cross-project MR. Its numeric ids are looked up by
@@ -101,17 +102,35 @@ impl GitLab {
         Ok(Some((&fork.source_path, source, target)))
     }
 
-    /// The authenticated user's id, read once.
-    fn my_id(&self) -> anyhow::Result<u64> {
-        if let Some(id) = self.me.get() {
-            return Ok(*id);
+    /// The authenticated user's id and username, read once.
+    fn me(&self) -> anyhow::Result<&(u64, String)> {
+        if let Some(me) = self.me.get() {
+            return Ok(me);
         }
         let v = request("GET", &format!("{}/user", self.api_base), &self.auth, None)?;
-        let id = v["id"]
-            .as_u64()
-            .ok_or_else(|| anyhow::anyhow!("could not read the authenticated user"))?;
-        // Listings run in parallel, so another one may have stored the same id first.
-        Ok(*self.me.get_or_init(|| id))
+        let (Some(id), Some(username)) = (v["id"].as_u64(), v["username"].as_str()) else {
+            anyhow::bail!("could not read the authenticated user");
+        };
+        // Requests run in parallel, so another one may have stored the same user first.
+        Ok(self.me.get_or_init(|| (id, username.to_owned())))
+    }
+
+    /// Whether `name` is a label of the target project or of a group above it.
+    /// `add_labels` creates any label it does not find ("If a label does not
+    /// already exist, this creates a new project label", the merge requests
+    /// API), so an unchecked typo would add a label to the project itself.
+    fn label_exists(&self, name: &str) -> anyhow::Result<bool> {
+        let url = format!(
+            "{}/projects/{}/labels/{}",
+            self.api_base,
+            self.target_path,
+            encode(name)
+        );
+        match request("GET", &url, &self.auth, None) {
+            Ok(_) => Ok(true),
+            Err(e) if super::status_of(&e) == Some(404) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// Resolve or unresolve a discussion (a separate call — a GitLab draft note
@@ -178,8 +197,7 @@ impl GitLab {
     /// the `assignee_ids` / `reviewer_ids` fields require.
     fn user_id(&self, name: &str) -> anyhow::Result<Option<u64>> {
         if name == SELF_REF {
-            let v = request("GET", &format!("{}/user", self.api_base), &self.auth, None)?;
-            return Ok(v["id"].as_u64());
+            return Ok(Some(self.me()?.0));
         }
         let url = format!("{}/users?username={}", self.api_base, encode(name));
         let v = request("GET", &url, &self.auth, None)?;
@@ -188,31 +206,28 @@ impl GitLab {
             .and_then(|u| u["id"].as_u64()))
     }
 
-    /// Union the resolved ids of `names` into `ids` (additive, deduped).
-    fn add_user_ids(&self, ids: &mut Vec<u64>, names: &[String]) {
-        for name in names {
-            match self.user_id(name) {
-                Ok(Some(uid)) if !ids.contains(&uid) => ids.push(uid),
-                Ok(Some(_)) => {}
-                Ok(None) => log::warn!("user '{name}' not found"),
-                Err(e) => log::warn!("resolving user '{name}': {e}"),
-            }
-        }
-    }
-
-    /// The authenticated user's username, for resolving `@me` in a feed filter.
-    fn current_username(&self) -> anyhow::Result<String> {
-        let v = request("GET", &format!("{}/user", self.api_base), &self.auth, None)?;
-        v["username"]
-            .as_str()
-            .map(str::to_owned)
-            .ok_or_else(|| anyhow::anyhow!("could not read the authenticated user"))
+    /// The users of `names` that resolve, each with its id; the rest warn.
+    fn resolve_user_ids<'a>(&self, names: &'a [String]) -> Vec<(&'a str, u64)> {
+        names
+            .iter()
+            .filter_map(|name| match self.user_id(name) {
+                Ok(Some(uid)) => Some((name.as_str(), uid)),
+                Ok(None) => {
+                    log::warn!("user '{name}' not found");
+                    None
+                }
+                Err(e) => {
+                    log::warn!("resolving user '{name}': {e}");
+                    None
+                }
+            })
+            .collect()
     }
 
     /// A feed filter value, with `@me` expanded to the authenticated username.
     fn filter_user(&self, name: &str) -> anyhow::Result<String> {
         if name == SELF_REF {
-            self.current_username()
+            Ok(self.me()?.1.clone())
         } else {
             Ok(name.to_owned())
         }
@@ -563,11 +578,30 @@ impl Forge for GitLab {
     fn apply_attributes(&self, id: &str, attrs: &Attributes) -> anyhow::Result<()> {
         let mut body = serde_json::Map::new();
 
-        // Labels have a native additive verb; users do not, so we read the
-        // current ids and union ours in, then PUT the full set.
-        if !attrs.labels.is_empty() {
-            body.insert("add_labels".into(), json!(attrs.labels.join(",")));
+        // Labels have a native additive verb, given only the labels that exist
+        // (see `label_exists`).
+        let labels: Vec<&str> = attrs
+            .labels
+            .iter()
+            .map(String::as_str)
+            .filter(|name| match self.label_exists(name) {
+                Ok(true) => true,
+                Ok(false) => {
+                    log::warn!("label '{name}' does not exist in this project or its groups");
+                    false
+                }
+                Err(e) => {
+                    log::warn!("label '{name}': {e}");
+                    false
+                }
+            })
+            .collect();
+        if !labels.is_empty() {
+            body.insert("add_labels".into(), json!(labels.join(",")));
         }
+        // Users have none, so we read the current ids and union ours in, then
+        // PUT the full set.
+        let mut wanted = Vec::new();
         if !attrs.assignees.is_empty() || !attrs.reviewers.is_empty() {
             let mr = request(
                 "GET",
@@ -575,15 +609,27 @@ impl Forge for GitLab {
                 &self.auth,
                 None,
             )?;
-            if !attrs.assignees.is_empty() {
-                let mut ids = current_user_ids(&mr, "assignees");
-                self.add_user_ids(&mut ids, &attrs.assignees);
-                body.insert("assignee_ids".into(), json!(ids));
-            }
-            if !attrs.reviewers.is_empty() {
-                let mut ids = current_user_ids(&mr, "reviewers");
-                self.add_user_ids(&mut ids, &attrs.reviewers);
-                body.insert("reviewer_ids".into(), json!(ids));
+            for (role, names) in [
+                ("assignees", &attrs.assignees),
+                ("reviewers", &attrs.reviewers),
+            ] {
+                if names.is_empty() {
+                    continue;
+                }
+                let users = self.resolve_user_ids(names);
+                let mut ids = current_user_ids(&mr, role);
+                for &(_, uid) in &users {
+                    if !ids.contains(&uid) {
+                        ids.push(uid);
+                    }
+                }
+                let field = if role == "assignees" {
+                    "assignee_ids"
+                } else {
+                    "reviewer_ids"
+                };
+                body.insert(field.into(), json!(ids));
+                wanted.push((role, users));
             }
         }
 
@@ -591,12 +637,23 @@ impl Forge for GitLab {
             return Ok(());
         }
         let url = format!("{}/{}", self.mrs_url(), id);
-        request("PUT", &url, &self.auth, Some(&Value::Object(body)))?;
+        let updated = request("PUT", &url, &self.auth, Some(&Value::Object(body)))?;
+        // An update GitLab will not carry out in full still succeeds: past the
+        // first assignee or reviewer on a tier without multiple ones, and for a
+        // reviewer the caller may not set (`MergeRequests::BaseService`).
+        for (role, users) in wanted {
+            let applied = current_user_ids(&updated, role);
+            for (name, uid) in users {
+                if !applied.contains(&uid) {
+                    log::warn!("{name} was not added to the {role}; GitLab dropped it");
+                }
+            }
+        }
         Ok(())
     }
 
     fn list_comments(&self, mr: &str) -> anyhow::Result<Vec<MrComment>> {
-        let me = self.my_id()?;
+        let me = self.me()?.0;
         let mr_url = format!("{}/-/merge_requests/{mr}", self.web_base);
         let url = format!(
             "{}/{mr}/notes?sort=asc&order_by=created_at&per_page=100",

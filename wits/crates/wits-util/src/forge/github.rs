@@ -255,30 +255,33 @@ impl GitHub {
         ids
     }
 
-    /// Resolve label names to their node ids on the target repo (one query;
-    /// unknown labels warn and are skipped).
-    fn label_node_ids(&self, names: &[String]) -> anyhow::Result<Vec<String>> {
-        let data = self.graphql(
-            "query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){labels(first:100){nodes{id name}}}}",
-            json!({ "owner": self.owner, "repo": self.repo }),
-        )?;
-        let by_name: HashMap<&str, &str> = data["repository"]["labels"]["nodes"]
-            .as_array()
-            .map(|nodes| {
-                nodes
-                    .iter()
-                    .filter_map(|n| Some((n["name"].as_str()?, n["id"].as_str()?)))
-                    .collect()
+    /// Resolve label names to their node ids on the target repo, one lookup
+    /// each: `label(name:)` finds any of a repository's labels, where a listing
+    /// would have to be read to its end (llvm-project has hundreds). Unknown
+    /// labels warn and are skipped.
+    fn label_node_ids(&self, names: &[String]) -> Vec<String> {
+        names
+            .iter()
+            .filter_map(|name| {
+                let found = self.graphql(
+                    "query($owner:String!,$repo:String!,$name:String!){repository(owner:$owner,name:$repo){label(name:$name){id}}}",
+                    json!({ "owner": self.owner, "repo": self.repo, "name": name }),
+                );
+                match found {
+                    Ok(data) => {
+                        let id = data["repository"]["label"]["id"].as_str().map(str::to_owned);
+                        if id.is_none() {
+                            log::warn!("label '{name}' not found on the repo");
+                        }
+                        id
+                    }
+                    Err(e) => {
+                        log::warn!("label '{name}': {e}");
+                        None
+                    }
+                }
             })
-            .unwrap_or_default();
-        let mut ids = Vec::new();
-        for name in names {
-            match by_name.get(name.as_str()) {
-                Some(id) => ids.push((*id).to_owned()),
-                None => log::warn!("label '{name}' not found on the repo"),
-            }
-        }
-        Ok(ids)
+            .collect()
     }
 
     /// Build a GitHub search query string from a feed's filter. `@me` in a user
@@ -653,18 +656,13 @@ impl Forge for GitHub {
         // fought — and best-effort: a sub-item that fails is logged, not fatal.
         let pr_id = self.pr_node_id(id)?;
 
-        if !attrs.labels.is_empty() {
-            match self.label_node_ids(&attrs.labels) {
-                Ok(ids) if !ids.is_empty() => {
-                    if let Err(e) = self.graphql(
-                        gql::ADD_LABELS,
-                        json!({ "input": { "labelableId": pr_id, "labelIds": ids } }),
-                    ) {
-                        log::warn!("labels: {e}");
-                    }
-                }
-                Ok(_) => {}
-                Err(e) => log::warn!("labels: {e}"),
+        let label_ids = self.label_node_ids(&attrs.labels);
+        if !label_ids.is_empty() {
+            if let Err(e) = self.graphql(
+                gql::ADD_LABELS,
+                json!({ "input": { "labelableId": pr_id, "labelIds": label_ids } }),
+            ) {
+                log::warn!("labels: {e}");
             }
         }
         if !attrs.assignees.is_empty() {

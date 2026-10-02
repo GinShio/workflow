@@ -8,13 +8,12 @@
 
 use serde_json::{json, Value};
 
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use super::RemoteInfo;
 use super::{
-    current_user, dedup_mrs, encode, next_link, request, request_every_page, resolve_self,
-    Attributes, Auth, Forge, HeadRepo, MergeRequest, MrComment, MrState, NewMr, SELF_REF,
+    dedup_mrs, encode, next_link, request, request_every_page, resolve_self, Attributes, Auth,
+    Forge, HeadRepo, MergeRequest, MrComment, MrState, NewMr, SELF_REF,
 };
 
 const WIP_PREFIX: &str = "WIP: ";
@@ -29,8 +28,9 @@ pub struct Gitea {
     push_repo: Option<RemoteInfo>,
     /// `push_repo`'s numeric id, resolved by the first lookup that needs it.
     push_repo_id: OnceLock<i64>,
-    /// The authenticated user's id, read by the first comment listing.
-    me: OnceLock<i64>,
+    /// The authenticated user's id and login, read once by the first request
+    /// that needs either.
+    me: OnceLock<(i64, String)>,
     auth: Auth,
 }
 
@@ -54,17 +54,17 @@ impl Gitea {
         }
     }
 
-    /// The authenticated user's id, read once.
-    fn my_id(&self) -> anyhow::Result<i64> {
-        if let Some(id) = self.me.get() {
-            return Ok(*id);
+    /// The authenticated user's id and login, read once.
+    fn me(&self) -> anyhow::Result<&(i64, String)> {
+        if let Some(me) = self.me.get() {
+            return Ok(me);
         }
         let v = request("GET", &format!("{}/user", self.api_base), &self.auth, None)?;
-        let id = v["id"]
-            .as_i64()
-            .ok_or_else(|| anyhow::anyhow!("could not read the authenticated user"))?;
-        // Listings run in parallel, so another one may have stored the same id first.
-        Ok(*self.me.get_or_init(|| id))
+        let (Some(id), Some(login)) = (v["id"].as_i64(), v["login"].as_str()) else {
+            anyhow::bail!("could not read the authenticated user");
+        };
+        // Requests run in parallel, so another one may have stored the same user first.
+        Ok(self.me.get_or_init(|| (id, login.to_owned())))
     }
 
     /// The `head` a pull request is created from: the branch alone in the
@@ -93,11 +93,33 @@ impl Gitea {
 
     fn resolve_users(&self, items: &[String]) -> anyhow::Result<Vec<String>> {
         if items.iter().any(|i| i == SELF_REF) {
-            let me = current_user(&self.api_base, &self.auth, "login")?;
-            Ok(resolve_self(items, &me))
+            Ok(resolve_self(items, &self.me()?.1))
         } else {
             Ok(items.to_vec())
         }
+    }
+
+    /// Add `names` to the issue's assignees. The issue edit replaces the set,
+    /// so it is read and unioned first to keep this additive.
+    fn add_assignees(&self, issue: &str, names: &[String]) -> anyhow::Result<()> {
+        let wanted = self.resolve_users(names)?;
+        let mut union = field_of(
+            &request("GET", issue, &self.auth, None)?["assignees"],
+            "login",
+        );
+        for name in &wanted {
+            if !union.contains(name) {
+                union.push(name.clone());
+            }
+        }
+        let body = json!({ "assignees": union });
+        let updated = request("PATCH", issue, &self.auth, Some(&body))?;
+        // Without write access the edit drops `assignees` and still succeeds
+        // (Gitea's and Forgejo's `EditIssue`).
+        for name in missing(&wanted, &field_of(&updated["assignees"], "login")) {
+            log::warn!("assignee '{name}' was not added; that takes write access to the repo");
+        }
+        Ok(())
     }
 
     /// The repository id a lookup pins `head`'s branches to: the push
@@ -122,33 +144,30 @@ impl Gitea {
         // Lookups run in parallel, so another one may have stored the same id first.
         Ok(Some(*self.push_repo_id.get_or_init(|| id)))
     }
+}
 
-    /// Gitea attaches labels by numeric id, so names have to be looked up against
-    /// the repo's label set first.
-    fn label_ids(&self, names: &[String]) -> anyhow::Result<Vec<i64>> {
-        let v = request(
-            "GET",
-            &format!("{}/labels?limit=100", self.repo_url()),
-            &self.auth,
-            None,
-        )?;
-        let by_name: HashMap<&str, i64> = v
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|l| Some((l["name"].as_str()?, l["id"].as_i64()?)))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let mut ids = Vec::new();
-        for name in names {
-            match by_name.get(name.as_str()) {
-                Some(id) => ids.push(*id),
-                None => log::warn!("label '{name}' does not exist in this repo"),
-            }
-        }
-        Ok(ids)
-    }
+/// The `field` of every object in a JSON array — an empty list for `null`,
+/// which is how Gitea spells an empty assignee list.
+fn field_of(items: &Value, field: &str) -> Vec<String> {
+    items
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item[field].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The `wanted` names `got` lacks, without regard to case: Gitea and Forgejo
+/// match logins that way, and a label found in another case is on the issue
+/// all the same.
+fn missing<'a>(wanted: &'a [String], got: &[String]) -> Vec<&'a str> {
+    wanted
+        .iter()
+        .filter(|want| !got.iter().any(|g| g.eq_ignore_ascii_case(want)))
+        .map(String::as_str)
+        .collect()
 }
 
 /// The next page of a list that started at `base`. Only the `page` number is
@@ -250,7 +269,7 @@ impl Forge for Gitea {
     }
 
     fn list_comments(&self, mr: &str) -> anyhow::Result<Vec<MrComment>> {
-        let me = self.my_id()?;
+        let me = self.me()?.0;
         // The endpoint takes no paging parameters and answers with every
         // comment (`issueGetComments` in Gitea's and Forgejo's API spec); a
         // `Link` header, should a server page it after all, is still followed.
@@ -312,52 +331,46 @@ impl Forge for Gitea {
         let issue = format!("{}/issues/{}", self.repo_url(), id);
 
         if !attrs.labels.is_empty() {
-            let ids = self.label_ids(&attrs.labels)?;
-            if !ids.is_empty() {
-                // POST adds to the issue's labels without replacing them.
-                let body = json!({ "labels": ids });
-                if let Err(e) = request("POST", &format!("{issue}/labels"), &self.auth, Some(&body))
-                {
-                    log::warn!("labels: {e}");
+            // By name, which also finds the organisation's labels (Gitea 1.23,
+            // Forgejo 10) that the repository's own list leaves out; POST adds
+            // to the issue's labels. A name the server does not know is dropped
+            // without an error, so the labels it answers with are checked.
+            let body = json!({ "labels": attrs.labels });
+            match request("POST", &format!("{issue}/labels"), &self.auth, Some(&body)) {
+                Ok(labels) => {
+                    for name in missing(&attrs.labels, &field_of(&labels, "name")) {
+                        log::warn!(
+                            "label '{name}' does not exist in this repo or its organisation"
+                        );
+                    }
                 }
+                Err(e) => log::warn!("labels: {e}"),
             }
         }
         if !attrs.assignees.is_empty() {
-            // Gitea's issue edit replaces assignees, so union with the current set
-            // to keep this additive.
-            let wanted = self.resolve_users(&attrs.assignees)?;
-            let mut union = current_logins(&request("GET", &issue, &self.auth, None)?);
-            for name in wanted {
-                if !union.contains(&name) {
-                    union.push(name);
-                }
-            }
-            let body = json!({ "assignees": union });
-            if let Err(e) = request("PATCH", &issue, &self.auth, Some(&body)) {
+            if let Err(e) = self.add_assignees(&issue, &attrs.assignees) {
                 log::warn!("assignees: {e}");
             }
         }
         if !attrs.reviewers.is_empty() {
-            let body = json!({ "reviewers": self.resolve_users(&attrs.reviewers)? });
+            // One request each: the server stops at the first reviewer it
+            // refuses — the PR's own author among them — and keeps or drops the
+            // ones before it depending on the server.
             let url = format!("{}/{}/requested_reviewers", self.pulls_url(), id);
-            if let Err(e) = request("POST", &url, &self.auth, Some(&body)) {
-                log::warn!("reviewers: {e}");
+            match self.resolve_users(&attrs.reviewers) {
+                Ok(reviewers) => {
+                    for reviewer in reviewers {
+                        let body = json!({ "reviewers": [reviewer] });
+                        if let Err(e) = request("POST", &url, &self.auth, Some(&body)) {
+                            log::warn!("reviewer '{reviewer}': {e}");
+                        }
+                    }
+                }
+                Err(e) => log::warn!("reviewers: {e}"),
             }
         }
         Ok(())
     }
-}
-
-/// The `login` of each assignee currently on an issue/PR JSON object.
-fn current_logins(issue: &Value) -> Vec<String> {
-    issue["assignees"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|u| u["login"].as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -428,6 +441,16 @@ mod tests {
         let mr = parse_pull(&pr("feat", 1, 1)).unwrap();
         assert_eq!(mr.source, "feat");
         assert_eq!(mr.state, MrState::Merged);
+    }
+
+    #[test]
+    fn what_an_update_left_out_is_found_in_its_answer() {
+        let labels = json!([{ "id": 1, "name": "Bug" }, { "id": 2, "name": "infra" }]);
+        let got = field_of(&labels, "name");
+        let wanted = ["bug".to_owned(), "typo".to_owned()];
+        assert_eq!(missing(&wanted, &got), ["typo"]);
+        // Gitea answers an empty assignee list with `null`.
+        assert!(field_of(&Value::Null, "login").is_empty());
     }
 
     #[test]
