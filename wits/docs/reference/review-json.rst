@@ -257,11 +257,13 @@ The ``Thread`` object
      - Fields
      - Meaning
    * - ``line``
-     - ``path``, ``end`` {``line``, ``side``}, ``start``? {``line``,
-       ``side``}, ``old_path?``
+     - ``path``, ``end`` {``line``, ``side``, ``old_line?``}, ``start``?
+       {``line``, ``side``, ``old_line?``}, ``old_path?``
      - A code line. ``end`` is the anchor line; ``start``, when present,
        makes a multi-line span and may carry a different ``side`` (a
-       cross-side span).
+       cross-side span). ``old_line``, on a ``new``-side line the change left
+       untouched, is the same line's number in the old file — present when
+       the forge reports it (GitLab does, for a thread on an unchanged line).
    * - ``file``
      - ``path``
      - A whole changed file, no line.

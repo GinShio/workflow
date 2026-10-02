@@ -9,12 +9,15 @@
 //! failed stays in the draft to retry. Only a fully-flushed draft triggers a
 //! re-fetch, so a partial failure never loses unposted work.
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 
-use wits_util::forge::{BatchAction, DiffVersion, Forge, ReviewBatch};
+use wits_util::forge::{Anchor, BatchAction, DiffVersion, Forge, ReviewBatch, Side};
 use wits_util::git::Repository;
 use wits_util::log as wits_log;
 
+use super::lines;
 use super::model::{comment_anchor, Action, Local, Snapshot, StoredFile};
 use super::{online, Online, SubmitArgs};
 
@@ -156,7 +159,24 @@ fn submit_draft(ctx: &Online, id: &str, mut local: Local, stale: Vec<String>) ->
     // Hand the whole review to the forge as one batch; it folds what it can into
     // one notification and reports each action's landing by key. A hard `Err`
     // means *nothing* landed — the whole (normalized) draft stays for retry.
-    let batch = build_batch(&local, &version, &info.snapshots, &info.files, forge, stale);
+    let mut batch = build_batch(&local, &version, &info.snapshots, &info.files, forge, stale);
+    let repo = &ctx.local.repo;
+    let mut changes: HashMap<(String, String, String), Option<Vec<lines::Hunk>>> = HashMap::new();
+    place_unchanged_lines(&mut batch, |version, path, old_path| {
+        let key = (
+            version.base_sha.clone(),
+            version.head_sha.clone(),
+            path.to_owned(),
+        );
+        changes
+            .entry(key)
+            .or_insert_with(|| {
+                let fork = repo.merge_base(&version.base_sha, &version.head_sha)?;
+                let patch = repo.diff_hunks(&fork, &version.head_sha, path, old_path)?;
+                Some(lines::hunks(&patch))
+            })
+            .clone()
+    });
     let outcome = match forge.submit(id, &batch) {
         Ok(o) => o,
         Err(e) => {
@@ -317,6 +337,44 @@ fn build_batch(
         actions,
         version: version.clone(),
         stale,
+    }
+}
+
+/// Give each new-side line a comment anchors on its pre-image number when the
+/// change left it untouched ([`LineRef::old_line`]), from the change the
+/// comment's version shows: its fork point to its head, the diff both forges
+/// anchor in. `hunks_of` answers for a version and a file (`path`, renamed
+/// from `old_path`); a change it cannot compute leaves the number unknown, for
+/// the forge to refuse rather than misplace.
+///
+/// [`LineRef::old_line`]: wits_util::forge::LineRef::old_line
+fn place_unchanged_lines(
+    batch: &mut ReviewBatch,
+    mut hunks_of: impl FnMut(&DiffVersion, &str, Option<&str>) -> Option<Vec<lines::Hunk>>,
+) {
+    for action in &mut batch.actions {
+        let BatchAction::Comment {
+            anchor:
+                Some(Anchor::Line {
+                    path,
+                    old_path,
+                    end,
+                    start,
+                }),
+            version,
+            ..
+        } = action
+        else {
+            continue;
+        };
+        let Some(hunks) = hunks_of(version, path, old_path.as_deref()) else {
+            continue;
+        };
+        for line in std::iter::once(end).chain(start.as_mut()) {
+            if line.side == Side::New {
+                line.old_line = lines::old_line_of(&hunks, line.line);
+            }
+        }
     }
 }
 
@@ -518,6 +576,62 @@ mod tests {
             &local.actions[1],
             Action::Comment { id: Some(id), .. } if id == "fail"
         ));
+    }
+
+    fn line_comment(end: (u32, Side), start: Option<(u32, Side)>) -> BatchAction {
+        let at = |(line, side)| wits_util::forge::LineRef {
+            line,
+            side,
+            old_line: None,
+        };
+        BatchAction::Comment {
+            key: "k".into(),
+            anchor: Some(Anchor::Line {
+                path: "f.c".into(),
+                old_path: None,
+                end: at(end),
+                start: start.map(at),
+            }),
+            version: DiffVersion::default(),
+            body: "b".into(),
+        }
+    }
+
+    fn placed(batch: &ReviewBatch) -> Vec<Option<u32>> {
+        let Some(BatchAction::Comment {
+            anchor: Some(Anchor::Line { end, start, .. }),
+            ..
+        }) = batch.actions.first()
+        else {
+            panic!("a line comment");
+        };
+        std::iter::once(end)
+            .chain(start)
+            .map(|line| line.old_line)
+            .collect()
+    }
+
+    #[test]
+    fn an_unchanged_line_gets_its_old_number_and_an_added_one_none() {
+        let mut batch = ReviewBatch {
+            verdict: None,
+            summary: None,
+            // Two lines were added at 3-4, so new 12 was old 10.
+            actions: vec![line_comment((12, Side::New), Some((4, Side::New)))],
+            version: DiffVersion::default(),
+            stale: Vec::new(),
+        };
+        place_unchanged_lines(&mut batch, |_, path, _| {
+            assert_eq!(path, "f.c");
+            Some(lines::hunks("@@ -2,0 +3,2 @@\n+a\n+b\n"))
+        });
+        assert_eq!(placed(&batch), [Some(10), None]);
+
+        // An old-side line already is its old number; a change that cannot be
+        // computed leaves every number unknown.
+        batch.actions = vec![line_comment((7, Side::Old), Some((12, Side::New)))];
+        place_unchanged_lines(&mut batch, |_, _, _| None);
+        assert_eq!(placed(&batch), [None, None]);
     }
 
     #[test]

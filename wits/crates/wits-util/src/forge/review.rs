@@ -41,6 +41,14 @@ impl Side {
 pub struct LineRef {
     pub line: u32,
     pub side: Side,
+    /// For a new-side line the change left untouched, its number in the
+    /// pre-image — which earlier changes in the file can make differ from
+    /// `line`. `None` for an added line, an old-side one, or when unknown.
+    /// GitLab places an unchanged line only by both numbers ("include both
+    /// `position[new_line]` and `position[old_line]`", its discussions API);
+    /// GitHub needs only `line`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub old_line: Option<u32>,
 }
 
 /// A reviewer's verdict on an MR. `RequestChanges` is a GitHub/Gitea concept;

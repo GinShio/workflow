@@ -295,7 +295,8 @@ impl Info {
 /// conversation comment, which carries no code anchor). `side` defaults to
 /// `New`; a multi-line `start`'s side defaults to `end`'s unless overridden.
 /// `old_path` is looked up by the caller (submit knows the changed-file set;
-/// the read view of a pending local comment does not, and passes `None`).
+/// the read view of a pending local comment does not, and passes `None`), and
+/// so is an unchanged line's pre-image number, which only submit computes.
 pub fn comment_anchor(
     file: Option<&str>,
     line: Option<u32>,
@@ -308,10 +309,15 @@ pub fn comment_anchor(
     Some(match line {
         Some(line) => {
             let s = side.unwrap_or(Side::New);
-            let end = LineRef { line, side: s };
+            let end = LineRef {
+                line,
+                side: s,
+                old_line: None,
+            };
             let start = start_line.map(|sl| LineRef {
                 line: sl,
                 side: start_side.unwrap_or(s),
+                old_line: None,
             });
             Anchor::Line {
                 path,

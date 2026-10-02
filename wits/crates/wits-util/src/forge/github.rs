@@ -469,13 +469,16 @@ fn parse_review_thread(n: &Value) -> RemoteThread {
     let anchor = if n["subjectType"].as_str() == Some("FILE") {
         Some(Anchor::File { path })
     } else {
+        // GitHub reports one number per line, on its side.
         let end = LineRef {
             line: line_of("originalLine", "line").unwrap_or(0) as u32,
             side: side(&n["diffSide"]),
+            old_line: None,
         };
         let start = line_of("originalStartLine", "startLine").map(|sl| LineRef {
             line: sl as u32,
             side: side(&n["startDiffSide"]),
+            old_line: None,
         });
         Some(Anchor::Line {
             path,

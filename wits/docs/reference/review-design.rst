@@ -387,7 +387,7 @@ conversation:
 
 ::
 
-   LineRef { line: u32, side: Old | New }          // one endpoint
+   LineRef { line: u32, side: Old | New, old_line: Option<u32> }   // one endpoint
 
    enum Anchor {
        Line {
@@ -413,6 +413,19 @@ express that, and GitLab's ``position.line_range`` is inherently two-sided
 the lowest common representation both forges speak: GitHub gets
 ``line``/``side``/``start_line``/``start_side``; GitLab gets
 ``line_range{start, end}``.
+
+A new-side line can also be one the change left untouched, and GitLab places
+such a line only by **both** of its numbers ("include both
+``position[new_line]`` and ``position[old_line]``"). Given the new one alone it
+accepts the draft and then, at ``bulk_publish``, drops the note — logged
+server-side, the draft deleted, the publish still a ``204`` — so the comment
+was reported posted and was gone. ``old_line`` carries the second number. A
+draft records only the line the reviewer saw, so ``submit`` derives it from
+the change the comment's version shows (fork point to head, the diff both
+forges anchor in, rename-aware) and GitHub ignores it. As a backstop, the
+GitLab backend fails the batch before publishing when a line comment's draft
+comes back without a ``line_code``, which is how GitLab says it found no such
+line.
 
 The deliberate choice is **file line numbers, not diff-hunk positions.**
 Modern forges anchor by file line (GitHub, with ``line``/``original_line``;

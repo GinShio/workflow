@@ -559,6 +559,33 @@ impl Repository {
         self.query(&args)
     }
 
+    /// One file's change between two tree-ish objects as bare hunks: no context
+    /// (`-U0`), renames followed (`-M`, with `old_path` in the pathspec so the
+    /// rename can be seen). The coordinates a line mapping needs, and nothing
+    /// else. `None` when the comparison can't be computed or the file did not
+    /// change — either way there is no line of a change to place.
+    pub fn diff_hunks(
+        &self,
+        from: &str,
+        to: &str,
+        path: &str,
+        old_path: Option<&str>,
+    ) -> Option<String> {
+        let mut args = vec![
+            "diff",
+            "--no-ext-diff",
+            "--no-color",
+            "-U0",
+            "-M",
+            from,
+            to,
+            "--",
+            path,
+        ];
+        args.extend(old_path.filter(|old| *old != path));
+        self.query(&args)
+    }
+
     /// `git range-diff` between two commit ranges: how one version of a branch
     /// corresponds to another, which is the question a force-push raises. With
     /// `patch` it carries the diff of diffs; without, just the correspondence
@@ -791,6 +818,41 @@ mod tests {
             Some("hunter2".to_owned())
         );
         assert_eq!(repo.get_config("wits.transcrypt.absent").unwrap(), None);
+    }
+
+    /// A renamed file's hunks are only its edits when the old path is in the
+    /// pathspec; without it, git sees a new file.
+    #[test]
+    fn diff_hunks_follows_a_rename() {
+        let _guard = crate::log::test_flag_guard();
+        let dir = init_repo();
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args.iter().copied())
+                .current_dir(dir.path())
+                .force_run()
+                .exec()
+                .unwrap();
+        };
+        let lines = |second: &str| format!("one\n{second}\nthree\nfour\nfive\nsix\n");
+        std::fs::write(dir.path().join("a.c"), lines("two")).unwrap();
+        run(&["add", "a.c"]);
+        run(&["commit", "-m", "add"]);
+        run(&["mv", "a.c", "b.c"]);
+        std::fs::write(dir.path().join("b.c"), lines("TWO")).unwrap();
+        run(&["commit", "-am", "rename and edit"]);
+
+        let repo = Repository::new(dir.path());
+        let hunk_headers = |old_path| {
+            repo.diff_hunks("HEAD~1", "HEAD", "b.c", old_path)
+                .unwrap()
+                .lines()
+                .filter(|l| l.starts_with("@@"))
+                .map(|l| l.split(" @@").next().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(hunk_headers(Some("a.c")), ["@@ -2 +2"]);
+        assert_eq!(hunk_headers(None), ["@@ -0,0 +1,6"]);
     }
 
     #[test]

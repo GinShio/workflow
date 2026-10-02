@@ -16,6 +16,7 @@ mod checkout;
 mod config;
 mod diff;
 mod fetch;
+mod lines;
 mod model;
 mod modulo;
 mod prune;

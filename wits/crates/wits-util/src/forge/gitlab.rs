@@ -282,9 +282,12 @@ fn diff_position(
 ) -> Value {
     let mut pos = file_position(version, path, old_path);
     pos["position_type"] = json!("text");
-    match end.side {
-        Side::New => pos["new_line"] = json!(end.line),
-        Side::Old => pos["old_line"] = json!(end.line),
+    let (old, new) = line_numbers(end);
+    if let Some(l) = old {
+        pos["old_line"] = json!(l);
+    }
+    if let Some(l) = new {
+        pos["new_line"] = json!(l);
     }
     if let Some(s) = start {
         pos["line_range"] = json!({
@@ -311,22 +314,33 @@ fn file_position(version: &DiffVersion, path: &str, old_path: Option<&str>) -> V
     })
 }
 
-/// One endpoint of a GitLab `position.line_range`: the side as `type`, the
-/// side-appropriate line, and — crucially — a `line_code`. GitLab **rejects** a
-/// `line_range` endpoint without one (`400 … line_code can't be blank`), so a
-/// multi-line note is impossible without it; we compute it rather than omit it.
-fn range_endpoint(path: &str, r: LineRef) -> Value {
-    let (old, new) = match r.side {
-        Side::New => (0, r.line),
-        Side::Old => (r.line, 0),
-    };
-    let mut o = json!({
-        "type": match r.side { Side::New => "new", Side::Old => "old" },
-        "line_code": line_code(path, old, new),
-    });
+/// A line's `(old_line, new_line)` in GitLab's terms, each absent on the side
+/// the line does not exist on: an added line has only its new number, a removed
+/// one only its old, an unchanged one both — the one form GitLab places it by.
+fn line_numbers(r: LineRef) -> (Option<u32>, Option<u32>) {
     match r.side {
-        Side::New => o["new_line"] = json!(r.line),
-        Side::Old => o["old_line"] = json!(r.line),
+        Side::Old => (Some(r.line), None),
+        Side::New => (r.old_line, Some(r.line)),
+    }
+}
+
+/// One endpoint of a GitLab `position.line_range`, shaped as GitLab builds one
+/// itself (`ResolveDiffPositionService#build_line_range_entry`): the side as
+/// `type` and that side's number, or both numbers and no `type` for an
+/// unchanged line — with the `line_code` the discussions API lists as required.
+fn range_endpoint(path: &str, r: LineRef) -> Value {
+    let (old, new) = line_numbers(r);
+    let mut o = json!({ "line_code": line_code(path, old.unwrap_or(0), new.unwrap_or(0)) });
+    match (old, new) {
+        (Some(_), Some(_)) => {}
+        (Some(_), None) => o["type"] = json!("old"),
+        (None, _) => o["type"] = json!("new"),
+    }
+    if let Some(l) = old {
+        o["old_line"] = json!(l);
+    }
+    if let Some(l) = new {
+        o["new_line"] = json!(l);
     }
     o
 }
@@ -344,26 +358,58 @@ fn line_code(path: &str, old_line: u32, new_line: u32) -> String {
 }
 
 /// Read one `line_range` endpoint back into a [`LineRef`]. `type` selects the
-/// side; the matching `new_line`/`old_line` gives the line.
+/// side and the matching `new_line`/`old_line` gives the line; an endpoint
+/// without a `type` is an unchanged line, read by its numbers.
 fn parse_range_endpoint(v: &Value) -> Option<LineRef> {
+    let number = |key: &str| v[key].as_u64().map(|l| l as u32);
     let side = match v["type"].as_str() {
         Some("old") => Side::Old,
         Some("new") => Side::New,
-        _ => return None,
+        _ => return position_line(number("old_line"), number("new_line")),
     };
-    let line = v[if side == Side::New {
+    let line = number(if side == Side::New {
         "new_line"
     } else {
         "old_line"
-    }]
-    .as_u64()
-    .map(|l| l as u32)
+    })
     // A side endpoint on a line that only exists on the other side (e.g. a
     // pure addition viewed from the old side) carries no line for that side;
     // fall back to whichever the object does carry so the span round-trips.
-    .or_else(|| v["new_line"].as_u64().map(|l| l as u32))
-    .or_else(|| v["old_line"].as_u64().map(|l| l as u32))?;
-    Some(LineRef { line, side })
+    .or_else(|| number("new_line"))
+    .or_else(|| number("old_line"))?;
+    Some(LineRef {
+        line,
+        side,
+        old_line: None,
+    })
+}
+
+/// The line a pair of GitLab numbers names: the new side when there is a new
+/// number — carrying the old one too, for an unchanged line — else the old.
+fn position_line(old: Option<u32>, new: Option<u32>) -> Option<LineRef> {
+    match (old, new) {
+        (old_line, Some(line)) => Some(LineRef {
+            line,
+            side: Side::New,
+            old_line,
+        }),
+        (Some(line), None) => Some(LineRef {
+            line,
+            side: Side::Old,
+            old_line: None,
+        }),
+        (None, None) => None,
+    }
+}
+
+/// Whether GitLab took a line comment's draft without finding its line. A draft
+/// answers with the `line_code` GitLab resolved its position to
+/// (`DraftNote#line_code`); a null one means the line is not in that diff, and
+/// publishing would drop the note — logged, its draft deleted, the publish
+/// still a `204` (`DraftNotes::PublishService`) — so the comment would be
+/// reported as posted and be gone.
+fn unplaced(sent: &Value, answer: &Value) -> bool {
+    sent["position"]["position_type"] == "text" && answer["line_code"].is_null()
 }
 
 /// Draft-note ids as the forge-neutral string tokens carried in
@@ -789,35 +835,33 @@ impl Forge for GitLab {
                 let commit = p["head_sha"].as_str().map(str::to_owned);
                 // `position_type: "file"` is a file-level anchor; a `line_range`
                 // is a multi-line span; otherwise a single-line note carries
-                // `new_line` or `old_line`. (A position with neither line nor
-                // range nor `file` type is a degenerate note we surface as a
-                // line-0 anchor rather than dropping.)
+                // `new_line`, `old_line`, or both for an unchanged line. The
+                // top-level pair is the range's last line too (GitLab's own
+                // `ResolveDiffPositionService` builds it so), which reads an
+                // end endpoint that names none. (A position with no line at
+                // all is a degenerate note we surface as a line-0 anchor
+                // rather than dropping.)
+                let number = |key: &str| p[key].as_u64().map(|l| l as u32);
+                let last =
+                    position_line(number("old_line"), number("new_line")).unwrap_or(LineRef {
+                        line: 0,
+                        side: Side::New,
+                        old_line: None,
+                    });
                 let anchor = if p["position_type"].as_str() == Some("file") {
                     Anchor::File { path }
                 } else if let Some(lr) = p["line_range"].as_object() {
-                    let end = parse_range_endpoint(&lr["end"]).unwrap_or(LineRef {
-                        line: 0,
-                        side: Side::New,
-                    });
-                    let start = parse_range_endpoint(&lr["start"]);
                     Anchor::Line {
                         path,
                         old_path,
-                        end,
-                        start,
+                        end: parse_range_endpoint(&lr["end"]).unwrap_or(last),
+                        start: parse_range_endpoint(&lr["start"]),
                     }
                 } else {
-                    let (side, line) = if let Some(l) = p["new_line"].as_u64() {
-                        (Side::New, l as u32)
-                    } else if let Some(l) = p["old_line"].as_u64() {
-                        (Side::Old, l as u32)
-                    } else {
-                        (Side::New, 0)
-                    };
                     Anchor::Line {
                         path,
                         old_path,
-                        end: LineRef { line, side },
+                        end: last,
                         start: None,
                     }
                 };
@@ -944,6 +988,14 @@ impl Forge for GitLab {
                             Ok(v) => {
                                 if let Some(did) = v["id"].as_u64() {
                                     posted_ref.lock().unwrap().push(did);
+                                }
+                                if unplaced(body, &v) {
+                                    log::warn!(
+                                        "MR {id}: GitLab cannot place the comment ({label}) on \
+                                         a line of the diff it was written against; nothing \
+                                         was published"
+                                    );
+                                    *ok_ref.lock().unwrap() = false;
                                 }
                             }
                             Err(e) => {
@@ -1149,21 +1201,28 @@ mod tests {
         assert!(!sourced_from(&mr(Value::Null, 7), None));
     }
 
+    fn at(line: u32, side: Side, old_line: Option<u32>) -> LineRef {
+        LineRef {
+            line,
+            side,
+            old_line,
+        }
+    }
+
+    fn sha(path: &str) -> String {
+        use sha1::{Digest, Sha1};
+        let mut h = Sha1::new();
+        h.update(path.as_bytes());
+        format!("{:x}", h.finalize())
+    }
+
     #[test]
     fn diff_position_single_and_multi_line() {
         let ver = version();
-        let single = diff_position(
-            &ver,
-            "a.c",
-            None,
-            LineRef {
-                line: 5,
-                side: Side::New,
-            },
-            None,
-        );
+        let single = diff_position(&ver, "a.c", None, at(5, Side::New, None), None);
         assert_eq!(single["position_type"], "text");
         assert_eq!(single["new_line"], 5);
+        assert!(single.get("old_line").is_none());
         assert_eq!(single["head_sha"], "h");
         assert_eq!(single["new_path"], "a.c");
         assert!(single.get("line_range").is_none());
@@ -1172,26 +1231,14 @@ mod tests {
             &ver,
             "a.c",
             None,
-            LineRef {
-                line: 5,
-                side: Side::New,
-            },
-            Some(LineRef {
-                line: 3,
-                side: Side::Old,
-            }),
+            at(5, Side::New, None),
+            Some(at(3, Side::Old, None)),
         );
         assert_eq!(multi["line_range"]["start"]["type"], "old");
         assert_eq!(multi["line_range"]["start"]["old_line"], 3);
         assert_eq!(multi["line_range"]["end"]["type"], "new");
         assert_eq!(multi["line_range"]["end"]["new_line"], 5);
-        // Every endpoint must carry a line_code or GitLab rejects the note.
-        let sha = |p: &str| {
-            use sha1::{Digest, Sha1};
-            let mut h = Sha1::new();
-            h.update(p.as_bytes());
-            format!("{:x}", h.finalize())
-        };
+        // Every endpoint carries the line_code the API lists as required.
         assert_eq!(
             multi["line_range"]["start"]["line_code"],
             format!("{}_3_0", sha("a.c"))
@@ -1200,6 +1247,35 @@ mod tests {
             multi["line_range"]["end"]["line_code"],
             format!("{}_0_5", sha("a.c"))
         );
+    }
+
+    /// GitLab places an unchanged line only by both of its numbers; given the
+    /// new one alone it drops the note when the review is published.
+    #[test]
+    fn an_unchanged_line_is_placed_by_both_numbers() {
+        let single = diff_position(&version(), "a.c", None, at(12, Side::New, Some(10)), None);
+        assert_eq!(
+            (single["old_line"].clone(), single["new_line"].clone()),
+            (json!(10), json!(12))
+        );
+
+        let range = diff_position(
+            &version(),
+            "a.c",
+            None,
+            at(12, Side::New, Some(10)),
+            Some(at(11, Side::New, None)),
+        );
+        let end = &range["line_range"]["end"];
+        assert!(end.get("type").is_none(), "an unchanged line has no side");
+        assert_eq!(
+            (end["old_line"].clone(), end["new_line"].clone()),
+            (json!(10), json!(12))
+        );
+        assert_eq!(end["line_code"], format!("{}_10_12", sha("a.c")));
+        // The added start line keeps its side and one number.
+        assert_eq!(range["line_range"]["start"]["type"], "new");
+        assert!(range["line_range"]["start"].get("old_line").is_none());
     }
 
     #[test]
@@ -1213,34 +1289,43 @@ mod tests {
 
     #[test]
     fn range_endpoint_round_trips() {
-        let n = range_endpoint(
-            "a.c",
-            LineRef {
-                line: 9,
-                side: Side::New,
-            },
-        );
+        for line in [
+            at(9, Side::New, None),
+            at(4, Side::Old, None),
+            at(12, Side::New, Some(10)),
+        ] {
+            assert_eq!(
+                parse_range_endpoint(&range_endpoint("a.c", line)),
+                Some(line)
+            );
+        }
+    }
+
+    #[test]
+    fn a_line_draft_without_a_line_code_was_not_placed() {
+        let line = json!({ "note": "n", "position": { "position_type": "text", "new_line": 3 } });
+        assert!(unplaced(&line, &json!({ "id": 1, "line_code": null })));
+        assert!(!unplaced(&line, &json!({ "id": 1, "line_code": "x_0_3" })));
+        // File and MR-level drafts have no line to place.
+        let file = json!({ "note": "n", "position": { "position_type": "file" } });
+        assert!(!unplaced(&file, &json!({ "id": 1, "line_code": null })));
+        assert!(!unplaced(
+            &json!({ "note": "n" }),
+            &json!({ "id": 1, "line_code": null })
+        ));
+    }
+
+    /// A range made in GitLab's own diff view gives an unchanged endpoint no
+    /// `type`; it reads back as the new-side line it is, not as nothing.
+    #[test]
+    fn an_untyped_endpoint_is_an_unchanged_line() {
+        let endpoint =
+            json!({ "line_code": "x_10_12", "type": null, "old_line": 10, "new_line": 12 });
         assert_eq!(
-            parse_range_endpoint(&n),
-            Some(LineRef {
-                line: 9,
-                side: Side::New
-            })
+            parse_range_endpoint(&endpoint),
+            Some(at(12, Side::New, Some(10)))
         );
-        let o = range_endpoint(
-            "a.c",
-            LineRef {
-                line: 4,
-                side: Side::Old,
-            },
-        );
-        assert_eq!(
-            parse_range_endpoint(&o),
-            Some(LineRef {
-                line: 4,
-                side: Side::Old
-            })
-        );
+        assert_eq!(parse_range_endpoint(&json!({ "type": null })), None);
     }
 
     #[test]
