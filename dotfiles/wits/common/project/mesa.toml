@@ -19,12 +19,10 @@ gallium-drivers = "radeonsi,zink,llvmpipe"
 vulkan-drivers = "amd,swrast"
 gallium-rusticl = true
 
-# Run notes:
-# MESA_ROOT=$INSTALL_DIR \
-#   LD_LIBRARY_PATH=$MESA_ROOT/lib LIBGL_DRIVERS_PATH=$MESA_ROOT/lib/dri \
-#   VK_DRIVER_FILES=$(eval echo "$MESA_ROOT/share/vulkan/icd.d/{radeon,lvp}_icd.x86_64.json" |tr ' ' ':') VK_LOADER_DRIVERS_DISABLE= \
-#   OCL_ICD_FILENAMES=$MESA_ROOT/lib/libRusticlOpenCL.so RUSTICL_ENABLE=zink \
-#   MESA_SHADER_CACHE_DISABLE=true MESA_LOADER_DRIVER_OVERRIDE=radeonsi LIBGL_ALWAYS_SOFTWARE= \
-#   RADV_DEBUG=nocache RADV_PERFTEST= AMD_DEBUG= \
-#   LP_DEBUG= LP_PERF= RUSTICL_DEBUG= ACO_DEBUG= NIR_DEBUG= \
-#   dosomething
+# Meson's own devenv (meson.add_devenv) already points a program at this build's
+# drivers, libraries and drirc; these are the knobs a test run adds on top. The
+# lists append, so flags already in the caller's environment are kept.
+[project.devenv]
+MESA_SHADER_CACHE_DISABLE = "true"
+RADV_DEBUG = { append = "nocache", separator = "," }
+RUSTICL_ENABLE = { append = "zink", separator = "," }
