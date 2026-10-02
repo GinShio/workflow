@@ -106,6 +106,8 @@ fn detect_service(domain: &str) -> Service {
         "bitbucket.org" | "www.bitbucket.org" => Service::Bitbucket,
         "gitlab.com" | "www.gitlab.com" => Service::GitLab,
         "codeberg.org" | "www.codeberg.org" => Service::Codeberg,
+        // GitHub Enterprise Cloud's tenants live under its own domain.
+        d if d.ends_with(".ghe.com") => Service::GitHub,
         // Self-hosted instances conventionally keep the product in the hostname,
         // which is the only signal we have for them.
         d if d.contains("gitlab") => Service::GitLab,
@@ -289,6 +291,8 @@ mod tests {
     fn detects_self_hosted_by_hostname_hint() {
         let info = parse_url("https://gitlab.example.com/team/app.git").unwrap();
         assert_eq!(info.service, Service::GitLab);
+        let tenant = parse_url("https://octocorp.ghe.com/team/app.git").unwrap();
+        assert_eq!(tenant.service, Service::GitHub);
     }
 
     #[test]

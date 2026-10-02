@@ -847,7 +847,10 @@ Token resolution tries these in order, most specific first, then the env var:
 * **``wits.forge.<host>.service``** — Declares a self-hosted host's type
   (``github`` / ``gitlab``) when the hostname does not reveal it.
 * **``wits.forge.<host>.api-url``** — The API base for a self-hosted or
-  enterprise instance (e.g. ``https://git.acme.com/api/v4``).
+  enterprise instance (e.g. ``https://git.acme.com/api/v4``). For a GitHub
+  Enterprise Server, the REST base (``https://host/api/v3``) or the GraphQL
+  endpoint itself; without one, a ``*.ghe.com`` tenant and a server are both
+  found from the host.
 
 Feeds — ``review.toml``
 ~~~~~~~~~~~~~~~~~~~~~~~

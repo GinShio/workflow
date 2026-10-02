@@ -46,27 +46,9 @@ impl GitHub {
         token: String,
         api_url_override: Option<String>,
     ) -> Self {
-        let is_dotcom = matches!(target.host.as_str(), "github.com" | "www.github.com");
-        // GitHub Enterprise serves GraphQL at `https://<host>/api/graphql`; the
-        // public host at `https://api.github.com/graphql`. A custom REST
-        // `api-url` override (e.g. `https://host/api/v3`) is mapped to its
-        // GraphQL sibling.
-        let graphql_url = if is_dotcom {
-            "https://api.github.com/graphql".to_owned()
-        } else {
-            match api_url_override {
-                Some(base) => {
-                    format!(
-                        "{}/graphql",
-                        base.trim_end_matches("/v3").trim_end_matches('/')
-                    )
-                }
-                None => format!("https://{}/api/graphql", target.host),
-            }
-        };
         let web_base = format!("https://{}/{}", target.host, target.project_path());
         Self {
-            graphql_url,
+            graphql_url: graphql_url(&target.host, api_url_override.as_deref()),
             web_base,
             owner: target.owner.clone(),
             repo: target.repo.clone(),
@@ -370,6 +352,24 @@ fn parse_issue_comment(node: &Value) -> Option<MrComment> {
         url: node["url"].as_str().unwrap_or_default().to_owned(),
         own: node["viewerDidAuthor"].as_bool().unwrap_or(false),
     })
+}
+
+/// The GraphQL endpoint for a GitHub `host`. The public host answers at
+/// `api.github.com`, a GitHub Enterprise Cloud tenant (`*.ghe.com`) at its own
+/// `api.` subdomain, and a GitHub Enterprise Server under `/api/graphql`
+/// (GitHub's "Forming calls with GraphQL", per product). An `api-url` override
+/// may name the endpoint itself, or the REST base (`https://host/api/v3`),
+/// whose GraphQL sibling it then is.
+fn graphql_url(host: &str, api_url_override: Option<&str>) -> String {
+    if matches!(host, "github.com" | "www.github.com") {
+        return "https://api.github.com/graphql".to_owned();
+    }
+    match api_url_override.map(|url| url.trim_end_matches('/')) {
+        Some(url) if url.ends_with("/graphql") => url.to_owned(),
+        Some(url) => format!("{}/graphql", url.trim_end_matches("/v3")),
+        None if host.ends_with(".ghe.com") => format!("https://api.{host}/graphql"),
+        None => format!("https://{host}/api/graphql"),
+    }
 }
 
 /// The `createPullRequest` input for `req` in repository `repo`, its head in
@@ -1191,6 +1191,31 @@ mod tests {
             "t".into(),
             None,
         )
+    }
+
+    #[test]
+    fn each_github_product_has_its_graphql_endpoint() {
+        assert_eq!(
+            graphql_url("github.com", None),
+            "https://api.github.com/graphql"
+        );
+        assert_eq!(
+            graphql_url("ghe.example.com", None),
+            "https://ghe.example.com/api/graphql"
+        );
+        assert_eq!(
+            graphql_url("acme.ghe.com", None),
+            "https://api.acme.ghe.com/graphql"
+        );
+        // A REST base, with or without its trailing slash, maps to its sibling…
+        for base in ["https://h/api/v3", "https://h/api/v3/"] {
+            assert_eq!(graphql_url("h", Some(base)), "https://h/api/graphql");
+        }
+        // …and the endpoint itself is taken as it is.
+        assert_eq!(
+            graphql_url("h", Some("https://h/api/graphql")),
+            "https://h/api/graphql"
+        );
     }
 
     #[test]
