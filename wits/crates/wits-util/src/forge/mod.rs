@@ -81,6 +81,10 @@ pub struct MergeRequest {
     /// one MR's `base` links to its parent's `source` — without the richer
     /// [`MrSummary`]. Empty when the platform withholds it.
     pub source: String,
+    /// The commit the MR's head is at — for a closed or merged MR, the one it
+    /// was at when it stopped being open, not wherever its branch has moved
+    /// since. The closed-MR guard compares it with the local tip to tell a
+    /// reused branch name from the branch it was. `None` when unknown.
     pub head_sha: Option<String>,
     pub body: String,
     pub web_url: String,

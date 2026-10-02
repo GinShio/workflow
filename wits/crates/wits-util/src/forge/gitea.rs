@@ -99,6 +99,18 @@ impl Gitea {
         }
     }
 
+    /// The commit pull request `number`'s head was at when it stopped being
+    /// open: its pull ref, which only an open PR's pushes move (`pull_list.go`
+    /// in Gitea and Forgejo). A PR listing will not do — Forgejo's gives the
+    /// head *branch*'s tip, which a reused branch name moves on.
+    fn pull_head(&self, number: &str) -> anyhow::Result<Option<String>> {
+        let url = format!("{}/git/refs/pull/{number}/head", self.repo_url());
+        Ok(pull_ref_sha(
+            &request("GET", &url, &self.auth, None)?,
+            number,
+        ))
+    }
+
     /// Add `names` to the issue's assignees. The issue edit replaces the set,
     /// so it is read and unioned first to keep this additive.
     fn add_assignees(&self, issue: &str, names: &[String]) -> anyhow::Result<()> {
@@ -144,6 +156,17 @@ impl Gitea {
         // Lookups run in parallel, so another one may have stored the same id first.
         Ok(Some(*self.push_repo_id.get_or_init(|| id)))
     }
+}
+
+/// The commit `refs/pull/<number>/head` names in a `git/refs` answer, which
+/// lists every ref the requested name prefixes.
+fn pull_ref_sha(refs: &Value, number: &str) -> Option<String> {
+    let name = format!("refs/pull/{number}/head");
+    let found = refs
+        .as_array()?
+        .iter()
+        .find(|r| r["ref"].as_str() == Some(name.as_str()))?;
+    found["object"]["sha"].as_str().map(str::to_owned)
 }
 
 /// The `field` of every object in a JSON array — an empty list for `null`,
@@ -253,7 +276,7 @@ impl Forge for Gitea {
             self.pulls_url(),
             encode(branch),
         );
-        request_every_page(&url, &self.auth, |v, headers| {
+        let prs = request_every_page(&url, &self.auth, |v, headers| {
             let prs = v
                 .as_array()
                 .map(|arr| {
@@ -264,8 +287,12 @@ impl Forge for Gitea {
                 })
                 .unwrap_or_default();
             (prs, next_page(&url, headers))
-        })
-        .map(dedup_mrs)
+        })?;
+        let mut prs = dedup_mrs(prs);
+        for pr in prs.iter_mut().filter(|pr| pr.state != MrState::Open) {
+            pr.head_sha = self.pull_head(&pr.id)?;
+        }
+        Ok(prs)
     }
 
     fn list_comments(&self, mr: &str) -> anyhow::Result<Vec<MrComment>> {
@@ -441,6 +468,17 @@ mod tests {
         let mr = parse_pull(&pr("feat", 1, 1)).unwrap();
         assert_eq!(mr.source, "feat");
         assert_eq!(mr.state, MrState::Merged);
+    }
+
+    #[test]
+    fn a_closed_pr_keeps_the_head_of_its_pull_ref() {
+        let refs = json!([
+            { "ref": "refs/pull/920/head", "object": { "type": "commit", "sha": "aaa" } },
+            { "ref": "refs/pull/920/headless", "object": { "type": "commit", "sha": "bbb" } },
+        ]);
+        assert_eq!(pull_ref_sha(&refs, "920").as_deref(), Some("aaa"));
+        assert_eq!(pull_ref_sha(&refs, "92"), None);
+        assert_eq!(pull_ref_sha(&json!({ "message": "x" }), "920"), None);
     }
 
     #[test]

@@ -418,6 +418,11 @@ and that is cleaner than a mode flag:
 one does, do not silently recreate it — recreate only when its head SHA
 differs from our local tip, or when the user passes ``--force``. (The branch
 was likely merged and is being reused; recreating blindly spams the forge.)
+That head is the commit the MR was closed at, never its branch's tip, or a
+reused branch name would match itself. GitLab refreshes only open MRs on a
+push, and Gitea's PR list reports the pull ref only open PRs move, but
+Forgejo's lists the branch's tip, so the Gitea backend reads a closed PR's
+``refs/pull/<n>/head`` instead — one request per closed PR of the branch.
 
 **Cross-fork on GitLab** is handled inside the GitLab module: because a
 create request cannot name a head in another project, it resolves the numeric
