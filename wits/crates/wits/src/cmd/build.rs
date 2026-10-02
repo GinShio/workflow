@@ -37,17 +37,39 @@ use wits_util::project::resolve::{self, Plan, PlanInput, ToolchainInjector};
 use wits_util::project::resolve_target;
 use wits_util::project::workspace::{ProjectData, Workspace};
 
+/// Which build a command means: the resolution profile, the detached-HEAD
+/// selector, and the two output-path overrides. `build` and `devenv` flatten the
+/// same group, so a program run in a build's environment names exactly the tree
+/// `build` produces for the same flags.
+#[derive(Debug, Args)]
+pub struct IdentityArgs {
+    #[command(flatten)]
+    pub profile: ProfileArgs,
+    /// Use the selected detached HEAD as-is, without assigning it a branch
+    /// identity or switching any checkout.
+    #[arg(long, conflicts_with = "branch")]
+    pub detach: bool,
+    /// Override the install prefix, ignoring the resolved focus/anchor
+    /// `install_dir` (the backend's install-prefix, e.g. cmake's
+    /// `CMAKE_INSTALL_PREFIX`; `build` passes it to configure as well as install).
+    #[arg(long = "install-dir", value_name = "DIR")]
+    pub install_dir: Option<PathBuf>,
+    /// Override the resolved build directory, ignoring the focus/anchor
+    /// `build_dir` template — e.g. for a `review checkout` built in an isolated
+    /// dir without touching config. The symmetric partner of `--install-dir`;
+    /// highest priority, verbatim ("The CLI override layer and the review
+    /// interaction").
+    #[arg(long = "build-dir", value_name = "DIR")]
+    pub build_dir: Option<PathBuf>,
+}
+
 #[derive(Debug, Args)]
 pub struct BuildArgs {
     /// Project name or path (default: the project owning the current directory).
     #[arg(value_name = "NAME|PATH")]
     pub target: Option<String>,
     #[command(flatten)]
-    pub profile: ProfileArgs,
-    /// Build the selected detached HEAD as-is, without assigning it a branch
-    /// identity or switching any checkout.
-    #[arg(long, conflicts_with = "branch")]
-    pub detach: bool,
+    pub identity: IdentityArgs,
 
     /// Configure only; do not compile.
     #[arg(long = "config-only", conflicts_with_all = ["build_only", "reconfig", "uninstall"])]
@@ -64,18 +86,6 @@ pub struct BuildArgs {
     /// Install after building.
     #[arg(long)]
     pub install: bool,
-    /// Override the install prefix, ignoring the resolved focus/anchor
-    /// `install_dir` (the backend's install-prefix, e.g. cmake's
-    /// `CMAKE_INSTALL_PREFIX`). Affects configure as well as install.
-    #[arg(long = "install-dir", value_name = "DIR")]
-    pub install_dir: Option<PathBuf>,
-    /// Override the resolved build directory, ignoring the focus/anchor
-    /// `build_dir` template — e.g. to build a `review checkout` in an isolated
-    /// dir without touching config. The symmetric partner of `--install-dir`;
-    /// highest priority, verbatim ("The CLI override layer and the review
-    /// interaction").
-    #[arg(long = "build-dir", value_name = "DIR")]
-    pub build_dir: Option<PathBuf>,
     /// Build a specific target.
     #[arg(short = 't', long = "target")]
     pub build_target: Option<String>,
@@ -94,23 +104,16 @@ pub struct BuildArgs {
     pub extra: Vec<String>,
 }
 
-/// What a build *does*, not where it resolves to (that is `project::Profile`).
+/// What a build *does*, not which build it is (that is [`IdentityArgs`]).
 /// Extra args are verbatim and applied last, at the highest priority (L3 in
 /// "The pipeline").
 /// Lives here, not in `project::model`, because nothing outside this module
-/// reads it — `resolve::plan` receives only its path/extra-argument fields,
-/// passed separately so `project` doesn't need to know this type exists.
+/// reads it — `resolve::plan` receives only its extra-argument fields, passed
+/// separately so `project` doesn't need to know this type exists.
 #[derive(Debug, Clone, Default)]
 pub struct BuildOptions {
     pub mode: BuildMode,
     pub install: bool,
-    /// A command-line override of the resolved install prefix ("The CLI
-    /// override layer and the review interaction"); `None` leaves the resolved
-    /// focus/anchor `install_dir` in force.
-    pub install_dir: Option<PathBuf>,
-    /// A command-line override of the resolved build dir (same section); `None`
-    /// leaves the resolved focus/anchor `build_dir` template in force.
-    pub build_dir: Option<PathBuf>,
     pub target: Option<String>,
     pub extra_config_args: Vec<String>,
     pub extra_build_args: Vec<String>,
@@ -121,13 +124,7 @@ pub struct BuildOptions {
 pub fn run(args: &BuildArgs) -> Result<()> {
     let ws = Workspace::load()?;
     let project = resolve_target(&ws, args.target.as_deref())?;
-    execute(
-        &ws,
-        project,
-        &args.profile.to_profile(),
-        &build_options(args)?,
-        args.detach,
-    )
+    execute(&ws, project, &args.identity, &build_options(args)?)
 }
 
 fn build_options(a: &BuildArgs) -> Result<BuildOptions> {
@@ -163,8 +160,6 @@ fn build_options(a: &BuildArgs) -> Result<BuildOptions> {
     Ok(BuildOptions {
         mode,
         install: a.install,
-        install_dir: a.install_dir.clone(),
-        build_dir: a.build_dir.clone(),
         target: a.build_target.clone(),
         extra_config_args: cfg,
         extra_build_args: build,
@@ -172,30 +167,44 @@ fn build_options(a: &BuildArgs) -> Result<BuildOptions> {
     })
 }
 
-fn execute(
+/// The branch a build of `project` is for: `None` for an explicit `--detach`,
+/// else `--branch`, else whatever the identity repo is currently on.
+///
+/// Detached mode is explicit: failed branch discovery never silently widens into
+/// it. Shared with `devenv`, so a program run in a build's environment and the
+/// build itself cannot disagree about which branch is meant.
+pub fn target_branch(
     ws: &Workspace,
     project: &ProjectData,
     profile: &Profile,
-    opts: &BuildOptions,
     detach: bool,
-) -> Result<()> {
-    let focus = project.focus_name(profile.focus.as_deref()).to_owned();
-    let identity = resolve::identity_repo(project, &focus);
-
-    // Detached mode is explicit: failed branch discovery never silently widens
-    // into it. Clap rejects this combination, and the check keeps direct callers
-    // honest too.
+) -> Result<Option<String>> {
+    // Clap rejects this combination; the check keeps direct callers honest too.
     if detach && profile.branch.is_some() {
         bail!("--branch and --detach cannot be used together");
     }
-    let branch = if detach {
-        None
-    } else {
-        Some(match &profile.branch {
-            Some(b) => b.clone(),
-            None => current_branch(ws, project, identity.as_deref())?,
-        })
-    };
+    if detach {
+        return Ok(None);
+    }
+    match &profile.branch {
+        Some(b) => Ok(Some(b.clone())),
+        None => {
+            let focus = project.focus_name(profile.focus.as_deref());
+            let identity = resolve::identity_repo(project, focus);
+            current_branch(ws, project, identity.as_deref()).map(Some)
+        }
+    }
+}
+
+fn execute(
+    ws: &Workspace,
+    project: &ProjectData,
+    identity: &IdentityArgs,
+    opts: &BuildOptions,
+) -> Result<()> {
+    let profile = identity.profile.to_profile();
+    let detach = identity.detach;
+    let branch = target_branch(ws, project, &profile, detach)?;
 
     // Resolve the backend once, from the project's declared build_system — it is
     // both the L0 toolchain injector for planning and the step emitter below.
@@ -207,7 +216,8 @@ fn execute(
     let plan = make_plan(
         ws,
         project,
-        profile,
+        &profile,
+        identity,
         opts,
         branch.as_deref(),
         backend.as_deref(),
@@ -361,6 +371,7 @@ fn make_plan(
     ws: &Workspace,
     project: &ProjectData,
     profile: &Profile,
+    identity: &IdentityArgs,
     opts: &BuildOptions,
     branch: Option<&str>,
     be: Option<&dyn Backend>,
@@ -382,11 +393,29 @@ fn make_plan(
     let trust_eligible =
         matches!(opts.mode, BuildMode::Auto | BuildMode::BuildOnly) && !explicit_toolchain;
 
+    let plan_with = |inject_toolchain: bool| {
+        resolve::plan(
+            ws,
+            project,
+            &PlanInput {
+                profile,
+                branch,
+                inject_toolchain,
+                injector: be.map(|b| b as &dyn ToolchainInjector),
+                extra_config_args: &opts.extra_config_args,
+                extra_build_args: &opts.extra_build_args,
+                extra_install_args: &opts.extra_install_args,
+                build_dir_override: identity.build_dir.as_deref(),
+                install_dir_override: identity.install_dir.as_deref(),
+            },
+        )
+    };
+
     if !trust_eligible {
-        return plan_with(ws, project, profile, opts, branch, true, be);
+        return plan_with(true);
     }
 
-    let plan = plan_with(ws, project, profile, opts, branch, false, be)?;
+    let plan = plan_with(false)?;
     let configured = plan
         .build_dir
         .as_ref()
@@ -395,34 +424,8 @@ fn make_plan(
     if configured {
         Ok(plan)
     } else {
-        plan_with(ws, project, profile, opts, branch, true, be)
+        plan_with(true)
     }
-}
-
-fn plan_with(
-    ws: &Workspace,
-    project: &ProjectData,
-    profile: &Profile,
-    opts: &BuildOptions,
-    branch: Option<&str>,
-    inject_toolchain: bool,
-    be: Option<&dyn Backend>,
-) -> Result<Plan> {
-    resolve::plan(
-        ws,
-        project,
-        &PlanInput {
-            profile,
-            branch,
-            inject_toolchain,
-            injector: be.map(|b| b as &dyn ToolchainInjector),
-            extra_config_args: &opts.extra_config_args,
-            extra_build_args: &opts.extra_build_args,
-            extra_install_args: &opts.extra_install_args,
-            build_dir_override: opts.build_dir.as_deref(),
-            install_dir_override: opts.install_dir.as_deref(),
-        },
-    )
 }
 
 /// Put the identity repo's checkout on the branch being built, returning a guard
@@ -486,7 +489,7 @@ fn current_branch(ws: &Workspace, project: &ProjectData, identity: Option<&str>)
     let name = identity.context("project has no own-git repo to take a branch from")?;
     resolve::current_branch(ws, project, name)?.with_context(|| {
         format!(
-            "repo '{name}' has no branch checked out; pass --detach to build HEAD as-is, \
+            "repo '{name}' has no branch checked out; pass --detach to use HEAD as-is, \
              or --branch to select a branch"
         )
     })
