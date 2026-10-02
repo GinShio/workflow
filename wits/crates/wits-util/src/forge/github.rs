@@ -87,25 +87,33 @@ impl GitHub {
     /// plugin keys on the same type). It was refused before running, so it is
     /// waited out and sent again like a 429.
     fn graphql(&self, query: &str, variables: Value) -> anyhow::Result<Value> {
+        let (data, errors) = self.graphql_answer(query, variables)?;
+        if errors.is_empty() {
+            return Ok(data);
+        }
+        let msg = errors
+            .iter()
+            .filter_map(|e| e["message"].as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        anyhow::bail!("GraphQL error: {msg}")
+    }
+
+    /// [`graphql`](Self::graphql)'s request: the `data` and the `errors[]`
+    /// beside it, for a caller to whom an error can be an answer.
+    fn graphql_answer(&self, query: &str, variables: Value) -> anyhow::Result<(Value, Vec<Value>)> {
         let body = json!({ "query": query, "variables": variables });
         let mut retries = 0;
         loop {
             let (v, headers) =
                 request_with_headers("POST", &self.graphql_url, &self.auth, Some(&body))?;
-            let Some(errs) = v["errors"].as_array().filter(|errs| !errs.is_empty()) else {
-                return Ok(v["data"].clone());
-            };
-            if retries < 3 && errs.iter().any(|e| e["type"] == "RATE_LIMITED") {
+            let errors = v["errors"].as_array().cloned().unwrap_or_default();
+            if retries < 3 && errors.iter().any(|e| e["type"] == "RATE_LIMITED") {
                 retries += 1;
                 wait_out_rate_limit(&self.graphql_url, &headers)?;
                 continue;
             }
-            let msg = errs
-                .iter()
-                .filter_map(|e| e["message"].as_str())
-                .collect::<Vec<_>>()
-                .join("; ");
-            anyhow::bail!("GraphQL error: {msg}");
+            return Ok((v["data"].clone(), errors));
         }
     }
 
@@ -210,9 +218,39 @@ impl GitHub {
             .ok_or_else(|| anyhow::anyhow!("could not resolve PR node id for {id}"))
     }
 
+    /// Whether recorded review `id` is still a pending review to clean up. One
+    /// deleted since, or published (from the browser, say), is nothing to clean
+    /// any more, and deleting it fails every time; a lookup that fails keeps
+    /// it, to be tried again.
+    fn still_pending(&self, id: &str) -> bool {
+        match self.graphql_answer(gql::REVIEW_STATE, json!({ "id": id })) {
+            Ok((data, errors)) if errors.is_empty() => {
+                data["node"]["state"].as_str() == Some("PENDING")
+            }
+            Ok((_, errors)) => !errors.iter().all(|e| e["type"] == "NOT_FOUND"),
+            Err(_) => true,
+        }
+    }
+
+    /// Why creating a review may have failed, for its warning: the viewer
+    /// already has a pending review on the PR, which `recorded` (what this
+    /// attempt still has in flight) does not hold. It is never taken for a
+    /// leftover of ours — one started in the browser looks the same, and
+    /// deleting it would destroy the drafts it holds — so the user is told to
+    /// submit or discard it.
+    fn pending_hint(&self, number: u64, recorded: &[String]) -> &'static str {
+        match self.viewer_pending_review(number) {
+            Ok(Some(rid)) if !recorded.contains(&rid) => {
+                "; you have a pending review on this PR (started on GitHub, or left by a run \
+                 that stopped before recording it) — submit or discard it there, then submit \
+                 again"
+            }
+            _ => "",
+        }
+    }
+
     /// The viewer's pending (unpublished) review on this PR, if any — GitHub
-    /// allows at most one, so this uniquely identifies an orphan left by a failed
-    /// submit, for deferred cleanup.
+    /// allows at most one per user and PR.
     fn viewer_pending_review(&self, number: u64) -> anyhow::Result<Option<String>> {
         let data = self.graphql(
             gql::VIEWER_PENDING,
@@ -405,7 +443,7 @@ fn parse_pr_node(v: &Value) -> Option<MrSummary> {
 /// Parse a GraphQL review/issue comment node.
 fn parse_gql_comment(c: &Value) -> RemoteComment {
     RemoteComment {
-        id: c["databaseId"].as_u64().unwrap_or(0).to_string(),
+        id: c["id"].as_str().unwrap_or_default().to_owned(),
         author: c["author"]["login"].as_str().unwrap_or_default().to_owned(),
         body: c["body"].as_str().unwrap_or_default().to_owned(),
         created_at: c["createdAt"].as_str().unwrap_or_default().to_owned(),
@@ -490,14 +528,44 @@ mod gql {
     pub const ID_QUERY: &str = "query($owner:String!,$repo:String!,$number:Int!){\
         repository(owner:$owner,name:$repo){pullRequest(number:$number){id}}}";
 
-    pub const THREADS_QUERY: &str = "query($owner:String!,$repo:String!,$number:Int!,$after:String){\
+    /// A review thread's comment. Every id the review half reads is a node id:
+    /// the numeric `databaseId` is a 32-bit `Int`, which today's comment ids
+    /// overflow, and on reviews and review comments it is deprecated for that
+    /// reason (GraphQL breaking changes: removal from 2024-07-01).
+    const THREAD_COMMENT: &str = "id author{login} body createdAt originalCommit{oid}";
+
+    /// One page of a PR's review threads, each with its first page of comments.
+    pub fn threads_query() -> String {
+        format!(
+            "query($owner:String!,$repo:String!,$number:Int!,$after:String){{\
+               repository(owner:$owner,name:$repo){{pullRequest(number:$number){{\
+                 reviewThreads(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}\
+                   nodes{{id isResolved isOutdated path line originalLine startLine \
+                     originalStartLine diffSide startDiffSide subjectType \
+                     comments(first:100){{pageInfo{{hasNextPage endCursor}} \
+                       nodes{{ {THREAD_COMMENT} }}}}}}}}}}}}}}"
+        )
+    }
+
+    /// A thread's comments past the page its thread came with.
+    pub fn thread_comments_query() -> String {
+        format!(
+            "query($id:ID!,$after:String){{node(id:$id){{... on PullRequestReviewThread{{\
+               comments(first:100,after:$after){{pageInfo{{hasNextPage endCursor}} \
+                 nodes{{ {THREAD_COMMENT} }}}}}}}}}}"
+        )
+    }
+
+    /// A PR's reviews, each body timed by when it was submitted rather than
+    /// when the review was started.
+    pub const REVIEWS_QUERY: &str =
+        "query($owner:String!,$repo:String!,$number:Int!,$after:String){\
         repository(owner:$owner,name:$repo){pullRequest(number:$number){\
-          reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor}\
-            nodes{id isResolved isOutdated path line originalLine startLine originalStartLine \
-              diffSide startDiffSide subjectType \
-              comments(first:100){nodes{databaseId author{login} body createdAt originalCommit{oid}}}}}\
-          reviews(first:100){nodes{databaseId author{login} body state createdAt}}\
-          comments(first:100){nodes{databaseId author{login} body createdAt}}}}}";
+          reviews(first:100,after:$after){pageInfo{hasNextPage endCursor}\
+            nodes{id author{login} body state createdAt:submittedAt}}}}}";
+
+    /// A review's state, or a `NOT_FOUND` error once it is deleted.
+    pub const REVIEW_STATE: &str = "query($id:ID!){node(id:$id){... on PullRequestReview{state}}}";
 
     pub const ADD_REVIEW: &str = "mutation($input:AddPullRequestReviewInput!){\
         addPullRequestReview(input:$input){pullRequestReview{id}}}";
@@ -541,11 +609,12 @@ mod gql {
         addLabelsToLabelable(input:$input){clientMutationId}}";
     pub const ADD_ASSIGNEES: &str = "mutation($input:AddAssigneesToAssignableInput!){\
         addAssigneesToAssignable(input:$input){clientMutationId}}";
+    /// A PR's conversation comments, for `anno` and the review read model alike.
     pub const COMMENTS_QUERY: &str =
         "query($owner:String!,$repo:String!,$number:Int!,$after:String){\
         repository(owner:$owner,name:$repo){pullRequest(number:$number){\
           comments(first:100,after:$after){pageInfo{hasNextPage endCursor}\
-            nodes{id url body createdAt viewerDidAuthor}}}}}";
+            nodes{id url body createdAt viewerDidAuthor author{login}}}}}}";
     pub const UPDATE_COMMENT: &str = "mutation($input:UpdateIssueCommentInput!){\
         updateIssueComment(input:$input){issueComment{id}}}";
     pub const REQUEST_REVIEWS: &str = "mutation($input:RequestReviewsInput!){\
@@ -776,65 +845,61 @@ impl Forge for GitHub {
     fn list_threads(&self, id: &str) -> anyhow::Result<Vec<RemoteThread>> {
         // GraphQL groups review threads natively and exposes `isResolved` /
         // `isOutdated` — no `in_reply_to_id` walk, no `line == null` heuristic.
-        // Conversation (issue) comments come back on the same query as MR-level
-        // threads (anchor `None`).
+        // Review bodies and conversation (issue) comments become MR-level
+        // threads (anchor `None`). Every list is read to its end: a busy PR
+        // passes a hundred conversation comments, the most one page holds.
         let number = self.number(id)?;
+        let pr = json!({ "owner": self.owner, "repo": self.repo, "number": number });
         let mut threads: Vec<RemoteThread> = Vec::new();
-        let mut after: Option<String> = None;
-        let mut first_page = true;
-        for _ in 0..10 {
-            let data = self.graphql(
-                gql::THREADS_QUERY,
-                json!({ "owner": self.owner, "repo": self.repo, "number": number, "after": after }),
-            )?;
-            let pr = &data["repository"]["pullRequest"];
-            let rt = &pr["reviewThreads"];
-            if let Some(nodes) = rt["nodes"].as_array() {
-                threads.extend(nodes.iter().map(parse_review_thread));
-            }
-            // Conversation comments and review summary bodies aren't paginated by
-            // the thread cursor; take them once, on the first page.
-            if first_page {
-                // A review's top-level body (the "Requested changes: …" text that
-                // rides a verdict) is neither a review thread nor an issue
-                // comment, so it must be read from `reviews` or it's invisible.
-                // Skip PENDING (your own unsubmitted) and body-less reviews (a
-                // bare verdict, or one whose remarks are all inline threads).
-                if let Some(nodes) = pr["reviews"]["nodes"].as_array() {
-                    for r in nodes {
-                        let body = r["body"].as_str().unwrap_or_default();
-                        if body.is_empty() || r["state"].as_str() == Some("PENDING") {
-                            continue;
-                        }
-                        threads.push(RemoteThread {
-                            id: r["databaseId"].as_u64().unwrap_or(0).to_string(),
-                            resolved: false,
-                            outdated: false,
-                            anchor: None,
-                            commit: None,
-                            comments: vec![parse_gql_comment(r)],
-                        });
-                    }
+        let review_threads = self.every_node(
+            &gql::threads_query(),
+            pr.clone(),
+            &["repository", "pullRequest", "reviewThreads"],
+        )?;
+        for mut thread in review_threads {
+            // A thread arrives with its first page of comments; a longer one
+            // is read on from where that page stopped.
+            let page = &thread["comments"]["pageInfo"];
+            if page["hasNextPage"].as_bool().unwrap_or(false) {
+                let rest = self.every_node(
+                    &gql::thread_comments_query(),
+                    json!({ "id": thread["id"], "after": page["endCursor"] }),
+                    &["node", "comments"],
+                )?;
+                if let Some(nodes) = thread["comments"]["nodes"].as_array_mut() {
+                    nodes.extend(rest);
                 }
-                if let Some(nodes) = pr["comments"]["nodes"].as_array() {
-                    for c in nodes {
-                        threads.push(RemoteThread {
-                            id: c["databaseId"].as_u64().unwrap_or(0).to_string(),
-                            resolved: false,
-                            outdated: false,
-                            anchor: None,
-                            commit: None,
-                            comments: vec![parse_gql_comment(c)],
-                        });
-                    }
-                }
-                first_page = false;
             }
-            let has_next = rt["pageInfo"]["hasNextPage"].as_bool().unwrap_or(false);
-            after = rt["pageInfo"]["endCursor"].as_str().map(str::to_owned);
-            if !has_next || after.is_none() {
-                break;
-            }
+            threads.push(parse_review_thread(&thread));
+        }
+        // A review's top-level body (the "Requested changes: …" text that rides
+        // a verdict) is neither a review thread nor an issue comment, so it must
+        // be read from `reviews` or it's invisible. Skip PENDING (your own
+        // unsubmitted) and body-less reviews (a bare verdict, or one whose
+        // remarks are all inline threads).
+        let reviews = self.every_node(
+            gql::REVIEWS_QUERY,
+            pr.clone(),
+            &["repository", "pullRequest", "reviews"],
+        )?;
+        let conversation = self.every_node(
+            gql::COMMENTS_QUERY,
+            pr,
+            &["repository", "pullRequest", "comments"],
+        )?;
+        let bodies = reviews.iter().filter(|r| {
+            !r["body"].as_str().unwrap_or_default().is_empty()
+                && r["state"].as_str() != Some("PENDING")
+        });
+        for c in bodies.chain(&conversation) {
+            threads.push(RemoteThread {
+                id: c["id"].as_str().unwrap_or_default().to_owned(),
+                resolved: false,
+                outdated: false,
+                anchor: None,
+                commit: None,
+                comments: vec![parse_gql_comment(c)],
+            });
         }
         Ok(threads)
     }
@@ -844,21 +909,17 @@ impl Forge for GitHub {
 
         // Pre-flight (deferred cleanup): discard the pending review a *prior*
         // failed attempt left orphaned, before creating a new one — GitHub allows
-        // only one pending review per PR, so a leftover would otherwise block
-        // every future submit. Best-effort: if the delete fails, a truly-still-
-        // pending review makes the create below fail, and we re-discover and
-        // re-record it (self-healing); a review that has since published simply
-        // can't be re-deleted, which is fine. We only delete ids we recorded.
-        // A stale delete that *fails* is kept as still-in-flight so the next
-        // attempt retries it — otherwise a cleanup-only submit (empty batch)
-        // would clear the record and orphan the review forever. On the non-empty
-        // path a truly-still-pending review also makes the create below fail and
-        // is re-discovered, so the id is deduped at the end.
+        // only one pending review per user and PR, so a leftover would otherwise
+        // block every future submit. We only delete ids we recorded. A delete
+        // that fails keeps its id in flight for the next attempt while the
+        // review is still pending; one deleted or published since is dropped,
+        // since no delete of it can ever succeed.
         let mut inflight: Vec<String> = Vec::new();
         for rid in &batch.stale {
             if self
                 .graphql(gql::DELETE_REVIEW, json!({ "id": rid }))
                 .is_err()
+                && self.still_pending(rid)
             {
                 inflight.push(rid.clone());
             }
@@ -981,7 +1042,8 @@ impl Forge for GitHub {
                         notifications += 1;
                     }
                     Err(e) => {
-                        log::warn!("MR {id}: review failed: {e}");
+                        let hint = self.pending_hint(number, &inflight);
+                        log::warn!("MR {id}: review failed: {e}{hint}");
                         for k in line_keys() {
                             landed.insert(k, false);
                         }
@@ -1042,15 +1104,10 @@ impl Forge for GitHub {
                         }
                     }
                     Err(e) => {
-                        log::warn!("MR {id}: creating the review failed: {e}");
+                        let hint = self.pending_hint(number, &inflight);
+                        log::warn!("MR {id}: creating the review failed: {e}{hint}");
                         for k in review_keys() {
                             landed.insert(k, false);
-                        }
-                        // Create can fail because a prior orphaned pending review
-                        // still blocks the slot (pre-flight couldn't clear it).
-                        // Re-discover it so the next attempt can delete it.
-                        if let Ok(Some(rid)) = self.viewer_pending_review(number) {
-                            inflight.push(rid);
                         }
                     }
                 }
@@ -1087,11 +1144,6 @@ impl Forge for GitHub {
             }
             landed.insert(k.clone(), ok);
         }
-
-        // A failed stale delete and a re-discovered orphan can be the same id;
-        // keep the record unique so cleanup doesn't try the same delete twice.
-        inflight.sort();
-        inflight.dedup();
 
         Ok(BatchOutcome {
             landed,
@@ -1227,8 +1279,8 @@ mod tests {
             "line": 42, "startLine": 40, "diffSide": "RIGHT", "startDiffSide": "RIGHT",
             "subjectType": "LINE",
             "comments": { "nodes": [ {
-                "databaseId": 5, "author": { "login": "bob" }, "body": "nit",
-                "createdAt": "t", "originalCommit": { "oid": "abc" }
+                "id": "PRRC_kwDOAbc5", "databaseId": null, "author": { "login": "bob" },
+                "body": "nit", "createdAt": "t", "originalCommit": { "oid": "abc" }
             } ] }
         });
         let t = parse_review_thread(&v);
@@ -1245,7 +1297,8 @@ mod tests {
             }
             other => panic!("expected a line anchor, got {other:?}"),
         }
-        assert_eq!(t.comments[0].id, "5");
+        // The node id, which holds where a 32-bit `databaseId` cannot.
+        assert_eq!(t.comments[0].id, "PRRC_kwDOAbc5");
         assert_eq!(t.comments[0].author, "bob");
     }
 

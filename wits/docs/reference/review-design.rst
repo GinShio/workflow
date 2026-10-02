@@ -869,17 +869,21 @@ granularity right:
   delete). The summary rides as a position-less draft note; the verdict is a
   separate call on the released API; resolves are separate PUTs, reconciled
   by their own key.
-* **GitHub: the single-pending-review invariant makes cleanup
-  self-healing.** A PR allows one pending review per user, so a leftover
-  orphan is unambiguous. Pre-flight best-effort ``deletePullRequestReview``
-  removes the recorded ``stale`` id; if that delete
-  transiently fails, the create below fails ("already pending"), and we
-  *re-discover* the orphan's id (``reviews(states: PENDING)``,
-  ``viewerDidAuthor``) and record it again — so the next attempt retries the
-  delete. On submit failure the orphaned pending review's id is recorded as
-  ``inflight``. The atomic path (no file comments or replies) creates no
-  pending review, so it cannot orphan. MR-level conversation comments and
-  resolves remain independent calls, reconciled by key.
+* **GitHub: only a pending review wits recorded is ever deleted.** A PR allows
+  one pending review per user. Pre-flight best-effort
+  ``deletePullRequestReview`` removes the recorded ``stale`` id; a delete that
+  fails keeps the id in flight while the review is still pending (``node(id:)``
+  answers its state) and drops it once the review is gone or published, since
+  no delete of it could ever succeed. A create that fails because the viewer
+  already holds a pending review the record does not name is **not** taken
+  for an orphan of ours: one started in the browser looks exactly the same,
+  and deleting it would destroy its drafts, so the warning says to submit or
+  discard it there. (An earlier version adopted it as a leftover — the
+  one-per-user rule made it look unambiguous — and so could delete a
+  hand-made review.) On submit failure the orphaned pending review's id is
+  recorded as ``inflight``. The atomic path (no file comments or replies)
+  creates no pending review, so it cannot orphan. MR-level conversation
+  comments and resolves remain independent calls, reconciled by key.
 * **The local write happens per-MR inside the fan-out.** Each MR writes to a
   distinct store path (``<id>/local.json``, ``<id>/inflight.json``), so the
   per-MR tasks are independent and there is never a race or a half-cleared
@@ -1210,11 +1214,14 @@ GitHub GraphQL (the whole forge)
      - ``subjectId`` (PR node id), ``body`` — an issue comment, **not** part
        of the review (its own notification)
    * - Read threads
-     - ``pullRequest.reviewThreads.nodes``
+     - ``pullRequest.reviewThreads.nodes``, then ``node(id:)`` for a
+       thread's comments past its first page; ``reviews`` and ``comments``
+       (MR-level) as their own lists — every page of each
      - ``id``, ``isResolved``, ``isOutdated``, ``path``,
        ``line``/``originalLine``, ``startLine``/``originalStartLine``,
        ``diffSide``/``startDiffSide``, ``subjectType``, ``comments{ nodes{
-       databaseId, author, body, createdAt, originalCommit{oid} } }``
+       id, author, body, createdAt, originalCommit{oid} } }`` — node ids
+       throughout, since a 32-bit ``databaseId`` cannot hold today's ids
    * - Feed / details
      - ``search(type: ISSUE, "repo:o/r is:pr …")`` → ``... on PullRequest``
      - ``number``, ``title``, ``author{login}``, ``baseRefName``,
