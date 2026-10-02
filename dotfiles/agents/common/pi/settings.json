@@ -3,6 +3,7 @@
 {
   "packages": [
     "npm:@juicesharp/rpiv-ask-user-question",
+    "npm:@juicesharp/rpiv-todo",
     "npm:@juicesharp/rpiv-web-tools",
     "npm:pi-workspace-history",
     "npm:@tintinweb/pi-subagents"

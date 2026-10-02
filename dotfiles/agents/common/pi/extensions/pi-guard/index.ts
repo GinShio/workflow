@@ -21,9 +21,6 @@
  * Every unattended resolution is audited as a pi-guard-unattended-audit entry; the
  * mode itself persists as pi-guard-unattended-mode entries, the last one winning
  * across /tree, /fork, and resume. deny verdicts are untouched by any of this.
- *
- * Companion to pi-discipline (stateful session mechanics); kept separate because
- * policy enforcement and session state change on different cadences.
  */
 
 import {
