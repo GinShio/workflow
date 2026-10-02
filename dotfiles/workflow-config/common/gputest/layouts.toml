@@ -3,9 +3,9 @@
 lib_dirs = ["lib", "lib64"]
 icd_pattern = "share/vulkan/icd.d/*_icd.x86_64.json"
 dri_pattern = "lib64/dri/*_dri.so"
-env = { LD_LIBRARY_PATH = "{{root}}/lib64:{{root}}/lib", LIBGL_DRIVERS_PATH = "{{root}}/lib64/dri" }
+env = { LD_LIBRARY_PATH = "{{root}}/lib64:{{root}}/lib" }
 
-[layouts.xgl]
+[layouts.amdvlk]
 # AMDVLK specific layout
 lib_dirs = ["lib", "lib64"]
 icd_pattern = "vulkan/icd.d/amd_icd64.json"
