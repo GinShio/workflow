@@ -1,9 +1,9 @@
 //! GitHub (and GitHub Enterprise) merge requests — "pull requests" in its words.
 //!
-//! This module is pure mapping: GitHub's REST shapes in, normalized
-//! [`MergeRequest`]s out. The only judgement calls are the API base (the public
-//! host has a dedicated `api.github.com`, Enterprise serves under `/api/v3`) and
-//! the cross-fork head form (`owner:branch`).
+//! This module is pure mapping: GitHub's GraphQL shapes in, normalized
+//! [`MergeRequest`]s out. The only judgement calls are the endpoint (the public
+//! host has a dedicated `api.github.com`, an Enterprise server answers under
+//! `/api/graphql`) and naming a fork's head by its repository's id.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -31,8 +31,6 @@ pub struct GitHub {
     owner: String,
     /// The repo name alone (the GraphQL `name:` argument).
     repo: String,
-    /// Set only when the head lives in a different fork.
-    head_owner: Option<String>,
     /// The repository a stack's branches are pushed to when it is not the
     /// target; `None` when they live in the target itself.
     push_repo: Option<RemoteInfo>,
@@ -44,7 +42,6 @@ pub struct GitHub {
 impl GitHub {
     pub fn new(
         target: RemoteInfo,
-        head_owner: Option<String>,
         push_repo: Option<RemoteInfo>,
         token: String,
         api_url_override: Option<String>,
@@ -74,7 +71,6 @@ impl GitHub {
             owner: target.owner.clone(),
             repo: target.repo.clone(),
             project: target.project_path(),
-            head_owner,
             push_repo,
             push_repo_id: OnceLock::new(),
             auth: Auth::Bearer(token),
@@ -117,15 +113,6 @@ impl GitHub {
     fn number(&self, id: &str) -> anyhow::Result<u64> {
         id.parse::<u64>()
             .map_err(|_| anyhow::anyhow!("MR id '{id}' is not a number"))
-    }
-
-    /// The head reference for *creating*: `owner:branch` across a fork, plain
-    /// `branch` within the same repo.
-    fn head_ref(&self, branch: &str) -> String {
-        match &self.head_owner {
-            Some(owner) => format!("{owner}:{branch}"),
-            None => branch.to_owned(),
-        }
     }
 
     /// The target repository's node id (needed by `createPullRequest`).
@@ -341,6 +328,27 @@ fn parse_issue_comment(node: &Value) -> Option<MrComment> {
         url: node["url"].as_str().unwrap_or_default().to_owned(),
         own: node["viewerDidAuthor"].as_bool().unwrap_or(false),
     })
+}
+
+/// The `createPullRequest` input for `req` in repository `repo`, its head in
+/// repository `head_repo` when that is not `repo` itself. The head repository
+/// is named by id, not by an `owner:branch` head: an owner cannot tell an
+/// organisation's own fork from its source (GitHub's REST `head_repo` is
+/// "required for cross-repository pull requests if both repositories are owned
+/// by the same organization"; `headRepositoryId` is its GraphQL form).
+fn create_input(req: &NewMr, repo: &str, head_repo: Option<&str>) -> Value {
+    let mut input = json!({
+        "repositoryId": repo,
+        "baseRefName": req.base,
+        "headRefName": req.branch,
+        "title": req.title,
+        "body": req.body,
+        "draft": req.draft,
+    });
+    if let Some(id) = head_repo {
+        input["headRepositoryId"] = json!(id);
+    }
+    input
 }
 
 /// Whether a `PullRequest` node's head lives in the expected repository: the
@@ -613,14 +621,8 @@ impl Forge for GitHub {
     }
 
     fn create(&self, req: &NewMr) -> anyhow::Result<MergeRequest> {
-        let input = json!({
-            "repositoryId": self.repo_node_id()?,
-            "baseRefName": req.base,
-            "headRefName": self.head_ref(&req.branch),
-            "title": req.title,
-            "body": req.body,
-            "draft": req.draft,
-        });
+        let head_repo = self.head_repo_id(HeadRepo::Origin)?;
+        let input = create_input(req, &self.repo_node_id()?, head_repo.as_deref());
         let data = self.graphql(gql::CREATE_PR, json!({ "input": input }))?;
         let pr = &data["createPullRequest"]["pullRequest"];
         parse_pr_mr(pr).ok_or_else(|| anyhow::anyhow!("unexpected create response: {pr}"))
@@ -1131,10 +1133,29 @@ mod tests {
                 service: Service::GitHub,
             },
             None,
-            None,
             "t".into(),
             None,
         )
+    }
+
+    #[test]
+    fn a_fork_head_is_named_by_its_repository() {
+        let req = NewMr {
+            branch: "feat".into(),
+            base: "main".into(),
+            title: "t".into(),
+            body: "b".into(),
+            draft: true,
+        };
+        let same = create_input(&req, "R_target", None);
+        assert_eq!(same["headRefName"], "feat");
+        assert!(same.get("headRepositoryId").is_none());
+        // A fork — even one the target's own organisation holds — by its id,
+        // with the branch bare.
+        let fork = create_input(&req, "R_target", Some("R_fork"));
+        assert_eq!(fork["headRefName"], "feat");
+        assert_eq!(fork["headRepositoryId"], "R_fork");
+        assert_eq!(fork["repositoryId"], "R_target");
     }
 
     #[test]

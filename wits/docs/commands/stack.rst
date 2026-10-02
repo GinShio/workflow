@@ -461,8 +461,10 @@ The short version: the **base branch** comes from the merge target's remote
 HEAD (the ``upstream`` role's holder, else ``origin``'s), then
 ``main``/``master``/``trunk``; each
 **MR's base** is its parent in the machete file (or the base branch at a
-root); **cross-fork** MRs work on all platforms (GitHub / Gitea via an
-``origin-owner:branch`` head, GitLab via its cross-project API). The full
+root); **cross-fork** MRs work on all platforms (GitHub by the fork's
+repository id, Gitea via an ``owner:branch`` head, GitLab via its
+cross-project API), including a fork the target's own organisation holds —
+on Gitea that needs 1.26 or later, and Forgejo cannot open one. The full
 rules, including fork scope and dynamic edits, are in
 :doc:`/reference/stack-behavior`.
 

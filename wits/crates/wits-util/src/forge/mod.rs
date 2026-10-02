@@ -315,20 +315,9 @@ pub fn detect(repo: &Repository, remotes: &Remotes) -> anyhow::Result<Box<dyn Fo
         )
     })?;
 
-    // Cross-fork MRs express the head as `origin_owner:branch`; same-repo MRs
-    // just use the branch name. We compute the owner once here.
-    let head_owner = if remotes.is_cross_fork() {
-        remotes.head_owner().map(str::to_owned)
-    } else {
-        None
-    };
-    // The repository a stack's branches live in when it is not the merge target
-    // itself — what an MR lookup pins a branch's head to. Compared by full
-    // identity rather than by owner: an organisation can fork its own repository.
-    let push_repo = remotes
-        .origin
-        .clone()
-        .filter(|origin| !origin.same_repository(&target));
+    // Every fork decision — the head a create names, the repository a lookup
+    // pins a branch to — derives from this one identity.
+    let push_repo = remotes.push_repo().cloned();
 
     let api_url_override = repo
         .get_config(&format!("wits.forge.{}.api-url", target.host))
@@ -338,7 +327,6 @@ pub fn detect(repo: &Repository, remotes: &Remotes) -> anyhow::Result<Box<dyn Fo
     match service {
         Service::GitHub => Ok(Box::new(github::GitHub::new(
             target,
-            head_owner,
             push_repo,
             token,
             api_url_override,
@@ -347,17 +335,16 @@ pub fn detect(repo: &Repository, remotes: &Remotes) -> anyhow::Result<Box<dyn Fo
         // detection) set Gitea, Forgejo and Codeberg apart.
         Service::Gitea | Service::Forgejo | Service::Codeberg => Ok(Box::new(gitea::Gitea::new(
             target,
-            head_owner,
             push_repo,
             token,
             api_url_override,
         ))),
         Service::GitLab => Ok(Box::new(gitlab::GitLab::new(
             target,
-            remotes.origin.clone(),
+            push_repo,
             token,
             api_url_override,
-        )?)),
+        ))),
         // The unsupported services were already rejected above.
         Service::Bitbucket | Service::Unknown => unreachable!(),
     }

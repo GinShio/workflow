@@ -5,14 +5,14 @@
 //! addressed by a URL-encoded `group/sub/repo` id, and a draft is a `Draft:`
 //! title prefix rather than a field.
 //!
-//! Cross-project (fork) MRs are the awkward part. Unlike GitHub/Gitea, GitLab has
-//! no `owner:branch` head string: an MR from a fork is **created on the source
+//! Cross-project (fork) MRs are the awkward part. Unlike GitHub and Gitea, a
+//! create request cannot name a head in another project: an MR from a fork is **created on the source
 //! project** carrying a numeric `target_project_id`, but the MR itself then lives
 //! in the **target** project (its iid belongs there), so reads and edits address
 //! the target. Numeric project ids are required for the `target_project_id` body
-//! field and the `source_project_id` list filter, so we resolve them once up
-//! front. When source and target are the same project, none of this applies and
-//! we stay on the cheap single-project path.
+//! field and the `source_project_id` list filter, so they are resolved once, by
+//! the first request that needs them. When source and target are the same
+//! project, none of this applies and we stay on the cheap single-project path.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -42,56 +42,63 @@ pub struct GitLab {
     /// edits always go here; for a same-project MR this is also where it's made.
     target_path: String,
     auth: Auth,
-    /// Present only for a fork MR (source project differs from target).
+    /// Present only when a stack's branches are pushed to another project — a
+    /// fork — than the one MRs merge into.
     fork: Option<Fork>,
     /// The authenticated user's id, read by the first comment listing.
     me: OnceLock<u64>,
 }
 
-/// The extra coordinates a cross-project MR needs, resolved once at construction.
+/// The source project of a cross-project MR. Its numeric ids are looked up by
+/// the first request that needs them, so a run that never opens or finds a
+/// stack's MR — any `wits review` — pays nothing for them.
 struct Fork {
     source_path: String,
-    source_id: u64,
-    target_id: u64,
+    /// `(source, target)` project ids.
+    ids: OnceLock<(u64, u64)>,
 }
 
 impl GitLab {
     pub fn new(
         target: RemoteInfo,
-        source: Option<RemoteInfo>,
+        push_repo: Option<RemoteInfo>,
         token: String,
         api_url_override: Option<String>,
-    ) -> anyhow::Result<Self> {
+    ) -> Self {
         let api_base =
             api_url_override.unwrap_or_else(|| format!("https://{}/api/v4", target.host));
-        let auth = Auth::PrivateToken(token);
-        let target_path = encode(&target.project_path());
-
-        // A fork MR only makes sense when the source is a *different* project on
-        // the *same* GitLab instance; cross-instance forks don't exist.
-        let fork = match source {
-            Some(src) if src.host == target.host && src.project_path() != target.project_path() => {
-                let source_path = encode(&src.project_path());
-                let source_id = project_id(&api_base, &auth, &source_path)?;
-                let target_id = project_id(&api_base, &auth, &target_path)?;
-                Some(Fork {
-                    source_path,
-                    source_id,
-                    target_id,
-                })
-            }
-            _ => None,
-        };
-
-        let web_base = format!("https://{}/{}", target.host, target.project_path());
-        Ok(Self {
+        let fork = push_repo.map(|push| Fork {
+            source_path: encode(&push.project_path()),
+            ids: OnceLock::new(),
+        });
+        Self {
             api_base,
-            web_base,
-            target_path,
-            auth,
+            web_base: format!("https://{}/{}", target.host, target.project_path()),
+            target_path: encode(&target.project_path()),
+            auth: Auth::PrivateToken(token),
             fork,
             me: OnceLock::new(),
-        })
+        }
+    }
+
+    /// A fork MR's source path with its `(source, target)` project ids, resolved
+    /// once; `None` for a same-project MR.
+    fn fork_ids(&self) -> anyhow::Result<Option<(&str, u64, u64)>> {
+        let Some(fork) = &self.fork else {
+            return Ok(None);
+        };
+        let &(source, target) = match fork.ids.get() {
+            Some(ids) => ids,
+            None => {
+                let ids = (
+                    project_id(&self.api_base, &self.auth, &fork.source_path)?,
+                    project_id(&self.api_base, &self.auth, &self.target_path)?,
+                );
+                // Lookups run in parallel, so another one may have stored the same ids first.
+                fork.ids.get_or_init(|| ids)
+            }
+        };
+        Ok(Some((&fork.source_path, source, target)))
     }
 
     /// The authenticated user's id, read once.
@@ -461,9 +468,9 @@ impl Forge for GitLab {
     fn mrs_for_branch(&self, head: HeadRepo, branch: &str) -> anyhow::Result<Vec<MergeRequest>> {
         // A fork MR comes from the fork's project; any other from the project it
         // merges into.
-        let source = match (head, &self.fork) {
-            (HeadRepo::Origin, Some(fork)) => Some(fork.source_id),
-            _ => None,
+        let source = match head {
+            HeadRepo::Origin => self.fork_ids()?.map(|(_, source, _)| source),
+            HeadRepo::Target => None,
         };
         let mut url = format!(
             "{}?source_branch={}&state=all&order_by=updated_at&sort=desc&per_page=100",
@@ -519,13 +526,10 @@ impl Forge for GitLab {
 
         // A fork MR is created on the source project, pointing at the target by
         // numeric id; a same-project MR is created where it lives.
-        let url = match &self.fork {
-            Some(fork) => {
-                body["target_project_id"] = json!(fork.target_id);
-                format!(
-                    "{}/projects/{}/merge_requests",
-                    self.api_base, fork.source_path
-                )
+        let url = match self.fork_ids()? {
+            Some((source_path, _, target_id)) => {
+                body["target_project_id"] = json!(target_id);
+                format!("{}/projects/{source_path}/merge_requests", self.api_base)
             }
             None => self.mrs_url(),
         };
@@ -1184,7 +1188,7 @@ mod tests {
 
     #[test]
     fn permalink_encodes_path() {
-        let gl = GitLab::new(info("gitlab.com", "g", "r"), None, "t".into(), None).unwrap();
+        let gl = GitLab::new(info("gitlab.com", "g", "r"), None, "t".into(), None);
         assert_eq!(
             gl.permalink("head", "src/a b.c", Some((5, Some(9)))),
             "https://gitlab.com/g/r/-/blob/head/src/a%20b.c#L5-9"
@@ -1193,16 +1197,24 @@ mod tests {
 
     #[test]
     fn same_project_needs_no_fork_and_no_network() {
-        // No source, or a source equal to the target, stays on the single-project
-        // path — constructible without any project-id lookups.
+        // No push repository stays on the single-project path.
         let target = info("gitlab.com", "me", "widget");
-        let gl = GitLab::new(target.clone(), None, "tok".into(), None).unwrap();
+        let gl = GitLab::new(target.clone(), None, "tok".into(), None);
         assert!(gl.fork.is_none());
         assert!(gl
             .mrs_url()
             .ends_with("/projects/me%2Fwidget/merge_requests"));
 
-        let same = GitLab::new(target.clone(), Some(target), "tok".into(), None).unwrap();
-        assert!(same.fork.is_none());
+        // A fork is constructed without a lookup: its ids wait for the first
+        // request that needs them, which a review never makes.
+        let fork = GitLab::new(
+            target,
+            Some(info("gitlab.com", "you", "widget")),
+            "tok".into(),
+            None,
+        );
+        let source = fork.fork.as_ref().expect("a fork");
+        assert_eq!(source.source_path, "you%2Fwidget");
+        assert!(source.ids.get().is_none());
     }
 }

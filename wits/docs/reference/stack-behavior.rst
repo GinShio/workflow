@@ -522,10 +522,15 @@ Known limitations
   the description, say) gets it at the end of that discussion.
 * **``tree mv`` is metadata only** — it does not rebase commits; you must
   restack the branch yourself for the MR to be meaningful.
-* **Cross-fork MRs** are supported on all three: GitHub/Gitea via the
-  ``owner:branch`` head; GitLab via its cross-project mechanism (create on
-  the source project with a numeric ``target_project_id``, read/edit on the
-  target), which costs two extra project-id lookups when a fork is detected.
+* **Cross-fork MRs** are supported on all three: GitHub names the head
+  repository by id (``headRepositoryId``); Gitea via the ``owner:branch``
+  head; GitLab via its cross-project mechanism (create on the source project
+  with a numeric ``target_project_id``, read/edit on the target), which costs
+  two project-id lookups the first time a stack needs them. A fork is any
+  push repository other than the target, so a fork the target's own
+  organisation holds counts too. Gitea names that one ``owner/repo:branch``,
+  which needs Gitea 1.26 or later; Forgejo parses no such head and refuses
+  it.
 * **Gitea/Forgejo base changes** depend on the server version honouring the
   ``base`` field; a server that doesn't degrades to a per-branch warning,
   never a corruption.

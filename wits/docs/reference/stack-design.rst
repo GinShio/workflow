@@ -305,13 +305,17 @@ resolved once and never re-derive it: a remote name is a fact about the
 checkout, not about the stack.
 
 The forge to talk to is determined by the **upstream** role's URL (that is where
-the MR lives). When the two roles resolve to different owners, the MR crosses a
-fork:
-GitHub/Gitea express that with an ``origin_owner:branch`` head, while GitLab
-needs its cross-project dance (create on the source project with a numeric
-``target_project_id``; the MR then lives in the target, where reads and edits
-go). The forge layer hides this — the verbs never know whether a fork is
-involved.
+the MR lives). When the ``origin`` role's repository is not that one, the MR
+crosses a fork. The two are compared as whole identities, host and path —
+never by owner, since an organisation may fork its own repository — and that
+one comparison (``Remotes::push_repo``) feeds every fork decision: the head a
+create names and the repository a lookup pins a branch to. GitHub names the
+head repository by id (``headRepositoryId``); Gitea by an ``owner:branch``
+head, or ``owner/repo:branch`` for a fork the target's owner holds (Gitea 1.26
+and later; Forgejo has no such form); GitLab needs its cross-project dance
+(create on the source project with a numeric ``target_project_id``; the MR
+then lives in the target, where reads and edits go). The forge layer hides
+this — the verbs never know whether a fork is involved.
 
 URL parsing and detection
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -415,12 +419,13 @@ one does, do not silently recreate it — recreate only when its head SHA
 differs from our local tip, or when the user passes ``--force``. (The branch
 was likely merged and is being reused; recreating blindly spams the forge.)
 
-**Cross-fork on GitLab** is handled inside the GitLab module: because it
-cannot use the ``owner:branch`` head trick, it resolves the numeric
-source/target project ids once, creates the MR on the source project with
-``target_project_id``, and does every read/edit against the target project
-(where the MR resides). Same-project stacks skip all of that and pay no extra
-request.
+**Cross-fork on GitLab** is handled inside the GitLab module: because a
+create request cannot name a head in another project, it resolves the numeric
+source/target project ids once, on the first request that needs them, creates
+the MR on the source project with ``target_project_id``, and does every
+read/edit against the target project (where the MR resides). Same-project
+stacks skip all of that and pay no extra request, and so does any run that
+never opens or finds a stack's MR — ``wits review`` among them.
 
 Transport and credentials
 ~~~~~~~~~~~~~~~~~~~~~~~~~

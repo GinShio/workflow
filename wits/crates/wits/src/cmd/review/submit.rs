@@ -439,7 +439,6 @@ mod tests {
                 service: Service::GitHub,
             },
             None,
-            None,
             "t".into(),
             None,
         )

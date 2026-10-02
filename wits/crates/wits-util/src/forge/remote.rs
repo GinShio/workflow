@@ -235,18 +235,19 @@ impl Remotes {
         }
     }
 
-    /// The owner of the branch we push, needed to express a cross-fork MR head
-    /// as `owner:branch`. `None` when the push side couldn't be parsed.
-    pub fn head_owner(&self) -> Option<&str> {
-        self.origin.as_ref().map(|r| r.owner.as_str())
-    }
-
-    /// Whether the MR crosses a fork boundary (push and merge target differ in
-    /// owner or host), which is what decides the `owner:branch` head form.
-    pub fn is_cross_fork(&self) -> bool {
-        match (self.origin.as_ref(), self.target.as_ref()) {
-            (Some(o), Some(t)) => o.owner != t.owner || o.host != t.host,
-            _ => false,
+    /// The repository a stack's branches are pushed to, when it is not the merge
+    /// target itself — the head repository of every MR a stack opens or looks
+    /// up. `None` when the branches live in the target, or the push side
+    /// couldn't be parsed.
+    ///
+    /// Compared by full identity, never by owner: an organisation may fork its
+    /// own repository, even several times (GitHub changelog, 2022-06-27 and
+    /// 2023-02-16), so an owner alone no longer tells a fork from its source.
+    pub fn push_repo(&self) -> Option<&RemoteInfo> {
+        let origin = self.origin.as_ref()?;
+        match &self.target {
+            Some(target) if origin.same_repository(target) => None,
+            _ => Some(origin),
         }
     }
 }
@@ -303,5 +304,33 @@ mod tests {
     fn rejects_urls_without_owner_repo() {
         assert!(parse_url("").is_none());
         assert!(parse_url("git@github.com:justrepo").is_none());
+    }
+
+    #[test]
+    fn a_push_repository_is_told_apart_by_its_whole_identity() {
+        let repo = |owner: &str, repo: &str| RemoteInfo {
+            host: "github.com".into(),
+            owner: owner.into(),
+            repo: repo.into(),
+            service: Service::GitHub,
+        };
+        let remotes = |origin: RemoteInfo, target: RemoteInfo| Remotes {
+            origin: Some(origin),
+            target: Some(target),
+        };
+        let target = repo("llvm", "llvm-project");
+        // The target itself, however its remote spells it, is no fork.
+        assert_eq!(
+            remotes(repo("LLVM", "LLVM-Project"), target.clone()).push_repo(),
+            None
+        );
+        // Another owner's fork, and the target owner's own fork, both are.
+        let fork = repo("me", "llvm-project");
+        assert_eq!(
+            remotes(fork.clone(), target.clone()).push_repo(),
+            Some(&fork)
+        );
+        let own = repo("llvm", "llvm-project-staging");
+        assert_eq!(remotes(own.clone(), target).push_repo(), Some(&own));
     }
 }

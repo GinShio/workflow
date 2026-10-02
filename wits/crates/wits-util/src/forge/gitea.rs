@@ -22,7 +22,8 @@ const WIP_PREFIX: &str = "WIP: ";
 pub struct Gitea {
     api_base: String,
     project: String,
-    head_owner: Option<String>,
+    /// The target's owner, which a fork's head is told apart from.
+    owner: String,
     /// The repository a stack's branches are pushed to when it is not the
     /// target; `None` when they live in the target itself.
     push_repo: Option<RemoteInfo>,
@@ -36,7 +37,6 @@ pub struct Gitea {
 impl Gitea {
     pub fn new(
         target: RemoteInfo,
-        head_owner: Option<String>,
         push_repo: Option<RemoteInfo>,
         token: String,
         api_url_override: Option<String>,
@@ -46,7 +46,7 @@ impl Gitea {
         Self {
             api_base,
             project: target.project_path(),
-            head_owner,
+            owner: target.owner,
             push_repo,
             push_repo_id: OnceLock::new(),
             me: OnceLock::new(),
@@ -67,10 +67,19 @@ impl Gitea {
         Ok(*self.me.get_or_init(|| id))
     }
 
+    /// The `head` a pull request is created from: the branch alone in the
+    /// target, `owner:branch` from a fork. A fork the target's own owner holds
+    /// needs `owner/repo:branch`, since `owner:branch` resolves to the target
+    /// itself. Only Gitea 1.26 and later parse that form (go-gitea/gitea#36105);
+    /// Forgejo refuses it with a 404 rather than opening the PR from the wrong
+    /// repository.
     fn head_ref(&self, branch: &str) -> String {
-        match &self.head_owner {
-            Some(owner) => format!("{owner}:{branch}"),
+        match &self.push_repo {
             None => branch.to_owned(),
+            Some(push) if push.owner.eq_ignore_ascii_case(&self.owner) => {
+                format!("{}:{branch}", push.project_path())
+            }
+            Some(push) => format!("{}:{branch}", push.owner),
         }
     }
 
@@ -419,5 +428,23 @@ mod tests {
         let mr = parse_pull(&pr("feat", 1, 1)).unwrap();
         assert_eq!(mr.source, "feat");
         assert_eq!(mr.state, MrState::Merged);
+    }
+
+    #[test]
+    fn a_fork_head_names_as_much_as_tells_it_apart() {
+        let repo = |owner: &str, repo: &str| RemoteInfo {
+            host: "codeberg.org".into(),
+            owner: owner.into(),
+            repo: repo.into(),
+            service: super::super::Service::Codeberg,
+        };
+        let gitea = |push| Gitea::new(repo("org", "tool"), push, "t".into(), None);
+        assert_eq!(gitea(None).head_ref("feat"), "feat");
+        assert_eq!(gitea(Some(repo("me", "tool"))).head_ref("feat"), "me:feat");
+        // The target owner's own fork: the owner alone would name the target.
+        assert_eq!(
+            gitea(Some(repo("org", "tool-next"))).head_ref("feat"),
+            "org/tool-next:feat"
+        );
     }
 }
