@@ -479,6 +479,13 @@ Troubleshooting
      - Set ``wits.forge.<host>.token`` or the platform's ``*_TOKEN`` env var.
    * - ``could not detect the forge for host '…'``
      - Self-hosted behind a custom domain: set ``wits.forge.<host>.service``.
+   * - ``HTTP 301: moved to …``
+     - The repository was renamed or transferred; point the remote at the URL
+       it names. Redirects are not followed, since that would turn a write into
+       a read that silently does nothing.
+   * - ``… asks to wait Ns before retrying, longer than the 60s wits waits``
+     - A rate limit whose quota refills later; retry after that time. Shorter
+       waits are sat out and the request is sent again.
    * - ``submit`` fails to create an MR (*head not found* or similar)
      - The branch is not on the ``origin`` remote yet — run ``wits stack sync``
        first.

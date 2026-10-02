@@ -1001,6 +1001,11 @@ Troubleshooting
      - ``review`` keys off the target remote; add one.
    * - ``no API token for …``
      - Set ``wits.forge.<host>.token`` or ``*_TOKEN`` (fetch/submit only).
+   * - ``HTTP 301: moved to …``
+     - The repository was renamed or transferred; point the remote at the URL
+       it names.
+   * - ``… asks to wait Ns before retrying, longer than the 60s wits waits``
+     - A rate limit whose quota refills later; retry after that time.
    * - ``MR N isn't in the store yet``
      - Run ``wits review fetch N`` first — read verbs use the local files.
    * - ``not a range and not a fetched review point's head``

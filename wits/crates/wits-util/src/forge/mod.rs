@@ -36,7 +36,8 @@ pub use review::{
 // level so a backend writes `super::request` rather than `super::transport::…`.
 pub(crate) use transport::{
     current_user, delete_idempotent, encode, encode_path, next_link, request, request_every_page,
-    request_paginated, resolve_self, Auth, EVERY_PAGE_LIMIT, SELF_REF,
+    request_paginated, request_with_headers, resolve_self, status_of, wait_out_rate_limit, Auth,
+    EVERY_PAGE_LIMIT, SELF_REF,
 };
 
 use crate::git::Repository;

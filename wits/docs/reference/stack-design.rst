@@ -431,6 +431,17 @@ small private helper inside ``forge`` does "method + path + json → json",
 applying the host's auth header; it does not become a public
 ``wits_util::http`` because nothing else needs it yet.
 
+One client serves the whole process, so connections are reused, and a stalled
+read times out instead of hanging the run. It follows no redirect: ``ureq``
+replays a redirected POST or PATCH as a GET without its body or credentials,
+so a write to a renamed repository would report success having done nothing;
+the redirect becomes an error naming the new location. A request is sent again
+only when the server said it did not act — a rate limiter's refusal, on any
+method — or when it was a read (a gateway error or timeout, on GET). The wait
+is the server's own, ``Retry-After`` or the reset of a spent quota, up to 60
+seconds; past that the limit is reported, since a quota that refills hourly is
+better retried by the user than slept through.
+
 Token resolution, most specific first: ``wits.forge.<host>.token`` →
 ``wits.forge.<service>.token`` → ``wits.forge.token`` → env (``GITHUB_TOKEN``
 / ``GITLAB_TOKEN`` / ``GITEA_TOKEN`` / ``FORGEJO_TOKEN`` /

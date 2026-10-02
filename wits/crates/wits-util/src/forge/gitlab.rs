@@ -151,7 +151,7 @@ impl GitLab {
         let url = format!("{}/{id}/unapprove", self.mrs_url());
         match request("POST", &url, &self.auth, None) {
             Ok(_) => true,
-            Err(e) if e.to_string().contains("404") => true,
+            Err(e) if super::status_of(&e) == Some(404) => true,
             Err(e) => {
                 log::warn!("MR {id}: unapprove (request-changes) failed: {e}");
                 false

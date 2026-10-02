@@ -12,9 +12,10 @@ use serde_json::{json, Value};
 
 use super::RemoteInfo;
 use super::{
-    request, ActionKey, Anchor, Attributes, Auth, BatchAction, BatchOutcome, DiffVersion,
-    FeedQuery, Forge, HeadRepo, LineRef, MergeRequest, MrComment, MrDetails, MrState, MrSummary,
-    NewMr, RemoteComment, RemoteThread, ReviewBatch, Side, Verdict, EVERY_PAGE_LIMIT, SELF_REF,
+    request_with_headers, wait_out_rate_limit, ActionKey, Anchor, Attributes, Auth, BatchAction,
+    BatchOutcome, DiffVersion, FeedQuery, Forge, HeadRepo, LineRef, MergeRequest, MrComment,
+    MrDetails, MrState, MrSummary, NewMr, RemoteComment, RemoteThread, ReviewBatch, Side, Verdict,
+    EVERY_PAGE_LIMIT, SELF_REF,
 };
 
 pub struct GitHub {
@@ -84,20 +85,32 @@ impl GitHub {
     /// `errors[]` (GraphQL replies `200 OK` with a partial `data` + `errors`, so
     /// the HTTP status alone is not enough). Bodies and ids ride as `variables`,
     /// never string-interpolated, so arbitrary comment text is safe.
+    ///
+    /// A spent quota is also a `200` here, with a `RATE_LIMITED` error ("status
+    /// will still be 200", GitHub's GraphQL rate-limit page; Octokit's throttling
+    /// plugin keys on the same type). It was refused before running, so it is
+    /// waited out and sent again like a 429.
     fn graphql(&self, query: &str, variables: Value) -> anyhow::Result<Value> {
         let body = json!({ "query": query, "variables": variables });
-        let v = request("POST", &self.graphql_url, &self.auth, Some(&body))?;
-        if let Some(errs) = v["errors"].as_array() {
-            if !errs.is_empty() {
-                let msg = errs
-                    .iter()
-                    .filter_map(|e| e["message"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                anyhow::bail!("GraphQL error: {msg}");
+        let mut retries = 0;
+        loop {
+            let (v, headers) =
+                request_with_headers("POST", &self.graphql_url, &self.auth, Some(&body))?;
+            let Some(errs) = v["errors"].as_array().filter(|errs| !errs.is_empty()) else {
+                return Ok(v["data"].clone());
+            };
+            if retries < 3 && errs.iter().any(|e| e["type"] == "RATE_LIMITED") {
+                retries += 1;
+                wait_out_rate_limit(&self.graphql_url, &headers)?;
+                continue;
             }
+            let msg = errs
+                .iter()
+                .filter_map(|e| e["message"].as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            anyhow::bail!("GraphQL error: {msg}");
         }
-        Ok(v["data"].clone())
     }
 
     /// Parse an MR number from its string id, for the GraphQL `number:` argument.
