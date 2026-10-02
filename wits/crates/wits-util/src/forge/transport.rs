@@ -224,9 +224,9 @@ fn apply_auth(req: ureq::Request, auth: &Auth) -> ureq::Request {
 /// Keyed on the method rather than the endpoint because the backends send reads
 /// and mutations through the same POST — GitHub's GraphQL queries included, which
 /// therefore give up gateway retries. That is the accepted cost of not making
-/// every call site declare its own idempotency; note it also means a *bodyless*
-/// POST (GitLab's approve/unapprove) is treated as unsafe even though it happens
-/// to be idempotent.
+/// every call site declare its own idempotency; note it also means a POST that
+/// happens to be idempotent (GitLab's approve) is treated as unsafe all the
+/// same.
 fn retry_wait(
     code: u16,
     method: &str,

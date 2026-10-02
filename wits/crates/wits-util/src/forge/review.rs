@@ -51,9 +51,10 @@ pub struct LineRef {
     pub old_line: Option<u32>,
 }
 
-/// A reviewer's verdict on an MR. `RequestChanges` is a GitHub/Gitea concept;
-/// GitLab has no native equivalent and maps it to "leave a comment review and do
-/// not approve" (see the capability matrix).
+/// A reviewer's verdict on an MR. GitHub takes each as a review event; GitLab
+/// records `RequestChanges` and `Comment` as the reviewer's state
+/// (`requested_changes`, `reviewed`) and `Approve` as an approval (see the
+/// capability matrix).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Verdict {

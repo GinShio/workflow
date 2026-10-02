@@ -690,12 +690,17 @@ later actions with the same id replace earlier ones), then handed to the forge
 as one review. Each platform folds as much as its native batch allows into
 **one notification**:
 
-* **GitLab** — comments (line/file/conversation), replies, and the summary (as
-  a position-less draft note) all ride a single bodyless ``bulk_publish``. The
-  verdict is a separate released call — ``approve``→``POST …/approve``,
-  ``request-changes``→``POST …/unapprove`` (there is no released API for the
-  formal ``requested_changes`` state; unapprove is its effect) —
-  ``comment`` → nothing — and a bare thread resolve is a separate (quiet) PUT.
+* **GitLab** (19.2 or later) — comments (line/file/conversation) and replies
+  ride a single ``bulk_publish`` as one review. The same call posts the
+  summary as a plain note — a second notification, but not a thread anyone
+  has to resolve — and records a ``request-changes`` (withdrawing an
+  approval) or ``comment`` verdict as your reviewer state; ``submit`` checks
+  that a requested change took, since GitLab does not say. ``approve`` is a
+  separate ``POST …/approve`` at the head you reviewed, so a push since is
+  refused rather than approved unseen. A bare thread resolve is a separate
+  (quiet) PUT. Any draft you started in GitLab's web UI publishes with the
+  review, as it would with GitLab's own *Submit review*: the publish takes all
+  of your pending drafts.
 * **GitHub** — the verdict, summary, line/file comments, **and replies** are
   one review (replies join the pending review by id, exactly as the web UI
   batches them), so they share one notification. Only a conversation (MR-level)
@@ -919,8 +924,8 @@ Bounded on purpose, and honest about it:
    * - Area
      - behaviour
    * - Forges
-     - GitHub (GraphQL) and GitLab (REST). Gitea/Forgejo/Codeberg have the
-       trait seam but no review backend.
+     - GitHub (GraphQL) and GitLab (REST, 19.2 or later). Gitea/Forgejo/
+       Codeberg have the trait seam but no review backend.
    * - Diff base
      - Always the **fork point**, ``merge-base(base, head)``, computed locally
        at fetch and stored on the snapshot — so a moving target branch never
@@ -955,13 +960,13 @@ Bounded on purpose, and honest about it:
      - Supported on **both** — GitHub via ``resolveReviewThread``, GitLab via
        the discussion API.
    * - Verdicts on GitLab
-     - Mapped onto the *released* API: ``approve``→``POST …/approve``,
-       ``request-changes``→``POST …/unapprove`` (no released API sets the
-       formal ``requested_changes`` reviewer state; unapprove is its concrete
-       effect), ``comment``→no-op. The ``bulk_publish`` ``reviewer_state``/
-       ``note`` body that would fold the verdict + summary into the publish is
-       the unmerged gitlab-org/gitlab!237813 — absent from every release — so
-       the summary rides as a draft note instead.
+     - ``approve``→``POST …/approve`` at the reviewed head (an approval
+       already given counts); ``request-changes``→the ``requested_changes``
+       reviewer state, which withdraws an approval, set by the publish and
+       checked afterwards; ``comment``→the ``reviewed`` state. Setting a
+       reviewer state takes permission to update the MR; without it GitLab
+       ignores the request silently, and ``submit`` keeps a
+       ``request-changes`` verdict in the draft and says so.
    * - Editing/deleting a **published** comment
      - Not supported; you edit only your pending ``local.json``.
    * - Cross-snapshot anchoring
@@ -982,8 +987,8 @@ Bounded on purpose, and honest about it:
        MR drops out of the feed.
    * - Notifications
      - Minimised, not promised: ``submit`` reports the true count. GitLab folds
-       comments + replies + summary into one ``bulk_publish`` (the verdict is a
-       separate quiet ``approve``/``unapprove``). GitHub folds the verdict,
+       comments + replies into one ``bulk_publish``; a summary is a note of its
+       own, and so a second notification. GitHub folds the verdict,
        summary, line/file comments, and replies into one review; only an
        MR-level conversation comment is a separate notification (resolves are
        separate but quiet).

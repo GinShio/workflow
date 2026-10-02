@@ -669,12 +669,13 @@ How ``submit`` treats it
   ``draft --dedup`` writes this compacted form back to ``local.json``;
   ``submit`` always applies the same compaction before posting.
 * **Batching:** the whole review is handed to the forge as one batch, folded
-  into as few notifications as the platform allows. On GitLab comments (line/
-  file/conversation), replies, and the summary (a position-less draft note)
-  ride one bodyless ``bulk_publish``; the verdict is a separate released call
-  (``approve``→``/approve``, ``request-changes``→``/unapprove``,
-  ``comment``→no-op — no released API sets the ``reviewed``/
-  ``requested_changes`` state), and a bare resolve is a separate PUT. On
+  into as few notifications as the platform allows. On GitLab (19.2 or
+  later) comments (line/file/conversation) and replies ride one
+  ``bulk_publish`` as one review, the replies into a thread sharing one
+  draft; the same call posts the summary as a plain note (a notification of
+  its own) and sets the reviewer state of a ``request-changes`` or
+  ``comment`` verdict. ``approve`` is a separate call at the reviewed head,
+  and a bare resolve is a separate PUT. On
   GitHub the verdict + summary + line/file comments **and replies** are one
   review (replies join the pending review, as in the web UI); only an
   MR-level conversation comment is a separate notification, and resolves are

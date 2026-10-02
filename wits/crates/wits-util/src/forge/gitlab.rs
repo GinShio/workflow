@@ -14,7 +14,7 @@
 //! the first request that needs them. When source and target are the same
 //! project, none of this applies and we stay on the cheap single-project path.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Value};
@@ -146,43 +146,57 @@ impl GitLab {
         Ok(())
     }
 
-    /// Record a real MR approval via the dedicated `POST …/approve` endpoint.
-    ///
-    /// GitLab has **no released public API** to set a reviewer's `reviewed` /
-    /// `requested_changes` state: the only mechanism is the `reviewer_state`
-    /// parameter on `bulk_publish`, which is still an *unmerged* proposal
-    /// (gitlab-org/gitlab!237813) and absent from every shipped release — and
-    /// even it routes through `UpdateReviewerStateService`, which is *not* a
-    /// formal approval. So the verdicts map onto what the released API actually
-    /// exposes: `approve` here, `request-changes` → [`unapprove`](Self::unapprove)
-    /// (its concrete released effect — a reviewer requesting changes has their
-    /// approval removed), and `comment` is a no-op (leaving notes no longer
-    /// changes reviewer state on its own). Returns whether it landed.
-    fn approve(&self, id: &str) -> bool {
+    /// Approve the MR at `sha`, the head that was reviewed: GitLab refuses with
+    /// a `409` once the MR has moved past it (the approvals API's `sha`), rather
+    /// than approving commits nobody looked at. A second approval is refused
+    /// too — a `401`, `already_approved` (`MergeRequests::ApprovalService`) — so
+    /// a refusal is checked against the approvals, and one already given counts
+    /// as landed; otherwise a resubmit after a partial success never could.
+    /// Returns whether the MR stands approved by the user.
+    fn approve(&self, id: &str, sha: &str) -> bool {
         let url = format!("{}/{id}/approve", self.mrs_url());
-        match request("POST", &url, &self.auth, None) {
+        let body = (!sha.is_empty()).then(|| json!({ "sha": sha }));
+        match request("POST", &url, &self.auth, body.as_ref()) {
             Ok(_) => true,
-            Err(e) => {
-                log::warn!("MR {id}: approve failed: {e}");
+            Err(e) if super::status_of(&e) == Some(409) => {
+                log::warn!(
+                    "MR {id}: not approved — it has moved past the head you reviewed; fetch \
+                     it and review again"
+                );
                 false
             }
+            Err(e) => match self.approved_by_me(id) {
+                Ok(true) => true,
+                _ => {
+                    log::warn!("MR {id}: approve failed: {e}");
+                    false
+                }
+            },
         }
     }
 
-    /// Remove the authenticated user's approval — the released proxy for a
-    /// `request-changes` verdict (see [`approve`](Self::approve)). Idempotent:
-    /// GitLab answers `404` when there was no approval to remove, which is the
-    /// goal state ("not approved"), so it counts as success.
-    fn unapprove(&self, id: &str) -> bool {
-        let url = format!("{}/{id}/unapprove", self.mrs_url());
-        match request("POST", &url, &self.auth, None) {
-            Ok(_) => true,
-            Err(e) if super::status_of(&e) == Some(404) => true,
-            Err(e) => {
-                log::warn!("MR {id}: unapprove (request-changes) failed: {e}");
-                false
-            }
-        }
+    /// Whether the authenticated user has approved the MR.
+    fn approved_by_me(&self, id: &str) -> anyhow::Result<bool> {
+        let url = format!("{}/{id}/approvals", self.mrs_url());
+        let v = request("GET", &url, &self.auth, None)?;
+        Ok(v["user_has_approved"].as_bool() == Some(true))
+    }
+
+    /// Whether the authenticated user's review of the MR stands at `state`.
+    /// `bulk_publish` sets `reviewer_state` and answers `204` whatever came of
+    /// it — the state update's own result is dropped — and that update needs
+    /// permission to update the MR, so a reviewer without it is refused in
+    /// silence; only the reviewer list tells.
+    fn reviewer_state_is(&self, id: &str, state: &str) -> bool {
+        let found = self.me().map(|me| me.0).and_then(|me| {
+            let url = format!("{}/{id}/reviewers?per_page=100", self.mrs_url());
+            let reviewers = request("GET", &url, &self.auth, None)?;
+            Ok(reviewers.as_array().is_some_and(|all| {
+                all.iter()
+                    .any(|r| r["user"]["id"].as_u64() == Some(me) && r["state"] == state)
+            }))
+        });
+        found.unwrap_or(false)
     }
 
     /// Where the MR lives — the endpoint for finding and editing it.
@@ -236,6 +250,18 @@ impl GitLab {
     /// The MR-scoped draft-notes endpoint (always on the target project).
     fn draft_notes_url(&self, id: &str) -> String {
         format!("{}/{id}/draft_notes", self.mrs_url())
+    }
+
+    /// The ids of the user's draft notes still pending on the MR — what a
+    /// publish did not take. The list comes whole (`load_draft_notes`, no
+    /// paging).
+    fn pending_drafts(&self, id: &str) -> anyhow::Result<HashSet<u64>> {
+        let v = request("GET", &self.draft_notes_url(id), &self.auth, None)?;
+        Ok(v.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|draft| draft["id"].as_u64())
+            .collect())
     }
 }
 
@@ -400,6 +426,83 @@ fn position_line(old: Option<u32>, new: Option<u32>) -> Option<LineRef> {
         }),
         (None, None) => None,
     }
+}
+
+/// One draft note a submission posts, and the actions it carries: a comment's
+/// one, or every reply into one thread.
+struct Draft {
+    keys: Vec<ActionKey>,
+    /// For logging.
+    label: String,
+    body: Value,
+    reply: bool,
+}
+
+/// The draft notes a batch posts: one per comment, and one per thread for all
+/// its replies, their bodies a paragraph apart. GitLab keeps one draft per
+/// author and thread (`DraftNote`'s uniqueness on the discussion), so a second
+/// reply to a thread would be refused — and refused again on every retry.
+fn drafts_of(batch: &ReviewBatch) -> Vec<Draft> {
+    let mut drafts: Vec<Draft> = Vec::new();
+    let mut by_thread: HashMap<&str, usize> = HashMap::new();
+    for a in &batch.actions {
+        match a {
+            BatchAction::Comment {
+                key,
+                anchor,
+                version,
+                body,
+            } => {
+                // Each comment anchors to its own snapshot version (resolved at
+                // build time) — the heart of cross-snapshot drafting.
+                let body = match anchor {
+                    Some(Anchor::Line {
+                        path,
+                        old_path,
+                        end,
+                        start,
+                    }) => json!({
+                        "note": body,
+                        "position": diff_position(version, path, old_path.as_deref(), *end, *start),
+                    }),
+                    Some(Anchor::File { path }) => json!({
+                        "note": body,
+                        "position": file_position(version, path, None),
+                    }),
+                    None => json!({ "note": body }),
+                };
+                drafts.push(Draft {
+                    keys: vec![key.clone()],
+                    label: format!("action {key}"),
+                    body,
+                    reply: false,
+                });
+            }
+            BatchAction::Reply { key, thread, body } => match by_thread.get(thread.as_str()) {
+                Some(&i) => {
+                    let draft = &mut drafts[i];
+                    let note = format!(
+                        "{}\n\n{body}",
+                        draft.body["note"].as_str().unwrap_or_default()
+                    );
+                    draft.body["note"] = json!(note);
+                    draft.keys.push(key.clone());
+                    draft.label = format!("{}, {key}", draft.label);
+                }
+                None => {
+                    by_thread.insert(thread, drafts.len());
+                    drafts.push(Draft {
+                        keys: vec![key.clone()],
+                        label: format!("action {key}"),
+                        body: json!({ "note": body, "in_reply_to_discussion_id": thread }),
+                        reply: true,
+                    });
+                }
+            },
+            BatchAction::Resolve { .. } => {}
+        }
+    }
+    drafts
 }
 
 /// Whether GitLab took a line comment's draft without finding its line. A draft
@@ -806,12 +909,13 @@ impl Forge for GitLab {
     }
 
     fn list_threads(&self, id: &str) -> anyhow::Result<Vec<RemoteThread>> {
+        // Every page: a thousand discussions — label and push events count —
+        // is within a long MR's reach.
         let url = format!("{}/{id}/discussions?per_page=100", self.mrs_url());
-        let discussions: Vec<Value> =
-            super::request_paginated(&url, &self.auth, 10, |v, headers| {
-                let items: Vec<Value> = v.as_array().map(|arr| arr.to_vec()).unwrap_or_default();
-                (items, next_page(&url, headers))
-            })?;
+        let discussions: Vec<Value> = request_every_page(&url, &self.auth, |v, headers| {
+            let items: Vec<Value> = v.as_array().map(|arr| arr.to_vec()).unwrap_or_default();
+            (items, next_page(&url, headers))
+        })?;
 
         let mut threads = Vec::new();
         for d in &discussions {
@@ -914,82 +1018,36 @@ impl Forge for GitLab {
         }
 
         // GitLab's native batch is draft notes + `bulk_publish`: comments
-        // (line / file / MR-level), replies, and the summary all become draft
-        // notes, published together as one review — one notification. That
-        // two-phase shape puts atomicity on us, so it is all-or-nothing *per
-        // attempt*: any draft failure aborts the publish and defers cleanup of
-        // what posted, for a clean retry (no orphans, no duplicates). Resolves
-        // are not draft notes (a draft needs a body), so they are separate PUTs
-        // (phase 3), and the verdict is a separate call (phase 2b) — the released
-        // `bulk_publish` takes no body (see below).
+        // (line / file / MR-level) and replies become draft notes, published
+        // together as one review — one notification — and the summary and the
+        // reviewer state ride the same call. That two-phase shape puts
+        // atomicity on us, so it is all-or-nothing *per attempt*: any draft
+        // failure aborts the publish and defers cleanup of what posted, for a
+        // clean retry (no orphans, no duplicates). Resolves are not draft notes
+        // (a draft needs a body), so they are separate PUTs (phase 3), and an
+        // approval is its own call (phase 2b).
 
-        // --- Phase 1: a draft note per comment / reply action, plus the summary
-        // as a position-less draft note so it publishes with the batch. The
-        // `String` label is for logging only; landing is reconciled by key from
-        // `batch.actions` below (the summary is not an action). ---
-        let mut reqs: Vec<(String, Value)> = Vec::new();
-        for a in &batch.actions {
-            match a {
-                BatchAction::Comment {
-                    key,
-                    anchor,
-                    version,
-                    body,
-                } => {
-                    // Each comment anchors to its own snapshot version (resolved
-                    // at build time) — the heart of cross-snapshot drafting.
-                    let b = match anchor {
-                        Some(Anchor::Line {
-                            path,
-                            old_path,
-                            end,
-                            start,
-                        }) => json!({
-                            "note": body,
-                            "position": diff_position(version, path, old_path.as_deref(), *end, *start),
-                        }),
-                        Some(Anchor::File { path }) => json!({
-                            "note": body,
-                            "position": file_position(version, path, None),
-                        }),
-                        None => json!({ "note": body }),
-                    };
-                    reqs.push((format!("action {key}"), b));
-                }
-                BatchAction::Reply { key, thread, body } => {
-                    reqs.push((
-                        format!("action {key}"),
-                        json!({ "note": body, "in_reply_to_discussion_id": thread }),
-                    ));
-                }
-                BatchAction::Resolve { .. } => {}
-            }
-        }
-        // The summary body: GitLab has no released `bulk_publish` `note` param
-        // (that is the unmerged gitlab-org/gitlab!237813), so it rides as an
-        // ordinary position-less draft note and publishes with the rest.
-        if let Some(summary) = &batch.summary {
-            reqs.push(("summary".to_owned(), json!({ "note": summary })));
-        }
-
-        // POST the draft notes in bounded-parallel batches. A cap keeps a big
-        // review from opening a connection per note.
-        let posted: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+        // --- Phase 1: the drafts, POSTed in bounded-parallel batches. A cap
+        // keeps a big review from opening a connection per note. ---
+        let drafts = drafts_of(batch);
+        let posted: Mutex<Vec<(usize, u64)>> = Mutex::new(Vec::new());
         let ok = Mutex::new(true);
         let draft_url_ref = &draft_url;
         let auth = &self.auth;
         let posted_ref = &posted;
         let ok_ref = &ok;
-        for chunk in reqs.chunks(MAX_DRAFT_PARALLEL) {
+        for (chunk_no, chunk) in drafts.chunks(MAX_DRAFT_PARALLEL).enumerate() {
             std::thread::scope(|scope| {
-                for (label, body) in chunk {
-                    scope.spawn(
-                        move || match request("POST", draft_url_ref, auth, Some(body)) {
+                for (i, draft) in chunk.iter().enumerate() {
+                    let index = chunk_no * MAX_DRAFT_PARALLEL + i;
+                    scope.spawn(move || {
+                        let label = &draft.label;
+                        match request("POST", draft_url_ref, auth, Some(&draft.body)) {
                             Ok(v) => {
                                 if let Some(did) = v["id"].as_u64() {
-                                    posted_ref.lock().unwrap().push(did);
+                                    posted_ref.lock().unwrap().push((index, did));
                                 }
-                                if unplaced(body, &v) {
+                                if unplaced(&draft.body, &v) {
                                     log::warn!(
                                         "MR {id}: GitLab cannot place the comment ({label}) on \
                                          a line of the diff it was written against; nothing \
@@ -999,16 +1057,24 @@ impl Forge for GitLab {
                                 }
                             }
                             Err(e) => {
-                                log::warn!("MR {id}: draft note ({label}) failed: {e}");
+                                let hint = if draft.reply && super::status_of(&e) == Some(400) {
+                                    "; GitLab keeps one draft per thread, so a draft reply \
+                                     you started there blocks this one — publish or delete it \
+                                     on GitLab"
+                                } else {
+                                    ""
+                                };
+                                log::warn!("MR {id}: draft note ({label}) failed: {e}{hint}");
                                 *ok_ref.lock().unwrap() = false;
                             }
-                        },
-                    );
+                        }
+                    });
                 }
             });
         }
         let drafts_all_ok = ok.into_inner().unwrap();
-        let posted_ids: Vec<u64> = posted.into_inner().unwrap();
+        let posted = posted.into_inner().unwrap();
+        let posted_ids: Vec<u64> = posted.iter().map(|&(_, did)| did).collect();
 
         // A draft failed → nothing lands. Defer cleanup: keep the posted-but-
         // unpublished draft ids so the *next* attempt deletes them first. We do
@@ -1023,68 +1089,109 @@ impl Forge for GitLab {
             return Ok(BatchOutcome::none_landed(batch, u64_ids(&posted_ids)));
         }
 
-        // --- Phase 2: one `bulk_publish` publishes ALL of the user's pending
-        // drafts on the MR as a single review — one notification. The released
-        // endpoint takes **no body** (the `note`/`reviewer_state` params are the
-        // unmerged !237813, absent from every shipped release), so the summary
-        // rode as a draft note in phase 1 and the verdict is a separate call
-        // (phase 2b). The summary therefore lands exactly when the publish does. ---
-        let has_publishable = !posted_ids.is_empty();
+        // --- Phase 2: one `bulk_publish` publishes all of the user's pending
+        // drafts on the MR as a single review. Since GitLab 19.2 the same call
+        // posts the summary as a plain note (`note`) — not as a draft, which
+        // would publish as a resolvable thread and could hold up "all threads
+        // must be resolved" — at the cost of a notification of its own, and
+        // sets the reviewer state a request-changes or comment verdict means
+        // (`reviewer_state`, which also withdraws an approval on request-
+        // changes). ---
+        let reviewer_state = match batch.verdict {
+            Some(Verdict::RequestChanges) => Some("requested_changes"),
+            Some(Verdict::Comment) => Some("reviewed"),
+            Some(Verdict::Approve) | None => None,
+        };
+        let mut publish = serde_json::Map::new();
+        if let Some(summary) = &batch.summary {
+            publish.insert("note".into(), json!(summary));
+        }
+        if let Some(state) = reviewer_state {
+            publish.insert("reviewer_state".into(), json!(state));
+        }
 
-        let mut notifications = 0u32;
+        // Which drafts went out: all of them once the publish answers. A
+        // failure can come after it published them — the summary note is
+        // created only then — so after one, the drafts still pending tell.
+        let mut published = vec![true; drafts.len()];
+        let mut inflight = Vec::new();
         let mut summary_ok = batch.summary.is_none();
-        if has_publishable {
-            match request(
-                "POST",
-                &format!("{draft_url}/bulk_publish"),
-                &self.auth,
-                None,
-            ) {
+        let mut state_set = false;
+        let mut notifications = 0u32;
+        if !posted.is_empty() || !publish.is_empty() {
+            let url = format!("{draft_url}/bulk_publish");
+            match request("POST", &url, &self.auth, Some(&Value::Object(publish))) {
                 Ok(_) => {
-                    notifications = 1;
+                    notifications =
+                        u32::from(!posted.is_empty()) + u32::from(batch.summary.is_some());
                     summary_ok = true;
+                    state_set = true;
                 }
                 Err(e) => {
+                    let still = self.pending_drafts(id).map(|pending| {
+                        posted
+                            .iter()
+                            .copied()
+                            .filter(|(_, did)| pending.contains(did))
+                            .collect::<Vec<_>>()
+                    });
+                    let Ok(still) = still else {
+                        log::warn!(
+                            "MR {id}: bulk_publish failed ({e}); deferring cleanup of {} \
+                             draft(s)",
+                            posted_ids.len()
+                        );
+                        return Ok(BatchOutcome::none_landed(batch, u64_ids(&posted_ids)));
+                    };
+                    for (index, did) in still {
+                        published[index] = false;
+                        inflight.push(did.to_string());
+                    }
+                    if inflight.len() == posted.len() {
+                        log::warn!(
+                            "MR {id}: bulk_publish failed ({e}); deferring cleanup of {} \
+                             draft(s)",
+                            inflight.len()
+                        );
+                        return Ok(BatchOutcome::none_landed(batch, inflight));
+                    }
                     log::warn!(
-                        "MR {id}: bulk_publish failed ({e}); deferring cleanup of {} draft(s)",
-                        posted_ids.len()
+                        "MR {id}: the review was published, but bulk_publish failed after it: {e}"
                     );
-                    return Ok(BatchOutcome::none_landed(batch, u64_ids(&posted_ids)));
+                    notifications = 1;
                 }
             }
         }
 
-        // --- Phase 2b: the verdict, mapped onto the *released* API (see
-        // [`GitLab::approve`]): `approve` → POST /approve; `request-changes` →
-        // POST /unapprove (its concrete released effect); `comment` → nothing
-        // (leaving notes no longer changes reviewer state, and there is no
-        // released API to set `reviewed`). ---
+        // --- Phase 2b: the verdict. Approval is its own call; a requested
+        // change rode the publish and is checked, since GitLab does not say
+        // whether it took it; `reviewed` is a courtesy to the author, not a
+        // gate, so it lands with the publish. ---
         let verdict_ok = match batch.verdict {
-            Some(Verdict::Approve) => {
-                let ok = self.approve(id);
-                if ok && !has_publishable {
-                    notifications = notifications.max(1);
-                }
-                Some(ok)
-            }
+            Some(Verdict::Approve) => Some(self.approve(id, &batch.version.head_sha)),
             Some(Verdict::RequestChanges) => {
-                let ok = self.unapprove(id);
-                if ok && !has_publishable {
-                    notifications = notifications.max(1);
+                let ok = state_set && self.reviewer_state_is(id, "requested_changes");
+                if state_set && !ok {
+                    log::warn!(
+                        "MR {id}: GitLab did not record the request for changes; a reviewer \
+                         state takes permission to update the MR"
+                    );
                 }
                 Some(ok)
             }
-            Some(Verdict::Comment) => Some(true),
+            Some(Verdict::Comment) => Some(state_set),
             None => None,
         };
+        if verdict_ok == Some(true) && notifications == 0 {
+            notifications = 1;
+        }
 
-        // Comment/reply actions all landed (we returned early on any failure).
-        let mut landed: HashMap<ActionKey, bool> = batch
-            .actions
-            .iter()
-            .filter(|a| !matches!(a, BatchAction::Resolve { .. }))
-            .map(|a| (a.key(), true))
-            .collect();
+        let mut landed: HashMap<ActionKey, bool> = HashMap::new();
+        for (draft, &went) in drafts.iter().zip(&published) {
+            for key in &draft.keys {
+                landed.insert(key.clone(), went);
+            }
+        }
 
         // --- Phase 3: resolves (separate PUTs, per action). ---
         for a in &batch.actions {
@@ -1107,7 +1214,7 @@ impl Forge for GitLab {
             summary_ok,
             verdict_ok,
             notifications,
-            inflight: Vec::new(),
+            inflight,
         })
     }
 
@@ -1299,6 +1406,50 @@ mod tests {
                 Some(line)
             );
         }
+    }
+
+    /// GitLab keeps one draft per author and thread, so the replies into one
+    /// thread travel as one draft; every other action keeps its own.
+    #[test]
+    fn replies_into_one_thread_share_a_draft() {
+        let reply = |key: &str, thread: &str, body: &str| BatchAction::Reply {
+            key: key.into(),
+            thread: thread.into(),
+            body: body.into(),
+        };
+        let batch = ReviewBatch {
+            verdict: None,
+            summary: Some("overall".into()),
+            actions: vec![
+                reply("r1", "d1", "first"),
+                BatchAction::Comment {
+                    key: "c".into(),
+                    anchor: None,
+                    version: version(),
+                    body: "note".into(),
+                },
+                reply("r2", "d2", "elsewhere"),
+                reply("r3", "d1", "second"),
+                BatchAction::Resolve {
+                    key: "x".into(),
+                    thread: "d1".into(),
+                    resolved: true,
+                },
+            ],
+            version: version(),
+            stale: Vec::new(),
+        };
+        let drafts = drafts_of(&batch);
+        let keys: Vec<Vec<&str>> = drafts
+            .iter()
+            .map(|d| d.keys.iter().map(String::as_str).collect())
+            .collect();
+        assert_eq!(keys, [vec!["r1", "r3"], vec!["c"], vec!["r2"]]);
+        assert_eq!(drafts[0].body["note"], "first\n\nsecond");
+        assert_eq!(drafts[0].body["in_reply_to_discussion_id"], "d1");
+        assert!(drafts[0].reply && !drafts[1].reply);
+        // The summary is no draft: it rides the publish as a plain note.
+        assert!(drafts.iter().all(|d| d.body["note"] != "overall"));
     }
 
     #[test]
