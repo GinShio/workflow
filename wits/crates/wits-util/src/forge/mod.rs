@@ -90,9 +90,9 @@ pub struct MergeRequest {
     pub web_url: String,
 }
 
-/// Everything needed to open a new MR. The forge turns `branch` (plus the fork
-/// owner it already knows) into the right head reference; the caller never has to
-/// reason about cross-fork head syntax.
+/// Everything needed to open a new MR. The forge turns `branch` (plus the push
+/// repository it already knows) into the right head reference; the caller never
+/// has to reason about cross-fork head syntax.
 #[derive(Debug, Clone)]
 pub struct NewMr {
     pub branch: String,
@@ -361,10 +361,11 @@ pub fn detect(repo: &Repository, remotes: &Remotes) -> anyhow::Result<Box<dyn Fo
 
 /// Find a token, most specific first: per-host config, then per-service config,
 /// then a blanket config key, then the platform's conventional env var. Config
-/// before env would invert the codebase's rule that the environment is the
-/// deliberate, throwaway override — so env comes last only among *config*, but a
-/// set env var still wins via the resolver elsewhere; here a token is a single
-/// secret and the explicit per-host config is the most precise answer.
+/// comes before the environment here, unlike a setting, where the environment
+/// is the deliberate, throwaway override: a token is one standing secret, the
+/// per-host key is the most precise answer to which one, and the env var is
+/// the CI-shaped fallback (`docs/reference/stack-design.rst`, "Transport and
+/// credentials").
 fn resolve_token(repo: &Repository, host: &str, service: Service) -> Option<String> {
     let config_keys = [
         format!("wits.forge.{host}.token"),

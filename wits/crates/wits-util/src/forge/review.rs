@@ -1,9 +1,9 @@
 //! The review half of the forge boundary: the normalized types the `review`
 //! command speaks in, kept free of any platform's JSON shape.
 //!
-//! Where the MR half (in `super`) is four small primitives, review touches
-//! corners of the platforms that do *not* normalize cleanly — batched reviews,
-//! approve-as-a-separate-call, GraphQL-only thread resolution. Those differences
+//! Where the MR half (in `super`) is a handful of small primitives, review
+//! touches corners of the platforms that do *not* normalize cleanly — batched
+//! reviews, approve-as-a-separate-call, GraphQL-only thread resolution. Those differences
 //! are trapped inside each host module and surfaced honestly in the capability
 //! matrix of `docs/reference/review-design.rst`; here we define only the shapes
 //! that cross the boundary. Nothing above the [`Forge`](super::Forge) trait ever

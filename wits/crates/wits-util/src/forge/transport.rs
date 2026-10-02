@@ -26,7 +26,8 @@ use serde_json::Value;
 pub(crate) enum Auth {
     /// `Authorization: Bearer <t>` — GitHub accepts this for every token kind.
     Bearer(String),
-    /// `Authorization: token <t>` — what Gitea/Forgejo personal tokens expect.
+    /// `Authorization: token <t>` — Gitea's own scheme for a personal token,
+    /// which Gitea and Forgejo accept alongside `Bearer`.
     Token(String),
     /// `PRIVATE-TOKEN: <t>` — GitLab's own header.
     PrivateToken(String),
@@ -342,7 +343,7 @@ pub(crate) fn request_with_headers(
 
 /// Issue a paginated request, accumulating items across pages. Each backend
 /// supplies a parser that extracts items from one page and the next-page URL
-/// (parsed from `Link` headers on GitHub, `X-Next-Page` on GitLab, etc.).
+/// (from the `Link` header on Gitea and Forgejo, `X-Next-Page` on GitLab).
 ///
 /// The parser is called once per page; its items are appended to the
 /// accumulator before the next page is fetched. A `None` next-URL (or

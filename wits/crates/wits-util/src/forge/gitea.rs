@@ -1,10 +1,11 @@
 //! Gitea / Forgejo / Codeberg merge requests.
 //!
-//! The API is GitHub-shaped but not identical, and the two differences are the
-//! ones that bite: a personal token authenticates with the `token` scheme (not
-//! bearer), and there is no draft *field* — a draft is signalled by a `WIP:`
-//! title prefix. Listing-then-filtering replaces GitHub's head query because the
-//! list endpoint is the dependable one across Gitea versions.
+//! The API is GitHub's REST API in shape but not in detail, and the
+//! differences that bite are behaviours: there is no draft *field* — a draft
+//! is signalled by a `WIP:` title prefix (the server's default
+//! `WORK_IN_PROGRESS_PREFIXES`) — and the PR list filters by head branch only
+//! from Forgejo 16 on, so a branch's PRs are found by listing and checking
+//! each one. The servers differ among themselves too, and the code says where.
 
 use serde_json::{json, Value};
 
