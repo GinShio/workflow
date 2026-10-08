@@ -28,6 +28,11 @@
 				"matcher": "^(Write|Delete|StrReplace)$",
 				"timeout": 15,
 				"failClosed": true
+			},
+			{
+				"command": "node $HOME/.cursor/hooks/tmpdir.ts {{@@ env['XDG_RUNTIME_DIR'] @@}}/cursor",
+				"matcher": "^Shell$",
+				"timeout": 15
 			}
 		]
 	}

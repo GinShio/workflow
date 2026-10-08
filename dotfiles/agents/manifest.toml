@@ -167,9 +167,9 @@ capabilities = ['develop']
 planes = ['user']
 
 [[install]]
-id = 'agents-cursor-hooks-guard'
-dst = '~/.cursor/hooks/guard.ts'
-path = 'cursor/hooks/guard.ts'
+id = 'agents-cursor-hooks-spec'
+dst = '~/.cursor/hooks'
+path = 'cursor/hooks'
 capabilities = ['develop']
 planes = ['user']
 
