@@ -104,7 +104,6 @@ id = 'agents-codex-settings'
 dst = '~/.codex/config.toml'
 path = 'codex/config.toml'
 capabilities = ['develop']
-requires_overlays = ['khronos3d']
 planes = ['user']
 chmod = '600'
 

@@ -1,9 +1,13 @@
 # -*- mode: toml; coding: utf-8; indent-tabs-mode: nil; -*-
 
+approvals_reviewer = "user"
+
+# The provider block is written for khronos3d's Azure gateway (the APIM key
+# header); other hosts keep codex's built-in provider.
+{%@@ if "khronos3d" in overlays @@%}
 model_provider         = "{{@@ agents.vendors['codex'] @@}}"
 model                  = "{{@@ agents.model[agents.vendors['codex']].default @@}}"
 model_reasoning_effort = "max"
-approvals_reviewer     = "user"
 
 [model_providers.{{@@ agents.vendors['codex'] @@}}]
 name         = "CODEX API Vendor"
@@ -11,6 +15,7 @@ base_url     = "{{@@ agents.vendor[agents.vendors['codex']].url @@}}"
 api_key      = "{{@@ agents.vendor[agents.vendors['codex']].key @@}}"
 http_headers = { "Ocp-Apim-Subscription-Key" = "{{@@ agents.vendor[agents.vendors['codex']].key @@}}" }
 wire_api     = "responses"
+{%@@ endif @@%}
 
 # Agent-spawned commands get the per-agent scratch dir as TMPDIR; codex's own
 # temp files live in ~/.codex/tmp regardless.
