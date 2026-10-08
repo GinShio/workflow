@@ -1,4 +1,7 @@
 {
+  "env": {
+    "TMPDIR": "{{@@ env['XDG_RUNTIME_DIR'] @@}}/claude"
+  },
   "hooks": {
     "PreToolUse": [
       {
