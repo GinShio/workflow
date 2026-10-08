@@ -9,13 +9,15 @@
 		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/claude",
 		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/codex",
 		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/cursor",
-		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/pi"
+		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/pi",
+		"{{@@ sysenv.xdg_state_home @@}}/wits/handoff"
 	],
 	"writeExemptPrefixes": [
 		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/claude",
 		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/codex",
 		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/cursor",
 		"{{@@ env['XDG_RUNTIME_DIR'] @@}}/pi",
+		"{{@@ sysenv.xdg_state_home @@}}/wits/handoff",
 		"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"
 	],
 	"unattended": {

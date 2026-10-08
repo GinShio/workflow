@@ -51,8 +51,9 @@
  *   - bashScope "external" classes gate on the project root plus the
  *     write-exempt prefixes: the scratch dirs count as interior (per-agent,
  *     wiped at session end — the same footing the workspace holds through
- *     git). A secret inside the project root still asks: the root does not
- *     exempt the secret scan, only the scope classes.
+ *     git), and so does the handoff store (notes agents write for the next
+ *     session, cheap to lose). A secret inside the project root still asks:
+ *     the root does not exempt the secret scan, only the scope classes.
  *   - underPrefixes classes are the pinned-safe doctrine carried to its third
  *     use: like readAllowlist under read-scope and writeExemptPrefixes under
  *     tree-external-write, they keep the scratch dirs exempt from the tmp rule
