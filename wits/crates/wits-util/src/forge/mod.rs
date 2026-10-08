@@ -315,11 +315,15 @@ pub fn detect(repo: &Repository, remotes: &Remotes) -> anyhow::Result<Box<dyn Fo
         ),
     }
 
-    let token = resolve_token(repo, &target.host, service).ok_or_else(|| {
+    let token = resolve_token(repo, &target, service).ok_or_else(|| {
         anyhow::anyhow!(
-            "no API token for {} ({}); set wits.forge.{}.token or the platform's *_TOKEN env var",
+            "no API token for {}/{} ({}); set wits.forge.{}/{}.token for this owner or \
+             wits.forge.{}.token for the whole host, or the platform's *_TOKEN env var",
             target.host,
+            target.project_path(),
             service.as_str(),
+            target.host,
+            target.owner,
             target.host
         )
     })?;
@@ -359,21 +363,33 @@ pub fn detect(repo: &Repository, remotes: &Remotes) -> anyhow::Result<Box<dyn Fo
     }
 }
 
-/// Find a token, most specific first: per-host config, then per-service config,
-/// then a blanket config key, then the platform's conventional env var. Config
-/// comes before the environment here, unlike a setting, where the environment
-/// is the deliberate, throwaway override: a token is one standing secret, the
-/// per-host key is the most precise answer to which one, and the env var is
-/// the CI-shaped fallback (`docs/reference/stack-design.rst`, "Transport and
-/// credentials").
-fn resolve_token(repo: &Repository, host: &str, service: Service) -> Option<String> {
-    let config_keys = [
-        format!("wits.forge.{host}.token"),
-        format!("wits.forge.{}.token", service.as_str()),
-        "wits.forge.token".to_owned(),
-    ];
-    for key in &config_keys {
-        if let Some(v) = repo.get_config(key).ok().flatten() {
+/// Find a token for `target`, most specific first: config scoped to a path of
+/// the repository on its host (`wits.forge.<host>/<owner>[/<repo>].token`, the
+/// longest matching path first), then per-host config, then per-service config,
+/// then a blanket config key, then the platform's conventional env var.
+///
+/// The path-scoped keys exist because a token need not cover its whole host: a
+/// GitHub fine-grained PAT "is limited to access resources owned by a single
+/// user or organization" (GitHub Docs, "Managing your personal access
+/// tokens"), so one host can need a different token per owner.
+///
+/// Config comes before the environment here, unlike a setting, where the
+/// environment is the deliberate, throwaway override: a token is one standing
+/// secret, the most specific key is the most precise answer to which one, and
+/// the env var is the CI-shaped fallback (`docs/reference/stack-design.rst`,
+/// "Transport and credentials").
+fn resolve_token(repo: &Repository, target: &RemoteInfo, service: Service) -> Option<String> {
+    let path_scoped = repo.config_names(r"^wits\.forge\.[^/]+/.+\.token$");
+    let config_keys = path_scoped_token_keys(&path_scoped, target)
+        .into_iter()
+        .map(str::to_owned)
+        .chain([
+            format!("wits.forge.{}.token", target.host),
+            format!("wits.forge.{}.token", service.as_str()),
+            "wits.forge.token".to_owned(),
+        ]);
+    for key in config_keys {
+        if let Some(v) = repo.get_config(&key).ok().flatten() {
             return Some(v);
         }
     }
@@ -389,6 +405,38 @@ fn resolve_token(repo: &Repository, host: &str, service: Service) -> Option<Stri
         Service::Unknown => &[],
     };
     env_vars.iter().find_map(|v| std::env::var(v).ok())
+}
+
+/// The path-scoped token keys among `names` that cover `target`, the most
+/// specific first. A key covers the target when its host is the target's and
+/// its path segments lead the target's `owner/repo` path: whole segments,
+/// compared case-insensitively, as [`RemoteInfo::same_repository`] compares
+/// repositories. Of two keys equally specific, the one git read later comes
+/// first, as a later config value overrides an earlier one.
+fn path_scoped_token_keys<'a>(names: &'a [String], target: &RemoteInfo) -> Vec<&'a str> {
+    let project = target.project_path();
+    let repo_path: Vec<&str> = project.split('/').collect();
+    let mut keys: Vec<(usize, usize, &str)> = names
+        .iter()
+        .enumerate()
+        .filter_map(|(read_at, name)| {
+            let scope = name.strip_prefix("wits.forge.")?.strip_suffix(".token")?;
+            let (host, path) = scope.split_once('/')?;
+            let path: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+            let covers = host.eq_ignore_ascii_case(&target.host)
+                && !path.is_empty()
+                && path.len() <= repo_path.len()
+                && path
+                    .iter()
+                    .zip(&repo_path)
+                    .all(|(a, b)| a.eq_ignore_ascii_case(b));
+            covers.then_some((path.len(), read_at, name.as_str()))
+        })
+        .collect();
+    keys.sort_unstable_by_key(|&(specificity, read_at, _)| {
+        std::cmp::Reverse((specificity, read_at))
+    });
+    keys.into_iter().map(|(_, _, name)| name).collect()
 }
 
 /// Drop repeats of an MR, keeping its first — most recently updated —
@@ -422,6 +470,95 @@ mod tests {
             .map(|mr| mr.id)
             .collect();
         assert_eq!(kept, ["3", "1", "2"]);
+    }
+
+    fn repository(host: &str, owner: &str, repo: &str) -> RemoteInfo {
+        RemoteInfo {
+            host: host.into(),
+            owner: owner.into(),
+            repo: repo.into(),
+            service: Service::GitHub,
+        }
+    }
+
+    fn names(keys: &[&str]) -> Vec<String> {
+        keys.iter().map(|key| (*key).to_owned()).collect()
+    }
+
+    /// A fine-grained PAT reaches one owner, so an owner's key must reach that
+    /// owner's repositories and no one else's, a repository's own key first.
+    #[test]
+    fn a_path_scoped_token_key_covers_only_its_own_path() {
+        let keys = names(&[
+            "wits.forge.github.com/acme.token",
+            "wits.forge.github.com/acme/driver.token",
+            "wits.forge.github.com/octo-org.token",
+            "wits.forge.gitlab.com/acme.token",
+            "wits.forge.github.com.token",
+        ]);
+        let covering = |owner: &str, repo: &str| {
+            path_scoped_token_keys(&keys, &repository("github.com", owner, repo))
+        };
+        assert_eq!(
+            covering("acme", "driver"),
+            [
+                "wits.forge.github.com/acme/driver.token",
+                "wits.forge.github.com/acme.token",
+            ]
+        );
+        assert_eq!(
+            covering("acme", "other"),
+            ["wits.forge.github.com/acme.token"]
+        );
+        // Whole segments only: an owner whose name merely starts the same is
+        // someone else.
+        assert!(covering("acme-labs", "driver").is_empty());
+        // An owner no key names is covered by none of them.
+        assert!(covering("globex", "widget").is_empty());
+    }
+
+    #[test]
+    fn a_path_scoped_token_key_matches_however_the_path_is_spelled() {
+        let keys = names(&["wits.forge.GitHub.com/acme/.token"]);
+        assert_eq!(
+            path_scoped_token_keys(&keys, &repository("github.com", "Acme", "r")),
+            ["wits.forge.GitHub.com/acme/.token"]
+        );
+    }
+
+    /// GitLab nests groups, so an owner can be several segments long; the
+    /// longest covering path still wins.
+    #[test]
+    fn a_nested_group_is_matched_by_its_longest_path() {
+        let keys = names(&[
+            "wits.forge.gitlab.com/group.token",
+            "wits.forge.gitlab.com/group/subx.token",
+            "wits.forge.gitlab.com/group/sub/proj.token",
+            "wits.forge.gitlab.com/group/sub.token",
+        ]);
+        assert_eq!(
+            path_scoped_token_keys(&keys, &repository("gitlab.com", "group/sub", "proj")),
+            [
+                "wits.forge.gitlab.com/group/sub/proj.token",
+                "wits.forge.gitlab.com/group/sub.token",
+                "wits.forge.gitlab.com/group.token",
+            ]
+        );
+    }
+
+    #[test]
+    fn of_two_equally_specific_keys_the_later_one_wins() {
+        let keys = names(&[
+            "wits.forge.github.com/acme.token",
+            "wits.forge.github.com/Acme.token",
+        ]);
+        assert_eq!(
+            path_scoped_token_keys(&keys, &repository("github.com", "acme", "r")),
+            [
+                "wits.forge.github.com/Acme.token",
+                "wits.forge.github.com/acme.token",
+            ]
+        );
     }
 
     #[test]

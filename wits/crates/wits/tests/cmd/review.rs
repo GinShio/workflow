@@ -218,21 +218,35 @@ impl Fixture {
         self.run_with(args, Some(stdin))
     }
 
+    /// [`run`](Self::run) with no token in the environment, so the forge's
+    /// token can come from git config alone.
+    fn run_tokenless(&self, args: &[&str]) -> Out {
+        self.run_as(args, None, None)
+    }
+
     fn run_with(&self, args: &[&str], stdin: Option<&str>) -> Out {
+        // A token lets a dry-run submit resolve the forge.
+        self.run_as(args, stdin, Some("x"))
+    }
+
+    fn run_as(&self, args: &[&str], stdin: Option<&str>, token: Option<&str>) -> Out {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_wits"));
         cmd.args(args)
             .current_dir(&self.repo)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env("WITS_REVIEW_DIR", &self.store)
-            .env("GITHUB_TOKEN", "x") // lets a dry-run submit resolve the forge
-            .stdin(if stdin.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .env("WITS_REVIEW_DIR", &self.store);
+        match token {
+            Some(token) => cmd.env("GITHUB_TOKEN", token),
+            None => cmd.env_remove("GITHUB_TOKEN"),
+        };
+        cmd.stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
         let mut child = cmd.spawn().unwrap();
         if let Some(text) = stdin {
             child
@@ -480,6 +494,40 @@ fn submit_dry_run_plans_without_touching_the_network() {
     assert!(out.stdout.contains("src/x.c:50"));
     // A dry run leaves the draft untouched.
     assert!(fx.local_exists("1"));
+}
+
+/// The draft a dry-run submit needs the forge for.
+const FORGE_DRAFT: &str = r#"{ "schema": 1, "verdict": "comment",
+     "actions": [ { "action": "summary", "body": "looks fine" } ] }"#;
+
+/// A GitHub fine-grained PAT reaches one owner's repositories, so it is kept
+/// under that owner's key, which may spell the owner otherwise than the remote.
+#[test]
+fn submit_takes_the_token_kept_for_the_repository_owner() {
+    let fx = Fixture::new();
+    fx.seed("1", "head111");
+    fx.write_local("1", FORGE_DRAFT);
+    fx.git(&["config", "wits.forge.github.com/Me.token", "x"]);
+
+    let out = fx.run_tokenless(&["-n", "review", "submit", "1"]);
+    assert!(out.success, "stderr: {}", out.stderr);
+}
+
+#[test]
+fn submit_never_takes_the_token_kept_for_another_owner() {
+    let fx = Fixture::new();
+    fx.seed("1", "head111");
+    fx.write_local("1", FORGE_DRAFT);
+    fx.git(&["config", "wits.forge.github.com/someone-else.token", "x"]);
+
+    let out = fx.run_tokenless(&["-n", "review", "submit", "1"]);
+    assert!(!out.success, "stdout: {}", out.stdout);
+    assert!(
+        out.stderr.contains("no API token for github.com/me/proj")
+            && out.stderr.contains("wits.forge.github.com/me.token"),
+        "stderr: {}",
+        out.stderr
+    );
 }
 
 /// The regression: `prune` carried no dry-run guard at all, so `-n` destroyed the

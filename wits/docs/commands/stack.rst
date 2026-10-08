@@ -71,20 +71,28 @@ One-time setup
 --------------
 
 **A token for your forge.** Opening and editing MRs needs an API token. Put it
-in git config (per host is the most precise; a blanket key works too):
+in git config (per host is the usual choice; a blanket key works too):
 
 .. code-block:: sh
 
-   git config wits.forge.github.com.token  ghp_xxx
+   git config wits.forge.github.com.token  <token>
    # or, less specific:
-   git config wits.forge.github.token       ghp_xxx
-   git config wits.forge.token              ghp_xxx
+   git config wits.forge.github.token       <token>
+   git config wits.forge.token              <token>
+
+A token that reaches only part of a host goes under the path it covers, and
+then wins for every repository below that path. A GitHub fine-grained PAT
+reaches one owner, so it is kept per owner:
+
+.. code-block:: sh
+
+   git config wits.forge.github.com/acme.token <token>
 
 Or supply it through the environment, which always works and is handy on CI:
 
 .. code-block:: sh
 
-   export GITHUB_TOKEN=ghp_xxx     # GITLAB_TOKEN / GITEA_TOKEN / FORGEJO_TOKEN / CODEBERG_TOKEN
+   export GITHUB_TOKEN=<token>     # GITLAB_TOKEN / GITEA_TOKEN / FORGEJO_TOKEN / CODEBERG_TOKEN
 
 ``sync`` needs no token (it only pushes); ``submit``, ``anno``, and
 ``decorate`` do.
@@ -423,9 +431,13 @@ tokens under the shared ``wits.forge.*``, and ``stack``'s own settings under
    * - Setting
      - Key
      - Notes
+   * - Token (per path)
+     - ``wits.forge.<host>/<owner>[/<repo>].token``
+     - Most specific; the longest path leading the repository's wins, matched
+       by whole segments, case-insensitively
    * - Token (per host)
      - ``wits.forge.<host>.token``
-     - Most specific; ``<host>`` is e.g. ``github.com``
+     - ``<host>`` is e.g. ``github.com``
    * - Token (per service)
      - ``wits.forge.<service>.token``
      - ``<service>`` ∈ github, gitlab, gitea, forgejo, codeberg
@@ -478,7 +490,8 @@ Troubleshooting
    * - Symptom
      - Cause and fix
    * - ``no API token for …``
-     - Set ``wits.forge.<host>.token`` or the platform's ``*_TOKEN`` env var.
+     - Set ``wits.forge.<host>/<owner>.token``, ``wits.forge.<host>.token``, or
+       the platform's ``*_TOKEN`` env var.
    * - ``could not detect the forge for host '…'``
      - Self-hosted behind a custom domain: set ``wits.forge.<host>.service``.
    * - ``HTTP 301: moved to …``

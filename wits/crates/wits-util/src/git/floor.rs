@@ -121,6 +121,17 @@ impl Repository {
             .unwrap_or_default()
     }
 
+    /// The names of the config keys matching `pattern`, a regular expression
+    /// over git's canonical form of a name (section and variable lowercased,
+    /// subsection as written), in the order git reads them: a key set in
+    /// several places is listed once per place. Only names are printed, so
+    /// keys holding secrets can be listed without their values.
+    pub fn config_names(&self, pattern: &str) -> Vec<String> {
+        self.query(&["config", "--name-only", "--get-regexp", pattern])
+            .map(|s| s.lines().map(str::to_owned).collect())
+            .unwrap_or_default()
+    }
+
     /// The branch currently checked out, or `None` on a detached HEAD. A
     /// detached HEAD has no name to push or build on, so the absence is
     /// meaningful rather than an error.

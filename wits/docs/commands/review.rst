@@ -76,12 +76,14 @@ configured exactly as for ``stack``:
 
    * - Where
      - Example
+   * - git config, per owner (a GitHub fine-grained PAT reaches one)
+     - ``git config wits.forge.github.com/acme.token <token>``
    * - git config, per host
-     - ``git config wits.forge.github.com.token ghp_xxx``
+     - ``git config wits.forge.github.com.token <token>``
    * - git config, blanket
-     - ``git config wits.forge.token ghp_xxx``
+     - ``git config wits.forge.token <token>``
    * - environment
-     - ``export GITHUB_TOKEN=ghp_xxx`` (or ``GITLAB_TOKEN``)
+     - ``export GITHUB_TOKEN=<token>`` (or ``GITLAB_TOKEN``)
 
 The forge (GitHub or GitLab in this version) is detected from the **upstream**
 remote's URL, or ``origin`` when there is no upstream. A self-hosted instance:
@@ -838,8 +840,12 @@ Git config (under ``wits.forge.*``, shared with ``stack``)
 
 Token resolution tries these in order, most specific first, then the env var:
 
-* **``wits.forge.<host>.token``** — Token for one host (e.g. ``github.com``).
-  The most precise, and what you usually set.
+* **``wits.forge.<host>/<owner>[/<repo>].token``** — Token for the
+  repositories under one path of a host, for a token that reaches only those:
+  a GitHub fine-grained PAT reaches one owner's. The longest path leading the
+  repository's wins; paths match by whole segments, case-insensitively.
+* **``wits.forge.<host>.token``** — Token for one host (e.g. ``github.com``),
+  and what you usually set.
 * **``wits.forge.<service>.token``** — Token for a whole service
   (``<service>`` ∈ ``github``, ``gitlab``), when several hosts share a service.
 * **``wits.forge.token``** — A blanket token, the last config fallback before
@@ -1008,7 +1014,8 @@ Troubleshooting
    * - ``no 'origin' or 'upstream' remote…``
      - ``review`` keys off the target remote; add one.
    * - ``no API token for …``
-     - Set ``wits.forge.<host>.token`` or ``*_TOKEN`` (fetch/submit only).
+     - Set ``wits.forge.<host>/<owner>.token``, ``wits.forge.<host>.token``,
+       or ``*_TOKEN`` (fetch/submit only).
    * - ``HTTP 301: moved to …``
      - The repository was renamed or transferred; point the remote at the URL
        it names.

@@ -452,13 +452,22 @@ is the server's own, ``Retry-After`` or the reset of a spent quota, up to 60
 seconds; past that the limit is reported, since a quota that refills hourly is
 better retried by the user than slept through.
 
-Token resolution, most specific first: ``wits.forge.<host>.token`` →
-``wits.forge.<service>.token`` → ``wits.forge.token`` → env (``GITHUB_TOKEN``
-/ ``GITLAB_TOKEN`` / ``GITEA_TOKEN`` / ``FORGEJO_TOKEN`` /
-``CODEBERG_TOKEN``). Unlike the single-setting resolver, config is consulted
-*before* the environment here: a token is one standing secret and the
-per-host key is the most precise answer, while the env var is the
-CI-shaped fallback.
+Token resolution, most specific first: ``wits.forge.<host>/<path>.token``,
+where ``<path>`` leads the merge target's ``<owner>/<repo>`` (the longest
+match first) → ``wits.forge.<host>.token`` → ``wits.forge.<service>.token`` →
+``wits.forge.token`` → env (``GITHUB_TOKEN`` / ``GITLAB_TOKEN`` /
+``GITEA_TOKEN`` / ``FORGEJO_TOKEN`` / ``CODEBERG_TOKEN``). Unlike the
+single-setting resolver, config is consulted *before* the environment here: a
+token is one standing secret and the most specific key is the most precise
+answer, while the env var is the CI-shaped fallback.
+
+The path-scoped keys exist because a token need not cover its host: a GitHub
+fine-grained PAT reaches the resources of a single user or organization, so
+one host can need a token per owner. A path matches on whole segments and
+case-insensitively, the way the forges compare owners and repositories; git's
+own URL matching (``git config --get-urlmatch``) was passed over because it
+compares paths case-sensitively. A run holds the one token chosen for the
+merge target, and the reads a fork needs ride on it.
 
 Gitea, Forgejo and Codeberg are one API family and share a single impl, but
 stay three separate *identities* — each with its own token env and
