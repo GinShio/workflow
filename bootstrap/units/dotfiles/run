@@ -1,6 +1,7 @@
 #!/bin/sh
-# Decrypt what this run has keys for, compile every host's Dotdrop config,
-# then install the two planes for this host.
+# Decrypt what this run has keys for, compile the Dotdrop config of every host
+# whose overlays that leaves readable, then install the two planes for this
+# host.
 #
 # The system plane escalates from inside this unit rather than the unit being
 # `root: yes` wholesale: generate, transcrypt and the user plane all have to
@@ -48,9 +49,11 @@ context_password() {
     printenv "WITS_TRANSCRYPT_$(upper "$1")_PASSWORD" 2>/dev/null || true
 }
 
-# Every overlay this run has a key for. `generate` compiles every host, so a
-# fragment still locked under another machine's overlay fails the whole run —
-# they all have to be decrypted, not just this machine's.
+# Every context this run was given a password for, starting with this
+# machine's own overlay. Generating needs no other machine's key: `generate`
+# skips an overlay this clone cannot read, with every host using it, and warns.
+# Any other key given is configured too, because a deployed file may be
+# encrypted under a key other than its own overlay's.
 collect_contexts() {
     add_context "$BOOTSTRAP_PROFILE"
     _env="$TMPDIR_DOT/env"
@@ -124,6 +127,9 @@ configure_transcrypt() {
 # entrypoint. The host is whatever the registry entry named, which is also
 # what the `hostname` unit set the machine to — so unlike the old module there
 # is nothing to guess and no fallback chain.
+#
+# Only hosts this clone could generate are listed, so a host missing from it is
+# either undeclared or uses an overlay still encrypted here.
 resolve_host() {
     _want=$BOOTSTRAP_HOSTNAME
     while read -r _plane _host _count _label _path; do
@@ -135,14 +141,19 @@ resolve_host() {
         fi
     done < "$CATALOG_FILE"
 
-    printf 'Error: no Dotdrop host named %s.\n' "$_want" >&2
-    printf 'Declared hosts:\n' >&2
+    printf 'Error: no Dotdrop config was generated for host %s.\n' "$_want" >&2
+    printf 'Generated hosts:\n' >&2
+    _listed=0
     while read -r _plane _host _count _label _path; do
         [ "$_label" = "unit(s)" ] || continue
         [ "$_plane" = user ] || continue
         printf '  %s\n' "$_host" >&2
+        _listed=1
     done < "$CATALOG_FILE"
-    printf 'The registry entry names this host; align it with hosts.toml.\n' >&2
+    [ "$_listed" -eq 1 ] || printf '  (none)\n' >&2
+    printf 'Either hosts.toml does not declare it (align it with the registry entry),\n' >&2
+    printf 'or it uses an overlay still encrypted here (see the warning above, and\n' >&2
+    printf 'give this run the password for that overlay).\n' >&2
     return 1
 }
 
