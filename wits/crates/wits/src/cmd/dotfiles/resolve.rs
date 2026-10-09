@@ -17,6 +17,17 @@
 //! separable from the "what does Dotdrop want to read" decisions, which is the
 //! seam a second backend would use.
 //!
+//! ## What a clone cannot read
+//!
+//! A clone holds the transcrypt keys of the machines it serves, rarely every
+//! key, so some fragments are still ciphertext — a normal state, not a broken
+//! one. A host's output depends on the shared files plus its own overlays'
+//! fragments and nothing else, so a locked fragment only has to stop what is
+//! built from it: its overlay's aggregate, and every host that uses that
+//! overlay. Those are skipped whole, with a warning, and the rest is generated
+//! as usual. Never in part: an aggregate or entrypoint built from the readable
+//! rest of an overlay would deploy quietly without the locked values.
+//!
 //! ## Why the per-overlay aggregates look redundant
 //!
 //! Dotdrop merges `import_variables` **shallowly**: the last file to mention a
@@ -36,7 +47,8 @@ use toml::{Table, Value};
 
 use super::layout::{match_fragment, relative, FragmentName};
 use super::model::{
-    leaves, merge_into, template_references, Composition, Fragment, Globals, Install, Manifest,
+    leaves, merge_into, template_references, Composition, Fragment, Globals, Host, Install,
+    Manifest,
 };
 use super::tree::{is_contained, Repo};
 
@@ -47,10 +59,17 @@ pub struct Plan {
     pub dynvariables: Table,
     pub actions: Table,
     /// Per overlay, the values that overlay changes. Absent for overlays nobody
-    /// overrides.
+    /// overrides, and for overlays this clone cannot read.
     pub overlay_variables: BTreeMap<String, Aggregate>,
-    /// One per plane × host, in emission order.
+    /// One per plane × host, in emission order, for every host whose overlays
+    /// this clone can read.
     pub entrypoints: Vec<Entrypoint>,
+    /// Output the description declares but this run leaves alone, because this
+    /// clone cannot read what it is built from. Never stale: an earlier run may
+    /// have written it, and a clone holding the key would write it again.
+    pub withheld: Vec<PathBuf>,
+    /// One per overlay this clone cannot read: what it skipped, and why.
+    pub warnings: Vec<String>,
     /// Non-fatal observations: dead installs, unused fragments, stale output.
     pub notes: Vec<String>,
 }
@@ -173,6 +192,8 @@ pub fn plan(repo: &Repo) -> Result<Plan> {
         actions,
         overlay_variables,
         entrypoints,
+        withheld: inputs.withheld(repo),
+        warnings: inputs.warnings(),
         notes,
     })
 }
@@ -189,9 +210,10 @@ pub fn inspect(repo: &Repo) -> Result<(Vec<String>, Vec<String>)> {
 // --- loaded inputs ------------------------------------------------------------
 
 /// Every file the generator reads, parsed. Loading is separated from resolving
-/// so that a locked or malformed fragment fails before any selection has run —
-/// a half-resolved plan built from a fragment that silently read as empty is
-/// exactly the outcome the encryption boundary makes possible.
+/// so that a malformed file fails, and a locked fragment is known, before any
+/// selection has run — a half-resolved plan built from a fragment that
+/// silently read as empty is exactly the outcome the encryption boundary makes
+/// possible.
 struct Inputs {
     composition: Composition,
     globals: Globals,
@@ -203,6 +225,10 @@ struct Inputs {
     fragments: Vec<Loaded>,
     /// Per-overlay values with no module owner at all, in the same order.
     shared_fragments: Vec<Loaded>,
+    /// Overlay -> its fragments this clone holds as ciphertext, in the same
+    /// order. An overlay listed here cannot be read whole, so nothing that is
+    /// built from it is built at all.
+    locked: BTreeMap<String, Vec<PathBuf>>,
     /// `.toml` files in a fragment directory that name no overlay any host uses.
     unclaimed: Vec<PathBuf>,
     /// Fragment file names that could belong to more than one overlay.
@@ -220,14 +246,17 @@ struct Loaded {
 
 /// Reads one fragment directory, sorting its files into the overlay each names.
 ///
-/// The two rejects are carried out rather than dropped. A file naming no known
-/// overlay is dead weight that reads like configuration, and a file naming two
-/// is a value about to be filed under the wrong encryption key — both are worth
-/// more than the silence that probing-by-name used to give them.
+/// Nothing it cannot use is dropped. A file naming no known overlay is dead
+/// weight that reads like configuration, and a file naming two is a value
+/// about to be filed under the wrong encryption key — both are worth more than
+/// the silence that probing-by-name used to give them. A file still encrypted
+/// is filed under its overlay like any other, because which overlays a clone
+/// can read decides what it can build.
 #[derive(Default)]
 struct Scan {
     unclaimed: Vec<PathBuf>,
     ambiguous: Vec<(PathBuf, Vec<String>)>,
+    locked: BTreeMap<String, Vec<PathBuf>>,
 }
 
 impl Scan {
@@ -265,11 +294,18 @@ impl Scan {
         // `personal.identity` sorts before `personal`.
         here.sort();
         for (name, path) in here {
-            out.push(Loaded {
-                overlay: name.overlay.to_owned(),
-                fragment: repo.read::<Fragment>(&path)?,
-                path,
-            });
+            match repo.read_unless_locked::<Fragment>(&path)? {
+                Some(fragment) => out.push(Loaded {
+                    overlay: name.overlay.to_owned(),
+                    path,
+                    fragment,
+                }),
+                None => self
+                    .locked
+                    .entry(name.overlay.to_owned())
+                    .or_default()
+                    .push(path),
+            }
         }
         Ok(())
     }
@@ -322,6 +358,7 @@ impl Inputs {
             manifests,
             fragments,
             shared_fragments,
+            locked: scan.locked,
             unclaimed: scan.unclaimed,
             ambiguous: scan.ambiguous,
             overlay_universe,
@@ -361,10 +398,15 @@ impl Inputs {
     }
 
     /// Layers 3 and 4, packaged so each aggregate survives Dotdrop's shallow
-    /// import merge *and* resolves on its own — see [`Aggregate`].
+    /// import merge *and* resolves on its own — see [`Aggregate`]. Only for the
+    /// overlays this clone can read whole: what is readable of a locked one is
+    /// not all of it.
     fn overlay_variables(&self, shared: &Table, shared_dyn: &Table) -> BTreeMap<String, Aggregate> {
         let mut out = BTreeMap::new();
         for overlay in &self.overlay_universe {
+            if self.locked.contains_key(overlay) {
+                continue;
+            }
             let contributions: Vec<&Table> = self
                 .fragments_for(overlay)
                 .map(|loaded| &loaded.fragment.variables)
@@ -411,6 +453,61 @@ impl Inputs {
             .get(host)
             .and_then(|h| h.planes.clone())
             .unwrap_or_else(declared)
+    }
+
+    /// Whether this clone can read every overlay the host uses. A host is
+    /// generated only then: built from the readable rest, it would deploy
+    /// quietly without the locked values.
+    fn readable(&self, host: &Host) -> bool {
+        host.overlays
+            .iter()
+            .all(|overlay| !self.locked.contains_key(overlay))
+    }
+
+    /// What this run leaves alone for want of a key: each locked overlay's
+    /// aggregate, and the entrypoints of every host using one.
+    fn withheld(&self, repo: &Repo) -> Vec<PathBuf> {
+        let layout = repo.layout();
+        let mut out: Vec<PathBuf> = self
+            .locked
+            .keys()
+            .map(|overlay| layout.overlay_variables_file(overlay))
+            .collect();
+        for (name, host) in &self.composition.hosts {
+            if !self.readable(host) {
+                out.extend(
+                    self.host_planes(name)
+                        .iter()
+                        .map(|plane| layout.entrypoint_of(plane, name)),
+                );
+            }
+        }
+        out
+    }
+
+    /// One warning per locked overlay, naming the hosts skipped with it and
+    /// the files that are still encrypted. Every overlay was matched because
+    /// some host names it, so no warning goes without a host.
+    fn warnings(&self) -> Vec<String> {
+        self.locked
+            .iter()
+            .map(|(overlay, paths)| {
+                let hosts: Vec<String> = self
+                    .composition
+                    .hosts
+                    .iter()
+                    .filter(|(_, host)| host.overlays.contains(overlay))
+                    .map(|(name, _)| format!("'{name}'"))
+                    .collect();
+                let paths: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+                format!(
+                    "skipping overlay '{overlay}' and {} {} — still encrypted in this clone: {}",
+                    if hosts.len() == 1 { "host" } else { "hosts" },
+                    hosts.join(", "),
+                    paths.join(", ")
+                )
+            })
+            .collect()
     }
 
     /// The dotfiles one host deploys in one plane, and the order it deploys
@@ -500,7 +597,9 @@ impl Inputs {
         let mut out = Vec::new();
         for (plane_name, plane) in &self.composition.planes {
             for (host_name, host) in &self.composition.hosts {
-                if !self.host_planes(host_name).iter().any(|p| p == plane_name) {
+                if !self.readable(host)
+                    || !self.host_planes(host_name).iter().any(|p| p == plane_name)
+                {
                     continue;
                 }
 
@@ -809,7 +908,8 @@ impl Inputs {
 
 /// Report Dotdrop configs under `modules/dotdrop/` that this plan does not
 /// produce — the residue of a renamed host, a dropped plane, or the previous
-/// format.
+/// format. What the plan withholds for want of a key is not residue, so it is
+/// not reported.
 ///
 /// Scoped to the two config extensions on purpose. The generator does not own
 /// that tree outright: `.gitattributes` and prose live there too, and a tool
@@ -824,6 +924,7 @@ pub fn stale(repo: &Repo, plan: &Plan) -> Result<Vec<String>> {
     for overlay in plan.overlay_variables.keys() {
         expected.insert(layout.overlay_variables_file(overlay));
     }
+    expected.extend(plan.withheld.iter().cloned());
 
     // The output directory is not owned outright — a repository may keep prose
     // or `.gitattributes` beside its generated files, and a tool that calls a
@@ -1310,5 +1411,141 @@ reload = 'true'
 
         let (problems, _) = inspect(&Repo::open(None, Some(dir.path())).unwrap()).unwrap();
         assert!(problems.iter().any(|p| p.contains("'dotpath'")));
+    }
+
+    /// base64 of `Salted__ciphertext-goes-here`: a file as a clone without its
+    /// transcrypt key holds it.
+    const LOCKED: &str = "U2FsdGVkX19jaXBoZXJ0ZXh0LWdvZXMtaGVyZQ==";
+
+    fn lock(dir: &tempfile::TempDir, relative: &str) {
+        let path = dir.path().join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, LOCKED).unwrap();
+    }
+
+    /// A clone without `personal`'s key: alpha uses that overlay, beta does not.
+    #[test]
+    fn a_locked_fragment_skips_its_overlay_and_every_host_using_it() {
+        let dir = fixture();
+        lock(&dir, "modules/git/manifest/personal.toml");
+        let plan = planned(&dir);
+
+        assert!(!plan.overlay_variables.contains_key("personal"));
+        let built: Vec<(&str, &str)> = plan
+            .entrypoints
+            .iter()
+            .map(|e| (e.plane.as_str(), e.host.as_str()))
+            .collect();
+        assert_eq!(built, vec![("system", "beta"), ("user", "beta")]);
+
+        assert_eq!(plan.warnings.len(), 1, "{:?}", plan.warnings);
+        let warning = &plan.warnings[0];
+        for named in [
+            "overlay 'personal'",
+            "host 'alpha'",
+            "modules/git/manifest/personal.toml",
+        ] {
+            assert!(warning.contains(named), "{warning}");
+        }
+        assert!(!warning.contains("beta"), "{warning}");
+
+        for withheld in [
+            "modules/dotdrop/user.alpha.toml",
+            "modules/dotdrop/bundle/personal/variables.toml",
+        ] {
+            assert!(
+                plan.withheld.contains(&PathBuf::from(withheld)),
+                "{withheld} missing from {:?}",
+                plan.withheld
+            );
+        }
+    }
+
+    /// Splitting an overlay is how part of it can be encrypted and part not.
+    /// The readable part is still not the overlay, so it builds nothing.
+    #[test]
+    fn an_overlay_locked_in_part_is_skipped_whole() {
+        let dir = fixture();
+        lock(&dir, "modules/git/manifest/personal.secret.toml");
+        let plan = planned(&dir);
+
+        assert!(
+            !plan.overlay_variables.contains_key("personal"),
+            "personal.toml alone must not pass for the overlay"
+        );
+        assert!(plan.entrypoints.iter().all(|e| e.host != "alpha"));
+        assert!(
+            plan.warnings[0].contains("manifest/personal.secret.toml")
+                && !plan.warnings[0].contains("manifest/personal.toml"),
+            "only the locked part is named: {:?}",
+            plan.warnings
+        );
+    }
+
+    #[test]
+    fn a_locked_fragment_with_no_module_owner_skips_its_overlay_too() {
+        let dir = fixture();
+        lock(&dir, "modules/dotdrop/manifest/personal.toml");
+        let plan = planned(&dir);
+
+        assert!(!plan.overlay_variables.contains_key("personal"));
+        assert!(plan.entrypoints.iter().all(|e| e.host != "alpha"));
+        assert!(
+            plan.warnings[0].contains("modules/dotdrop/manifest/personal.toml"),
+            "{:?}",
+            plan.warnings
+        );
+    }
+
+    /// A host is built from the shared files and its own overlays, so another
+    /// host's missing key must not change anything about it.
+    #[test]
+    fn a_lock_changes_nothing_for_the_hosts_that_do_not_use_it() {
+        let dir = fixture();
+        let open = planned(&dir);
+        lock(&dir, "modules/git/manifest/personal.toml");
+        let locked = planned(&dir);
+
+        assert_eq!(open.variables, locked.variables);
+        assert_eq!(open.dynvariables, locked.dynvariables);
+        assert_eq!(open.actions, locked.actions);
+        let sources = |e: &Entrypoint| -> Vec<(String, String, String)> {
+            e.dotfiles
+                .iter()
+                .map(|(id, d)| (id.clone(), d.src.clone(), d.dst.clone()))
+                .collect()
+        };
+        for plane in ["user", "system"] {
+            let (before, after) = (entry(&open, plane, "beta"), entry(&locked, plane, "beta"));
+            assert_eq!(before.config, after.config, "{plane}");
+            assert_eq!(sources(before), sources(after), "{plane}");
+            assert_eq!(before.profile.dotfiles, after.profile.dotfiles, "{plane}");
+            assert_eq!(before.profile.variables, after.profile.variables, "{plane}");
+        }
+    }
+
+    /// What an earlier run wrote for a host this clone can no longer read is
+    /// not residue of a rename: a clone holding the key would write it again.
+    #[test]
+    fn output_withheld_for_want_of_a_key_is_not_stale() {
+        let dir = fixture();
+        for earlier in [
+            "user.alpha.toml",
+            "bundle/personal/variables.toml",
+            "user.gamma.toml",
+        ] {
+            let path = dir.path().join("modules/dotdrop").join(earlier);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        lock(&dir, "modules/git/manifest/personal.toml");
+
+        let repo = Repo::open(None, Some(dir.path())).unwrap();
+        let notes = stale(&repo, &plan(&repo).unwrap()).unwrap();
+        assert_eq!(
+            notes,
+            vec!["note: stale generated file modules/dotdrop/user.gamma.toml".to_owned()],
+            "gamma is declared nowhere; alpha and personal are only unreadable here"
+        );
     }
 }

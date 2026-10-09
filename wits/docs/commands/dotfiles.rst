@@ -356,6 +356,9 @@ Four kinds of file, at whatever paths ``[output]`` names:
 * **one file per overlay that changes something** — encrypted under that
   overlay's key.
 
+An overlay this clone cannot decrypt is skipped, and so is every host that
+uses it — see `Encryption`_. Everything else is generated as usual.
+
 Then:
 
 .. code-block:: sh
@@ -425,10 +428,36 @@ the generated aggregates:
 
 Because :doc:`transcrypt` runs as a smudge filter, a fragment is already
 plaintext in the working tree of a clone that has the key — the generator just
-reads files. What it does do is refuse to run when a fragment it needs is
-still ciphertext, naming the file: generating from a locked fragment would
-silently produce a bundle missing that overlay's values, which is far worse
-than stopping.
+reads files. A clone without a key holds that key's fragments as ciphertext,
+and that is the normal state of almost every clone: a machine carries the keys
+of the overlays it deploys, not every overlay's.
+
+So a fragment that is still ciphertext does not stop the run. A host's output
+is built from the shared files and its own overlays' fragments and nothing
+else, so a locked fragment only stops what is built from it:
+
+* **its overlay's aggregate**, because what is readable of an overlay is not
+  all of it;
+* **every host that uses the overlay**, because an entrypoint built without
+  the overlay's values would deploy quietly without them.
+
+Everything else is generated exactly as it would be with every key, and the
+run warns once per skipped overlay, naming the files still encrypted and the
+hosts skipped with it::
+
+   [WARN] (dotfiles) skipping overlay 'personal' and host 'strix' — still encrypted in this clone: modules/git/manifest/personal.secret.toml
+
+A host is all or nothing. One whose overlays are only partly readable — a
+split overlay whose plain fragment reads but whose secret part does not — is
+skipped whole, never built from the part that reads.
+
+What an earlier run wrote for a skipped overlay or host is left as it was. It
+is not refreshed, and it is not reported as stale either: it is not residue of
+a rename, and a clone holding the key would write it again.
+
+Only fragments get this treatment. The composition table, the globals, and
+every module manifest feed every host, so one of them still encrypted stops
+the run, naming the file.
 
 Checks
 ------
@@ -443,7 +472,13 @@ Checks
 * a host naming an undeclared plane, or no overlays
 * a reserved key written into ``[config]`` or ``[planes.<name>.config]``
 * a fragment file that could belong to two overlays
-* a fragment that is still encrypted, or malformed
+* a malformed fragment
+* a composition table, globals file, or module manifest that is still
+  encrypted
+
+It warns, without failing, about every overlay this clone cannot decrypt, and
+lists only the entrypoints it could generate — the same ones ``generate``
+writes. A clone without every key is the normal case, not an incoherent one.
 
 It reports, without failing, things that are dead or suspicious but still
 coherent — a module with content but no manifest, an install whose path exists

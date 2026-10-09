@@ -13,6 +13,11 @@
 //! (`generate`). Deployment stays where it already is: `dotdrop install -c` on
 //! one of the generated entrypoints.
 //!
+//! A clone rarely holds every overlay's transcrypt key, so both verbs work
+//! from what this clone can read: an overlay with a fragment still encrypted is
+//! skipped together with every host that uses it, and the run warns rather
+//! than fails — see [`resolve`].
+//!
 //! The pipeline is [`layout`] (where things are) -> [`tree`] (find and read) ->
 //! [`resolve`] (decide) -> [`emit`] (write). Two seams matter. `resolve`
 //! produces a whole [`Plan`](resolve::Plan) rather than writing as it goes, so
@@ -52,7 +57,8 @@ pub struct DotfilesArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum DotfilesSub {
-    /// Write the Dotdrop bundle and per-host entrypoints.
+    /// Write the Dotdrop bundle and per-host entrypoints, skipping overlays
+    /// still encrypted here and the hosts that use them.
     Generate,
     /// Validate the manifests without writing anything.
     Check,
@@ -78,8 +84,9 @@ fn check(repo: &Repo) -> Result<()> {
         bail!("{} manifest problem(s)", problems.len());
     }
 
-    // Stale output needs the plan (it is defined as "what generate would not
-    // write"), so it can only be reported once resolution has succeeded.
+    // Stale output needs the plan (it is defined as output the description no
+    // longer produces), so it can only be reported once resolution has
+    // succeeded.
     let plan = resolve::plan(repo)?;
     notes.extend(plan.notes.iter().cloned());
     notes.extend(resolve::stale(repo, &plan)?);
@@ -98,6 +105,9 @@ fn generate(repo: &Repo) -> Result<()> {
     notes.extend(resolve::stale(repo, &plan)?);
     notes.sort();
     notes.dedup();
+    for warning in &plan.warnings {
+        log::warn!("{warning}");
+    }
     for note in &notes {
         eprintln!("{note}");
     }
@@ -116,6 +126,9 @@ fn generate(repo: &Repo) -> Result<()> {
 /// What `check` prints when the manifests hold together: the shape of the thing,
 /// so the number that is wrong is visible without diffing generated output.
 fn report(plan: &resolve::Plan, notes: &[String]) {
+    for warning in &plan.warnings {
+        log::warn!("{warning}");
+    }
     for note in notes {
         eprintln!("{note}");
     }
@@ -132,9 +145,17 @@ fn report(plan: &resolve::Plan, notes: &[String]) {
         let overlays: Vec<&str> = plan.overlay_variables.keys().map(String::as_str).collect();
         println!("overlay aggregates: {}", overlays.join(", "));
     }
-    if notes.is_empty() {
+    let tally: Vec<String> = [
+        (plan.warnings.len(), "warning(s)"),
+        (notes.len(), "note(s)"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, what)| format!("{count} {what}"))
+    .collect();
+    if tally.is_empty() {
         println!("ok");
     } else {
-        println!("ok ({} note(s))", notes.len());
+        println!("ok ({})", tally.join(", "));
     }
 }

@@ -413,21 +413,102 @@ fn a_dst_outside_its_planes_prefixes_fails_the_check() {
     );
 }
 
-/// A fragment left encrypted is a normal state of a clone without that
-/// overlay's key, and generating from it would silently drop the overlay's
-/// values — so it has to stop the run and say which file and why.
+/// base64 of `Salted__ciphertext-goes-here`: a file as a clone without its
+/// transcrypt key checks it out.
+const LOCKED: &str = "U2FsdGVkX19jaXBoZXJ0ZXh0LWdvZXMtaGVyZQ==";
+
+/// A clone rarely holds every overlay's key, and one without `personal`'s
+/// still has a whole host it can build. The overlay and the host using it are
+/// skipped, loudly; everything else is generated as if nothing were locked.
 #[test]
-fn a_locked_fragment_stops_the_run() {
+fn a_locked_fragment_skips_its_overlay_and_the_hosts_using_it() {
     let fx = Fixture::new();
-    write(
-        &fx.root.join("apps/git/private/personal.toml"),
-        "U2FsdGVkX19jaXBoZXJ0ZXh0LWdvZXMtaGVyZQ==",
+    write(&fx.root.join("apps/git/private/personal.toml"), LOCKED);
+
+    let out = fx.ok(&["dotfiles", "generate"]);
+    for named in [
+        "skipping overlay 'personal'",
+        "host 'alpha'",
+        "apps/git/private/personal.toml",
+    ] {
+        assert!(
+            out.stderr.contains(named),
+            "{named} missing:\n{}",
+            out.stderr
+        );
+    }
+    for built in [
+        "build/user/beta.conf",
+        "build/system/beta.conf",
+        "build/shared/values.conf",
+        "build/shared/hooks.conf",
+    ] {
+        assert!(fx.root.join(built).is_file(), "missing {built}");
+    }
+    for skipped in ["build/user/alpha.conf", "build/secret/personal.conf"] {
+        assert!(
+            !fx.root.join(skipped).exists(),
+            "{skipped} was built from a locked overlay"
+        );
+    }
+}
+
+/// `check` answers from the same plan: it lists exactly the entrypoints
+/// `generate` would write, and a locked overlay warns rather than fails.
+#[test]
+fn check_lists_only_the_hosts_this_clone_can_build() {
+    let fx = Fixture::new();
+    write(&fx.root.join("apps/git/private/personal.toml"), LOCKED);
+
+    let out = fx.ok(&["dotfiles", "check"]);
+    assert!(
+        out.stderr.contains("skipping overlay 'personal'"),
+        "{}",
+        out.stderr
     );
+    let hosts: Vec<&str> = out
+        .stdout
+        .lines()
+        .filter(|line| line.contains("unit(s)"))
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .collect();
+    assert_eq!(hosts, vec!["beta", "beta"], "{}", out.stdout);
+    assert!(out.stdout.contains("1 warning(s)"), "{}", out.stdout);
+}
+
+/// What an earlier run wrote for a host this clone can no longer read is left
+/// as it was, and it is not residue of a rename: a clone holding the key would
+/// write it again.
+#[test]
+fn a_skipped_host_keeps_its_earlier_output_and_is_not_called_stale() {
+    let fx = Fixture::new();
+    fx.ok(&["dotfiles", "generate"]);
+    let earlier = std::fs::read_to_string(fx.root.join("build/user/alpha.conf")).unwrap();
+
+    write(&fx.root.join("apps/git/private/personal.toml"), LOCKED);
+    fx.ok(&["dotfiles", "generate"]);
+    assert_eq!(
+        std::fs::read_to_string(fx.root.join("build/user/alpha.conf")).unwrap(),
+        earlier
+    );
+    assert!(fx.root.join("build/secret/personal.conf").is_file());
+
+    let out = fx.ok(&["dotfiles", "check"]);
+    assert!(!out.stderr.contains("stale"), "{}", out.stderr);
+}
+
+/// Only a fragment has an overlay that can be skipped in its place. A
+/// manifest feeds every host, so a locked one still stops the run.
+#[test]
+fn a_locked_manifest_still_stops_the_run() {
+    let fx = Fixture::new();
+    write(&fx.root.join("apps/git/app.toml"), LOCKED);
 
     let out = fx.run(&["dotfiles", "generate"]);
     assert!(!out.success);
     assert!(out.stderr.contains("still encrypted"), "{}", out.stderr);
-    assert!(out.stderr.contains("personal.toml"), "{}", out.stderr);
+    assert!(out.stderr.contains("app.toml"), "{}", out.stderr);
+    assert!(!fx.root.join("build").exists(), "nothing may be written");
 }
 
 #[test]

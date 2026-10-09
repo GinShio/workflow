@@ -10,8 +10,9 @@
 //! The one piece of real logic here is [`read_toml`]. A per-overlay fragment is
 //! encrypted at rest, so on a machine without that overlay's key it checks out
 //! as base64 rather than TOML. That is a *normal* state of the working tree, not
-//! corruption — but generating from it would silently produce output missing
-//! that overlay's values, so it has to be caught and named.
+//! corruption — and not something to generate from either, since the output
+//! would silently lack its values. So it comes back as its own outcome rather
+//! than as a parse error, and the caller decides what can be built without it.
 
 use std::path::{Path, PathBuf};
 
@@ -192,7 +193,23 @@ impl Repo {
         })
     }
 
+    /// Read a file every host is generated from. Unlike a fragment it has no
+    /// overlay that could be skipped instead, so still being encrypted stops
+    /// the run.
     pub fn read<T: DeserializeOwned>(&self, relative: &Path) -> Result<T> {
+        let path = self.abs(relative);
+        read_toml(&path)?.with_context(|| {
+            format!(
+                "{} is still encrypted — this clone has no transcrypt key for it, \
+                 and every host is generated from it",
+                path.display()
+            )
+        })
+    }
+
+    /// Read a file this clone may legitimately hold as ciphertext: `None`
+    /// means it is still encrypted.
+    pub fn read_unless_locked<T: DeserializeOwned>(&self, relative: &Path) -> Result<Option<T>> {
         read_toml(&self.abs(relative))
     }
 
@@ -205,22 +222,23 @@ pub struct Target {
     pub is_dir: bool,
 }
 
-/// Parse a TOML file, distinguishing "still encrypted" from "malformed".
+/// Parse a TOML file, telling "still encrypted" (`None`) apart from
+/// "malformed" (an error).
 ///
-/// Both are fatal, but they are different problems with different fixes, and a
-/// TOML parse error on a wall of base64 tells you neither.
-pub fn read_toml<T: DeserializeOwned>(path: &Path) -> Result<T> {
+/// They are different states with different fixes: ciphertext is what a clone
+/// without the file's transcrypt key normally holds, while a parse error is a
+/// bug in the file. A TOML parse error on a wall of base64 would tell you
+/// neither.
+fn read_toml<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     if wits_util::crypto::is_encrypted(&bytes) {
-        bail!(
-            "{} is still encrypted — this clone has no transcrypt key for it, \
-             so generating here would silently drop its values",
-            path.display()
-        );
+        return Ok(None);
     }
     let text = String::from_utf8(bytes)
         .with_context(|| format!("{} is not valid UTF-8", path.display()))?;
-    toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    toml::from_str(&text)
+        .map(Some)
+        .with_context(|| format!("parsing {}", path.display()))
 }
 
 /// Reject a path that would reach outside its overlay. Manifests are trusted
@@ -333,18 +351,47 @@ mod tests {
         assert!(repo.overlay_target("git", "personal", ".").is_none());
     }
 
-    /// A locked fragment is base64, which is also valid UTF-8 and invalid TOML;
-    /// without the header check it would surface as a bewildering parse error.
-    #[test]
-    fn a_locked_fragment_says_so() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("personal.toml");
-        // base64 of `Salted__ciphertext-goes-here` — the salt header is what
-        // marks a transcrypt packet, and everything after it is opaque.
-        std::fs::write(&path, "U2FsdGVkX19jaXBoZXJ0ZXh0LWdvZXMtaGVyZQ==").unwrap();
+    /// base64 of `Salted__ciphertext-goes-here` — the salt header is what marks
+    /// a transcrypt packet, and everything after it is opaque.
+    const LOCKED: &str = "U2FsdGVkX19jaXBoZXJ0ZXh0LWdvZXMtaGVyZQ==";
 
-        let err = read_toml::<toml::Table>(&path).unwrap_err().to_string();
+    /// A locked file is base64, which is also valid UTF-8 and invalid TOML;
+    /// without the header check it would surface as a bewildering parse error,
+    /// and a caller could not tell it from a file that is genuinely broken.
+    #[test]
+    fn a_locked_file_reads_as_locked_and_a_broken_one_as_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("personal.toml");
+        std::fs::write(&locked, LOCKED).unwrap();
+        assert!(read_toml::<toml::Table>(&locked).unwrap().is_none());
+
+        let broken = dir.path().join("common.toml");
+        std::fs::write(&broken, "[variables\n").unwrap();
+        let err = read_toml::<toml::Table>(&broken).unwrap_err();
+        assert!(format!("{err:#}").contains("parsing"), "got: {err:#}");
+    }
+
+    /// Only a fragment has an overlay that can be skipped instead. Everything
+    /// else feeds every host, so a locked one still stops the run, and says
+    /// why rather than failing to parse.
+    #[test]
+    fn a_locked_shared_input_stops_the_run() {
+        let dir = scaffold();
+        std::fs::write(dir.path().join("etc/machines.toml"), LOCKED).unwrap();
+        let repo = Repo::open(None, Some(dir.path())).unwrap();
+        let composition = Path::new("etc/machines.toml");
+
+        let err = repo
+            .read::<toml::Table>(composition)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("still encrypted"), "got: {err}");
+        assert!(
+            repo.read_unless_locked::<toml::Table>(composition)
+                .unwrap()
+                .is_none(),
+            "the same file, read as one that may be locked"
+        );
     }
 
     #[test]
