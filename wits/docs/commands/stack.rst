@@ -36,7 +36,8 @@ re-run it freely; each only reconciles its own slice of the world:
 
 Plus a few helpers: ``wits stack slice`` cuts commits into the stack in the
 first place, ``wits stack decorate`` adds labels / reviewers / assignees to an
-MR, and ``wits stack tree`` edits the stack's structure.
+MR, and ``wits stack tree`` edits the stack's structure. And ``wits stack`` on
+its own shows where everything stands (`Seeing where things stand`_).
 
 The dependency tree itself lives in **each branch's own git config**: a branch
 in a stack records the branch it sits on (``branch.<name>.witsParent``), its
@@ -64,6 +65,47 @@ Here ``feature-api`` and ``feature-docs`` both build on ``main``;
    happens when you add or remove a branch mid-stack — live in
    :doc:`/reference/stack-behavior`. This guide stays at the
    getting-things-done level.
+
+Seeing where things stand
+-------------------------
+
+``wits stack`` — the same as ``wits stack status`` — draws every stack in the
+repository as a tree, each branch with what the verbs above would find:
+
+.. code-block:: text
+
+   main  (at upstream/main)
+   ├── feature-api      pushed      #120 open
+   │   ├── feature-ui * ahead 2     #121 open    needs push
+   │   └── feature-cli  not pushed  no MR        feature-api has 1 commit(s) it lacks; needs restack, push, submit
+   └── fix-typo         pushed      #118 merged  needs delete
+
+Each row says which verb the branch waits on: **push** when the remote branch
+is missing or behind; **restack** when its parent moved past it, so it needs a
+rebase onto the parent; **submit** when it has no open MR, or one based
+elsewhere than the stack says; **delete** when its MR merged or closed — the
+branch is done, and deleting it is all the cleanup the stack needs (its
+children move up on their own). A branch whose recorded parent is gone says
+where history placed it.
+
+Push state is read from your remote-tracking refs, so it is as fresh as your
+last fetch. MR state is asked of the forge, one request per branch in parallel;
+``--offline`` skips the forge and shows the MR each branch was last seen with.
+Without a token or a forge it falls back to that on its own. In a terminal the
+MR numbers are links (OSC 8; kitty and most terminals open them on click).
+
+.. code-block:: sh
+
+   wits stack                         # every stack
+   wits stack status feature-api      # just that branch's stack
+   wits stack status --json           # the same rows as data, for fzf or an editor
+
+``--json`` carries every fact the table shows — ``name``, ``parent``,
+``depth``, ``current``, ``push.state``, ``restack``, ``mr`` (``display``,
+``state``, ``url``, ``base``, ``wants_base``), ``cached_mr``,
+``placed_by_history`` and ``needs`` — so a picker is a few lines of ``jq``
+rather than a parse of the table. The checked-out branch is listed even when
+the stack does not record it, as the one-branch stack every verb treats it as.
 
 One-time setup
 --------------

@@ -439,3 +439,42 @@ fn tree_mv_moves_a_branch_with_its_substack() {
         "main\n    feat-a\n    feat-b\n        feat-c\n"
     );
 }
+
+#[test]
+fn status_reports_what_each_branch_waits_on() {
+    let fx = Fixture::new("feat-c");
+    fx.stack();
+    fx.record(STACK);
+    // feat-a moves on under feat-b and feat-c.
+    fx.git(&["switch", "-q", "feat-a"]);
+    fx.commit("a", "Amend A");
+    fx.git(&["switch", "-q", "feat-c"]);
+
+    let out = fx.wits(&["stack", "status", "--offline", "--json"], &[], None);
+    assert!(out.success, "{}", out.stderr);
+    let report: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(report["base"], "main");
+    let rows = report["branches"].as_array().unwrap();
+    let names: Vec<&str> = rows.iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["feat-a", "feat-b", "feat-c"]);
+    assert_eq!(rows[1]["restack"], 1, "feat-a has a commit feat-b lacks");
+    assert_eq!(rows[1]["needs"], serde_json::json!(["restack"]));
+    assert_eq!(rows[2]["current"], true);
+    assert!(rows[2]["restack"].is_null(), "feat-b did not move");
+}
+
+#[test]
+fn a_bare_wits_stack_shows_the_tree_without_a_forge() {
+    let fx = Fixture::new("feat-c");
+    fx.stack();
+    fx.record(STACK);
+    let out = fx.wits(&["stack"], &[], None);
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stdout.starts_with("main\n"), "{}", out.stdout);
+    assert!(out.stdout.contains("└── feat-a"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains("        └── feat-c *"),
+        "{}",
+        out.stdout
+    );
+}

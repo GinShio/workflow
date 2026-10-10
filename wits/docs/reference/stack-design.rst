@@ -61,12 +61,20 @@ succeeds but an MR update fails you want to know *which* step you were in and
 to re-run only that step. The three remote verbs map cleanly onto three
 distinct intents::
 
+   wits stack [status]  [branch]  # where every branch stands, and what it waits on
    wits stack push      [scope]   # push to the origin role (git only; no forge)
    wits stack submit    [scope]   # reconcile MRs: create missing, fix drifted bases
    wits stack anno      [scope]   # keep each MR's navigation comment current
    wits stack decorate  [branch]  # add labels/assignees/reviewers to an MR (additive)
    wits stack slice     [--base B] # interactively cut HEAD's commits into a stack
    wits stack tree      {rm|mv|edit}  # direct edits to the stack's structure
+
+``status`` is the one verb that changes nothing, and the default: it reads the
+facts each of the others acts on — the remote-tracking ref for ``push``, the
+parent's tip for a restack, the forge's MRs for ``submit`` — and names the verb
+each branch waits on, a merged or closed MR meaning the branch is done. It is
+deliberately not a verb that *acts* on what it finds: the user decides what to
+run, and deleting a finished branch is all the cleanup the stack needs.
 
 ``decorate`` is single-MR by default (attributes differ per MR; ``--all``
 applies one set across that branch's whole stack) and additive-only, so it

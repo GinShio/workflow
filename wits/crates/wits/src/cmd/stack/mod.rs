@@ -17,6 +17,7 @@ mod decorate;
 mod push;
 mod resolution;
 pub mod slice;
+mod status;
 mod store;
 mod submit;
 mod topology;
@@ -26,7 +27,7 @@ use clap::{Args, Subcommand, ValueEnum};
 
 use wits_util::forge::{self, Forge, HeadRepo, MergeRequest, MrState, Remotes};
 use wits_util::git::Repository;
-use wits_util::project::remotes;
+use wits_util::project::remotes::{self, Declared};
 use wits_util::remote::RemoteRoles;
 
 /// How many forge/push operations run at once. Stacks are small and the work is
@@ -36,12 +37,15 @@ const MAX_PARALLEL: usize = 8;
 
 #[derive(Debug, Args)]
 pub struct StackArgs {
+    /// What to do; without one, `status`.
     #[command(subcommand)]
-    pub action: StackAction,
+    pub action: Option<StackAction>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum StackAction {
+    /// Show every stack branch, its push and MR state, and what it waits on.
+    Status(StatusArgs),
     /// Push in-scope branches to origin (force-with-lease).
     Push(ScopeArgs),
     /// Create missing MRs and correct drifted bases.
@@ -95,6 +99,20 @@ pub struct MvArgs {
     /// The new parent (an existing branch, or the base branch).
     #[arg(long)]
     pub onto: String,
+}
+
+#[derive(Debug, Default, Args)]
+pub struct StatusArgs {
+    /// Show only this branch's stack (default: every stack).
+    pub branch: Option<String>,
+
+    /// Print the rows as JSON, for a picker or an editor.
+    #[arg(long)]
+    pub json: bool,
+
+    /// Skip the forge: show each branch's cached MR instead of asking.
+    #[arg(long)]
+    pub offline: bool,
 }
 
 #[derive(Debug, Args)]
@@ -196,12 +214,20 @@ pub fn run(args: &StackArgs) -> anyhow::Result<()> {
     let declared = remotes::declared_for_checkout(&repo)?;
 
     match &args.action {
-        StackAction::Push(s) => push::run(&repo, &declared, s),
-        StackAction::Submit(s) => submit::run(&repo, &declared, s),
-        StackAction::Anno(s) => anno::run(&repo, &declared, s),
-        StackAction::Decorate(d) => decorate::run(&repo, &declared, d),
-        StackAction::Slice(s) => slice::run(&repo, &declared, s.base.as_deref()),
-        StackAction::Tree(t) => tree::run(&repo, &declared, &t.action),
+        None => status::run(&repo, &declared, &StatusArgs::default()),
+        Some(action) => run_action(&repo, &declared, action),
+    }
+}
+
+fn run_action(repo: &Repository, declared: &Declared, action: &StackAction) -> anyhow::Result<()> {
+    match action {
+        StackAction::Status(s) => status::run(repo, declared, s),
+        StackAction::Push(s) => push::run(repo, declared, s),
+        StackAction::Submit(s) => submit::run(repo, declared, s),
+        StackAction::Anno(s) => anno::run(repo, declared, s),
+        StackAction::Decorate(d) => decorate::run(repo, declared, d),
+        StackAction::Slice(s) => slice::run(repo, declared, s.base.as_deref()),
+        StackAction::Tree(t) => tree::run(repo, declared, &t.action),
     }
 }
 

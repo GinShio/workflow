@@ -67,7 +67,7 @@ complete -c wits -f -l get -r -a '(__wits_project_get_paths)'
 function __wits_git_branches
     git for-each-ref refs/heads --format='%(refname:short)' 2>/dev/null
 end
-complete -c wits -f -n '__fish_seen_subcommand_from stack; and __fish_seen_subcommand_from push submit anno decorate' -a '(__wits_git_branches)'
+complete -c wits -f -n '__fish_seen_subcommand_from stack; and __fish_seen_subcommand_from status push submit anno decorate' -a '(__wits_git_branches)'
 complete -c wits -f -l branch -s b -r -a '(__wits_git_branches)'
 
 # Worktrees: `create`/`switch` take a REV that must be a local branch
