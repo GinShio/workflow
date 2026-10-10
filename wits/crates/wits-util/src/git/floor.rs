@@ -606,9 +606,20 @@ impl Repository {
     ///
     /// `--no-ext-diff` because callers either parse this (hunk headers) or feed
     /// it onward: a user's configured difftool would emit something neither can
-    /// read.
+    /// read. For the same reason no textconv, whose lines are not the file's,
+    /// and the `a/` and `b/` prefixes whatever `diff.noprefix` or
+    /// `diff.mnemonicPrefix` say.
     pub fn diff_patch(&self, from: &str, to: &str, path: Option<&str>) -> Option<String> {
-        let mut args = vec!["diff", "--no-ext-diff", "--no-color", from, to];
+        let mut args = vec![
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            from,
+            to,
+        ];
         if let Some(p) = path {
             args.push("--");
             args.push(p);
