@@ -84,8 +84,11 @@ model, generalized to threads, outdating, and stacks.
 
    # Reading — from the local files, no network; each supports --json.
    wits review show  [mr] [--details] [--outdated|--resolved|--unresolved|--unread|--file P]   # inbox, or one MR (merged)
-   wits review diff  <mr> [--range SPEC] [--against SPEC] [--patch[=2way|3way]|--json]   # one range, or two compared
+   wits review diff  <mr> [--range SPEC] [--against SPEC|--since-reviewed] [--patch[=2way|3way]|--json]   # one range, or two compared
    wits review draft <mr> [FILE|-] [--dedup]                          # show, append, or compact local.json
+
+   # Authoring — a front-end over local.json, no network.
+   wits review edit  <mr> [--discard]                                 # write the review in the quoted patch
 
    # Materialize / housekeep.
    wits review checkout <mr> [--next|--prev] [--in-place|--worktree DIR]
@@ -101,8 +104,10 @@ Notes on shape, each with its reason:
   public, versioned file. The tool owns the write: a front-end pipes a batch
   of actions to ``draft <mr> -`` (no need to know the store path), which
   appends, fills in missing action ids, and validates them; a human can edit
-  the file directly. This one file is the write contract — the store's *read*
-  layout is otherwise private.
+  the file directly, or write in the patch with ``edit``, which renders the
+  review point as ``prr``'s quoted buffer and turns what was written into the
+  same actions, applied as changes against what it showed. This one file is
+  the write contract — the store's *read* layout is otherwise private.
 * **``fetch`` subsumes "pull" and "sync"** — one idempotent verb like
   ``git fetch``. Bare ``fetch`` refreshes every configured feed (the RSS
   "refresh all"); ``--feed`` one feed; a number/URL one MR in full. Any of
