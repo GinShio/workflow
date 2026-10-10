@@ -166,6 +166,60 @@ impl Repository {
         result.is_success().then_some(result.stdout)
     }
 
+    /// The paths the index stages against `HEAD` — added, copied, modified, or
+    /// renamed (under the new name) — or `None` when git cannot list them.
+    /// `None` is kept apart from an empty list, so a check built on this can
+    /// refuse rather than pass when it saw nothing.
+    pub fn staged_paths(&self) -> Option<Vec<String>> {
+        let result = self
+            .git()
+            .args([
+                "diff",
+                "--cached",
+                "--name-only",
+                "-z",
+                "--diff-filter=ACMR",
+            ])
+            .force_run()
+            .exec_raw()
+            .ok()?;
+        if !result.is_success() {
+            return None;
+        }
+        let names = String::from_utf8(result.stdout).ok()?;
+        Some(
+            names
+                .split('\0')
+                .filter(|path| !path.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        )
+    }
+
+    /// The value of attribute `attr` for each of `paths`, in their order, as
+    /// `git check-attr` reports it — `unspecified`, `set`, `unset`, or the value
+    /// itself — or `None` when git cannot answer.
+    pub fn attribute(&self, attr: &str, paths: &[String]) -> Option<Vec<(String, String)>> {
+        if paths.is_empty() {
+            return Some(Vec::new());
+        }
+        let mut args = vec!["check-attr", "-z", attr, "--"];
+        args.extend(paths.iter().map(String::as_str));
+        let result = self.git().args(args).force_run().exec_raw().ok()?;
+        if !result.is_success() {
+            return None;
+        }
+        let report = String::from_utf8(result.stdout).ok()?;
+        // `-z` reports each path as `<path> NUL <attr> NUL <value> NUL`.
+        let fields: Vec<&str> = report.split('\0').collect();
+        Some(
+            fields
+                .chunks_exact(3)
+                .map(|entry| (entry[0].to_owned(), entry[2].to_owned()))
+                .collect(),
+        )
+    }
+
     /// The editor git would open a commit message in, as the shell command string
     /// git itself would run, or `None` when git finds no usable editor. Git
     /// resolves the whole precedence (`GIT_EDITOR`, `core.editor`, `VISUAL`,

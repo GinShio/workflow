@@ -304,8 +304,9 @@ impl Repo {
         repo
     }
 
-    fn git(&self, args: &[&str]) -> String {
-        let mut cmd = Command::new("git");
+    /// `program` run in this repository, with nothing but its own config.
+    fn command(&self, program: &str, args: &[&str]) -> Command {
+        let mut cmd = Command::new(program);
         cmd.args(args)
             .current_dir(self.dir.path())
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -319,13 +320,29 @@ impl Repo {
                 cmd.env_remove(key);
             }
         }
-        let out = cmd.output().unwrap();
+        cmd
+    }
+
+    fn git(&self, args: &[&str]) -> String {
+        let out = self.command("git", args).output().unwrap();
         assert!(
             out.status.success(),
             "git {args:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
         String::from_utf8(out.stdout).unwrap()
+    }
+
+    fn wits(&self, args: &[&str]) -> Run {
+        let out = self
+            .command(env!("CARGO_BIN_EXE_wits"), args)
+            .output()
+            .unwrap();
+        Run {
+            success: out.status.success(),
+            stdout: out.stdout,
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
     }
 
     fn write(&self, path: &str, contents: &str) {
@@ -383,6 +400,61 @@ fn a_changed_file_gets_a_new_packet_that_opens() {
         repo.git(&["cat-file", "--filters", ":secret/a.txt"]),
         "v2\n"
     );
+}
+
+#[test]
+fn verify_flags_plaintext_staged_under_an_undefined_filter() {
+    // A machine that does not define this context's filter: the attribute
+    // still names it, and git quietly stages the file as it is.
+    let repo = Repo::new();
+    repo.git(&["config", "--remove-section", "filter.transcrypt"]);
+    repo.write("secret/new.env", "API_KEY=not-yet-sealed\n");
+    repo.git(&["add", "secret/new.env"]);
+
+    let out = repo.wits(&["transcrypt", "verify", "--staged"]);
+    assert!(!out.success);
+    assert!(
+        out.stderr.contains("secret/new.env: staged as plaintext"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn verify_flags_a_moved_packet_until_it_is_sealed_again() {
+    let repo = Repo::new();
+    repo.write("secret/a.txt", "v1\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-qm", "v1"]);
+    repo.git(&["mv", "secret/a.txt", "secret/b.txt"]);
+
+    let out = repo.wits(&["transcrypt", "verify", "--staged"]);
+    assert!(
+        !out.success,
+        "git mv keeps the blob sealed for the old path"
+    );
+    assert!(
+        out.stderr
+            .contains("secret/b.txt: its staged packet does not open"),
+        "{}",
+        out.stderr
+    );
+
+    repo.git(&["add", "--renormalize", "--", "secret/b.txt"]);
+    let out = repo.wits(&["transcrypt", "verify", "--staged"]);
+    assert!(out.success, "{}", out.stderr);
+}
+
+#[test]
+fn verify_passes_sealed_empty_and_unfiltered_files() {
+    let repo = Repo::new();
+    repo.write("secret/a.txt", "v1\n");
+    repo.write("secret/empty", "");
+    repo.write("README", "not a secret\n");
+    repo.git(&["add", "-A"]);
+
+    let out = repo.wits(&["transcrypt", "verify", "--staged"]);
+    assert!(out.success, "{}", out.stderr);
 }
 
 #[test]

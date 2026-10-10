@@ -21,9 +21,9 @@
 //! give git a new blob each time; clean hands back the packet the index already
 //! holds instead, whenever that packet seals this same content.
 //!
-//! These subcommands are meant to be invoked by git, not by hand. Configure
-//! them in `.git/config` and `.gitattributes`; see
-//! `docs/commands/transcrypt.rst`.
+//! The filter subcommands are meant to be invoked by git, not by hand —
+//! configure them in `.git/config` and `.gitattributes` — while `verify` is for
+//! a pre-commit hook, or a person; see `docs/commands/transcrypt.rst`.
 
 use std::io::{Read, Write};
 
@@ -66,6 +66,15 @@ pub enum TranscryptAction {
         #[arg(value_name = "FILE")]
         file: String,
     },
+    /// Check that every staged transcrypt path holds a packet sealed for it.
+    ///
+    /// Covers every context at once — each path's context comes from its
+    /// filter's name — so `-C` plays no part.
+    Verify {
+        /// Check the index: what the next commit would hold.
+        #[arg(long, required = true)]
+        staged: bool,
+    },
 }
 
 pub fn run(args: &TranscryptArgs) -> anyhow::Result<()> {
@@ -78,6 +87,7 @@ pub fn run(args: &TranscryptArgs) -> anyhow::Result<()> {
         TranscryptAction::Clean { file } => clean(&resolver, &repo, file.as_deref()),
         TranscryptAction::Smudge { file } => smudge(&resolver, file.as_deref()),
         TranscryptAction::Textconv { file } => textconv(file),
+        TranscryptAction::Verify { .. } => verify(&repo),
     }
 }
 
@@ -291,6 +301,83 @@ fn textconv(file: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The context a transcrypt filter serves, by its name: `transcrypt` for the
+/// default context, `transcrypt-<ctx>` for another. The name is the contract
+/// because it is the one link from a path to its context that holds where the
+/// filter is not defined — which is when plaintext gets staged.
+fn filter_context(filter: &str) -> Option<&str> {
+    match filter {
+        "transcrypt" => Some("default"),
+        _ => filter
+            .strip_prefix("transcrypt-")
+            .filter(|context| !context.is_empty()),
+    }
+}
+
+/// Fail when a staged transcrypt path is not sealed for where it stands.
+///
+/// Two ways one goes wrong without a word from git. A `filter=` attribute
+/// naming a driver this machine does not define is a pass-through — `required`
+/// binds only a defined driver — so the file is staged in the clear. And `git
+/// mv` moves a blob without re-cleaning it, so the packet stays bound to the
+/// old path and a fresh clone cannot check it out. The first needs no key to
+/// see; the second is checked wherever the context's password resolves.
+fn verify(repo: &Repository) -> anyhow::Result<()> {
+    let staged = repo
+        .staged_paths()
+        .ok_or_else(|| anyhow!("could not list the staged paths"))?;
+    let filters = repo
+        .attribute("filter", &staged)
+        .ok_or_else(|| anyhow!("could not read the staged paths' filter attributes"))?;
+
+    let mut problems = Vec::new();
+    for (path, filter) in &filters {
+        let Some(context) = filter_context(filter) else {
+            continue;
+        };
+        let blob = repo.index_blob(path).unwrap_or_default();
+        if blob.is_empty() {
+            continue;
+        }
+        if !crypto::is_encrypted(&blob) {
+            problems.push(format!(
+                "{path}: staged as plaintext although its filter is {filter} — is that \
+                 filter defined here? Define it, then `git add -- {path}` again"
+            ));
+            continue;
+        }
+
+        let resolver = Resolver::new(Some(repo), "wits.transcrypt", Some(context));
+        let Some(secret) = resolve_secret(&resolver)? else {
+            continue;
+        };
+        let opts = DecryptOptions {
+            cipher: secret.cipher,
+            kdf: secret.kdf,
+            path: Some(path.clone()),
+        };
+        let packet = std::str::from_utf8(&blob).unwrap_or_default();
+        if crypto::decrypt(packet, &secret.password, &opts).is_err() {
+            problems.push(format!(
+                "{path}: its staged packet does not open at this path under context \
+                 {context} — moved without being re-added, or sealed under another \
+                 password? `git add --renormalize -- {path}` seals it again"
+            ));
+        }
+    }
+
+    if problems.is_empty() {
+        return Ok(());
+    }
+    for problem in &problems {
+        eprintln!("{problem}");
+    }
+    bail!(
+        "{} staged transcrypt path(s) are not sealed for where they stand",
+        problems.len()
+    )
+}
+
 /// Turn stored bytes back into plaintext for smudge. The guiding rule: never
 /// abort git over content we simply can't read. The one case we *do* fail on is
 /// a genuine packet the configured password does not open — passing it through
@@ -326,5 +413,19 @@ fn recover(resolver: &Resolver<'_>, file: Option<&str>, data: &[u8]) -> anyhow::
                 Err(e.into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::filter_context;
+
+    #[test]
+    fn a_filter_name_maps_to_its_context() {
+        assert_eq!(filter_context("transcrypt"), Some("default"));
+        assert_eq!(filter_context("transcrypt-prod"), Some("prod"));
+        assert_eq!(filter_context("transcrypt-"), None);
+        assert_eq!(filter_context("git-crypt"), None);
+        assert_eq!(filter_context("lfs"), None);
     }
 }

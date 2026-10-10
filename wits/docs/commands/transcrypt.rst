@@ -36,6 +36,9 @@ tree). ``wits transcrypt`` is both ends, plus a third for ``git diff``:
      - passes through the file ``git diff`` hands it — git has already
        smudged each blob into it — so diffs read as plaintext instead of two
        blobs of base64
+   * - ``wits transcrypt verify --staged``
+     - checks that every staged path a transcrypt filter owns holds a packet
+       sealed for that path (see `Checking what is staged`_)
 
 You almost never run these by hand. You register them once, tell git which
 paths they apply to, and from then on ``git add`` encrypts and ``git checkout``
@@ -336,6 +339,34 @@ decrypt — which is why ``%f`` belongs in the filter command, and why the same
 path must be intact when decrypting. Re-cleaning unchanged content gives git
 the blob it already holds (that is the determinism guarantee, see `Salt
 modes`_), and the path is part of what makes that stable and safe.
+
+``git mv`` is the one everyday move that breaks this: it renames the index
+entry without re-cleaning the file, so the moved blob is still sealed for the
+old path, and a fresh clone cannot check it out. ``wits transcrypt verify
+--staged`` catches it before the commit, and ``git add --renormalize --
+<path>`` seals the file again where it now stands.
+
+Checking what is staged
+~~~~~~~~~~~~~~~~~~~~~~~
+
+``wits transcrypt verify --staged`` checks every staged path — added, copied,
+modified, or renamed — whose ``filter`` attribute is ``transcrypt`` (the
+default context) or ``transcrypt-<ctx>``, and fails, naming each offending path
+and its fix, when:
+
+* the path is staged as plaintext. Git treats a ``filter=`` attribute naming a
+  driver this machine does not define as a pass-through — ``required`` binds
+  only a defined driver — so a file created under a context whose filter is not
+  set up here is committed in the clear without a word. This needs no key to
+  see.
+* its packet does not open at that path, checked wherever that context's
+  password resolves — the ``git mv`` case above, or a packet sealed under
+  another password.
+
+An empty file passes, since clean leaves one empty. ``verify`` reads each
+path's context from its filter's *name*, because that is the one link to a
+context that survives the filter being undefined; name a context's filter
+``transcrypt-<ctx>`` for it to be checked.
 
 Rotating the password
 ---------------------
