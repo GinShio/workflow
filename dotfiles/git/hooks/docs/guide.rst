@@ -272,8 +272,9 @@ Keeps what you add honest: LF newlines only, and valid UTF-8. A commit adding a
 line with a CR or CRLF ending, or an invalid UTF-8 byte, is rejected; lines the
 file already had — a Windows batch file's CRLFs, a Latin-1 test input — are not
 your commit's to answer for. Binary blobs are skipped, and so is the UTF-8 half
-when ``iconv`` is not installed. Nothing to configure — for automatic newline normalisation on top of
-this, let git do it with a ``.gitattributes`` entry of ``text=auto eol=lf``.
+when ``iconv`` is not installed. Nothing to configure — for automatic newline
+normalisation on top of this, let git do it with a ``.gitattributes`` entry of
+``text=auto eol=lf``.
 
 The protected-branch prompt
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -590,13 +591,22 @@ The build-directory cleanup
 Reclaims disk when a branch stops carrying its name — deleted outright, or
 renamed away, which orphans the old name's trees just the same. Opt in, and the
 branch's build directory (resolved through the ``wits`` project registry) goes
-with it. Off by default because it deletes files — enable it per repository
-where you want the housekeeping:
+with it. Off by default because it ends in deleting files — enable it where you
+want the housekeeping:
 
 .. code-block:: console
 
    $ git config wits.hooks.reference-transaction.cleanup-build-dir-enable true
 
+A tree is **moved aside, not deleted**: into a ``.wits-trash`` directory beside
+it, under its own name plus a unique suffix. That is a rename on the same
+filesystem, instant however large the tree, and it means a branch you deleted by
+mistake — back from the reflog in a second — can have its build back too: move
+the directory back to its old name. The nightly ``stale-builds`` service
+(``services/units/stale-builds``) deletes trees that have sat in the trash for
+14 days. Each move is recorded as one file under
+``$XDG_STATE_HOME/wits/stale-builds/`` naming the tree; that is how the service
+finds them, and a tree you moved back simply drops its record.
 The sweep spans **every project the branch identified a build in**, not only the
 one that owns the checkout. A borrowed component can be the build identity of
 several projects at once — each keying its own build tree on that component's
@@ -607,10 +617,10 @@ and it is left alone; so is a build directory whose path does not vary by branch
 Both are derived from the registry rather than declared in it, so nothing has to
 be kept in step by hand.
 
-It refuses to remove anything it cannot prove is a build directory — a candidate
+It refuses to touch anything it cannot prove is a build directory — a candidate
 must be a real directory, not a symlink, not your home or the repository root,
-and not a parent of the repository — so a stray branch name can never point
-``rm -rf`` at something you care about.
+and not a parent of the repository — so a stray branch name can never send
+something you care about to the trash.
 
 The recorder hooks
 ------------------

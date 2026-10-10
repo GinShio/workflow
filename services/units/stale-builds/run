@@ -1,0 +1,44 @@
+#!/bin/sh
+set -u
+
+# Delete the build trees the git hooks moved aside, once they are 14 days old.
+#
+# The reference-transaction hook (dotfiles/git/hooks, 60-cleanup-build-dir)
+# moves a gone branch's build tree into a `.wits-trash` directory beside it and
+# records it here, one file per tree: named `<epoch seconds>.<unique>`, holding
+# the tree's path. The age is read from the name. A record whose tree is gone —
+# moved back by hand, say — is simply dropped. Each record is its own file, so
+# the hook adding one never races this run removing another.
+
+records="${XDG_STATE_HOME:-$HOME/.local/state}/wits/stale-builds"
+[ -d "$records" ] || exit 0
+
+cutoff=$(($(date +%s) - 14 * 86400))
+status=0
+
+for record in "$records"/*; do
+    [ -f "$record" ] || continue
+    stamp=${record##*/}
+    stamp=${stamp%%.*}
+    case $stamp in '' | *[!0-9]*) continue ;; esac
+    [ "$stamp" -le "$cutoff" ] || continue
+
+    tree=
+    IFS= read -r tree < "$record" || true
+    # Only ever a tree the hook put into a trash directory.
+    case $tree in
+        /*/.wits-trash/?*)
+            if [ -d "$tree" ] && [ ! -L "$tree" ]; then
+                if ! rm -rf -- "$tree"; then
+                    echo "stale-builds: could not delete $tree" >&2
+                    status=1
+                    continue
+                fi
+            fi
+            rmdir -- "${tree%/*}" 2>/dev/null || true
+            ;;
+    esac
+    rm -f -- "$record"
+done
+
+exit "$status"

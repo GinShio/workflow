@@ -18,6 +18,7 @@ docker-prune
 podman-prune
 system-logs
 user-cache
+stale-builds
 ai-agents
 flatpak-cleanup
 npm-cache

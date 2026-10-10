@@ -1,5 +1,5 @@
 #!/bin/sh
-# Remove a branch's build directories once no branch carries that name any more.
+# Reclaim a branch's build directories once no branch carries that name.
 #
 # A rename orphans them exactly as a deletion does: `build_dir` templates key on
 # `branch.slug`, so the trees built under the old name are no longer reachable
@@ -7,8 +7,19 @@
 # therefore handled the same way, which is why this script only needs to know
 # that the name is gone, never why.
 #
-# Guards run before the library for the reason spelled out in 50-cleanup-machete.
+# A tree is moved aside rather than deleted, because a branch deleted by mistake
+# comes back from the reflog in a second while its build may have taken an hour.
+# It goes into a `.wits-trash` directory beside it — the same filesystem, so the
+# move is a rename however large the tree — and a record of it goes into
+# $XDG_STATE_HOME/wits/stale-builds/, one file per tree, named
+# `<epoch seconds>.<unique>` and holding the tree's new path. The nightly
+# stale-builds service (services/units/stale-builds) deletes trees older than
+# its limit by those names, and that file layout is the contract between the
+# two.
 
+# The entrypoint already drops every fire but `committed`; the check stays so
+# the script is right on its own, and runs before the library so it costs
+# nothing.
 [ "$1" = "committed" ] || exit 0
 
 . "$HOOKS_DIR/core/lib.sh"
@@ -19,22 +30,40 @@ cfg_bool wits.hooks.reference-transaction.cleanup-build-dir-enable || exit 0
 deletions=$(branch_deletions)
 [ -n "$deletions" ] || exit 0
 
+trash_records="${XDG_STATE_HOME:-$HOME/.local/state}/wits/stale-builds"
+
+# Move one build tree into the trash beside it and record it. Prints the tree's
+# new path.
+quarantine() {
+    _q_trash="${1%/*}/.wits-trash"
+    _q_stamp=$(date +%s)
+    mkdir -p "$_q_trash" "$trash_records" || return 1
+    _q_record=$(mktemp "$trash_records/$_q_stamp.XXXXXX") || return 1
+    _q_dest="$_q_trash/${1##*/}.${_q_record##*.}"
+    if ! mv -- "$1" "$_q_dest"; then
+        rm -f -- "$_q_record"
+        return 1
+    fi
+    printf '%s\n' "$_q_dest" > "$_q_record"
+    printf '%s\n' "$_q_dest"
+}
+
 while read -r branch _old_sha; do
     [ -n "$branch" ] || continue
 
     # Across every project the branch identified a build in, not just the one
     # that owns the checkout: a borrowed component is the build identity of each
     # project that focuses on it, and those trees are orphaned by this too.
-    # branch_build_dirs has already dropped anything unsafe to delete.
+    # branch_build_dirs has already dropped anything unsafe to move.
     build_dirs=$(branch_build_dirs "$branch" || true)
     oldifs=$IFS
     IFS=$LF
     set -f
     for build_dir in $build_dirs; do
-        if rm -rf -- "$build_dir"; then
-            log_warn "cleanup-build-dir: removed $build_dir"
+        if moved=$(quarantine "$build_dir"); then
+            log_warn "cleanup-build-dir: moved $build_dir to $moved; the nightly stale-builds service deletes it later, move it back to keep it"
         else
-            log_warn "cleanup-build-dir: failed to remove $build_dir"
+            log_warn "cleanup-build-dir: failed to move $build_dir aside"
         fi
     done
     IFS=$oldifs
@@ -43,5 +72,8 @@ done <<_DELETIONS_EOF
 $deletions
 _DELETIONS_EOF
 
-# Advisory, like every reference-transaction script: see 50-cleanup-machete.
+# Advisory: the refs are already written, and housekeeping that could not be
+# done must not abort the chain under the runner's fail-fast rule. The explicit
+# status also keeps a suppressed log_warn (non-zero when the log level hides it)
+# from becoming this script's exit code.
 exit 0

@@ -248,13 +248,13 @@ branch_build_dirs() {
         done
 }
 
-# Whether a path may be handed to `rm -rf` as a build directory.
+# Whether a path may be reclaimed as a build directory.
 # Usage: removable_build_dir <path>
 #
 # wits only ever names a directory its own registry resolved, so nothing here is
-# expected to fire. They stay because the caller deletes recursively, and the
-# distance between a registry mistake and an unrecoverable one should not be a
-# single template typo.
+# expected to fire. They stay because what the caller moves aside is deleted
+# recursively a fortnight later, and the distance between a registry mistake and
+# an unrecoverable one should not be a single template typo.
 removable_build_dir() {
     _rbd_path="$1"
     if [ -L "$_rbd_path" ]; then

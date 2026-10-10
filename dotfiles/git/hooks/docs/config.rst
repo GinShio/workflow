@@ -332,10 +332,12 @@ Fires whenever refs change; acts only on committed branch deletions.
      - Meaning
    * - ``wits.hooks.reference-transaction.cleanup-build-dir-enable``
      - off
-     - Remove a branch's build directories (resolved through the ``wits``
-       project registry) once no branch carries that name — deleted outright,
-       or renamed away, which orphans the old name's trees just the same.
-       ``-enable``: off until set, because it deletes files.
+     - Move a branch's build directories (resolved through the ``wits``
+       project registry) into a ``.wits-trash`` directory beside them once no
+       branch carries that name — deleted outright, or renamed away, which
+       orphans the old name's trees just the same. The nightly
+       ``stale-builds`` service deletes them 14 days later. ``-enable``: off
+       until set, because it ends in deleting files.
 
 The per-script toggles (``wits.hooks.reference-transaction.``):
 
