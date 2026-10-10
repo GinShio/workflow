@@ -439,6 +439,29 @@ staged_files() {
     git diff --cached --name-only --diff-filter=ACM
 }
 
+# Every line the staged changes add, one `<path>\t<line>\t<text>` per line, where
+# <line> numbers the line in the staged blob. Optional arguments are pathspecs.
+#
+# Rename detection stays on, so a moved file contributes only the lines the move
+# changed rather than all of them. Binary files and deletions contribute nothing.
+# The staged bytes are read as they are, without textconv, so an encrypted file
+# shows its ciphertext — which content checks skip anyway. A `+++ ` line counts as
+# a file header only before the file's first hunk, since an added line whose own
+# text starts with `++` looks the same inside one.
+staged_added_lines() {
+    git diff --cached --no-color --no-ext-diff --no-textconv -M -U0 \
+        --diff-filter=ACMR --src-prefix=a/ --dst-prefix=b/ -- "$@" |
+        awk '
+            /^diff --git / { in_hunk = 0; path = ""; next }
+            !in_hunk && /^\+\+\+ b\// { path = substr($0, 7); next }
+            /^@@ / { in_hunk = 1; split($3, n, ","); line = substr(n[1], 2) + 0; next }
+            in_hunk && /^\+/ {
+                if (path != "") printf "%s\t%d\t%s\n", path, line, substr($0, 2)
+                line++
+            }
+        '
+}
+
 # The staged content of a file, straight from the index.
 staged_blob() {
     git cat-file blob ":$1" 2>/dev/null

@@ -227,8 +227,9 @@ The marker guard
 Lets you plant a tripwire in your own code. Stage a line containing
 ``DO_NOT_SUBMIT``, ``NOCOMMIT``, or ``FIXME_BLOCKER`` and the commit is refused
 until you remove it — the reliable way to make sure a debug hack or a
-note-to-self never ships. The scan is over the staged content only and skips
-binary files. Nothing to configure.
+note-to-self never ships. Only the lines the commit adds are scanned, so a file
+that already carries a marker — this page, for one — does not block every later
+edit to it; binary files are skipped. Nothing to configure.
 
 The secret scan
 ~~~~~~~~~~~~~~~
