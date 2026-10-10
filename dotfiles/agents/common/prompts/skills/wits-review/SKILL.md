@@ -22,7 +22,7 @@ Start from the forge's current snapshot and the complete local review state:
 
 - Run `wits review fetch <mr>` at the start so the snapshot, discussion, and stack state are current.
 - Run `wits review checkout <mr>`. It creates or repoints the one reusable review worktree; use the path it reports, `cd` there, and run the rest of the review from it. `--next`/`--prev` repoint that same worktree within the stack.
-- Read `wits review show <mr> --json` for `snapshot.fork_sha`, `snapshot.head_sha`, snapshot history, commits, files, threads, and neighbors. Read `wits review draft <mr> --json` for the exact pending action stream before changing it.
+- Read `wits review show <mr> --json` for `snapshot.fork_sha`, `snapshot.head_sha`, snapshot history, `reviewed`, commits, files, threads, and neighbors. Read `wits review draft <mr> --json` for the exact pending action stream before changing it.
 
 Done when the refreshed `head_sha` is checked out in the review worktree and you hold its `fork_sha`, history, files, threads, neighbors, and existing draft.
 
@@ -31,7 +31,7 @@ Done when the refreshed `head_sha` is checked out in the review worktree and you
 Read past the diff: read entire files, follow symbols, and run project tooling from the review worktree.
 
 - **Current change:** read `wits review diff <mr> --patch`. This is the patch the final review assesses and the source of comment line/side coordinates.
-- **Re-review:** identify the newest earlier `snapshots[].head_sha` also attached to the existing local or remote comments. Read `wits review diff <mr> --against <old-head> --patch` for the change since that review point. If no comment identifies one, assess the current patch instead of guessing. When the comparison reports identical-content ambiguity, inspect the same comparison without `--patch`, then with `--patch=3way`.
+- **Re-review:** when `show` carries `reviewed`, the review point of the last submitted review, read `wits review diff <mr> --since-reviewed --patch` for the change since; it says so when nothing moved. Without `reviewed`, take the newest earlier `snapshots[].head_sha` attached to the existing local or remote comments and read `wits review diff <mr> --against <old-head> --patch`; when neither identifies a review point, assess the current patch. When the comparison reports identical-content ambiguity, inspect the same comparison without `--patch`, then with `--patch=3way`.
 - **Around the change:** read the changed files whole and use `rg` to follow each affected symbol to its definition and other uses, so you see the change's reach.
 - **Before/after:** the worktree holds the post-image. Read the pre-image with `git show <fork_sha>:<pre-image-path>`, where `<pre-image-path>` is `files[].old_path` for a rename or copy and `files[].path` otherwise.
 - **Intent:** read `git log <fork_sha>..<head_sha>` and the relevant `git show <sha>` output.
