@@ -79,6 +79,12 @@ place, and the entrypoints are disposable boilerplate. When an installer does
 overwrite a stub outright, recovery is restoring a file whose executable
 content is one line, not reconstructing a pipeline.
 
+The ``reference-transaction`` stub is the one exception, and it stays a stub in
+spirit: before handing off it drops, with shell builtins alone, every fire no
+layer acts on (see `Repo-scoped state: eager for the few, lazy for the rest`_).
+That filter has to sit in front of the runner rather than inside it, because the
+runner's own startup is the cost being avoided.
+
 The branchless bootstrap takes the same idea one step further. Rather than let
 ``git branchless init`` install its own entrypoints over ours, the hook points
 that installation at a dedicated, inactive generated-hooks directory, so the
@@ -217,21 +223,33 @@ while its scripts have work only on the rare fire that is a committed branch
 deletion. So they read their stdin first, which costs no subprocess at all, and
 call git only for a line that reads like a deletion — to confirm the branch is
 really gone, since the ref stores report their own housekeeping the same way
-(see the :doc:`guide`). On every other fire not one ``git`` subprocess is
-spawned, and the hottest hook stays cheap without a value cache to invalidate.
+(see the :doc:`guide`).
 
 Worth stating plainly, because the measurement is easy to assume the other way
-round: this is a correctness-and-clarity argument, not a throughput one. The
-framework's floor is process startup — one shell for the runner plus one per
-``.d`` script, each re-parsing the library — and that dominates everything the
-warm layer does. Lazy facts are worth having because a script should pay for
+round: lazy facts are a correctness-and-clarity argument, not a throughput one.
+The framework's floor is process startup — one shell for the runner plus one
+per ``.d`` script, each re-parsing the library — and that dominates everything
+the warm layer does. Lazy facts are worth having because a script should pay for
 what it uses; they are not what makes the pipeline fast.
 
-What lazy evaluation deliberately does *not* buy: it cannot stop each child
-from re-parsing the library on ``exec``. POSIX ``sh`` has no way to share
-compiled functions across processes, and that interpreter cost is the price of
-the shell architecture — the only lever against it is compiling the hot path,
-which is a separate decision from this one.
+What makes ``reference-transaction`` fast is not starting at all. Its stub
+answers, with shell builtins and before the runner, every fire no layer acts
+on: anything but ``committed``, and a committed transaction whose every ref is
+one git-branchless ignores (``refs/branchless/*`` and git's operation-state
+pseudo-refs such as ``ORIG_HEAD`` and ``AUTO_MERGE``). On a 20-commit
+``rebase --update-refs`` with branchless active, that is the difference between
+741 runner starts and 63, and between 23 s and 3.4 s of hook time; the fires that
+still arrive are exactly the ones the scripts act on, in the same order. The
+filter applies to every layer — overlays, external hooks and the repository's
+own ``.git/hooks/reference-transaction`` included — so a layer that needs
+another state, or one of the dropped refs, has to widen it.
+
+What none of this buys is the interpreter cost of the fires that do arrive:
+POSIX ``sh`` cannot share compiled functions across processes, so each child
+re-parses the library. Compiling the dispatcher would remove that, and is
+declined on purpose: the hooks stay plain shell that needs nothing built, and
+the hot hook is kept cheap by skipping the fires that do not matter rather than
+by running them faster.
 
 One wrinkle worth recording: a getter honours a value already in the
 environment, so a hook that recursively drove *another* repository's hooks

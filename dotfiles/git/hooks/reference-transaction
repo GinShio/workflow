@@ -1,5 +1,32 @@
 #!/bin/sh
 # GINSHIO HOOK RUNNER STUB
 # distinct file to prevent cross-pollution by third-party tools
+#
+# Unlike the other stubs, this one first drops the fires no layer acts on,
+# using builtins alone, so they never pay for the runner. Every script under
+# reference-transaction.d acts only on a `committed` transaction (githooks(5):
+# the only state whose refs were actually written), and the ref names below are
+# the ones git-branchless ignores (git-branchless-lib 0.11.1,
+# src/core/eventlog.rs, should_ignore_ref_updates). A fire carrying nothing
+# else reaches no script, and nearly every fire of a rebase is of that kind.
+# A ref branchless starts ignoring only costs a needless fire here; a layer
+# that needs another state, or a ref this list drops, must widen it.
+[ "$1" = committed ] || exit 0
+
+_rt_input=$(cat)
+_rt_wanted=
+while read -r _rt_old _rt_new _rt_ref; do
+    case $_rt_ref in
+        '' | refs/branchless/* | ORIG_HEAD | CHERRY_PICK | REBASE_HEAD | \
+            CHERRY_PICK_HEAD | AUTO_MERGE | FETCH_HEAD) ;;
+        *) _rt_wanted=1; break ;;
+    esac
+done <<_RT_EOF
+$_rt_input
+_RT_EOF
+[ -n "$_rt_wanted" ] || exit 0
+
 # source the central logic; 'exit' in runner will stop execution here
-. "$(dirname "$0")/core/runner"
+. "$(dirname "$0")/core/runner" <<_RT_EOF
+$_rt_input
+_RT_EOF

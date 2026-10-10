@@ -488,6 +488,15 @@ Fires whenever refs change. The scripts here react to one case in particular —
 a branch that stops existing — and act only once the change is actually
 committed, so a rolled-back transaction never triggers them.
 
+Because nearly every fire is of no interest — a rebase fires this hook hundreds
+of times, mostly for transactions that are only being prepared or that touch
+nothing but git's own bookkeeping refs — the hook's entrypoint drops those fires
+before anything else starts. Only a ``committed`` transaction carrying at least
+one ref that git-branchless records reaches the pipeline, and that holds for
+every layer, your external and repository-local hooks included. A hook of yours
+that wants the ``prepared`` state (to veto an update, say) needs that filter
+widened in the ``reference-transaction`` entrypoint first.
+
 What the hook is told, though, is what each ref *store* did — not what
 happened to a branch. The default files backend keeps loose refs beside a
 ``packed-refs`` file and runs a transaction on each, so
