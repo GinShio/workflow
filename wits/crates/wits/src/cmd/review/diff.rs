@@ -306,8 +306,7 @@ fn describe_one(repo: &Repository, id: &str, series: &Series, args: &DiffArgs) -
              range — add `--against <SPEC>`"
         ),
         Some(PatchMode::TwoWay) => {
-            print!("{}", patch_text(repo, series)?);
-            return Ok(());
+            return wits_util::pager::show_patch(repo, &patch_text(repo, series)?);
         }
         None => {}
     }
@@ -348,8 +347,7 @@ fn compare_two(
     args: &DiffArgs,
 ) -> Result<()> {
     if let Some(mode) = args.patch {
-        print!("{}", render_comparison(repo, from, to, mode)?);
-        return Ok(());
+        return wits_util::pager::show_patch(repo, &render_comparison(repo, from, to, mode)?);
     }
 
     let view = InterdiffView {

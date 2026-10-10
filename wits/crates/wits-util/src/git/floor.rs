@@ -157,6 +157,27 @@ impl Repository {
         self.query(&["var", "GIT_EDITOR"])
     }
 
+    /// The pager git would page its own output through, as the shell command
+    /// string git itself would run. Git resolves the whole precedence
+    /// (`GIT_PAGER`, `core.pager`, `PAGER`, then its built-in `less`).
+    pub fn pager(&self) -> Option<String> {
+        self.query(&["var", "GIT_PAGER"])
+    }
+
+    /// Whether git colours `key`'s output (`color.diff`, say, falling back to
+    /// `color.ui`) when it writes to a terminal.
+    pub fn colors_terminal(&self, key: &str) -> bool {
+        self.query(&["config", "--get-colorbool", key, "true"])
+            .is_some_and(|v| v == "true")
+    }
+
+    /// The escape sequence for the colour `key` names, `default` when it is
+    /// unset; empty for a colour of "normal".
+    pub fn color(&self, key: &str, default: &str) -> String {
+        self.query(&["config", "--get-color", key, default])
+            .unwrap_or_default()
+    }
+
     /// The branch currently checked out, or `None` on a detached HEAD. A
     /// detached HEAD has no name to push or build on, so the absence is
     /// meaningful rather than an error.

@@ -548,6 +548,12 @@ Bare ``--patch`` is ``2way``. The mode must be attached with ``=``
 (``--patch=3way``), so that ``wits review diff --patch 123`` cannot read
 ``123`` as a mode.
 
+On a terminal the patch is shown the way ``git diff`` shows one: in git's
+diff colours (``color.diff.*``, when ``color.diff`` or ``color.ui`` allows) and
+through git's pager (``git var GIT_PAGER``, so delta if git uses it), with
+``LESS=FRX`` when ``LESS`` is unset, as git sets it. Piped or redirected, it is
+the bare patch.
+
 Empty ``2way`` output means nothing changed — with one nuance ``wits`` reports
 when it happens: if the two ranges produce identical content but their commits
 differ against their bases, either the series was restructured with the same

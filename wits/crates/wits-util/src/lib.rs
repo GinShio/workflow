@@ -8,9 +8,9 @@
 //! floor instead of reinventing it.
 //!
 //! The modules are flat on purpose. There is still a rough gradient — `config`,
-//! `crypto`, `git`, `jinja`, `log`, `process`, `time` are the thin floor;
-//! `build_system`, `forge`, `project`, `remote`, `worktree` are subsystems with
-//! real domain logic — but they sit side by side so a consumer names
+//! `crypto`, `git`, `jinja`, `log`, `pager`, `process`, `time` are the thin
+//! floor; `build_system`, `forge`, `project`, `remote`, `worktree` are subsystems
+//! with real domain logic — but they sit side by side so a consumer names
 //! `wits_util::process` or `wits_util::forge` directly, without a grouping layer
 //! in between.
 //!
@@ -39,6 +39,7 @@ pub mod forge;
 pub mod git;
 pub mod jinja;
 pub mod log;
+pub mod pager;
 pub mod process;
 pub mod project;
 pub mod remote;

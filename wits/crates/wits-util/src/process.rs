@@ -8,6 +8,7 @@
 //! exists — [`force_run`](Command::force_run) is how a caller marks a query as
 //! safe to execute regardless.
 
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::Stdio;
 use thiserror::Error;
@@ -24,6 +25,12 @@ pub enum ProcessError {
     },
     #[error("command output is not valid UTF-8: {0}")]
     Utf8(#[from] std::string::FromUtf8Error),
+    #[error("failed waiting for '{program}': {source}")]
+    Wait {
+        program: String,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 pub struct CommandResult {
@@ -204,6 +211,37 @@ impl Command {
                 program: self.program.clone(),
                 source,
             })?;
+        Ok(status.code().unwrap_or(-1))
+    }
+
+    /// [`status`](Command::status) with `input` fed to stdin: how output is
+    /// handed to a pager, which reads it there while it owns the terminal. A
+    /// reader that stops before taking all of `input` — a pager quit early — is
+    /// not an error; its exit status says how it went.
+    pub fn status_with_input(&self, input: &[u8]) -> Result<i32, ProcessError> {
+        if wits_log::is_dry_run() && !self.force_run {
+            wits_log::dry_run(&self.format_cmd());
+            return Ok(0);
+        }
+        if wits_log::is_verbose() {
+            log::debug!("running: {}", self.format_cmd());
+        }
+
+        let mut child = self
+            .build_std_command()
+            .stdin(Stdio::piped())
+            .spawn()
+            .map_err(|source| ProcessError::Spawn {
+                program: self.program.clone(),
+                source,
+            })?;
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(input);
+        }
+        let status = child.wait().map_err(|source| ProcessError::Wait {
+            program: self.program.clone(),
+            source,
+        })?;
         Ok(status.code().unwrap_or(-1))
     }
 
