@@ -160,7 +160,9 @@ pub struct ResolvedValue {
 /// because it is the more deliberate, ephemeral override. The `prefix` is the
 /// git-config spelling and may be dotted (`wits.transcrypt`); the env form
 /// replaces those dots with underscores (`WITS_TRANSCRYPT_…`), so a subcommand's
-/// keys land under one consistent `wits.<sub>` / `WITS_<SUB>_` namespace.
+/// keys land under one consistent `wits.<sub>` / `WITS_<SUB>_` namespace. A dash
+/// in a key or context becomes an underscore too: git config allows one in a
+/// variable name, and a shell cannot name a variable with one.
 pub struct Resolver<'repo> {
     repo: Option<&'repo Repository>,
     prefix: String,
@@ -237,9 +239,9 @@ impl<'repo> Resolver<'repo> {
             None => format!("{}_{}", self.prefix, key),
         };
         // A dotted prefix (`wits.transcrypt`) is the git-config spelling; in an
-        // env var the dots become underscores, so `wits.transcrypt`/`password`
-        // reads `WITS_TRANSCRYPT_PASSWORD`.
-        std::env::var(name.replace('.', "_").to_uppercase()).ok()
+        // env var the dots become underscores, and so does a dash, so
+        // `wits.transcrypt`/`salt-mode` reads `WITS_TRANSCRYPT_SALT_MODE`.
+        std::env::var(name.replace(['.', '-'], "_").to_uppercase()).ok()
     }
 
     fn get_git(&self, repo: &Repository, ctx: Option<&str>, key: &str) -> Option<String> {
@@ -357,6 +359,17 @@ mod tests {
         std::env::remove_var("WFTEST2_MYKEY");
         std::env::remove_var("WFTEST2_PROD_MYKEY");
         assert_eq!(resolved.unwrap().value, "scoped");
+    }
+
+    #[test]
+    fn a_dash_reads_as_an_underscore_in_the_environment() {
+        let resolver = Resolver::new(None::<&Repository>, "wftest.dash", Some("my-ctx"));
+        std::env::set_var("WFTEST_DASH_MY_CTX_SALT_MODE", "context");
+        let resolved = resolver.get("salt-mode");
+        std::env::remove_var("WFTEST_DASH_MY_CTX_SALT_MODE");
+        let resolved = resolved.expect("the underscored env name should resolve");
+        assert_eq!(resolved.value, "context");
+        assert_eq!(resolved.source, ConfigSource::Env);
     }
 
     #[test]
