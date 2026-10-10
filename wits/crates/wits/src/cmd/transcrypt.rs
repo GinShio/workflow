@@ -225,6 +225,30 @@ fn clean(resolver: &Resolver<'_>, repo: &Repository, file: Option<&str>) -> anyh
             resolver.where_to_set("password")
         )
     })?;
+    let path = file.unwrap_or("");
+
+    // A packet coming in means the working tree holds ciphertext — checked out
+    // before the key was set, or copied in. Sealing it would nest one packet
+    // inside another. One that opens here is already what git should store, so
+    // it goes through byte for byte; one that does not is not this context's
+    // packet for this path, and is refused.
+    if crypto::is_encrypted(&plaintext) {
+        let opts = DecryptOptions {
+            cipher: secret.cipher,
+            kdf: secret.kdf,
+            path: Some(path.to_owned()),
+        };
+        let text = std::str::from_utf8(&plaintext).unwrap_or_default();
+        crypto::decrypt(text, &secret.password, &opts).with_context(|| {
+            format!(
+                "{path} already holds a packet, but not one the configured settings \
+                 open at this path; refusing to seal a packet inside a packet"
+            )
+        })?;
+        std::io::stdout().write_all(&plaintext)?;
+        return Ok(());
+    }
+
     let options = resolve_seal_options(resolver, &secret)?;
     let previous = file.and_then(|path| repo.index_blob(path));
 
@@ -232,7 +256,7 @@ fn clean(resolver: &Resolver<'_>, repo: &Repository, file: Option<&str>) -> anyh
     match crypto::seal(
         &plaintext,
         &secret.password,
-        file.unwrap_or(""),
+        path,
         previous.as_deref(),
         &options,
     )? {

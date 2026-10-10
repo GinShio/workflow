@@ -118,6 +118,45 @@ fn clean_without_a_context_salt_fails_naming_the_key() {
 }
 
 #[test]
+fn clean_passes_a_packet_it_opens_through_unchanged() {
+    // A working tree checked out before the key was set holds the ciphertext
+    // itself; adding it again must store it as it is, not seal it twice.
+    let cleaned = sealed(b"already sealed\n");
+    let again = run(
+        &["transcrypt", "clean", "secret.txt"],
+        &[PASSWORD, SALT],
+        &[],
+        &cleaned,
+    );
+    assert!(again.success, "{}", again.stderr);
+    assert_eq!(again.stdout, cleaned);
+}
+
+#[test]
+fn clean_refuses_a_packet_it_cannot_open() {
+    let cleaned = sealed(b"data\n");
+    let under_another_password = run(
+        &["transcrypt", "clean", "secret.txt"],
+        &[("WITS_TRANSCRYPT_PASSWORD", "the-wrong-one"), SALT],
+        &[],
+        &cleaned,
+    );
+    assert!(!under_another_password.success);
+    let at_another_path = run(
+        &["transcrypt", "clean", "elsewhere.txt"],
+        &[PASSWORD, SALT],
+        &[],
+        &cleaned,
+    );
+    assert!(!at_another_path.success);
+    assert!(
+        at_another_path.stderr.contains("packet inside a packet"),
+        "{}",
+        at_another_path.stderr
+    );
+}
+
+#[test]
 fn smudge_without_a_password_passes_bytes_through() {
     let blob: &[u8] = b"not-really-ciphertext but still checked out\n";
     let out = run(

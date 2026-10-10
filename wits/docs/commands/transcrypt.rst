@@ -147,6 +147,11 @@ are already up to date; removing them first makes the checkout repopulate them
 through ``smudge``. This is the whole onboarding story — tell the teammate the
 password and the salt, they run those lines, done.
 
+A file that is added again while it still holds its ciphertext is stored
+unchanged: clean recognises a packet that opens at that path and passes it
+through, rather than sealing a packet inside a packet. A packet that does not
+open there — another password's, or another path's — is refused.
+
 Choosing algorithms
 -------------------
 
@@ -390,6 +395,11 @@ Troubleshooting
      - Set ``wits.transcrypt.salt`` (or ``WITS_TRANSCRYPT_SALT``) to 16 hex
        digits — ``openssl rand -hex 8`` makes one — and use the same salt on
        every clone that seals.
+   * - ``git add`` aborts with *refusing to seal a packet inside a packet*
+     - The working-tree file holds ciphertext that the configured settings do
+       not open at that path — copied from elsewhere, or sealed under another
+       password. Put the plaintext back, or fix the password and re-checkout
+       the path.
    * - Working-tree files are base64 gibberish
      - The password is not set in this clone, so ``smudge`` passed the
        ciphertext through. Set the password, then ``rm`` and re-checkout the
