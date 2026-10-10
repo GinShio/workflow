@@ -1,6 +1,6 @@
 //! `wits stack` — turning a chain of local branches into a navigable set of MRs.
 //!
-//! The verbs are deliberately orthogonal facets of remote state: `sync` is
+//! The verbs are deliberately orthogonal facets of remote state: `push` is
 //! branch content (push), `submit` is MR existence and base, `anno` is each
 //! MR's navigation comment. Each is an idempotent reconcile that can be re-run
 //! on its own, which is what makes a stack workflow recoverable — when one step
@@ -14,11 +14,11 @@
 
 mod anno;
 mod decorate;
+mod push;
 mod resolution;
 pub mod slice;
 mod store;
 mod submit;
-mod sync;
 mod topology;
 mod tree;
 
@@ -43,7 +43,7 @@ pub struct StackArgs {
 #[derive(Debug, Subcommand)]
 pub enum StackAction {
     /// Push in-scope branches to origin (force-with-lease).
-    Sync(ScopeArgs),
+    Push(ScopeArgs),
     /// Create missing MRs and correct drifted bases.
     Submit(SubmitArgs),
     /// Keep each MR's stack navigation comment current.
@@ -196,7 +196,7 @@ pub fn run(args: &StackArgs) -> anyhow::Result<()> {
     let declared = remotes::declared_for_checkout(&repo)?;
 
     match &args.action {
-        StackAction::Sync(s) => sync::run(&repo, &declared, s),
+        StackAction::Push(s) => push::run(&repo, &declared, s),
         StackAction::Submit(s) => submit::run(&repo, &declared, s),
         StackAction::Anno(s) => anno::run(&repo, &declared, s),
         StackAction::Decorate(d) => decorate::run(&repo, &declared, d),
@@ -232,7 +232,7 @@ where
 /// one branch fails, so a single bad MR never strands the rest of the batch. But
 /// the *command* must still exit non-zero when anything failed — otherwise a
 /// script sees success while MRs silently went untouched. This is the shared
-/// tail that makes that true, matching `sync`'s all-or-nothing exit.
+/// tail that makes that true, matching `push`'s all-or-nothing exit.
 pub(crate) fn fail_if_any(failures: usize) -> anyhow::Result<()> {
     if failures > 0 {
         anyhow::bail!("{failures} branch(es) failed");

@@ -24,7 +24,7 @@ re-run it freely; each only reconciles its own slice of the world:
    * - Verb
      - Owns
      - Touches
-   * - ``wits stack sync``
+   * - ``wits stack push``
      - branch **content** on the remote
      - git only (push)
    * - ``wits stack submit``
@@ -92,7 +92,7 @@ Or supply it through the environment, which always works and is handy on CI:
 
    export GITHUB_TOKEN=<token>     # GITLAB_TOKEN / GITEA_TOKEN / FORGEJO_TOKEN / CODEBERG_TOKEN
 
-``sync`` needs no token (it only pushes); ``submit``, ``anno``, and
+``push`` needs no token (it only pushes); ``submit``, ``anno``, and
 ``decorate`` do.
 
 **Remotes: the ``origin`` and ``upstream`` roles.** ``wits stack`` reads two
@@ -187,13 +187,13 @@ After reworking your commits:
 
 .. code-block:: sh
 
-   wits stack sync       # push every branch in the stack to the origin remote
+   wits stack push       # push every branch in the stack to the origin remote
    wits stack submit     # open MRs that don't exist; fix bases that moved
    wits stack anno       # keep each MR's navigation comment current
 
 Run them in that order the first time; afterwards run whichever matches what
 changed. Reordered the stack but did not touch code? ``submit`` alone fixes the
-MR bases. Just amended a commit? ``sync`` alone re-pushes.
+MR bases. Just amended a commit? ``push`` alone re-pushes.
 
 Where the navigation lives
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -232,7 +232,7 @@ are standing on. Other stacks on the same base branch are left alone:
 
 .. code-block:: sh
 
-   wits stack sync --all
+   wits stack push --all
    wits stack submit --all
 
 ``anno`` only looks up the MRs in scope, so on a stack that forks, run
@@ -245,7 +245,7 @@ for driving another stack from a worktree or a dirty tree:
 .. code-block:: sh
 
    wits stack submit feature-api         # submit the stack around feature-api
-   wits stack sync feature-api           # push that stack, without switching to it
+   wits stack push feature-api           # push that stack, without switching to it
    wits stack anno feature-api --all     # refresh feature-api's whole stack
 
 The branch is a **scope anchor**, not the single target: the stack around it is
@@ -287,13 +287,13 @@ Single branches
 
 Not everything is a tall stack. A branch that is not in the stack is treated
 as its own one-node stack sitting on the base branch — so
-``sync`` and ``submit`` work on an ordinary feature branch with zero setup:
+``push`` and ``submit`` work on an ordinary feature branch with zero setup:
 
 .. code-block:: sh
 
    git switch -c quick-fix
    # ... commit ...
-   wits stack sync && wits stack submit
+   wits stack push && wits stack submit
 
 ``anno`` skips a lone branch: a single MR has no neighbours to navigate to.
 
@@ -325,7 +325,7 @@ repeatedly is exactly equivalent to a default:
 .. code-block:: sh
 
    # a repo's dev script
-   wits stack sync && wits stack submit && wits stack anno
+   wits stack push && wits stack submit && wits stack anno
    wits stack decorate feature-api       --label api --reviewer alice
    wits stack decorate feature-ui        --label ui  --reviewer bob
    wits stack decorate feature-api --all --label stacked
@@ -387,7 +387,7 @@ navigation comments instead of performing them:
 .. code-block:: sh
 
    wits stack submit -n
-   wits stack sync -n -v        # -v also shows the underlying git commands
+   wits stack push -n -v        # -v also shows the underlying git commands
 
 Configuration reference
 -----------------------
@@ -476,7 +476,7 @@ Troubleshooting
      - A rate limit whose quota refills later; retry after that time. Shorter
        waits are sat out and the request is sent again.
    * - ``submit`` fails to create an MR (*head not found* or similar)
-     - The branch is not on the ``origin`` remote yet — run ``wits stack sync``
+     - The branch is not on the ``origin`` remote yet — run ``wits stack push``
        first.
    * - A closed MR is not reopened
      - Intended: a closed/merged MR at the current commit is left alone. Pass

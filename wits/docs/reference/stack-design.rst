@@ -61,7 +61,7 @@ succeeds but an MR update fails you want to know *which* step you were in and
 to re-run only that step. The three remote verbs map cleanly onto three
 distinct intents::
 
-   wits stack sync      [scope]   # push to the origin role (git only; no forge)
+   wits stack push      [scope]   # push to the origin role (git only; no forge)
    wits stack submit    [scope]   # reconcile MRs: create missing, fix drifted bases
    wits stack anno      [scope]   # keep each MR's navigation comment current
    wits stack decorate  [branch]  # add labels/assignees/reviewers to an MR (additive)
@@ -80,7 +80,7 @@ git deletes a branch's stack keys with the branch and moves them with a rename
 (`Topology — stored in branch config`_).
 
 The three remote verbs are orthogonal facets of remote state — branch content
-(``sync``), MR existence and base (``submit``), MR navigation (``anno``) —
+(``push``), MR existence and base (``submit``), MR navigation (``anno``) —
 and each is an idempotent reconcile you can re-run on its own.
 
 Scope: which branches a verb touches
@@ -114,7 +114,7 @@ dynamic-edit examples). Given the current branch **N**:
 The base branch (usually ``main``) is never itself pushed or given an MR, but
 it *does* appear in annotation chains so reviewers see the full lineage.
 
-``sync``, ``submit``, and ``anno`` must agree on this selection — if the
+``push``, ``submit``, and ``anno`` must agree on this selection — if the
 fork-point threshold ever changes for one, it changes for all. The selection
 therefore lives in exactly one place, not copied per verb.
 
@@ -226,7 +226,7 @@ Resolution is the seam between "the file on disk" and "the work to do". It
 takes the topology, the current branch, the live local refs, and the resolved
 base branch, and produces a single ordered selection of *operable* nodes plus,
 for each, the **base it should target** (its parent, or the base branch when
-its parent is the root). Everything downstream — sync, submit, anno — consumes
+its parent is the root). Everything downstream — push, submit, anno — consumes
 this one structure, which is how the three verbs are guaranteed to agree on
 scope.
 
@@ -267,7 +267,7 @@ Branches not in the stack — synthetic one-node stack
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 When the current branch is not in the stack,
-resolution synthesizes a trivial tree: ``base → branch``. ``sync`` and
+resolution synthesizes a trivial tree: ``base → branch``. ``push`` and
 ``submit`` then operate on exactly that branch. ``anno`` **skips** it: a lone
 MR has no neighbours to navigate to, so a navigation comment would be pure
 noise. This single-node path requires zero stack setup and is the common
@@ -417,7 +417,7 @@ Gitea / Forgejo / Codeberg family — one API surface, three identities.
 There is no monolithic "reconcile" — the split verbs compose the primitives,
 and that is cleaner than a mode flag:
 
-* **``sync``** uses no forge primitives at all — it is a git push. Nothing
+* **``push``** uses no forge primitives at all — it is a git push. Nothing
   MR-shaped happens here.
 * **``submit``** → ``mrs_for_branch`` (one lookup, every state); an open MR
   with a drifted base gets ``set_base``; if none is open, consult the
@@ -500,7 +500,7 @@ fixed HEADER/FOOTER comment pair. Inside, one navigation section per chain from
 ``anno_blocks``; each line names the MR and its ``parent ← child`` flow, with
 the current MR marked. A fork-point MR therefore shows one section per
 downstream branch, so a reviewer sees every path the stack takes from here. The
-MRs it numbers are the ones in scope — the same selection ``sync`` and
+MRs it numbers are the ones in scope — the same selection ``push`` and
 ``submit`` act on — so those sections are complete for the lines in scope, and
 ``anno --all`` puts every line of the stack there.
 

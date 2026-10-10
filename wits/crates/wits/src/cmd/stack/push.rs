@@ -1,7 +1,7 @@
-//! `wits stack sync` — push the in-scope branches to the `origin` role's remote,
+//! `wits stack push` — push the in-scope branches to the `origin` role's remote,
 //! and nothing else.
 //!
-//! Sync is intentionally the dumbest verb: it makes the remote branch tips match
+//! Push is intentionally the dumbest verb: it makes the remote branch tips match
 //! the local ones. No forge, no MR. Keeping it that narrow is what lets the
 //! other verbs assume the remote is current without entangling push failures
 //! with MR logic.

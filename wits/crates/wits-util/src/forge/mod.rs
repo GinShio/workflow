@@ -297,7 +297,7 @@ pub fn detect(repo: &Repository, remotes: &Remotes) -> anyhow::Result<Box<dyn Fo
     // Turn away a recognized-but-unsupported host *before* hunting for a token,
     // so the failure names the real reason instead of masquerading as a missing
     // token. Bitbucket is the live case: we still parse its remotes and
-    // `wits stack sync` pushes to it, but the MR verbs have no backend for it.
+    // `wits stack push` pushes to it, but the MR verbs have no backend for it.
     match service {
         Service::GitHub
         | Service::GitLab
@@ -306,7 +306,7 @@ pub fn detect(repo: &Repository, remotes: &Remotes) -> anyhow::Result<Box<dyn Fo
         | Service::Codeberg => {}
         Service::Bitbucket => anyhow::bail!(
             "`wits stack` speaks to GitHub, GitLab and Gitea; Bitbucket has no MR backend here \
-             (`wits stack sync` still pushes to it)"
+             (`wits stack push` still pushes to it)"
         ),
         Service::Unknown => anyhow::bail!(
             "could not detect the forge for host '{}'; set wits.forge.{}.service",

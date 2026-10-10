@@ -78,7 +78,7 @@ Definitions
 Scope — which branches a verb touches
 -------------------------------------
 
-``sync``, ``submit``, and ``anno`` share **one** scope computation, so they can
+``push``, ``submit``, and ``anno`` share **one** scope computation, so they can
 never disagree. Given the checked-out branch N:
 
 .. list-table::
@@ -107,7 +107,7 @@ branch, ``--all`` included: every stack shares it, so it chooses none.
 Anchoring on a named branch
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-N above is normally the checked-out branch, but ``sync``/``submit``/``anno``
+N above is normally the checked-out branch, but ``push``/``submit``/``anno``
 accept an optional positional branch that replaces it as the anchor — the
 stack is then computed around *that* branch without checking it out. It is a
 scope anchor, not a single target: an anchor mid-line still selects its
@@ -144,17 +144,17 @@ reaches resolution: a root branch's MR targets the base branch on the
 *merge-target* repo.
 
 A branch not in the stack becomes a synthetic ``base → branch`` stack:
-``sync``/``submit`` act on it; ``anno`` skips it (a lone MR has no neighbours
+``push``/``submit`` act on it; ``anno`` skips it (a lone MR has no neighbours
 to list).
 
-sync
+push
 ----
 
 Push every operable branch that exists locally to the ``origin`` role's remote,
 with
 ``--force-with-lease``, in parallel. A root of the forest with no local ref is
 skipped rather than pushed. Any push failure makes the
-whole command exit non-zero (after attempting the rest). ``sync`` never
+whole command exit non-zero (after attempting the rest). ``push`` never
 contacts the forge.
 
 ``--force-with-lease`` (not a plain force) is the deliberate choice: history
@@ -556,7 +556,7 @@ Where the logic lives
    * - scope selection, base resolution, per-branch base
      - ``crates/wits/src/cmd/stack/resolution.rs``
    * - push
-     - ``crates/wits/src/cmd/stack/sync.rs``
+     - ``crates/wits/src/cmd/stack/push.rs``
    * - MR reconcile decision
      - ``crates/wits/src/cmd/stack/submit.rs`` (``decide``)
    * - navigation rendering, the navigation comment, description migration
@@ -581,7 +581,7 @@ Where the logic lives
 Invariants
 ----------
 
-1. ``sync``, ``submit``, ``anno`` (and ``decorate --all``) must share one
+1. ``push``, ``submit``, ``anno`` (and ``decorate --all``) must share one
    scope computation — never fork the fork-point rule across verbs.
 2. ``anno_blocks`` must stop at the next fork-point; expanding it grows
    navigation comments combinatorially.

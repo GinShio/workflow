@@ -2,7 +2,7 @@
 //!
 //! Everything MR-shaped lives here and only here: open the ones that are
 //! missing, and correct the base of the ones the topology moved. It never
-//! pushes — a branch is expected to already be on `origin` (via `sync`), and if
+//! pushes — a branch is expected to already be on `origin` (via `push`), and if
 //! it isn't the forge will refuse to open the MR, which is the honest failure.
 //!
 //! The two-phase shape (read all state, then apply) exists so that base
