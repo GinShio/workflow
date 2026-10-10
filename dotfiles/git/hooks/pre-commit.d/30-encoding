@@ -1,7 +1,9 @@
 #!/bin/sh
 . "$HOOKS_DIR/core/lib.sh"
 
-# Keep staged text sane: LF newlines only, and valid UTF-8. Binary blobs and
+# Keep what a commit adds sane: LF newlines only, and valid UTF-8. Only added
+# lines are judged — a file that already holds a CRLF line or a Latin-1 test
+# input is the project's own, not this commit's doing. Binary blobs and
 # (when iconv is absent) the UTF-8 check are skipped.
 files=$(staged_files)
 [ -n "$files" ] || exit 0
@@ -9,6 +11,9 @@ files=$(staged_files)
 has_iconv=0
 command -v iconv >/dev/null 2>&1 && has_iconv=1
 CR=$(printf '\r')
+
+added=$(staged_added_lines)
+[ -n "$added" ] || exit 0
 
 rc=0
 oldifs=$IFS
@@ -19,14 +24,17 @@ for file in $files; do
     is_staged_text "$file" || continue
     is_encrypted "$file" && continue   # its staged blob is ciphertext
 
-    if staged_blob "$file" | LC_ALL=C grep -q "$CR"; then
-        log_error "CR/CRLF line endings in $file (use LF)"
+    text=$(added_text_of "$file" "$added")
+    [ -n "$text" ] || continue
+
+    if printf '%s\n' "$text" | LC_ALL=C grep -q "$CR"; then
+        log_error "CR/CRLF line endings on added lines of $file (use LF)"
         rc=1
     fi
 
     if [ "$has_iconv" -eq 1 ] &&
-       ! staged_blob "$file" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then
-        log_error "invalid UTF-8 in $file"
+       ! printf '%s\n' "$text" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then
+        log_error "invalid UTF-8 on added lines of $file"
         rc=1
     fi
 done

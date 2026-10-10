@@ -436,7 +436,7 @@ staged_files() {
         [ -n "$STAGED_FILES" ] && printf '%s\n' "$STAGED_FILES"
         return 0
     fi
-    git diff --cached --name-only --diff-filter=ACM
+    git diff --cached --no-renames --name-only --diff-filter=ACM
 }
 
 # Every line the staged changes add, one `<path>\t<line>\t<text>` per line, where
@@ -451,7 +451,7 @@ staged_files() {
 staged_added_lines() {
     git diff --cached --no-color --no-ext-diff --no-textconv -M -U0 \
         --diff-filter=ACMR --src-prefix=a/ --dst-prefix=b/ -- "$@" |
-        awk '
+        LC_ALL=C awk '
             /^diff --git / { in_hunk = 0; path = ""; next }
             !in_hunk && /^\+\+\+ b\// { path = substr($0, 7); next }
             /^@@ / { in_hunk = 1; split($3, n, ","); line = substr(n[1], 2) + 0; next }
@@ -460,6 +460,24 @@ staged_added_lines() {
                 line++
             }
         '
+}
+
+# One file's share of a staged_added_lines listing: its added line numbers,
+# comma-separated on one line (nothing when the commit adds no line to it).
+# Usage: added_lines_of <file> <listing>
+#
+# The path travels through the environment because `awk -v` would read escape
+# sequences in it.
+added_lines_of() {
+    printf '%s\n' "$2" | _AL_PATH="$1" LC_ALL=C awk -F'\t' '
+        $1 == ENVIRON["_AL_PATH"] { printf "%s%s", sep, $2; sep = "," }'
+}
+
+# The same share as text: the added lines themselves, one per line.
+# Usage: added_text_of <file> <listing>
+added_text_of() {
+    printf '%s\n' "$2" | _AL_PATH="$1" LC_ALL=C awk -F'\t' '
+        $1 == ENVIRON["_AL_PATH"] { print substr($0, length($1) + length($2) + 3) }'
 }
 
 # The staged content of a file, straight from the index.

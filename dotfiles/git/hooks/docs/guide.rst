@@ -186,8 +186,11 @@ each language is independent, running a fast, file-oriented static analyzer
 over what you are committing — ``ruff`` (or ``flake8``) for Python,
 ``zig ast-check`` for Zig — and stops the commit on a finding. It works on the
 **staged content**: a partially staged file is linted exactly as it will be
-committed, not with your unstaged edits. A missing tool warns rather than
-passing silently, so you are told a linter you asked for is not running.
+committed, not with your unstaged edits. The Python linter blocks only on
+findings on lines the commit adds; the rest of the file's findings are the
+project's own, and blocking on them would make every touch of an upstream file a
+cleanup. A missing tool warns rather than passing silently, so you are told a
+linter you asked for is not running.
 
 Only genuinely *static* (no-build) linters belong here. Languages whose
 analysis requires a compile have no entry: **Rust** has no non-compiling
@@ -205,8 +208,9 @@ The sanity checks
 A safety net for the mistakes that are easy to make and tedious to undo. Staging
 a file triggers these in turn:
 
-* an **unresolved merge-conflict marker** (``<<<<<<<`` / ``=======`` /
-  ``>>>>>>>``) blocks the commit — the tell your merge left a fence up;
+* an **unresolved merge-conflict marker** (``<<<<<<<`` / ``|||||||`` /
+  ``=======`` / ``>>>>>>>``) on a line the commit adds blocks it — the tell
+  your merge left a fence up;
 * a **symlink pointing nowhere** blocks it — usually a ``broken symlink:
   link -> target`` where the target was never staged;
 * an **oversized file** blocks it — usually a fat-fingered ``git add`` of a
@@ -243,10 +247,11 @@ positive can be waved through with ``git commit --no-verify``.
 The encoding check
 ~~~~~~~~~~~~~~~~~~
 
-Keeps staged text honest: LF newlines only, and valid UTF-8. A staged text file
-carrying a CR or CRLF line ending, or an invalid UTF-8 byte, is rejected.
-Binary blobs are skipped, and so is the UTF-8 half when ``iconv`` is not
-installed. Nothing to configure — for automatic newline normalisation on top of
+Keeps what you add honest: LF newlines only, and valid UTF-8. A commit adding a
+line with a CR or CRLF ending, or an invalid UTF-8 byte, is rejected; lines the
+file already had — a Windows batch file's CRLFs, a Latin-1 test input — are not
+your commit's to answer for. Binary blobs are skipped, and so is the UTF-8 half
+when ``iconv`` is not installed. Nothing to configure — for automatic newline normalisation on top of
 this, let git do it with a ``.gitattributes`` entry of ``text=auto eol=lf``.
 
 The protected-branch prompt

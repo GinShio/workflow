@@ -47,11 +47,17 @@ fi
 # fork per file per script is what a large commit cannot afford.
 # staged_files/is_staged_text/is_staged_regular/is_encrypted (lib.sh) read them
 # back.
+#
+# Both listings turn rename detection off. With it on (diff.renames, which is
+# git's default), a file that was moved and edited is reported as a rename, and
+# an added/copied/modified filter would leave it out of every content check; off,
+# it is listed under its new path like any added file. Scripts that judge lines
+# rather than files ask staged_added_lines, which keeps renames paired.
 warm_staged_cache() {
-    _numstat=$(git diff --cached --numstat --diff-filter=ACM 2>/dev/null)
+    _numstat=$(git diff --cached --no-renames --numstat --diff-filter=ACM 2>/dev/null)
     STAGED_FILES=$(printf '%s\n' "$_numstat" | awk -F'\t' 'NF>=3 { print $3 }')
     STAGED_TEXT_FILES=$(printf '%s\n' "$_numstat" | awk -F'\t' 'NF>=3 && $1 != "-" { print $3 }')
-    _raw=$(git diff --cached --raw --diff-filter=ACM 2>/dev/null)
+    _raw=$(git diff --cached --no-renames --raw --diff-filter=ACM 2>/dev/null)
     STAGED_REGULAR_FILES=$(
         printf '%s\n' "$_raw" |
             awk -F'\t' 'NF>=2 {

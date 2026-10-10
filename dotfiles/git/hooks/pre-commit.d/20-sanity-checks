@@ -2,8 +2,11 @@
 . "$HOOKS_DIR/core/lib.sh"
 
 # Reject the easy-to-make, tedious-to-undo mistakes, judged against the staged
-# content: leftover conflict markers, symlinks pointing nowhere, and an
-# oversized blob (usually a stray build artifact or dataset).
+# content: conflict markers on lines this commit adds, symlinks pointing nowhere,
+# and an oversized blob (usually a stray build artifact or dataset). Markers are
+# looked for on added lines only, so a file that legitimately holds such a line
+# (a test of conflict handling, or a seven-character reStructuredText title
+# underlined with `=======`) does not block every later edit to it.
 files=$(staged_files)
 [ -n "$files" ] || exit 0
 
@@ -26,14 +29,18 @@ for file in $files; do
         log_error "file too large: $file ($((size / 1048576)) MiB > $((max_size / 1048576)) MiB)"
         rc=1
     fi
-
-    if is_staged_text "$file" &&
-       staged_blob "$file" | grep -Eq '^(<<<<<<< |=======$|>>>>>>> )'; then
-        log_error "merge-conflict markers in $file"
-        rc=1
-    fi
 done
 IFS=$oldifs
 set +f
+
+# The markers of all three conflict styles, zdiff3's base marker included.
+markers=$(staged_added_lines | LC_ALL=C awk -F'\t' '
+    $3 ~ /^(<<<<<<<|\|\|\|\|\|\|\||=======|>>>>>>>)( |$)/ { print $1 }' | sort -u)
+if [ -n "$markers" ]; then
+    printf '%s\n' "$markers" | while IFS= read -r file; do
+        log_error "merge-conflict markers in $file"
+    done
+    rc=1
+fi
 
 exit $rc

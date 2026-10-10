@@ -3,29 +3,71 @@
 
 # Static analysis of staged Python. ruff (or flake8) reads the staged blob on
 # stdin with the real path, so a partially-staged file is linted exactly as it
-# will be committed and config/reporting stay accurate. A finding blocks the
-# commit; a missing tool warns.
+# will be committed and config/reporting stay accurate. A finding on a line this
+# commit adds blocks the commit; findings elsewhere in the file are the
+# project's own, and blocking an edit on them would make every touch of an
+# upstream file a cleanup. A missing tool warns.
 files=$(staged_lang_files .py .pyi)
 [ -n "$files" ] || exit 0
 
+# Colour is turned off explicitly: the report is parsed, and a FORCE_COLOR in
+# the environment makes ruff colour it even when it is captured.
+if command -v ruff >/dev/null 2>&1; then
+    lint() {
+        staged_blob "$1" |
+            ruff check --color never --output-format=concise --stdin-filename "$1" -
+    }
+elif command -v flake8 >/dev/null 2>&1; then
+    lint() { staged_blob "$1" | flake8 --color=never --stdin-display-name "$1" -; }
+else
+    log_warn "python lint enabled but neither ruff nor flake8 is installed"
+    exit 0
+fi
+
+# Both tools report a finding as `<path>:<line>:<col>: <code> <message>`.
+# Keep the ones whose line the commit added.
+on_added_lines() { # <path> <comma-separated lines>
+    _AL_PATH="$1" awk -v lines="$2" '
+        BEGIN {
+            n = split(lines, a, ",")
+            for (i = 1; i <= n; i++) added[a[i]] = 1
+            prefix = ENVIRON["_AL_PATH"] ":"
+        }
+        index($0, prefix) == 1 {
+            rest = substr($0, length(prefix) + 1)
+            split(rest, field, ":")
+            if (field[1] in added) print
+        }'
+}
+
+added=$(staged_added_lines)
 rc=0
 oldifs=$IFS
 IFS='
 '
 set -f
-if command -v ruff >/dev/null 2>&1; then
-    for f in $files; do
-        staged_blob "$f" | ruff check --stdin-filename "$f" - || rc=1
-    done
-elif command -v flake8 >/dev/null 2>&1; then
-    for f in $files; do
-        staged_blob "$f" | flake8 --stdin-display-name "$f" - || rc=1
-    done
-else
-    log_warn "python lint enabled but neither ruff nor flake8 is installed"
-fi
+for f in $files; do
+    lines=$(added_lines_of "$f" "$added")
+    [ -n "$lines" ] || continue
+    report=$(lint "$f" 2>&1)
+    case $? in
+        0) continue ;;
+        1) ;;
+        *)
+            # Neither a clean run nor findings: the tool itself failed.
+            printf '%s\n' "$report" >&2
+            rc=1
+            continue
+            ;;
+    esac
+    findings=$(printf '%s\n' "$report" | on_added_lines "$f" "$lines")
+    if [ -n "$findings" ]; then
+        printf '%s\n' "$findings" >&2
+        rc=1
+    fi
+done
 IFS=$oldifs
 set +f
 
-[ "$rc" -eq 0 ] || log_error "python lint failed; fix the issues above or commit with --no-verify"
+[ "$rc" -eq 0 ] || log_error "python lint failed on added lines; fix the issues above or commit with --no-verify"
 exit $rc
