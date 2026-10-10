@@ -22,17 +22,17 @@
  * open: the command runs with whatever TMPDIR its shell already holds.
  */
 
-import { readFileSync, writeSync } from "node:fs";
+import { writeSync } from "node:fs";
 import process from "node:process";
 
 function shellQuote(s: string): string {
 	return `'${s.replaceAll("'", `'\\''`)}'`;
 }
 
-function main() {
+function main(raw: string) {
 	const scratch = process.argv[2];
 	if (!scratch) throw new Error("expected the scratch dir as the only argument");
-	const event = JSON.parse(readFileSync(0, "utf8")) as {
+	const event = JSON.parse(raw) as {
 		tool_name?: string;
 		tool_input?: Record<string, unknown>;
 	};
@@ -49,8 +49,19 @@ function main() {
 	writeSync(1, JSON.stringify({ updated_input: { ...input, command: `${prefix}\n${input.command}` } }));
 }
 
+/**
+ * Cursor can hand a hook a non-blocking stdin, where readFileSync(0) throws
+ * EAGAIN once the payload outruns the pipe buffer — a long enough command —
+ * and the crash fails open. The stream read waits for the writer instead.
+ */
+async function readStdin(): Promise<string> {
+	const chunks: Buffer[] = [];
+	for await (const chunk of process.stdin) chunks.push(chunk);
+	return Buffer.concat(chunks).toString("utf8");
+}
+
 try {
-	main();
+	main(await readStdin());
 } catch (e) {
 	console.error(`tmpdir hook failed: ${e}`);
 	process.exit(1);

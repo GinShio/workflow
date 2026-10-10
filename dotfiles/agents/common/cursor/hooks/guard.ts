@@ -33,7 +33,7 @@
 
 import { evaluate, isUnattended, workspaceRoot, type Intent } from "./core/mod.ts"; // paths are written against the deployed layout (~/.cursor/hooks/) — guard.ts sits beside core/, not against this repo tree
 import { homedir } from "node:os";
-import { readFileSync, writeSync } from "node:fs";
+import { writeSync } from "node:fs";
 import process from "node:process";
 
 const ASK_CAPABLE = new Set(["beforeShellExecution", "beforeMCPExecution"]);
@@ -48,8 +48,7 @@ function respond(permission: "allow" | "ask" | "deny", message?: string) {
 	writeSync(1, JSON.stringify({ permission, user_message: message, agent_message: message }));
 }
 
-function main() {
-	const raw = readFileSync(0, "utf8");
+function main(raw: string) {
 	const event = JSON.parse(raw) as {
 		hook_event_name?: string;
 		command?: string;
@@ -120,8 +119,20 @@ function main() {
 	respond(permission, `[${verdict.rule}] ${verdict.reason}${suffix}`);
 }
 
+/**
+ * Cursor can hand a hook a non-blocking stdin, where readFileSync(0) throws
+ * EAGAIN once the payload outruns the pipe buffer — a beforeReadFile carries
+ * the whole file — and failClosed turns that crash into a deny. The stream
+ * read waits for the writer instead.
+ */
+async function readStdin(): Promise<string> {
+	const chunks: Buffer[] = [];
+	for await (const chunk of process.stdin) chunks.push(chunk);
+	return Buffer.concat(chunks).toString("utf8");
+}
+
 try {
-	main();
+	main(await readStdin());
 } catch (e) {
 	console.error(`guard failed: ${e}`);
 	process.exit(2);
