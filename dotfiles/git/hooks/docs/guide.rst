@@ -256,6 +256,21 @@ note-to-self never ships. Only the lines the commit adds are scanned, so a file
 that already carries a marker — this page, for one — does not block every later
 edit to it; binary files are skipped. Nothing to configure.
 
+The transcrypt plaintext check
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Makes sure a file a ``transcrypt`` filter owns reaches the commit sealed. Git
+quietly treats a ``filter=`` attribute naming a driver this machine does not
+define as a pass-through, so a file created under a context whose filter is not
+set up here would otherwise be committed in the clear. Every staged path whose
+filter is ``transcrypt`` or ``transcrypt-<ctx>`` must hold a packet, or nothing
+at all; the check reads only attributes and blobs, so it holds exactly where the
+filter is missing, and needs no built binary. Where ``wits`` is installed,
+``wits transcrypt verify --staged`` then also checks that each packet opens at
+the path it is staged at — a ``git mv`` moves a blob still sealed for the old
+one — and an older ``wits`` without ``verify`` is warned about and skipped.
+Nothing to configure.
+
 The secret scan
 ~~~~~~~~~~~~~~~
 

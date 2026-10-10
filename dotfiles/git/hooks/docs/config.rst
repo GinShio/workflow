@@ -144,6 +144,8 @@ The per-script toggles for ``pre-commit``:
      - the marker guard (``25-block-checks``)
    * - ``encoding-disable``
      - the encoding check (``30-encoding``)
+   * - ``transcrypt-sealed-disable``
+     - the transcrypt plaintext check (``35-transcrypt-sealed``)
    * - ``secret-scan-disable``
      - the secret scan (``40-secret-scan``)
    * - ``format-clang-disable``

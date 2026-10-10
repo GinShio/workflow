@@ -1,0 +1,58 @@
+#!/bin/sh
+. "$HOOKS_DIR/core/lib.sh"
+
+# Block a commit that stages plaintext where a transcrypt filter should have
+# sealed it. Git treats a `filter=` attribute naming a driver this machine does
+# not define as a pass-through — `required` binds only a defined driver — so a
+# file created under a context whose filter is not set up here is staged in the
+# clear without a word. The check reads attributes and blobs, never filter
+# config, so it holds exactly where the filter is missing, and it needs no built
+# binary: every packet is base64 opening with `U2FsdGVk`, the encoding of
+# `Salted`. An empty blob passes, since clean leaves an empty file empty.
+#
+# Where wits is installed, `wits transcrypt verify --staged` then also checks
+# that each packet opens at the path it is staged at: `git mv` moves a blob still
+# sealed for the old path.
+if [ -n "${_WITS_STAGED_CACHED:-}" ]; then
+    encrypted=$STAGED_ENCRYPTED_FILES
+else
+    encrypted=$(staged_files | crypt_filtered)
+fi
+[ -n "$encrypted" ] || exit 0
+
+# `transcrypt` and `transcrypt-<ctx>` are wits' filter names; another
+# encrypting filter (git-crypt) seals in its own format and is not ours to read.
+plaintext=$(
+    printf '%s\n' "$encrypted" | git check-attr --stdin filter 2>/dev/null |
+        while IFS= read -r line || [ -n "$line" ]; do
+            case ${line##*: filter: } in
+                transcrypt | transcrypt-?*) ;;
+                *) continue ;;
+            esac
+            path=${line%: filter: *}
+            [ "$(git cat-file -s ":$path" 2>/dev/null)" = 0 ] && continue
+            magic=$(git cat-file blob ":$path" 2>/dev/null | dd ibs=1 count=8 2>/dev/null)
+            [ "$magic" = U2FsdGVk ] || printf '%s\n' "$path"
+        done
+)
+if [ -n "$plaintext" ]; then
+    printf '%s\n' "$plaintext" >&2
+    log_error "staged as plaintext though a transcrypt filter owns them (above); define that filter here, then git add them again"
+    exit 1
+fi
+
+command -v wits >/dev/null 2>&1 || exit 0
+report=$(wits transcrypt verify --staged 2>&1)
+# Exit status 2 is a usage error, from a wits older than `transcrypt verify`:
+# a check that is missing, warned about rather than shown as a failure.
+case $? in
+    0) exit 0 ;;
+    2)
+        log_warn "this wits has no 'transcrypt verify'; skipped checking that staged packets open at their paths"
+        exit 0
+        ;;
+    *)
+        printf '%s\n' "$report" >&2
+        exit 1
+        ;;
+esac
