@@ -277,7 +277,11 @@ Submodules — borrowed, not re-downloaded
 borrows objects through git alternates, so even a large submodule costs no
 download of its own; every level of a nested tree borrows from its own store.
 On a later ``HEAD`` move it just **updates** the already-present submodules to
-the new pins — the borrow is a one-time materialisation concern.
+the new pins — but first fetches each pinned commit the store lacks into the
+store itself. Left to ``submodule update``, a moved pin would download into the
+worktree's own object store, and every superproject fetch would grow that
+private copy again; fed this way, the commit reaches every worktree borrowing
+the store through its alternate.
 
 It is idempotent, so it also works as a cheap second pass over a worktree you
 first made lightweight.

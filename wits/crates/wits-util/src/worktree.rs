@@ -608,8 +608,9 @@ pub fn repoint(dir: &Path, rev: &str) -> Result<()> {
 ///   owns for it, so even a large submodule costs no download of its own;
 /// - a submodule **already materialised** only needs its working tree moved to
 ///   the new pin — a plain `git submodule update`, no `--init`, no
-///   `--reference`. The borrow was a one-time concern; re-passing it on every
-///   HEAD switch would be pure waste.
+///   `--reference`, once the pinned commit is in the store it borrows from
+///   ([`feed_store`]). The alternate is set up once; keeping the store fed is
+///   what keeps it holding.
 ///
 /// The nesting is walked here, one level at a time, rather than handed to
 /// `--recursive`: see the module docs for why the store has to exist before the
@@ -643,6 +644,87 @@ pub fn sync_submodules(dir: &Path) -> Result<usize> {
     materialise(&wt, &level)
 }
 
+/// Feed the shared stores of a checkout's already-materialised top-level
+/// submodules among `paths` with the commits its index pins (see
+/// [`feed_store`]), for a caller that then updates them itself: `wits update`,
+/// whose `submodule update --recursive` would otherwise download every moved pin
+/// into each checkout. Initialises nothing and moves nothing.
+pub fn feed_submodule_stores(dir: &Path, paths: &[String]) {
+    let wt = Repository::new(dir);
+    let Some(common) = wt.git_common_dir() else {
+        return;
+    };
+    let stores = common.join("modules");
+    for sub in wt.materialised_submodules() {
+        let checkout = dir.join(&sub.path);
+        if paths.contains(&sub.path) && checkout.join(".git").exists() {
+            feed_store(&wt, &sub, &checkout, &stores.join(&sub.name));
+        }
+    }
+}
+
+/// Before an already-materialised submodule follows its pin, put the pinned
+/// commit into the store the checkout borrows from, when it is missing there.
+///
+/// Otherwise `submodule update` downloads it into the checkout's own object
+/// store: the private copy the borrow exists to avoid, which every pin a
+/// superproject fetch moves would grow again — the borrow held only at the first
+/// materialisation. Fetched into the store, the commit reaches the checkout
+/// through its alternate, and every other worktree borrowing the same store gets
+/// it for nothing.
+///
+/// Only a checkout that borrows from `store` is fed: the checkout whose git-dir
+/// *is* the store (a conventional clone's main worktree) fetches into it anyway.
+/// Best effort, like the borrow itself: a store that cannot be fed leaves the
+/// update to download as it always did.
+fn feed_store(at: &Repository, sub: &Submodule, checkout: &Path, store: &Path) {
+    if !git::is_object_store(store) || !borrows_from(checkout, store) {
+        return;
+    }
+    // The commit the index pins, which is what `submodule update` checks out.
+    let Some(pin) = at.rev_parse(&format!(":{}", sub.path)) else {
+        return;
+    };
+    let shared = Repository::new(store);
+    if shared.rev_exists(&format!("{pin}^{{commit}}")) {
+        return;
+    }
+    log::debug!(
+        "fetching submodule '{}' into its shared store {}",
+        sub.name,
+        store.display()
+    );
+    if let Err(e) = shared.fetch(&["--quiet", "origin"]) {
+        log::warn!(
+            "could not fetch submodule '{}' into its shared store {}: {e}; the checkout \
+             will download its pin itself",
+            sub.name,
+            store.display()
+        );
+    }
+}
+
+/// Whether the checkout at `checkout` reads objects from `store` through an
+/// alternate.
+fn borrows_from(checkout: &Path, store: &Path) -> bool {
+    let Some(git_dir) = Repository::new(checkout).git_dir() else {
+        return false;
+    };
+    let Ok(alternates) = std::fs::read_to_string(git_dir.join("objects/info/alternates")) else {
+        return false;
+    };
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let objects = real(&store.join("objects"));
+    alternates
+        .lines()
+        .map(|line| {
+            let path = Path::new(line.trim());
+            // git reads a relative alternate against the borrower's objects dir.
+            real(&git_dir.join("objects").join(path))
+        })
+        .any(|path| path == objects)
+}
+
 /// One nesting level of a submodule walk: where this level's object stores
 /// belong, and what the repository around them looks like.
 struct Level {
@@ -667,6 +749,7 @@ fn materialise(at: &Repository, level: &Level) -> Result<usize> {
         let checkout = at.path().join(&sub.path);
         let store = level.stores.join(&sub.name);
         if checkout.join(".git").exists() {
+            feed_store(at, &sub, &checkout, &store);
             at.submodule_follow_pin(&sub.path)
                 .with_context(|| format!("updating submodule '{}'", sub.path))?;
         } else {
@@ -1141,6 +1224,119 @@ mod tests {
             Some("feat"),
             "an untracked file did not block the move"
         );
+    }
+
+    /// A pin that moved after the first materialisation is fetched into the
+    /// store the checkout borrows from, not into the checkout: the borrow has to
+    /// keep holding, or every superproject fetch grows a private copy again.
+    #[test]
+    fn a_moved_pin_is_fetched_into_the_shared_store() {
+        let _guard = crate::log::test_flag_guard();
+        // See the sibling test above for why this goes through the environment.
+        std::env::set_var("GIT_CONFIG_COUNT", "4");
+        std::env::set_var("GIT_CONFIG_KEY_0", "protocol.file.allow");
+        std::env::set_var("GIT_CONFIG_VALUE_0", "always");
+        std::env::set_var("GIT_CONFIG_KEY_1", "user.email");
+        std::env::set_var("GIT_CONFIG_VALUE_1", "t@e.com");
+        std::env::set_var("GIT_CONFIG_KEY_2", "user.name");
+        std::env::set_var("GIT_CONFIG_VALUE_2", "T");
+        std::env::set_var("GIT_CONFIG_KEY_3", "core.hooksPath");
+        std::env::set_var("GIT_CONFIG_VALUE_3", "/nonexistent-wits-test-hooks");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let run = |dir: &Path, args: &[&str]| {
+            crate::process::Command::new("git")
+                .args(args.iter().copied())
+                .current_dir(dir)
+                .force_run()
+                .exec()
+                .unwrap()
+        };
+        let sub = root.join("sub");
+        run(root, &["init", "-q", "-b", "main", "sub"]);
+        std::fs::write(sub.join("f"), "v1").unwrap();
+        run(&sub, &["add", "f"]);
+        run(&sub, &["commit", "-q", "-m", "c1"]);
+        let sup = root.join("P");
+        run(root, &["init", "-q", "-b", "main", "P"]);
+        run(
+            &sup,
+            &["submodule", "add", "-q", sub.to_str().unwrap(), "sub"],
+        );
+        run(&sup, &["commit", "-q", "-m", "add sub"]);
+        run(&sup, &["branch", "feat"]);
+
+        let repo = Repository::new(&sup);
+        let wt = root.join("P.feat");
+        create(&repo, &wt, "feat").unwrap();
+        sync_submodules(&wt).unwrap();
+        let store = sup.join(".git/modules/sub");
+        assert!(
+            borrows_from(&wt.join("sub"), &store),
+            "the worktree borrows"
+        );
+
+        // Upstream moves on, and the worktree's branch pins the new commit — as
+        // a superproject fetch would deliver it: in no local store yet.
+        std::fs::write(sub.join("f"), "v2").unwrap();
+        run(&sub, &["commit", "-q", "-am", "c2"]);
+        let c2 = Repository::new(&sub).rev_parse("HEAD").unwrap();
+        run(
+            &wt,
+            &["update-index", "--cacheinfo", &format!("160000,{c2},sub")],
+        );
+        run(&wt, &["commit", "-q", "-m", "bump sub"]);
+
+        let private = Repository::new(wt.join("sub")).git_dir().unwrap();
+        let objects = |dir: &Path| -> Vec<String> {
+            let mut found = Vec::new();
+            let mut stack = vec![dir.join("objects")];
+            while let Some(d) = stack.pop() {
+                for entry in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if !path.ends_with("info") {
+                            stack.push(path);
+                        }
+                    } else {
+                        found.push(path.display().to_string());
+                    }
+                }
+            }
+            found.sort();
+            found
+        };
+        let before = objects(&private);
+
+        sync_submodules(&wt).unwrap();
+        assert_eq!(
+            Repository::new(wt.join("sub")).rev_parse("HEAD").as_deref(),
+            Some(c2.as_str()),
+            "the checkout follows the new pin"
+        );
+        assert!(
+            Repository::new(&store).rev_exists(&format!("{c2}^{{commit}}")),
+            "the pin was fetched into the shared store"
+        );
+        assert_eq!(objects(&private), before, "and nothing into the checkout");
+
+        // `wits update`'s path: the stores are fed, then git updates on its own.
+        std::fs::write(sub.join("f"), "v3").unwrap();
+        run(&sub, &["commit", "-q", "-am", "c3"]);
+        let c3 = Repository::new(&sub).rev_parse("HEAD").unwrap();
+        run(
+            &wt,
+            &["update-index", "--cacheinfo", &format!("160000,{c3},sub")],
+        );
+        run(&wt, &["commit", "-q", "-m", "bump sub again"]);
+        feed_submodule_stores(&wt, &["sub".to_owned()]);
+        run(&wt, &["submodule", "update", "--recursive", "--", "sub"]);
+        assert_eq!(
+            Repository::new(wt.join("sub")).rev_parse("HEAD").as_deref(),
+            Some(c3.as_str())
+        );
+        assert_eq!(objects(&private), before, "still nothing into the checkout");
     }
 
     /// The bare-backed case, which git leaves with nowhere durable to put a

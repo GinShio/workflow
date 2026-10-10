@@ -55,7 +55,9 @@ The default action
 * Declared submodule repos advance via their own lifecycle; undeclared nested
   submodules are refreshed with ``git submodule update --recursive -- <materialised
   paths>`` — no ``--init``; ``--init`` happens only on clone or worktree
-  creation.
+  creation. A pinned commit the shared store a checkout borrows from lacks is
+  fetched into that store first, so it does not land in the checkout's own
+  object store (see :doc:`worktree`).
 
 Safe by default
 ---------------

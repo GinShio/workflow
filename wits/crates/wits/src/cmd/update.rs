@@ -472,6 +472,7 @@ fn refresh_submodules(project: &ProjectData, name: &str, git: &Repository) -> Re
         .map(|sub| sub.path)
         .filter(|p| !declared.contains(p))
         .collect();
+    worktree::feed_submodule_stores(git.path(), &subs);
     git.submodule_update(&subs, false)?;
     Ok(())
 }
