@@ -280,52 +280,6 @@ removable_build_dir() {
     return 0
 }
 
-# Resolve Main/Default Branch Name
-# Usage: get_main_branch [remote_name]
-get_main_branch() {
-    _remote="${1:-origin}"
-
-    # 1. The wits project registry — authoritative for a known project, below an
-    # explicit git-config override but above the remote-HEAD / name guesses.
-    #
-    # `repo.*` is the focus repo, so this reads the focus's own `main_branch`. A
-    # focus that is a *subtree* has none (it shares its anchor's git), and the
-    # registry renders that as the empty string — which the `-n` test below then
-    # passes over to the remote-HEAD tier rather than returning a wrong branch.
-    # That tier is the right answer for such a repo anyway, and wits's own design
-    # notes record a nested focus as a shape that may be removed
-    # (wits/docs/reference/project-design.rst, "Open questions / future").
-    if command -v wits >/dev/null 2>&1; then
-        _wits_mb=$(wits project info --get repo.main_branch 2>/dev/null) &&
-            [ -n "$_wits_mb" ] && { echo "$_wits_mb"; return; }
-    fi
-
-    # 2. Check local tracking info (fastest)
-    if _remote_head=$(git symbolic-ref "refs/remotes/$_remote/HEAD" 2>/dev/null); then
-        echo "${_remote_head#refs/remotes/$_remote/}"
-        return
-    fi
-
-    # 2.1 Verify if 'refs/remotes/origin/HEAD' is missing, try to detect it once?
-    # This invokes network and is slow, so we only implicitly trust if cached.
-    # Alternatively, users should run `git remote set-head origin -a`
-
-    # 3. Guess common names
-    for _candidate in main master trunk development; do
-        if git show-ref --verify --quiet "refs/heads/$_candidate"; then
-            echo "$_candidate"
-            return
-        fi
-        if git show-ref --verify --quiet "refs/remotes/$_remote/$_candidate"; then
-            echo "$_candidate"
-            return
-        fi
-    done
-
-    # 4. Fallback
-    echo "master"
-}
-
 # --- Branch events ---
 #
 # `reference-transaction` reports what each *ref store* did, not what happened to

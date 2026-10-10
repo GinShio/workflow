@@ -191,10 +191,12 @@ The framework itself needs only git. Everything else is incremental:
        still runs and UTF-8 validation is simply skipped.
    * - ``wits``
      - Resolves build directories (for workspace-restore and build-dir
-       cleanup) and owns every edit to the ``git-machete`` file
-       (cleanup-machete). When absent, workspace-restore warns and the two
+       cleanup), names the trunk git-branchless is initialised with, and owns
+       every edit to the ``git-machete`` file (cleanup-machete). When absent,
+       workspace-restore warns, the branchless bootstrap waits, and the two
        ``reference-transaction`` cleanups do nothing — there is deliberately no
-       second implementation of the machete format to fall back to.
+       second implementation of the machete format or the trunk rule to fall
+       back to.
    * - ``git-machete``
      - Its definition file is read and pruned by ``reference-transaction``;
        the tool itself never needs to run.

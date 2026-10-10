@@ -14,16 +14,26 @@ command -v git-branchless >/dev/null 2>&1 || exit 0
 # Use the common dir so linked worktrees share the main repo's state.
 [ -f "$GIT_COMMON_DIR/branchless/config" ] && exit 0
 
-main_branch=$(get_main_branch origin)
+# branchless records its main branch once, at init, so it is asked of wits — the
+# trunk `wits stack` bases a stack on — rather than guessed here. Where wits names
+# none, the init waits for a later checkout instead of freezing a guess.
+if ! main_branch=$(wits __trunk 2>/dev/null); then
+    log_warn "git-branchless not initialised: wits names no trunk here; \`wits __trunk\` says why."
+    exit 0
+fi
 log_info "Initializing git-branchless (main branch: $main_branch)..."
 # branchless installs its own top-level hook stubs. Point that installation at
 # a dedicated inactive directory; the shared hooksPath already calls branchless
 # from post-checkout.d/01 and the other ordered .d scripts.
 generated_hooks="$GIT_COMMON_DIR/branchless/generated-hooks"
 mkdir -p "$generated_hooks"
-if git -c core.hooksPath="$generated_hooks" \
-       branchless init --main-branch "$main_branch"; then
+# Its report is kept back unless the init fails: on success it is a warning that
+# core.hooksPath is not where branchless expects, which is exactly the redirect
+# above, read out on the first checkout of every repository.
+if report=$(git -c core.hooksPath="$generated_hooks" \
+        branchless init --main-branch "$main_branch" 2>&1); then
     log_info "git-branchless initialized."
 else
+    printf '%s\n' "$report" >&2
     log_error "git-branchless init failed."
 fi

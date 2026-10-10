@@ -521,6 +521,14 @@ directory; the shared ``core.hooksPath`` entrypoints remain the only active
 dispatch path. Everything here is idempotent: once ``branchless`` is set up, it
 does nothing.
 
+branchless records its main branch once, at init, so the hook asks ``wits
+__trunk`` for it — the trunk ``wits stack`` bases a stack on and ``wits
+worktree`` measures "merged" against: a declared project's ``main_branch``,
+else the merge target's remote HEAD, else ``main``/``master``/``trunk``. Where
+wits names none, initialisation waits for a later checkout rather than freezing
+a guess, and says so. branchless's own report is shown only if the init fails;
+on success it is a warning about the very ``core.hooksPath`` redirect above.
+
 reference-transaction
 ---------------------
 
