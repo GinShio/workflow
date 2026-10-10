@@ -35,8 +35,8 @@ use wits_util::git::{Commit, Repository};
 use wits_util::process::Command;
 use wits_util::project::remotes::Declared;
 
-use super::resolution;
 use super::topology::Topology;
+use super::{resolution, store};
 
 /// Explains our layer of the todo; git's own help block follows it.
 const FOOTER: &[&str] = &[
@@ -68,7 +68,7 @@ pub fn run(repo: &Repository, declared: &Declared, base: Option<&str>) -> anyhow
         return Ok(());
     }
 
-    let topology = resolution::load_topology(repo)?;
+    let topology = store::load(repo, &base).topology;
     let current = repo.current_branch();
     refuse_occupied(repo, &topology, &commits, current.as_deref())?;
 
@@ -127,17 +127,16 @@ pub fn run(repo: &Repository, declared: &Declared, base: Option<&str>) -> anyhow
     let branches = chain_branches(parse_assignments(&saved), &base);
 
     if branches.is_empty() {
-        log::info!("no update-ref lines were uncommented; the machete file is unchanged");
+        log::info!("no update-ref lines were uncommented; the stack is unchanged");
         return Ok(());
     }
 
     // Lay the discovered branches down as a linear chain on the base, leaving any
-    // unrelated stacks in the file untouched. The rebase ran for a while and the
-    // forest may have changed underneath it (a branch deleted in another
-    // terminal, the reference-transaction hook pruning), so the chain applies to
-    // a fresh load under the machete lock, not to the pre-rebase snapshot.
-    let _lock = resolution::MacheteLock::acquire(repo)?;
-    let mut topology = resolution::load_topology(repo)?;
+    // unrelated stacks untouched. The rebase ran for a while and the stack may
+    // have changed underneath it (a branch deleted in another terminal), so the
+    // chain applies to a fresh load, not to the pre-rebase snapshot.
+    let stored = store::load(repo, &base);
+    let mut topology = stored.topology.clone();
     topology.ensure(&base);
     let mut parent = base.clone();
     for branch in &branches {
@@ -145,7 +144,7 @@ pub fn run(repo: &Repository, declared: &Declared, base: Option<&str>) -> anyhow
         topology.reparent(branch, &parent);
         parent = branch.clone();
     }
-    resolution::save_topology(repo, &topology)?;
+    store::save(repo, &stored, &topology)?;
 
     log::info!("sliced into: {}", branches.join(", "));
     Ok(())
@@ -196,7 +195,7 @@ struct Spec {
     capture: PathBuf,
     /// The checked-out branch; `None` on a detached HEAD.
     current: Option<String>,
-    /// Every branch the machete file records.
+    /// Every branch the stack records.
     stack: HashSet<String>,
     /// The name to suggest for each commit of the range, keyed by full hash.
     suggestions: HashMap<String, String>,

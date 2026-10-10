@@ -12,13 +12,15 @@ the precise contract, aimed at whoever changes or debugs the logic.
 Throughout, an MR is the merge request (GitHub's "PR", GitLab's "MR"); the
 noun shown to users is per-host, but everything here calls it an MR.
 
-The machete forest
-------------------
+The stack forest
+----------------
 
-The machete file (``<common-git-dir>/machete``, one per repository and so
-shared by all its worktrees) records a dependency **forest**: each line is a
-branch, and indentation means "sits on top of". It is a forest, not just a
-chain — a branch may fork into several::
+Each stack branch records, in its own ``branch.<name>`` git config section,
+the branch it sits on, its place among its siblings and its cached MR — one
+stack per repository, shared by all its worktrees. Together they make a
+dependency **forest**, shown and edited (``tree edit``) as git-machete's text:
+each line is a branch, and indentation means "sits on top of". It is a forest,
+not just a chain — a branch may fork into several::
 
    main
        A            single child: linear
@@ -27,16 +29,24 @@ chain — a branch may fork into several::
                D    single child: linear
                    F  leaf
 
-Two properties of the parser matter:
+Two properties of the text form matter:
 
 * **Reading is indentation-agnostic.** Only *relative* nesting is read: a
   line's parent is the nearest preceding line with strictly smaller indent.
   Two spaces, four, or a tab all parse identically, and deleting a middle line
   leaves its child correctly attached to the grandparent even if the child is
   not re-indented.
-* **Writing normalizes to four spaces.** A rewrite (by ``anno`` caching
-  numbers, or ``slice``) emits four spaces per level regardless of the input
-  width.
+* **Rendering normalizes to four spaces**, regardless of the width that was
+  read.
+
+Git keeps the forest honest across branch events: ``git branch -m`` moves a
+branch's section, so it keeps its place, substack and cached MR; ``git branch
+-d``/``-D`` deletes it, so the branch leaves the stack. A child whose recorded
+parent is gone — renamed or deleted — is placed by history: under the deepest
+stack branch with an intact place whose tip is an ancestor of the child's, else
+on the base branch. That finds a renamed parent and splices a deleted one's
+children up to its parent; the next command that edits the stack writes the
+placement down.
 
 A trailing annotation per line caches the MR identity (e.g. ``PR #123``). It
 is a cache only — the live forge is the source of truth — refreshed by
@@ -81,7 +91,7 @@ never disagree. Given the checked-out branch N:
      - ancestors(N) + entire subtree(N) — "I manage this whole tree"
    * - N is **linear** (≤ 1 child)
      - linear stack(N) — this one line of work; sibling forks are left alone
-   * - N is **not in the file**
+   * - N is **not in the stack**
      - just N, as a synthetic one-node stack on the base branch, with or
        without ``--all``
    * - ``--all``
@@ -103,12 +113,10 @@ stack is then computed around *that* branch without checking it out. It is a
 scope anchor, not a single target: an anchor mid-line still selects its
 ancestors and downstream chain (the same set standing on it would), and
 ``--all`` widens that to its whole stack, as it would for the checked-out
-branch. An explicitly named anchor must be a real branch — a live local ref,
-or a name recorded in the file — so a typo fails loudly instead of quietly
-resolving to an empty synthetic stack. (An
-anchor that *is* a valid branch but absent from the file still becomes the
-synthetic one-node stack of the next section, just as the checked-out branch
-would.) A named anchor also lifts the detached-HEAD restriction, since scope
+branch. An explicitly named anchor must be a local branch, so a typo fails
+loudly instead of quietly resolving to an empty synthetic stack. (An anchor
+that *is* a branch but not in the stack still becomes the synthetic one-node
+stack of the next section, just as the checked-out branch would.) A named anchor also lifts the detached-HEAD restriction, since scope
 no longer depends on HEAD.
 
 Worked examples, on the sample forest above:
@@ -135,7 +143,7 @@ branch is a root. This is the only place the origin/upstream distinction
 reaches resolution: a root branch's MR targets the base branch on the
 *merge-target* repo.
 
-A branch absent from the file becomes a synthetic ``base → branch`` stack:
+A branch not in the stack becomes a synthetic ``base → branch`` stack:
 ``sync``/``submit`` act on it; ``anno`` skips it (a lone MR has no neighbours
 to list).
 
@@ -144,8 +152,8 @@ sync
 
 Push every operable branch that exists locally to the ``origin`` role's remote,
 with
-``--force-with-lease``, in parallel. A name in the file with no local ref is a
-stale entry and is skipped rather than pushed. Any push failure makes the
+``--force-with-lease``, in parallel. A root of the forest with no local ref is
+skipped rather than pushed. Any push failure makes the
 whole command exit non-zero (after attempting the rest). ``sync`` never
 contacts the forge.
 
@@ -193,8 +201,8 @@ anno
 Keep one navigation comment on each operable MR, written by the token's user.
 Its body is one delimited region (``<!-- wits stack: generated navigation …
 -->`` … ``<!-- wits stack: end navigation -->``) containing one or more
-``### Stack List`` sections. Discovered MR numbers are cached back into the
-machete annotations.
+``### Stack List`` sections. Discovered MR numbers are cached in each branch's
+``witsMr``.
 
 The comment
 ~~~~~~~~~~~
@@ -410,7 +418,7 @@ de-duplicated and the base is dropped before writing.
   same name) or a stray ``update-ref`` to the base cannot create a self-loop.
 * **Writing** lays the branches as a chain ``base → b1 → … → bn`` via
   ``reparent``, which **refuses any link that would form a cycle** and leaves
-  unrelated stacks in the file untouched.
+  unrelated stacks untouched.
 * **A stack branch checked out in another worktree** stops the slice before
   the rebase starts: git will not move a branch another worktree has checked
   out, so the chain could only be recorded without it.
@@ -450,11 +458,6 @@ then retargets its base). The base branch is protected from removal.
 
    * - Command
      - Effect
-   * - ``tree prune``
-     - Drop every node whose branch no longer exists locally; each removed
-       node's children splice up. Needs no names, idempotent, network-free —
-       the automation cleanup. A live fork sibling keeps its node (its ref
-       still exists), so it is never collateral.
    * - ``tree rm <branch>… [--delete]``
      - Remove named branches from the stack (children splice up).
        ``--delete`` also runs ``git branch -d`` (``-D`` with ``--force``).
@@ -464,32 +467,22 @@ then retargets its base). The base branch is protected from removal.
        come along). Refused if it would place the branch beneath its own
        descendant (the cycle guard). Creates the node if it was not recorded
        yet, so ``mv`` also serves as "add this branch onto X".
-   * - ``tree rename <from> <to>``
-     - Follow a ``git branch -m``: the node keeps its parent, its slot among
-       that parent's siblings, its substack and its MR annotation — only the
-       name changes. ``<to>`` must be an existing local branch. A ``<from>``
-       that was never stacked is reported and ignored; a ``<to>`` already in
-       the forest is refused (it can only be a stale entry, since git will not
-       rename onto a live branch — ``tree prune`` is the way out). Unlike
-       ``rm`` and ``mv``, the base branch is **not** protected.
+   * - ``tree edit [FILE|-]``
+     - Rewrite the whole forest as text, in git's editor, or from a file
+       (``-`` for stdin). Writes only what changed; refuses a name that is
+       neither a local branch nor the base, a name given twice, and the base
+       indented under another branch — changing nothing in each case.
 
 ``tree mv`` changes the *declared* shape only — it does not move commits.
 After a move, rebase the branch onto its new parent for the code to match;
 ``submit`` then retargets the MR base.
 
-``tree rename`` is likewise a file edit and never renames a git branch: the
-git rename has already happened, which is why ``<to>`` must exist. It is not
-``rm`` + ``mv``, because that sequence would lose the MR annotation, append the
-node after its former siblings instead of restoring its slot, and reorder the
-file — three silent losses for an operation in which nothing about the stack
-changed except a name.
-
 Adding and removing mid-stack
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The verbs are stateless re-readers of the file, so dynamic correctness is
-just a matter of keeping the file in step with reality; ``submit``'s base
-correction does the rest.
+The verbs are stateless re-readers of the stack, so dynamic correctness is
+just a matter of keeping it in step with reality; ``submit``'s base correction
+does the rest.
 
 .. list-table::
    :header-rows: 1
@@ -499,33 +492,31 @@ correction does the rest.
      - How / Result
    * - **Insert** B between A and C
      - ``slice`` (re-run), ``tree mv B --onto A`` then ``tree mv C --onto B``,
-       or edit the file. C ends up under B; ``submit`` creates B's MR and
+       or ``tree edit``. C ends up under B; ``submit`` creates B's MR and
        retargets C's base to B.
    * - **Remove** B (between A and C)
-     - ``tree rm B``, ``tree prune`` (after deleting B's branch), or delete
-       B's line in the file. C reattaches to A; ``submit`` retargets C's base
-       to A.
+     - ``tree rm B``, ``git branch -D B``, or delete B's line in ``tree
+       edit``. C reattaches to A; ``submit`` retargets C's base to A.
    * - **Remove** B via re-``slice``
      - Re-run ``slice``, assign A, C. ⚠️ ``slice`` does not prune, so B
-       lingers as a dead sibling. Follow with ``tree prune`` (if B's branch
-       is gone) or ``tree rm B``.
+       lingers as a dead sibling. Follow with ``tree rm B``, or delete B's
+       branch.
 
-Deleting a branch from the file by hand is still valid — the parser is
-indentation-agnostic, so the orphaned child reattaches to the grandparent
-without re-indenting.
+Deleting a line in ``tree edit`` is valid — the parser is indentation-agnostic,
+so the orphaned child reattaches to the grandparent without re-indenting.
 
 Known limitations
 -----------------
 
 * **Re-``slice`` does not prune** a branch dropped from a line; it lingers as
   a dead node (auto-pruning inside ``slice`` is unsafe — it cannot be told
-  apart from a fork sibling that should survive). Clean it with ``tree prune``
-  (once the branch is deleted) or ``tree rm``.
+  apart from a fork sibling that should survive). Clean it with ``tree rm``,
+  or by deleting the branch.
 * **A stack branch mid-rebase in another worktree** slips past the worktree
   check, since that worktree reports a detached HEAD. Git still leaves the
   branch unmoved, and ``slice`` records the chain without it, as if its line
   had been removed.
-* **An MR orphaned by removal** (its branch no longer in the file) keeps its
+* **An MR orphaned by removal** (its branch no longer in the stack) keeps its
   last navigation comment; ``anno`` no longer touches it.
 * **A navigation comment keeps the place it was posted at.** Run ``anno``
   right after ``submit`` and it sits directly under the description; an MR
@@ -573,9 +564,11 @@ Where the logic lives
    * - attribute application (labels/assignees/reviewers)
      - ``crates/wits/src/cmd/stack/decorate.rs`` and
        ``crates/wits-util/src/forge/*`` (``apply_attributes``)
-   * - structure edits (``prune``/``rm``/``mv``), ``remove`` splice
+   * - structure edits (``rm``/``mv``/``edit``), ``remove`` splice
      - ``crates/wits/src/cmd/stack/tree.rs`` and
        ``crates/wits/src/cmd/stack/topology.rs`` (``remove``)
+   * - where the forest is stored, placement by history
+     - ``crates/wits/src/cmd/stack/store.rs``
    * - forge primitives + normalized MR + detection
      - ``crates/wits-util/src/forge/``
    * - the role vocabulary + which remote holds each

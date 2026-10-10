@@ -45,10 +45,10 @@ everything below:
 
 * **The target is any MR in the repo, not just my own stack.** We review
   other people's work far more than we re-read ours, so the tool cannot
-  assume a local branch, a machete entry, or authorship. Acquisition is
+  assume a local branch, a stack entry, or authorship. Acquisition is
   therefore **forge-first**: address an MR by number, ask the forge what it
-  is, fetch its objects. Machete/``stack`` integration is a convenience for
-  reviewing *our own* stacks, not a prerequisite.
+  is, fetch its objects. ``stack`` integration is a convenience for reviewing
+  *our own* stacks, not a prerequisite.
 * **A review is pinned to a snapshot, and we never assume HEAD is latest.**
   The natural sequence is ``commit A → I review → author pushes B, C → I sync
   → I submit``. My comments were about the code at ``A``; they must be
@@ -618,8 +618,8 @@ The store root follows the env → XDG_STATE → common-git-dir ladder, with
 
    WITS_REVIEW_DIR  >  $XDG_STATE_HOME/wits/review  >  <common-git-dir>/wits/review
 
-The default is ``<common-git-dir>/wits/review``, per-clone like the machete
-file; env/XDG lift it out when you want it centralized or shared across
+The default is ``<common-git-dir>/wits/review``, per-clone like the stack;
+env/XDG lift it out when you want it centralized or shared across
 clones. It is the **common** git dir (not the per-worktree one), so a
 ``checkout`` worktree and the main clone share one store — you can review
 from either.
@@ -962,8 +962,8 @@ Stack integration — navigate freely, but a comment belongs to one MR
 Reviewing a stack is jumping between its MRs, and the tool should make that
 fluid without inventing anything the forge cannot store.
 
-* **Stack shape is reconstructed from the MR list, not required from
-  machete.** A chain of MRs whose base branches link head-to-tail *is* a
+* **Stack shape is reconstructed from the MR list, not required from the
+  local stack.** A chain of MRs whose base branches link head-to-tail *is* a
   stack; we read it off the fetched MRs, so ``review`` is stack-aware for
   *anyone's* stack. The linking is by **branch** (``base`` ↔ ``source``),
   never by MR number, so non-contiguous or non-increasing numbers are fine (a
@@ -1050,9 +1050,8 @@ An MR ends its life two ways, and only one is unambiguous:
 The cost of *not* pruning is deliberately bounded so that doing nothing is
 fine: the JSON files are kilobytes, and the only real weight is git objects
 held alive by the ``refs/wits/review/*`` pins. Pins are created by a **full**
-``fetch <mr>`` only; a merely feed-listed MR pins nothing. ``prune`` then
-mirrors ``stack tree prune``: idempotent, automatable, a no-op when nothing
-dangles — it drops the pins and the store directory of terminal MRs (and,
+``fetch <mr>`` only; a merely feed-listed MR pins nothing. ``prune`` is then
+idempotent, automatable, a no-op when nothing dangles — it drops the pins and the store directory of terminal MRs (and,
 with ``--older-than``, dormant ones) and lets git GC the objects.
 
 Rejected alternatives

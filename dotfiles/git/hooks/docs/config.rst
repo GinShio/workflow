@@ -349,8 +349,6 @@ The per-script toggles (``wits.hooks.reference-transaction.``):
      - Turns off
    * - ``git-branchless-disable``
      - the branchless recorder (``00-git-branchless``)
-   * - ``cleanup-machete-disable``
-     - the machete pruning (``50-cleanup-machete``)
    * - ``cleanup-build-dir-disable``
      - the build-directory cleanup (``60-cleanup-build-dir``)
 

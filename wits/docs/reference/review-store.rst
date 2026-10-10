@@ -23,8 +23,7 @@ The base directory is resolved on a three-rung ladder, first hit wins:
    * - 2
      - ``$XDG_STATE_HOME/wits/review`` — when ``XDG_STATE_HOME`` is set.
    * - 3
-     - ``<common-git-dir>/wits/review`` — the default, per-clone, beside the
-       machete file.
+     - ``<common-git-dir>/wits/review`` — the default, per-clone.
 
 Rung 3 uses the **common** git directory (``git rev-parse --git-common-dir``),
 not the per-worktree one, so a ``checkout`` worktree and the main clone resolve

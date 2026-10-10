@@ -132,6 +132,31 @@ impl Repository {
             .unwrap_or_default()
     }
 
+    /// The config keys matching `pattern` with their values, as `(name, value)`
+    /// in the order git reads them, names in the canonical form
+    /// [`config_names`](Self::config_names) describes. A key written without a
+    /// value reads as the empty string.
+    pub fn config_entries(&self, pattern: &str) -> Vec<(String, String)> {
+        self.query(&["config", "--get-regexp", pattern])
+            .map(|s| {
+                s.lines()
+                    .map(|line| match line.split_once(' ') {
+                        Some((name, value)) => (name.to_owned(), value.to_owned()),
+                        None => (line.to_owned(), String::new()),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The editor git would open a commit message in, as the shell command string
+    /// git itself would run, or `None` when git finds no usable editor. Git
+    /// resolves the whole precedence (`GIT_EDITOR`, `core.editor`, `VISUAL`,
+    /// `EDITOR`).
+    pub fn editor(&self) -> Option<String> {
+        self.query(&["var", "GIT_EDITOR"])
+    }
+
     /// The branch currently checked out, or `None` on a detached HEAD. A
     /// detached HEAD has no name to push or build on, so the absence is
     /// meaningful rather than an error.
@@ -608,6 +633,24 @@ impl Repository {
         }
         args.extend([old_range, new_range]);
         self.query(&args)
+    }
+
+    // -- config mutations (captured) -------------------------------------------
+
+    /// Set a key in this repository's own config — the common one, which every
+    /// worktree shares. Mutating, so dry-run prints rather than writes.
+    pub fn set_config(&self, key: &str, value: &str) -> Result<(), GitError> {
+        self.capture(format!("set {key}"), &["config", key, value], false)
+    }
+
+    /// Remove a key, every value of it, from this repository's own config. The
+    /// key must be set there: git refuses to unset one that is not.
+    pub fn unset_config(&self, key: &str) -> Result<(), GitError> {
+        self.capture(
+            format!("unset {key}"),
+            &["config", "--unset-all", key],
+            false,
+        )
     }
 
     // -- ref & history mutations (captured) -----------------------------------

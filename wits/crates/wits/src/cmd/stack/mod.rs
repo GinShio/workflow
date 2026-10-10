@@ -16,6 +16,7 @@ mod anno;
 mod decorate;
 mod resolution;
 pub mod slice;
+mod store;
 mod submit;
 mod sync;
 mod topology;
@@ -51,7 +52,7 @@ pub enum StackAction {
     Decorate(DecorateArgs),
     /// Interactively cut HEAD's commits into a stack of branches.
     Slice(SliceArgs),
-    /// Edit the stack's structure in the machete file (prune, remove, move).
+    /// Edit the stack's structure: remove, move, or rewrite it as text.
     Tree(TreeArgs),
 }
 
@@ -63,14 +64,12 @@ pub struct TreeArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum TreeAction {
-    /// Drop entries whose local branch no longer exists (children splice up).
-    Prune,
     /// Remove branches from the stack; their children splice up to the parent.
     Rm(RmArgs),
     /// Move a branch — and everything stacked on it — onto a new parent.
     Mv(MvArgs),
-    /// Rename an entry, keeping its place, its substack and its MR note.
-    Rename(RenameArgs),
+    /// Rewrite the whole stack as text, in git's editor or from a file.
+    Edit(EditArgs),
 }
 
 #[derive(Debug, Args)]
@@ -99,12 +98,11 @@ pub struct MvArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct RenameArgs {
-    /// The name the entry currently carries.
-    pub from: String,
-
-    /// The name to give it — an existing local branch.
-    pub to: String,
+pub struct EditArgs {
+    /// Read the new stack from this file (`-` for stdin) instead of opening an
+    /// editor: git-machete's format, one branch per line, indented under the
+    /// branch it sits on.
+    pub file: Option<String>,
 }
 
 /// Scope shared by the verbs that walk the stack. The optional branch is a

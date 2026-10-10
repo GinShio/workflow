@@ -913,9 +913,8 @@ The store root is resolved on this ladder, first hit wins:
 
 * **``$WITS_REVIEW_DIR``** — an explicit override, when set.
 * **``$XDG_STATE_HOME/wits/review``** — when ``XDG_STATE_HOME`` is set.
-* **``<common-git-dir>/wits/review``** — the default, per-clone (beside the
-  machete file, and in the common dir for the same reason: one store per
-  repository, shared by every worktree).
+* **``<common-git-dir>/wits/review``** — the default, per-clone, in the common
+  dir so there is one store per repository, shared by every worktree.
 
 Per-run choices (``--range``, ``--against``, ``--patch``, ``--details``,
 ``--stack``, ``--all``, ``-n``) are flags, not config — they describe one

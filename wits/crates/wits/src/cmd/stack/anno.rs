@@ -25,7 +25,7 @@ use wits_util::log as wits_log;
 use wits_util::project::remotes::Declared;
 
 use super::topology::Topology;
-use super::{fail_if_any, find_open_mrs, map_parallel, resolution, ForgeSession, ScopeArgs};
+use super::{fail_if_any, find_open_mrs, map_parallel, resolution, store, ForgeSession, ScopeArgs};
 
 /// The first line of every navigation comment, and how one is recognised. It
 /// must never change: the comments already posted are found by it, and a new
@@ -60,25 +60,24 @@ pub fn run(repo: &Repository, declared: &Declared, scope: &ScopeArgs) -> anyhow:
         return fail_if_any(failures);
     }
 
-    // Cache discovered numbers into the machete annotations so later runs (and a
-    // human reading the file) can see them without another round-trip. The plan
-    // was built before the network round-trip, so the update applies to a
-    // freshly loaded forest under the machete lock: whatever else changed in
-    // the meantime is carried through, not overwritten with a stale snapshot.
-    let _lock = resolution::MacheteLock::acquire(repo)?;
-    let mut topology = resolution::load_topology(repo)?;
+    // Cache discovered numbers in each branch's config, so later runs and
+    // `wits stack` can show them without another round-trip. The plan was built
+    // before the network round-trip, so the update applies to a fresh load:
+    // whatever else changed in the meantime is carried through, not overwritten
+    // with a stale snapshot.
+    let stored = store::load(repo, &plan.base_branch);
+    let mut topology = stored.topology.clone();
     let mut annotations_changed = false;
     for (branch, mr) in &mrs {
         let annotation = format!("{noun} {}", mr.display);
-        if topology.annotation(branch) != Some(annotation.as_str()) {
+        if topology.contains(branch) && topology.annotation(branch) != Some(annotation.as_str()) {
             topology.set_annotation(branch, annotation);
             annotations_changed = true;
         }
     }
     if annotations_changed {
-        resolution::save_topology(repo, &topology)?;
+        store::save(repo, &stored, &topology)?;
     }
-    drop(_lock);
 
     let jobs: Vec<(&String, &MergeRequest, String)> = plan
         .selected

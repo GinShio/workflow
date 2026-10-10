@@ -83,9 +83,8 @@ so the table doubles as a map of the scripts.
    * - ``pre-auto-gc``
      - Branchless record.
    * - ``reference-transaction``
-     - Reacts to committed ref changes: branchless record, pruning deleted
-       branches from the ``git-machete`` file, and (opt-in) cleaning up the
-       build directories of a branch that no longer carries its name.
+     - Reacts to committed ref changes: branchless record, and (opt-in) moving
+       aside the build directories of a branch that no longer carries its name.
 
 The ordering within a hook is set by each script's numeric prefix. The list
 below is the order ``pre-commit`` runs them in, which shows the shape of a
@@ -191,15 +190,10 @@ The framework itself needs only git. Everything else is incremental:
        still runs and UTF-8 validation is simply skipped.
    * - ``wits``
      - Resolves build directories (for workspace-restore and build-dir
-       cleanup), names the trunk git-branchless is initialised with, and owns
-       every edit to the ``git-machete`` file (cleanup-machete). When absent,
-       workspace-restore warns, the branchless bootstrap waits, and the two
-       ``reference-transaction`` cleanups do nothing — there is deliberately no
-       second implementation of the machete format or the trunk rule to fall
-       back to.
-   * - ``git-machete``
-     - Its definition file is read and pruned by ``reference-transaction``;
-       the tool itself never needs to run.
+       cleanup) and names the trunk git-branchless is initialised with. When
+       absent, workspace-restore warns, the branchless bootstrap waits, and the
+       build-dir cleanup does nothing — there is deliberately no second
+       implementation of the trunk rule to fall back to.
 
 Because each hook only acts on what is actually installed, the same shared
 hooks directory works on a laptop with a full toolchain and on a minimal CI

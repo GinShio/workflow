@@ -18,7 +18,7 @@ What this is, and what it deliberately is not
 
 A single set of global git hooks, shared across every repository through
 ``core.hooksPath``, that stays modular and coexists with the tools that also
-want to own your hooks — ``git-branchless``, Git LFS, Husky, ``git-machete``.
+want to own your hooks — ``git-branchless``, Git LFS, Husky.
 The design problem here is not *how to run a script on commit*; git already
 solves that. The problem is keeping a dozen small behaviours — formatting,
 linting, secret scanning, protected-branch guards, per-branch bookkeeping —
@@ -31,8 +31,7 @@ Two non-goals, stated once so they are never re-litigated:
   compete with Husky, it runs alongside it. Installing, enabling and versioning
   hooks is Husky's job and it already does it — we simply let its output compose
   with ours in the same pipeline.
-* It does not reimplement what ``branchless``, ``lfs`` or ``machete`` already
-  do. Those are sequenced alongside our own scripts, and the framework steps
+* It does not reimplement what ``branchless`` or ``lfs`` already do. Those are sequenced alongside our own scripts, and the framework steps
   out of their way.
 
 Everything is POSIX ``sh`` and nothing is a build step: the hooks are the

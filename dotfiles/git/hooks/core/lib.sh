@@ -313,8 +313,7 @@ removable_build_dir() {
 #   before it unlinks the loose ref, and files_transaction_cleanup() releases the
 #   lock after both. lock_raw_ref() takes that lock even when no loose file
 #   exists. The same deletion is reported again once it completes, carrying the
-#   old value it asserted, which is what lets may_be_rename tell `git branch -m`
-#   from `git branch -D`.
+#   old value it asserted.
 #
 # git 2.36-rc briefly stopped running the hook for both, and was reverted before
 # release (git.git c6da34a), so every released git reports them.
@@ -341,39 +340,6 @@ branch_deletions() {
     done <<_BD_EOF
 $_bd_candidates
 _BD_EOF
-}
-
-# True when a deletion might really be a rename.
-# Usage: may_be_rename <old-value>
-#
-# **The new name is not knowable from inside this hook**, and no amount of looking
-# will change that: git deletes the old ref, fires us, and only afterwards creates
-# the new one. At the moment we run, the new name exists in no ref, no reflog, not
-# in HEAD's reflog and not in packed-refs. So a hook can recognise that a rename
-# may have happened, and cannot learn what it was renamed to.
-#
-# What separates the two is whether the deletion asserted an object id.
-# `git branch -m` deletes the old name with its real one; `git branch -d`/`-D`,
-# `git update-ref -d` without an old value and fetch pruning all write zeros.
-# Asserted ids that are certainly not renames:
-#
-# - git-branchless deletes a branch through libgit2, then runs this hook itself
-#   with the real old id and BRANCHLESS_TRANSACTION_ID set (git-branchless-lib,
-#   move_branches() and run_hook_inner()). It never renames.
-# - A symbolic ref, whose old value reads `ref:<target>`: git refuses to rename
-#   one (refs/files-backend.c, files_copy_or_rename_ref()).
-#
-# An explicit `git update-ref -d <ref> <old>`, or a push that deletes one of this
-# repository's branches, looks exactly like a rename. Treating it as "might be a
-# rename" only means a stack entry outlives its branch until
-# `wits stack tree prune` runs, which is the recoverable direction.
-may_be_rename() {
-    [ -z "${BRANCHLESS_TRANSACTION_ID:-}" ] || return 1
-    case "$1" in
-        ref:*) return 1 ;;
-        '' | *[!0]*) return 0 ;;
-        *) return 1 ;;
-    esac
 }
 
 # --- Staged content ---

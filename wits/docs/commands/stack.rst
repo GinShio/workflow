@@ -38,11 +38,15 @@ Plus a few helpers: ``wits stack slice`` cuts commits into the stack in the
 first place, ``wits stack decorate`` adds labels / reviewers / assignees to an
 MR, and ``wits stack tree`` edits the stack's structure.
 
-The dependency tree itself lives in the **machete file** (the same format
-``git-machete`` uses): one branch per line, indentation meaning *sits on top
-of*. It sits at ``<common-git-dir>/machete`` — one forest per *repository*, so
-every worktree of it reads and writes the same stack rather than each keeping
-a private one that ``git worktree remove`` would take with it::
+The dependency tree itself lives in **each branch's own git config**: a branch
+in a stack records the branch it sits on (``branch.<name>.witsParent``), its
+place among its siblings (``witsOrder``) and the MR it was last seen with
+(``witsMr``, a cache — the forge stays the source of truth). Because that is the
+branch's own section, ``git branch -m`` carries it along and ``git branch -d``
+deletes it, so the stack follows a rename and forgets a deleted branch on its
+own; and every worktree of the repository reads the same config. You see and
+edit the stack as text, in the format ``git-machete`` uses — one branch per
+line, indentation meaning *sits on top of*::
 
    main
        feature-api
@@ -50,18 +54,12 @@ a private one that ``git worktree remove`` would take with it::
        feature-docs
 
 Here ``feature-api`` and ``feature-docs`` both build on ``main``;
-``feature-ui`` builds on ``feature-api``. You do not have to hand-write this
-file — ``slice`` generates it — but it is plain text and safe to edit.
-
-Beside it sits an empty ``machete.lock``, which every edit ``flock``\ s so that
-two of them — yours and the ``reference-transaction`` hook's, say — take turns.
-It stays there on purpose: unlike git's ``*.lock`` files its existence means
-nothing, and deleting it while an edit is waiting is the one way to let two
-edits overlap.
+``feature-ui`` builds on ``feature-api``. You do not have to write this —
+``slice`` builds it — but ``wits stack tree edit`` opens it in your editor.
 
 .. note::
 
-   The file is a *forest*, not just a chain — a branch may fork into several.
+   The stack is a *forest*, not just a chain — a branch may fork into several.
    The precise rules — how scope is chosen on a fork, how forks render, what
    happens when you add or remove a branch mid-stack — live in
    :doc:`/reference/stack-behavior`. This guide stays at the
@@ -154,15 +152,15 @@ with a commented branch suggestion after each commit:
 
 Uncomment the ``update-ref`` line after each commit a branch should end on,
 save, and let the rebase finish. The branches move at the end of the rebase,
-and the machete file is written to match. The last line names the branch you
+and the stack is recorded to match. The last line names the branch you
 are on (``work`` here): uncomment it to keep that branch as the top of the
 stack, and leave it last — git moves the checked-out branch to the end of the
 rebase itself. Branch-name suggestions use ``wits.stack.prefix`` if set,
 otherwise a slug of your ``user.name``, otherwise ``stack/``.
 
-You do not *have* to use ``slice`` — any branches you create yourself and
-record in the machete file work identically. And a branch that is not in the
-file at all is treated as a one-branch stack (see `Single branches`_).
+You do not *have* to use ``slice`` — branches you place yourself with ``tree
+mv`` or ``tree edit`` work identically. And a branch that is not in the stack at
+all is treated as a one-branch stack (see `Single branches`_).
 
 Growing or reshaping an existing stack
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -254,8 +252,8 @@ The branch is a **scope anchor**, not the single target: the stack around it is
 operated on exactly as if you had checked it out (an anchor mid-line still
 pulls in its ancestors and downstream chain), and ``--all`` widens that to the
 anchor's whole stack. That is the per-stack meaning — different from
-``decorate``, whose branch names the one MR to touch. The anchor must be a real
-branch (a local ref, or a name recorded in the machete file).
+``decorate``, whose branch names the one MR to touch. The anchor must be a
+local branch.
 
 The base branch (``main``/``master``/…) is never pushed and never gets an MR,
 but it does appear in the navigation chains so reviewers see the full lineage.
@@ -287,8 +285,8 @@ by default. Change which one:
 Single branches
 ---------------
 
-Not everything is a tall stack. A branch that is not recorded in the machete
-file is treated as its own one-node stack sitting on the base branch — so
+Not everything is a tall stack. A branch that is not in the stack is treated
+as its own one-node stack sitting on the base branch — so
 ``sync`` and ``submit`` work on an ordinary feature branch with zero setup:
 
 .. code-block:: sh
@@ -345,65 +343,39 @@ splice up to its parent, and the next ``submit`` retargets their base.
 
 .. code-block:: sh
 
-   wits stack tree prune              # drop entries whose branch no longer exists
-   wits stack tree rm feature-b       # remove one branch (its children move up)
-   wits stack tree rm feature-b --delete   # ...and delete the git branch too
-   wits stack tree mv feature-c --onto main   # restack a branch (its substack moves with it)
-   wits stack tree rename feature-c feature-d # follow a `git branch -m`
+   wits stack tree rm feature-b             # remove one branch (its children move up)
+   wits stack tree rm feature-b --delete    # ...and delete the git branch too
+   wits stack tree mv feature-c --onto main # restack a branch (its substack moves with it)
+   wits stack tree edit                     # rewrite the whole stack in your editor
+   wits stack tree edit forest.txt          # ...or from a file; `-` reads stdin
 
 ``tree mv`` updates the *shape* only; rebase the branch onto its new parent
-yourself for the code to match. It also creates the entry if the branch was not
-in the stack yet, so it doubles as "put this branch onto X".
+yourself for the code to match. It also adds the branch if it was not in the
+stack yet, so it doubles as "put this branch onto X".
 
-``tree rename`` follows a branch that changed its name, keeping everything else
-about its entry: its parent, its slot among that parent's children, its
-substack, and its MR annotation. It is a file edit and never renames a git
-branch — ``git branch -m`` has already done that, and the new name must be a
-branch that exists. It deliberately does not protect the base branch, since a
-renamed base is exactly the case where refusing would leave the forest naming a
-branch that is gone.
+``tree edit`` opens the stack in git's editor as text in the format above, each
+branch's cached MR after its name. Delete a line to take that branch out — what
+sat on it moves up to the line above — re-indent to restack, and save. Nothing
+is written unless every name is a local branch (or the base) and none appears
+twice. Reading from a file is also how a forest kept elsewhere comes in:
+``wits stack tree edit "$(git rev-parse --git-common-dir)/machete"`` takes over
+a stack an older ``wits``, or git-machete, kept in a file.
 
-.. _rename-needs-following:
+Renaming and deleting branches
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-After ``git branch -m``
-~~~~~~~~~~~~~~~~~~~~~~~
+Nothing to do. ``git branch -m`` moves a branch's config section, so the
+branch keeps its place, its substack and its cached MR; ``git branch -d`` deletes
+the section, so a deleted branch leaves the stack.
 
-A rename is the one branch event nothing can follow for you, and the reason is
-worth knowing rather than rediscovering. Git applies ``git branch -m`` by
-deleting the old ref, firing ``reference-transaction``, and only *then* creating
-the new one — so at the moment any hook could react, the new name exists in no
-ref, no reflog, no ``HEAD`` reflog entry and no ``packed-refs`` line. A hook can
-tell that a branch disappeared while keeping its commit, which is very likely a
-rename; it cannot learn what the branch became.
-
-So the shipped ``reference-transaction`` hook recognises that shape, leaves the
-entry alone rather than dropping it, and prints the command to finish the job:
-
-.. code-block:: sh
-
-   git branch -m feature-c feature-d
-   wits stack tree rename feature-c feature-d
-
-Skip it and nothing is lost — the entry simply names a branch that is gone,
-which ``sync`` and ``submit`` pass over and ``tree prune`` cleans up.
-
-Automating cleanup
-~~~~~~~~~~~~~~~~~~
-
-``tree prune`` is the one to reach for in automation: it needs no branch
-names, is idempotent, and only drops branches whose ref is actually gone.
-The ``reference-transaction`` hook shipped alongside this repository's git
-hooks already calls ``tree rm`` when a branch is deleted, so on a machine using
-those hooks the forest keeps itself honest. Everywhere else, run it at the end
-of a branch-cleanup script:
-
-.. code-block:: sh
-
-   git branch -d old-feature && wits stack tree prune
-
-or on a timer (cron / systemd / launchd) the same way you would schedule any
-periodic chore. Since it is a no-op when nothing dangles, running it often is
-harmless.
+What git cannot update is the other end of a link: the children of a renamed
+or deleted branch still name it. Such a child is placed by history — under the
+deepest stack branch whose tip is an ancestor of its own, else on the base.
+That finds a renamed parent, which kept its commit, and puts a deleted one's
+children where ``tree rm`` would have: on its parent. The placement is written
+down by the next command that edits the stack. A history that no longer says —
+a parent rewritten and then deleted before its children were restacked — puts
+a child on the base, and ``tree mv`` corrects it.
 
 Previewing with ``--dry-run``
 -----------------------------
@@ -474,7 +446,7 @@ The short version: the **base branch** is the checkout's trunk — a declared
 project's ``main_branch``, else the merge target's remote HEAD (the
 ``upstream`` role's holder, else ``origin``'s), else
 ``main``/``master``/``trunk``; each
-**MR's base** is its parent in the machete file (or the base branch at a
+**MR's base** is its parent in the stack (or the base branch at a
 root); **cross-fork** MRs work on all platforms (GitHub by the fork's
 repository id, Gitea via an ``owner:branch`` head, GitLab via its
 cross-project API), including a fork the target's own organisation holds —

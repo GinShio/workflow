@@ -558,53 +558,15 @@ plain rebase or commit never deletes a branch, and a rebase in progress changes
 nothing — a branch deleted while a rebase is stopped is cleaned up like any
 other.
 
-.. _rename-blind-spot:
+A rename reaches these scripts as a plain deletion of the *old* name: git
+deletes the old ref, fires the hook, and only afterwards creates the new one.
+The build-directory cleanup needs no more than that, since ``build_dir``
+templates key on ``branch.slug`` and the trees built under the old name are
+orphaned either way.
 
-What a rename looks like from in here
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-``git branch -m`` reaches these scripts as a plain deletion of the *old* name.
-The new name is not merely hard to find — at the moment the hook runs it does
-not exist yet, in any form: git deletes the old ref, fires the hook, and only
-afterwards creates the new one. There is no ref, no reflog, no ``HEAD`` reflog
-entry and no ``packed-refs`` line naming it. (On the ``reftable`` backend a
-rename produces no branch transaction at all, so the hook never even runs.)
-
-What *is* visible is that the deletion asserted the branch's real commit, which
-every ordinary deletion path leaves as all zeros. That is enough to recognise
-"this may be a rename" without knowing what it became, and the scripts use it
-to stay out of the way:
-
-* **The machete cleanup** leaves the entry standing and says so, naming
-  ``wits stack tree rename <old> <new>`` to follow the rename and
-  ``wits stack tree prune`` to drop it. Losing the entry would throw away the
-  only record of where that line of work sat.
-* **The build-directory cleanup** treats it exactly like a deletion, because it
-  only ever needs the *old* name: ``build_dir`` templates key on
-  ``branch.slug``, so the trees built under the old name are orphaned either
-  way.
-
-Two other senders assert a real commit. git-branchless deletes a branch itself
-and then runs this hook with the old commit, marking the call with
-``BRANCHLESS_TRANSACTION_ID``; it never renames, so its deletions are handled as
-deletions. An explicit ``git update-ref -d <ref> <old>``, or a push that deletes
-one of this repository's branches, cannot be told apart from a rename and is
-handled as one — the entry outlives its branch until ``wits stack tree prune``,
-which is the recoverable direction.
-
-The machete cleanup
-~~~~~~~~~~~~~~~~~~~
-
-Keeps your ``git-machete``/stack layout honest as branches come and go. Delete
-a branch and it is removed from the machete definition file with its children
-spliced up to its parent, so the tree stays valid instead of collecting
-dangling entries you would have to prune by hand. ``wits`` owns the edit
-(``wits stack tree rm``), and deliberately owns it alone: a second
-implementation of the machete format living here would be a copy to keep in
-step, and a stale copy mangles the stack silently. Without ``wits`` on
-``PATH`` this script does nothing at all. The file lives in the common git dir,
-so the cleanup reaches the same forest from any worktree of the repository.
-Runs wherever a machete file exists; nothing to configure.
+The stack ``wits stack`` keeps is not this hook's business: it lives in each
+branch's own git config, which git moves with a rename and deletes with the
+branch.
 
 The build-directory cleanup
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -834,6 +796,7 @@ Common situations and where to look:
   themselves quietly when their tool is missing. A branchless recorder that
   fails warns and carries on; a failed LFS sync stops the hook — that is the
   guarantee behind "a push never completes with half-uploaded LFS content".
-* **The machete file or a build directory changed behind your back.** That is
+* **A build directory moved behind your back.** That is
   ``reference-transaction`` reacting to a committed branch deletion — by design.
-  Disable the specific script if you do not want it.
+  Find it in the ``.wits-trash`` directory beside it, or disable the script if
+  you do not want it.

@@ -3,8 +3,7 @@
 One set of git hooks, shared across every repository through `core.hooksPath`,
 that handles the routine chores — formatting, linting, secret scanning,
 protected-branch guards, per-branch bookkeeping — and coexists cleanly with the
-tools that also touch your hooks (`git-branchless`, Git LFS, Husky,
-`git-machete`).
+tools that also touch your hooks (`git-branchless`, Git LFS, Husky).
 
 ```sh
 git config --global core.hooksPath /path/to/git/hooks
@@ -22,7 +21,7 @@ shared state and helpers live in `core/lib.sh`.
 | `post-checkout` | branchless init/record, LFS, encrypted-file modes, workspace restore, lockfile warning, maintenance |
 | `post-merge` | branchless record, LFS, encrypted-file modes, lockfile warning |
 | `post-commit` / `post-applypatch` / `post-rewrite` / `pre-auto-gc` | branchless recorders (+ LFS on commit, encrypted modes and lockfile warning on rewrite) |
-| `reference-transaction` | branchless record, machete cleanup, build-dir cleanup (opt-in) |
+| `reference-transaction` | branchless record, build-dir cleanup (opt-in) |
 
 ## Docs
 

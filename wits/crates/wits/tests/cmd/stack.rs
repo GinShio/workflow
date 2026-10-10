@@ -1,4 +1,4 @@
-//! Black-box tests for `wits stack slice`.
+//! Black-box tests for `wits stack slice` and `wits stack tree`.
 //!
 //! `slice` is a thin layer over `git rebase -i`, and what it can get wrong lives
 //! in the interplay with git: which todo git generates under the user's rebase
@@ -25,6 +25,7 @@ struct Fixture {
 
 struct Out {
     success: bool,
+    stdout: String,
     stderr: String,
 }
 
@@ -90,12 +91,51 @@ impl Fixture {
         self.git(&["switch", "-q", "-"]);
     }
 
+    /// Lay `forest` down as the stack, through `tree edit` reading stdin.
     fn record(&self, forest: &str) {
-        std::fs::write(self.repo.join(".git/machete"), forest).unwrap();
+        let out = self.wits(&["stack", "tree", "edit", "-"], &[], Some(forest));
+        assert!(out.success, "tree edit failed: {}", out.stderr);
     }
 
-    fn machete(&self) -> String {
-        std::fs::read_to_string(self.repo.join(".git/machete")).unwrap()
+    /// The stack as `tree edit` would open it, read through an editor that only
+    /// prints its buffer, with the help comments dropped.
+    fn forest(&self) -> String {
+        let out = self.wits(&["stack", "tree", "edit"], &[("GIT_EDITOR", "cat")], None);
+        assert!(out.success, "tree edit failed: {}", out.stderr);
+        out.stdout
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .map(|line| format!("{line}\n"))
+            .collect()
+    }
+
+    /// Run wits in the repository with the scratch registry, extra environment,
+    /// and optionally some stdin.
+    fn wits(&self, args: &[&str], env: &[(&str, &str)], stdin: Option<&str>) -> Out {
+        use std::io::Write as _;
+        let mut child = Command::new(env!("CARGO_BIN_EXE_wits"))
+            .args(args)
+            .current_dir(&self.repo)
+            .envs(hermetic_git())
+            .env("WITS_PROJECT_CONFIG", self.root.join("registry"))
+            .envs(env.iter().copied())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.unwrap_or("").as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        Out {
+            success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
     }
 
     /// An editor script running `body` on the todo, which it receives as `$1`.
@@ -119,6 +159,7 @@ impl Fixture {
             .unwrap();
         Out {
             success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         }
     }
@@ -206,7 +247,7 @@ fn a_fixup_folds_into_its_branch_and_the_stack_is_kept() {
         "stderr: {}",
         out.stderr
     );
-    assert_eq!(fx.machete(), STACK);
+    assert_eq!(fx.forest(), STACK);
 }
 
 #[test]
@@ -245,7 +286,7 @@ fn a_commit_already_upstream_is_dropped_by_git_not_replayed() {
     assert!(out.success, "slice failed: {}", out.stderr);
 
     assert_eq!(fx.subjects("main..feat-c"), ["Add B", "Add C"]);
-    assert_eq!(fx.machete(), "main\n    feat-b\n        feat-c\n");
+    assert_eq!(fx.forest(), "main\n    feat-b\n        feat-c\n");
 }
 
 #[test]
@@ -292,7 +333,7 @@ mv "$1.new" "$1""#,
     assert!(out.success, "slice failed: {}", out.stderr);
 
     assert_eq!(
-        fx.machete(),
+        fx.forest(),
         "main\n    stack/add-a\n        stack/add-b\n            work\n"
     );
     assert_eq!(fx.rev("stack/add-a"), fx.rev("work~2"));
@@ -324,5 +365,77 @@ mv "$1.new" "$1""#,
     );
     assert_eq!(fx.rev("work"), before);
     assert!(!fx.rebasing());
-    assert_eq!(fx.machete(), "main\n    work\n");
+    assert_eq!(fx.forest(), "main\n    work\n");
+}
+
+#[test]
+fn a_renamed_branch_keeps_its_place_and_its_children() {
+    let fx = Fixture::new("feat-c");
+    fx.stack();
+    fx.record(STACK);
+    fx.git(&["branch", "-m", "feat-b", "feat-b2"]);
+    assert_eq!(
+        fx.forest(),
+        "main\n    feat-a\n        feat-b2\n            feat-c\n"
+    );
+}
+
+#[test]
+fn a_deleted_branchs_children_splice_up_to_its_parent() {
+    let fx = Fixture::new("feat-c");
+    fx.stack();
+    fx.record(STACK);
+    fx.git(&["branch", "-D", "feat-b"]);
+    assert_eq!(fx.forest(), "main\n    feat-a\n        feat-c\n");
+}
+
+#[test]
+fn tree_edit_refuses_a_name_that_is_not_a_branch_and_changes_nothing() {
+    let fx = Fixture::new("feat-c");
+    fx.stack();
+    fx.record(STACK);
+    let out = fx.wits(
+        &["stack", "tree", "edit", "-"],
+        &[],
+        Some("main\n    feat-a\n        nope\n"),
+    );
+    assert!(!out.success);
+    assert!(
+        out.stderr.contains("nope is not a local branch"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(fx.forest(), STACK);
+}
+
+#[test]
+fn tree_rm_splices_children_up_and_delete_removes_the_branch() {
+    let fx = Fixture::new("feat-c");
+    fx.stack();
+    fx.record(STACK);
+    let out = fx.wits(
+        &["stack", "tree", "rm", "--delete", "--force", "feat-b"],
+        &[],
+        None,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(fx.forest(), "main\n    feat-a\n        feat-c\n");
+    assert!(fx.read(&["branch", "--list", "feat-b"]).is_empty());
+}
+
+#[test]
+fn tree_mv_moves_a_branch_with_its_substack() {
+    let fx = Fixture::new("feat-c");
+    fx.stack();
+    fx.record(STACK);
+    let out = fx.wits(
+        &["stack", "tree", "mv", "feat-b", "--onto", "main"],
+        &[],
+        None,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        fx.forest(),
+        "main\n    feat-a\n    feat-b\n        feat-c\n"
+    );
 }

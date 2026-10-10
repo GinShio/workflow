@@ -37,11 +37,11 @@ label is just a presentation detail a forge supplies.)
 
 The division of labour:
 
-* **Local topology is given, not computed.** ``<common-git-dir>/machete``
-  records which branch sits on which (a forest, not just a chain). We read it;
-  we never reimplement restack/rebase. ``slice`` is the one place we *write*
-  it, and even there git does the commit movement — we only assign names and
-  record the resulting shape.
+* **Local topology is given, not computed.** Each stack branch's git config
+  records which branch it sits on (a forest, not just a chain). We read it; we
+  never reimplement restack/rebase. ``slice`` and ``tree`` are the places we
+  *write* it, and even there git does the commit movement — we only assign
+  names and record the resulting shape.
 * **Local refs are the source of truth for content.** If ``feature-b`` points
   at a commit locally, that is what gets pushed. We assume the user (or
   ``git-branchless``) has kept the pointers sane.
@@ -66,25 +66,18 @@ distinct intents::
    wits stack anno      [scope]   # keep each MR's navigation comment current
    wits stack decorate  [branch]  # add labels/assignees/reviewers to an MR (additive)
    wits stack slice     [--base B] # interactively cut HEAD's commits into a stack
-   wits stack tree      {prune|rm|mv|rename}  # direct edits to the stack's structure
+   wits stack tree      {rm|mv|edit}  # direct edits to the stack's structure
 
 ``decorate`` is single-MR by default (attributes differ per MR; ``--all``
 applies one set across that branch's whole stack) and additive-only, so it
 never fights a project's own label/reviewer automation.
 
-``tree`` is a separate group on purpose: ``prune``/``rm``/``mv``/``rename``
-change *what the stack is* (structure edits to ``<common-git-dir>/machete``),
-as opposed to the four verbs that *act on* it. Their behaviour — and the
-splice-up rule that keeps a removal from destroying the line above it — is
-specified in :doc:`stack-behavior`.
-
-``rename`` exists because a rename is the one branch event nothing can follow
-automatically. Git applies ``git branch -m`` by deleting the old ref, firing
-``reference-transaction``, and creating the new one only afterwards, so at the
-moment a hook runs the new name exists in no ref, no reflog and no
-``packed-refs`` line. A hook can see that a branch vanished while keeping its
-commit — very likely a rename — but never what it became, so following it is
-necessarily a separate, explicit act.
+``tree`` is a separate group on purpose: ``rm``/``mv``/``edit`` change *what
+the stack is*, as opposed to the verbs that *act on* it. Their behaviour — and
+the splice-up rule that keeps a removal from destroying the line above it — is
+specified in :doc:`stack-behavior`. There is no ``prune`` and no ``rename``:
+git deletes a branch's stack keys with the branch and moves them with a rename
+(`Topology — stored in branch config`_).
 
 The three remote verbs are orthogonal facets of remote state — branch content
 (``sync``), MR existence and base (``submit``), MR navigation (``anno``) —
@@ -110,9 +103,9 @@ dynamic-edit examples). Given the current branch **N**:
      - the **linear stack**: ancestors + N + the first-child chain down to the
        next fork/leaf. Sibling branches are someone else's line of work and
        are left alone.
-   * - N is **not in ``<common-git-dir>/machete``**
+   * - N is **not in the stack**
      - N alone, as a one-node stack on the base branch. This is what makes
-       single-branch MRs work with zero machete setup.
+       single-branch MRs work with zero stack setup.
    * - ``--all``
      - N's **whole stack**: every line under N's outermost ancestor short of
        the base branch. The other stacks on the base are left alone — "I'm
@@ -168,32 +161,49 @@ name — it is the precise term for a git hosting platform and dodges the worse
 options (``remote`` collides with git's noun, ``platform``/``provider`` are
 vague).
 
-Topology — the machete forest
------------------------------
+Topology — stored in branch config
+----------------------------------
 
 The topology layer is pure data and pure functions; it never touches git or
-the network, which is what makes the tree rules trivially testable.
+the network, which is what makes the tree rules trivially testable. Where the
+forest is *stored* is a separate module, and the one decision there worth
+recording.
 
-The file format stays **git-machete-compatible**: one branch per line,
-indentation encodes parentage, an optional trailing annotation per line. We
-keep the annotation slot and use it to cache MR identity (e.g. ``!123``) so a
-later run need not re-discover numbers — but the annotation is a cache, never
-the source of truth; the live forge is.
+Each stack branch keeps its place in its own ``branch.<name>`` config
+section: ``witsParent``, the branch it sits on; ``witsOrder``, its position
+among that parent's children, since the first child is what a linear scope
+follows; and ``witsMr``, the MR identity (``PR #123``, ``MR !45``) a run last
+saw, kept so a later run and ``wits stack`` need not re-discover numbers. That
+one is a cache, never the source of truth; the live forge is.
 
-It lives at **``<common-git-dir>/machete``**, one forest per *repository*. A
-stack is a set of branches, which is a repository-wide fact, so the file
-belongs where every worktree can see it — the same reasoning that puts the
-review store and the submodule object stores in the common dir. The plain git
-dir is the wrong home for exactly the reason a worktree's submodule store is:
-inside a linked worktree it is that worktree's *private* administrative
-directory (``<common>/worktrees/<id>``), so a forest written there is
-invisible from every other checkout and is deleted by ``git worktree remove``.
-For a conventional clone the two directories are the same, which is why the
-distinction only surfaces once you keep a worktree per branch — and under a
-bare-style layout it is the entire file, since no checkout is the main
-worktree. A forest an earlier version left in a worktree-private dir is still
-*read* while no shared one exists, with a warning; the next structure edit
-writes the shared file.
+The section is the reason. ``git branch -m`` moves it with the branch and
+``git branch -d`` deletes it, so the stack follows both events with nothing
+listening for them. The earlier home, a git-machete file in the common git dir,
+needed exactly the machinery this removes: a ``reference-transaction`` hook to
+drop deleted branches, an ``flock`` so the hook and a command could not lose
+each other's edits, and a ``tree rename`` verb for the one event the hook could
+not follow — at the moment the hook runs, git has deleted the old name and not
+yet created the new one. ``git branch --edit-description`` is the precedent for
+keeping a branch's own metadata in its section. Every worktree reads the
+repository's one config, so the stack stays repository-wide.
+
+What git does not carry is the *other* end of a link: renaming or deleting a
+parent leaves its children naming a branch that is gone. Such a child is placed
+by history — under the deepest stack branch whose own place is intact and whose
+tip is an ancestor of its own, else on the base. A renamed parent kept its
+commit, so it is found; a deleted one's children land on its parent, where the
+splice-up rule would put them. Branches beneath the child are never candidates,
+which rules out a cycle, and neither are the other orphans, so siblings left by
+one deleted parent are not stacked onto each other. Loading only computes these
+placements; the next write records them. A history that no longer says — a
+parent rewritten and then deleted before its children were restacked — puts the
+child on the base, and ``tree mv`` corrects it.
+
+The text form survives as the editing format: ``tree edit`` renders the forest
+git-machete's way — one branch per line, indentation encoding parentage, the
+cached MR after the name — opens it in git's editor, and writes back what
+changed, refusing names that are not local branches. Reading the text from a
+file is how a forest kept elsewhere, an old machete file included, comes in.
 
 The tree algebra is small and total:
 
@@ -248,19 +258,19 @@ nothing resolves, that is a hard error, not a guess.
 MR base mapping
 ~~~~~~~~~~~~~~~
 
-A node's MR base is its machete parent. When the parent *is* the base branch
+A node's MR base is its parent in the stack. When the parent *is* the base branch
 (the root of the tree), the MR targets the base branch on the **merge-target
 repo** — the only place the origin/upstream distinction reaches into
 resolution.
 
-Branches not in the file — synthetic one-node stack
+Branches not in the stack — synthetic one-node stack
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-When the current branch is absent from ``<common-git-dir>/machete``,
+When the current branch is not in the stack,
 resolution synthesizes a trivial tree: ``base → branch``. ``sync`` and
 ``submit`` then operate on exactly that branch. ``anno`` **skips** it: a lone
 MR has no neighbours to navigate to, so a navigation comment would be pure
-noise. This single-node path requires zero machete setup and is the common
+noise. This single-node path requires zero stack setup and is the common
 case for an ordinary one-off MR.
 
 Git access
@@ -509,7 +519,7 @@ with the HEADER — a reply quoting the block contains it without being it. None
 the comment is created. Otherwise the oldest is the one kept current, as it
 sits highest in the conversation, and is edited only when its text differs
 (line endings and outer whitespace aside), so a second run writes nothing. The
-comment's id is not cached in the machete file: deciding whether to edit needs
+comment's id is not cached with the stack: deciding whether to edit needs
 the current body anyway, which costs the same request as listing, and a cache
 would go stale the moment someone deleted the comment.
 
@@ -539,8 +549,8 @@ is stripped of it — the rest of the text kept, a torn footer recovered — but
 only after the comment holds the navigation, so a failure part-way never
 leaves the MR without one.
 
-Identity: ``anno`` discovers MR numbers from the forge, caches them back into
-the machete annotations, and reuses them within the run.
+Identity: ``anno`` discovers MR numbers from the forge, caches them in each
+branch's ``witsMr``, and reuses them within the run.
 
 ``slice`` — authoring a stack
 -----------------------------
@@ -567,7 +577,7 @@ cannot tell. The checked-out branch's line is withheld from what git executes
 — git moves that branch to the end of the rebase itself, and an explicit line
 fails git's final ref update once anything was rewritten — which is also why
 that line must stay after the last commit. From the captured list we (re)write
-``<common-git-dir>/machete``.
+the stack.
 
 Suggested branch names use a configurable prefix (``wits.stack.prefix``, else
 a slug of ``user.name``, else ``stack/``).
