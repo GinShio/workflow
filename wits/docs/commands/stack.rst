@@ -229,13 +229,29 @@ After reworking your commits:
 
 .. code-block:: sh
 
+   wits stack publish    # push, open or retarget MRs, and refresh the navigation
+
+``publish`` is the three remote verbs in one pass:
+
+.. code-block:: sh
+
    wits stack push       # push every branch in the stack to the origin remote
    wits stack submit     # open MRs that don't exist; fix bases that moved
    wits stack anno       # keep each MR's navigation comment current
 
-Run them in that order the first time; afterwards run whichever matches what
-changed. Reordered the stack but did not touch code? ``submit`` alone fixes the
-MR bases. Just amended a commit? ``push`` alone re-pushes.
+It is more than running them in a row. It looks each branch's MRs up once,
+where ``submit`` and ``anno`` would each look them all up, and it goes branch by
+branch: a branch whose push failed is not submitted — the forge would refuse
+an MR for a branch it does not have, or open one at a stale tip — though an MR
+it already has still numbers in its neighbours' navigation. It takes
+``submit``'s flags (``--no-draft``, ``--force``, ``--title-source``) and the same
+scope. Under ``-n`` it prints the pushes, the MR changes and the navigation it
+would write.
+
+The single verbs stay for when only one facet changed, or one step failed and
+you want to re-run just that. Reordered the stack but did not touch code?
+``submit`` alone fixes the MR bases. Just amended a commit? ``push`` alone
+re-pushes.
 
 Where the navigation lives
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -367,7 +383,7 @@ repeatedly is exactly equivalent to a default:
 .. code-block:: sh
 
    # a repo's dev script
-   wits stack push && wits stack submit && wits stack anno
+   wits stack publish
    wits stack decorate feature-api       --label api --reviewer alice
    wits stack decorate feature-ui        --label ui  --reviewer bob
    wits stack decorate feature-api --all --label stacked

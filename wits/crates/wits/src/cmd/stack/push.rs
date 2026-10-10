@@ -16,20 +16,30 @@ use super::{fail_if_any, map_parallel, resolution, ScopeArgs};
 pub fn run(repo: &Repository, declared: &Declared, scope: &ScopeArgs) -> anyhow::Result<()> {
     let target = push_target(&declared.roles, None)?;
     let plan = resolution::plan_scoped(repo, declared, scope)?;
+    let (_, failures) = push_branches(repo, target, &plan.selected);
+    // Same all-or-nothing exit contract as submit/anno/decorate: per-branch
+    // failures are warned, and the command still exits non-zero if any occurred.
+    fail_if_any(failures)
+}
 
-    // Only push branches that actually exist locally; a name in the file with no
-    // ref is a stale entry, not something to push.
+/// Push each of `branches` that exists locally to `target`, in parallel, and
+/// return the ones whose push succeeded — an up-to-date branch included — with
+/// the number that failed. A root of the forest with no local ref is skipped,
+/// not pushed.
+pub(super) fn push_branches(
+    repo: &Repository,
+    target: &str,
+    branches: &[String],
+) -> (Vec<String>, usize) {
     let tips = repo.branch_tips();
-    let branches: Vec<String> = plan
-        .selected
+    let branches: Vec<String> = branches
         .iter()
         .filter(|b| tips.contains_key(*b))
         .cloned()
         .collect();
-
     if branches.is_empty() {
         log::info!("nothing to push");
-        return Ok(());
+        return (Vec::new(), 0);
     }
 
     let results = map_parallel(&branches, |branch| {
@@ -37,20 +47,21 @@ pub fn run(repo: &Repository, declared: &Declared, scope: &ScopeArgs) -> anyhow:
         (branch.clone(), outcome)
     });
 
+    let mut pushed = Vec::new();
     let mut failures = 0;
     for (branch, outcome) in results {
         match outcome {
-            Ok(()) => log::info!("pushed {branch}"),
+            Ok(()) => {
+                log::info!("pushed {branch}");
+                pushed.push(branch);
+            }
             Err(e) => {
                 failures += 1;
                 log::warn!("failed to push {branch}: {e}");
             }
         }
     }
-
-    // Same all-or-nothing exit contract as submit/anno/decorate: per-branch
-    // failures are warned, and the command still exits non-zero if any occurred.
-    fail_if_any(failures)
+    (pushed, failures)
 }
 
 /// The remote a push goes to: `requested` when the caller names one, else the
@@ -68,7 +79,10 @@ pub fn run(repo: &Repository, declared: &Declared, scope: &ScopeArgs) -> anyhow:
 /// check is written here rather than omitted because this is the parameter a
 /// user-supplied remote name will arrive through, and then it is the only thing
 /// standing between a typo and an MR from `main` onto `main`.
-fn push_target<'a>(roles: &'a RemoteRoles, requested: Option<&'a str>) -> anyhow::Result<&'a str> {
+pub(super) fn push_target<'a>(
+    roles: &'a RemoteRoles,
+    requested: Option<&'a str>,
+) -> anyhow::Result<&'a str> {
     let target = match requested {
         Some(name) => name,
         None => roles.origin().context(

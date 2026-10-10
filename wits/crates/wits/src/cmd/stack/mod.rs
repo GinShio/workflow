@@ -1,19 +1,21 @@
 //! `wits stack` — turning a chain of local branches into a navigable set of MRs.
 //!
 //! The verbs are deliberately orthogonal facets of remote state: `push` is
-//! branch content (push), `submit` is MR existence and base, `anno` is each
-//! MR's navigation comment. Each is an idempotent reconcile that can be re-run
-//! on its own, which is what makes a stack workflow recoverable — when one step
-//! fails you re-run that step, not a monolith. `slice` is the one local
-//! authoring verb.
+//! branch content, `submit` is MR existence and base, `anno` is each MR's
+//! navigation comment. Each is an idempotent reconcile that can be re-run on its
+//! own, which is what makes a stack workflow recoverable — when one step fails
+//! you re-run that step, not a monolith. `publish` composes the three in one
+//! pass, `status` reads what each of them would find, and `slice` is the one
+//! local authoring verb.
 //!
-//! All four share a single notion of *scope* (which branches this invocation
+//! They share a single notion of *scope* (which branches this invocation
 //! touches), computed once in `resolution`; see
 //! `docs/reference/stack-design.rst` for the reasoning behind the topology
 //! rules and the forge abstraction.
 
 mod anno;
 mod decorate;
+mod publish;
 mod push;
 mod resolution;
 pub mod slice;
@@ -52,6 +54,8 @@ pub enum StackAction {
     Submit(SubmitArgs),
     /// Keep each MR's stack navigation comment current.
     Anno(ScopeArgs),
+    /// Push, submit and anno in one pass, looking each branch's MR up once.
+    Publish(SubmitArgs),
     /// Add labels / assignees / reviewers to an MR (additive).
     Decorate(DecorateArgs),
     /// Interactively cut HEAD's commits into a stack of branches.
@@ -225,6 +229,7 @@ fn run_action(repo: &Repository, declared: &Declared, action: &StackAction) -> a
         StackAction::Push(s) => push::run(repo, declared, s),
         StackAction::Submit(s) => submit::run(repo, declared, s),
         StackAction::Anno(s) => anno::run(repo, declared, s),
+        StackAction::Publish(s) => publish::run(repo, declared, s),
         StackAction::Decorate(d) => decorate::run(repo, declared, d),
         StackAction::Slice(s) => slice::run(repo, declared, s.base.as_deref()),
         StackAction::Tree(t) => tree::run(repo, declared, &t.action),

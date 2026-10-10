@@ -65,6 +65,7 @@ distinct intents::
    wits stack push      [scope]   # push to the origin role (git only; no forge)
    wits stack submit    [scope]   # reconcile MRs: create missing, fix drifted bases
    wits stack anno      [scope]   # keep each MR's navigation comment current
+   wits stack publish   [scope]   # push + submit + anno in one pass, one lookup per MR
    wits stack decorate  [branch]  # add labels/assignees/reviewers to an MR (additive)
    wits stack slice     [--base B] # interactively cut HEAD's commits into a stack
    wits stack tree      {rm|mv|edit}  # direct edits to the stack's structure
@@ -423,7 +424,12 @@ own thing (composition over a fragile shared base class), and serves the whole
 Gitea / Forgejo / Codeberg family — one API surface, three identities.
 
 There is no monolithic "reconcile" — the split verbs compose the primitives,
-and that is cleaner than a mode flag:
+and that is cleaner than a mode flag. ``publish`` composes the three verbs
+rather than replacing them: it plans once, looks each branch's MRs up once and
+hands the result from ``submit``'s phase to ``anno``'s, and gates per branch — a
+failed push keeps that branch out of ``submit``, while an MR it already has still
+numbers in the navigation. Each verb's phase is a function ``publish`` calls,
+so the composed path and the single verbs cannot drift apart:
 
 * **``push``** uses no forge primitives at all — it is a git push. Nothing
   MR-shaped happens here.

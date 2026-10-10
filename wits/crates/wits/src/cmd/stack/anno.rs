@@ -24,6 +24,7 @@ use wits_util::git::Repository;
 use wits_util::log as wits_log;
 use wits_util::project::remotes::Declared;
 
+use super::resolution::StackPlan;
 use super::topology::Topology;
 use super::{fail_if_any, find_open_mrs, map_parallel, resolution, store, ForgeSession, ScopeArgs};
 
@@ -48,16 +49,29 @@ pub fn run(repo: &Repository, declared: &Declared, scope: &ScopeArgs) -> anyhow:
     }
 
     let session = ForgeSession::open(repo, &declared.roles)?;
-    let noun = session.noun;
 
     // Discover the open MR for each branch up front; rendering is local.
-    let (found, mut failures) = find_open_mrs(&session, &plan.selected, |branch| {
+    let (found, failures) = find_open_mrs(&session, &plan.selected, |branch| {
         Some(plan.base_for(branch))
     });
     let mrs: HashMap<String, MergeRequest> = found.into_iter().collect();
+    let failures = failures + navigate(repo, &session, &plan, &mrs)?;
+    fail_if_any(failures)
+}
+
+/// Bring the navigation comment of every MR in `mrs` — each in-scope branch's
+/// open MR — to the block the plan renders for it, and cache the MRs' numbers.
+/// Returns the number of MRs that failed.
+pub(super) fn navigate(
+    repo: &Repository,
+    session: &ForgeSession,
+    plan: &StackPlan,
+    mrs: &HashMap<String, MergeRequest>,
+) -> anyhow::Result<usize> {
+    let noun = session.noun;
     if mrs.is_empty() {
         log::info!("no open {noun}s to annotate");
-        return fail_if_any(failures);
+        return Ok(0);
     }
 
     // Cache discovered numbers in each branch's config, so later runs and
@@ -68,7 +82,7 @@ pub fn run(repo: &Repository, declared: &Declared, scope: &ScopeArgs) -> anyhow:
     let stored = store::load(repo, &plan.base_branch);
     let mut topology = stored.topology.clone();
     let mut annotations_changed = false;
-    for (branch, mr) in &mrs {
+    for (branch, mr) in mrs {
         let annotation = format!("{noun} {}", mr.display);
         if topology.contains(branch) && topology.annotation(branch) != Some(annotation.as_str()) {
             topology.set_annotation(branch, annotation);
@@ -84,7 +98,7 @@ pub fn run(repo: &Repository, declared: &Declared, scope: &ScopeArgs) -> anyhow:
         .iter()
         .filter_map(|branch| {
             let mr = mrs.get(branch)?;
-            let block = render_navigation(&plan.topology, branch, &mrs, noun, &plan.base_branch)?;
+            let block = render_navigation(&plan.topology, branch, mrs, noun, &plan.base_branch)?;
             Some((branch, mr, block))
         })
         .collect();
@@ -93,6 +107,7 @@ pub fn run(repo: &Repository, declared: &Declared, scope: &ScopeArgs) -> anyhow:
         annotate(session.forge.as_ref(), noun, branch, mr, block)
     });
     let mut changed = 0usize;
+    let mut failures = 0usize;
     for ((branch, mr, _), result) in jobs.iter().zip(results) {
         match result {
             Ok(done) => {
@@ -108,7 +123,7 @@ pub fn run(repo: &Repository, declared: &Declared, scope: &ScopeArgs) -> anyhow:
     if changed == 0 && failures == 0 {
         log::info!("navigation already up to date");
     }
-    fail_if_any(failures)
+    Ok(failures)
 }
 
 /// What to do about an MR's navigation comment.

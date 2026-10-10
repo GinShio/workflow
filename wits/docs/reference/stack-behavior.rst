@@ -195,6 +195,19 @@ everything ready. (Draft is expressed per host: GitHub a field, GitLab a
 latest by default, ``--title-source first`` for the oldest. Existing MRs are
 never re-titled.
 
+publish
+-------
+
+``push``, then ``submit``, then ``anno``, over one plan. Each branch's MRs are
+looked up once, by ``submit``'s phase, and the MRs it leaves open — found,
+retargeted or created — are what ``anno``'s phase numbers and annotates; a
+created MR under ``-n`` does not exist, so it is neither numbered nor annotated.
+A branch whose push failed is looked up but not acted on: its open MR, if any,
+still appears in the navigation, and no MR is created or retargeted for it.
+Takes ``submit``'s flags and scope; a standalone branch is pushed and submitted
+and, like under ``anno``, gets no navigation. Exits non-zero when any step
+failed for any branch.
+
 anno
 ----
 
