@@ -1,15 +1,50 @@
 #!/bin/sh
 # Register this repository for git's background maintenance, once.
+#
+# Registrations go to a file of their own, $XDG_STATE_HOME/git/maintenance.conf,
+# which the deployed git config includes (dotfiles/git/common/config). git would
+# otherwise append them to its global config file, and on this machine that is
+# the dotfiles' own rendering: every deployment rewrites it and drops them all.
+#
+# A repository is registered once, by its common git dir, rather than once per
+# worktree that checks a branch out. A repository whose objects are borrowed
+# through alternates — the submodule checkouts `wits worktree` materialises — is
+# not registered at all: its daily prefetch would download into its own store
+# what the store it borrows from holds, which is the copy borrowing exists to
+# avoid.
 
 . "$HOOKS_DIR/core/lib.sh"
 
-# Skip if this exact repo path is already registered globally.
-# -x forces a whole-line match so path prefixes don't cause false positives.
-if git config --global --get-all maintenance.repo 2>/dev/null | grep -Fqx "$GIT_TOPLEVEL"; then
-    exit 0
-fi
+common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
+[ -f "$common/objects/info/alternates" ] && exit 0
 
-# `git maintenance` exists since git 2.29; fails silently on older versions.
-if git maintenance start >/dev/null 2>&1; then
+registry="${XDG_STATE_HOME:-$HOME/.local/state}/git/maintenance.conf"
+git config --file "$registry" --get-all maintenance.repo 2>/dev/null | grep -Fqx "$common" &&
+    exit 0
+mkdir -p "${registry%/*}" || exit 0
+
+strategy=$(git config --global --get maintenance.strategy 2>/dev/null)
+
+# The repository is named by -C, so the locations the runner and git exported
+# for this checkout must not apply: a relative GIT_COMMON_DIR would resolve
+# against the new working directory.
+(
+    unset GIT_DIR GIT_COMMON_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
+    # `git maintenance` exists since git 2.29; fails silently on older versions.
+    git -C "$common" maintenance register --config-file "$registry" >/dev/null 2>&1 || exit 0
     log_info "Registered repository for git background maintenance."
-fi
+
+    # `register` schedules nothing, and `start`, which does, can only record the
+    # repository in the global config file. So `start` runs against a throwaway
+    # global file: its schedule (systemd timers, launchd agents, cron entries) is
+    # installed or refreshed as before, and its registration is discarded. It is
+    # handed the real maintenance.strategy because, finding none, it would write
+    # `incremental` into this repository's own config, overriding the global one.
+    throwaway=$(mktemp) || exit 0
+    GIT_CONFIG_GLOBAL=$throwaway git -C "$common" \
+        -c "maintenance.strategy=${strategy:-incremental}" maintenance start >/dev/null 2>&1 ||
+        log_warn "git maintenance start failed; registered repositories run once it is scheduled."
+    rm -f "$throwaway"
+)
+exit 0

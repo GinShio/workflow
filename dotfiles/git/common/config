@@ -24,3 +24,7 @@
         path = config.d/rerere.conf
         path = config.d/stash.conf
         path = config.d/status.conf
+        # Repositories registered for git maintenance, written by the
+        # post-checkout hook. Kept out of this file, which every deployment
+        # rewrites; a missing file is skipped.
+        path = {{@@ sysenv.xdg_state_home @@}}/git/maintenance.conf

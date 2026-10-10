@@ -492,10 +492,23 @@ The maintenance enrolment
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Opts each repository into git's own upkeep. The first time you land in a repo
-it registers it with ``git maintenance start``, so git's background tasks
-(commit-graph, gc, and so on) keep the repository fast without you scheduling
-anything. It is a no-op once the repository is already registered. Nothing to
-configure.
+it registers it, so git's background tasks (commit-graph, prefetch, repacking,
+and so on) keep the repository fast without you scheduling anything, and makes
+sure the schedule itself is installed. It is a no-op once the repository is
+already registered. Nothing to configure.
+
+Three things set it apart from a plain ``git maintenance start``:
+
+* The registrations live in ``$XDG_STATE_HOME/git/maintenance.conf``, which
+  the deployed git config includes, not in the global config file. That file
+  is the dotfiles' rendering, and every deployment rewrites it — taking every
+  registration git had appended with it.
+* A repository is registered once, by its common git dir, however many
+  worktrees check its branches out.
+* A repository that borrows its objects through alternates — the submodule
+  checkouts ``wits worktree`` materialises — is not registered. Its daily
+  prefetch would download into its own store what the store it borrows from
+  already holds.
 
 The branchless bootstrap
 ~~~~~~~~~~~~~~~~~~~~~~~~
