@@ -18,7 +18,7 @@ use wits_util::git::Repository;
 use wits_util::log as wits_log;
 
 use super::lines;
-use super::model::{comment_anchor, Action, Local, Snapshot, StoredFile};
+use super::model::{comment_anchor, Action, Local, Reviewed, Snapshot, StoredFile};
 use super::{online, Online, SubmitArgs};
 
 pub fn run(repo: &Repository, args: &SubmitArgs) -> Result<()> {
@@ -188,6 +188,17 @@ fn submit_draft(ctx: &Online, id: &str, mut local: Local, stale: Vec<String>) ->
 
     let reconciled = reconcile_local(&mut local, &outcome);
     store.save_local(id, &local)?;
+    // Anything that landed, a lone verdict included, is a review written against
+    // this snapshot, which is where `diff --since-reviewed` measures from.
+    if reconciled.posted > 0 || outcome.verdict_ok == Some(true) {
+        let reviewed = Reviewed {
+            head_sha: version.head_sha.clone(),
+            at: wits_util::time::now_secs(),
+        };
+        if let Err(e) = store.save_reviewed(id, &reviewed) {
+            log::warn!("MR {id}: submitted, but recording the review point failed: {e}");
+        }
+    }
     // Persist any forge-side objects this attempt left unpublished, so the next
     // submit's pre-flight cleans them (empty ⇒ the file is removed).
     store.save_inflight(id, &outcome.inflight)?;
@@ -660,5 +671,145 @@ mod tests {
         // A non-reference is untouched; an unterminated token is left as written.
         assert_eq!(go("no refs here"), "no refs here");
         assert_eq!(go("dangling [[oops"), "dangling [[oops");
+    }
+
+    /// What `submit` records for `diff --since-reviewed` to measure from.
+    mod review_point {
+        use wits_util::forge::{
+            Attributes, BatchOutcome, Forge, HeadRepo, MergeRequest, MrComment, NewMr, RemoteInfo,
+            ReviewBatch, Service, Verdict,
+        };
+        use wits_util::git::Repository;
+        use wits_util::remote::RemoteRoles;
+
+        use super::super::submit_draft;
+        use crate::cmd::review::model::{Action, Info, Local};
+        use crate::cmd::review::store::Store;
+        use crate::cmd::review::{Online, ReviewCtx};
+
+        /// A forge on which the whole batch lands, or none of it does.
+        struct Fake {
+            lands: bool,
+        }
+
+        impl Forge for Fake {
+            fn noun(&self) -> &'static str {
+                "PR"
+            }
+            fn submit(&self, _: &str, batch: &ReviewBatch) -> anyhow::Result<BatchOutcome> {
+                anyhow::ensure!(self.lands, "refused");
+                Ok(BatchOutcome {
+                    landed: batch.actions.iter().map(|a| (a.key(), true)).collect(),
+                    summary_ok: true,
+                    verdict_ok: batch.verdict.map(|_| true),
+                    notifications: 1,
+                    inflight: Vec::new(),
+                })
+            }
+            fn mrs_for_branch(&self, _: HeadRepo, _: &str) -> anyhow::Result<Vec<MergeRequest>> {
+                unreachable!()
+            }
+            fn create(&self, _: &NewMr) -> anyhow::Result<MergeRequest> {
+                unreachable!()
+            }
+            fn set_base(&self, _: &str, _: &str) -> anyhow::Result<()> {
+                unreachable!()
+            }
+            fn set_body(&self, _: &str, _: &str) -> anyhow::Result<()> {
+                unreachable!()
+            }
+            fn apply_attributes(&self, _: &str, _: &Attributes) -> anyhow::Result<()> {
+                unreachable!()
+            }
+            fn list_comments(&self, _: &str) -> anyhow::Result<Vec<MrComment>> {
+                unreachable!()
+            }
+            fn add_comment(&self, _: &str, _: &str) -> anyhow::Result<()> {
+                unreachable!()
+            }
+            fn edit_comment(&self, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
+                unreachable!()
+            }
+        }
+
+        const INFO: &str = r##"{
+          "schema": 1,
+          "mr": { "id": "7", "display": "#7", "state": "open", "draft": false,
+                  "title": "t", "author": "a", "base": "main", "source": "f",
+                  "updated_at": "2026-07-01T00:00:00Z", "labels": [], "web_url": "" },
+          "snapshots": [
+            { "fork_sha": "f1", "start_sha": "f1", "head_sha": "h1" },
+            { "fork_sha": "f2", "start_sha": "f2", "head_sha": "h2" }
+          ],
+          "fetched_at": 1, "commits": [], "files": []
+        }"##;
+
+        fn online(lands: bool) -> (tempfile::TempDir, Online) {
+            let tmp = tempfile::tempdir().unwrap();
+            let status = std::process::Command::new("git")
+                .args(["init", "-q"])
+                .arg(tmp.path())
+                .status()
+                .unwrap();
+            assert!(status.success());
+            let repo = Repository::new(tmp.path());
+            let target = RemoteInfo {
+                host: "github.com".into(),
+                owner: "o".into(),
+                repo: "r".into(),
+                service: Service::GitHub,
+            };
+            let store = Store::at(tmp.path().join("store"));
+            let info: Info = serde_json::from_str(INFO).unwrap();
+            store.save_info("7", &info).unwrap();
+            let ctx = Online {
+                local: ReviewCtx {
+                    repo,
+                    target,
+                    store,
+                },
+                roles: RemoteRoles::new(Some("origin".into()), None),
+                forge: Box::new(Fake { lands }),
+            };
+            (tmp, ctx)
+        }
+
+        fn summary() -> Local {
+            Local {
+                schema: 1,
+                verdict: None,
+                actions: vec![Action::Summary {
+                    id: None,
+                    body: "fine".into(),
+                }],
+            }
+        }
+
+        #[test]
+        fn a_landed_review_records_the_current_snapshot() {
+            let (_tmp, ctx) = online(true);
+            submit_draft(&ctx, "7", summary(), Vec::new()).unwrap();
+            let reviewed = ctx.local.store.load_reviewed("7").expect("recorded");
+            assert_eq!(reviewed.head_sha, "h2");
+        }
+
+        #[test]
+        fn a_lone_verdict_is_a_review() {
+            let (_tmp, ctx) = online(true);
+            let approve = Local {
+                schema: 1,
+                verdict: Some(Verdict::Approve),
+                actions: Vec::new(),
+            };
+            submit_draft(&ctx, "7", approve, Vec::new()).unwrap();
+            assert!(ctx.local.store.load_reviewed("7").is_some());
+        }
+
+        #[test]
+        fn a_review_that_did_not_land_records_nothing() {
+            let (_tmp, ctx) = online(false);
+            assert!(submit_draft(&ctx, "7", summary(), Vec::new()).is_err());
+            assert!(ctx.local.store.load_reviewed("7").is_none());
+        }
     }
 }

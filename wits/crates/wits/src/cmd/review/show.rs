@@ -13,8 +13,8 @@ use wits_util::git::Repository;
 use wits_util::time::age_since;
 
 use super::model::{
-    short, state_word, Action, Comment, Info, Local, Snapshot, StoredCommit, StoredFile, Thread,
-    SCHEMA,
+    short, state_word, Action, Comment, Info, Local, Reviewed, Snapshot, StoredCommit, StoredFile,
+    Thread, SCHEMA,
 };
 use super::{local, ShowArgs};
 
@@ -85,6 +85,9 @@ struct DetailView {
     snapshots: Vec<Snapshot>,
     /// Unix seconds of the last `fetch` that synced this MR.
     fetched_at: i64,
+    /// The review point your last submitted review was written against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reviewed: Option<Reviewed>,
     neighbors: Neighbors,
     commits: Vec<StoredCommit>,
     files: Vec<StoredFile>,
@@ -168,6 +171,7 @@ fn build_detail_view(ctx: &super::ReviewCtx, id: &str, args: &ShowArgs) -> Resul
         },
         snapshots: info.snapshots.clone(),
         fetched_at: info.fetched_at,
+        reviewed: ctx.store.load_reviewed(id),
         neighbors: neighbors(&ctx.store.list_infos(), id),
         commits: info.commits.clone(),
         files: info.files.clone(),
@@ -494,6 +498,16 @@ fn print_detail_metadata(view: &DetailView) {
             at => age_since(at),
         },
     );
+    if let Some(reviewed) = &view.reviewed {
+        field(
+            "reviewed",
+            &format!(
+                "{} at {}   (`diff --since-reviewed` shows what changed since)",
+                age_since(reviewed.at),
+                short(&reviewed.head_sha)
+            ),
+        );
+    }
     if view.neighbors.nodes.len() > 1 {
         let chain: Vec<String> = view
             .neighbors
@@ -553,8 +567,13 @@ fn print_detail_metadata(view: &DetailView) {
         for (i, s) in view.snapshots.iter().enumerate() {
             let rebased = prev_fork.is_some_and(|f| f != s.fork());
             prev_fork = Some(s.fork());
+            let reviewed = view
+                .reviewed
+                .as_ref()
+                .is_some_and(|r| r.head_sha == s.head_sha);
             let marks = [
                 (rebased, "rebased"),
+                (reviewed, "reviewed"),
                 (i + 1 == view.snapshots.len(), "current"),
             ]
             .iter()

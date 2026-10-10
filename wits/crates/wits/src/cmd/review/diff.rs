@@ -262,6 +262,26 @@ pub fn run(repo: &Repository, args: &DiffArgs) -> Result<()> {
             .with_context(|| format!("MR {id} has no fetched review point — run `wits review fetch {id}` first, or name a range with --range"))?,
     };
 
+    if args.since_reviewed {
+        let reviewed = ctx.store.load_reviewed(&id).with_context(|| {
+            format!(
+                "no review of MR {id} has been submitted from here; name an earlier review \
+                 point with --against"
+            )
+        })?;
+        let from = resolve_spec(&ctx.repo, &info, &reviewed.head_sha).with_context(|| {
+            format!("MR {id}: the review point you reviewed is no longer in the store")
+        })?;
+        if from.head == to.head && from.fork == to.fork {
+            log::info!(
+                "MR {id} has not moved since your review at {}",
+                &reviewed.head_sha[..reviewed.head_sha.len().min(11)]
+            );
+            return Ok(());
+        }
+        return compare_two(&ctx.repo, &id, &from, &to, args);
+    }
+
     match &args.against {
         Some(spec) => {
             let from = resolve_spec(&ctx.repo, &info, spec)

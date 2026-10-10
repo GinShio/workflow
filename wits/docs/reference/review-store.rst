@@ -41,6 +41,7 @@ directory::
    │   ├── info.json       # the MR's metadata + diff state
    │   ├── comments.json   # the forge's discussion (a cache)
    │   ├── local.json      # your unsubmitted review (only present while drafting)
+   │   ├── reviewed.json   # where your last submitted review stood
    │   └── inflight.json   # deferred cleanup ids (only after a failed submit)
    ├── <id>/ …
    └── current             # the MR the last `checkout` materialized
@@ -149,6 +150,19 @@ file) hands a batch of actions to the tool, which appends, assigns missing
 ids, and validates them. Editing the file directly is equivalent; the tool
 reading it does not care who wrote it. ``wits review draft <mr> --dedup``
 compacts the append-only stream in place.
+
+``reviewed.json`` — where your last submitted review stood
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: json
+
+   { "head_sha": "9f8e…", "at": 1755500000 }
+
+The snapshot head a submitted review was written against, and when. ``submit``
+writes it whenever anything of a review lands, a lone verdict included;
+``fetch`` leaves it alone. ``diff --since-reviewed`` compares the current
+review point against it. Losing it loses nothing but that shorthand — the
+review point itself is still in ``info.json``'s history.
 
 ``inflight.json`` — deferred forge-side cleanup (transient)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -160,6 +160,11 @@ pub struct DiffArgs {
     /// on any two ranges; two review points of one MR is simply the common case.
     #[arg(long, value_name = "SPEC")]
     pub against: Option<String>,
+    /// Compare against the review point your last submitted review was written
+    /// on — `--against` that review point, recorded by `submit` — to see what
+    /// changed since you last reviewed.
+    #[arg(long, conflicts_with = "against")]
+    pub since_reviewed: bool,
     /// Print the textual patch instead of coordinates. Bare, or `=2way` / `=3way`
     /// to choose how (`3way` needs `--against`).
     #[arg(

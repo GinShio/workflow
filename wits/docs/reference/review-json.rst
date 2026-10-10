@@ -64,6 +64,7 @@ The detail view, with the pending draft folded into the remote discussion.
      "snapshot": { "fork_sha": "1a2b…", "head_sha": "9f8e…" },
      "snapshots": [ { "fork_sha": "1a2b…", "start_sha": "1a2b…", "head_sha": "9f8e…" } ],
      "fetched_at": 1755500000,
+     "reviewed": { "head_sha": "9f8e…", "at": 1755400000 },
      "neighbors": { "position": 1, "prev_mr": "122", "next_mr": "124",
                     "nodes": ["121","122","123","124"] },
      "commits": [ { "sha": "9f8e…", "subject": "Fix the lock ordering" } ],
@@ -108,6 +109,12 @@ Top-level fields
      - int
      - Unix seconds of the last ``fetch`` that synced this MR; ``0`` for a
        feed-only entry.
+   * - ``reviewed``
+     - object
+     - *Optional.* Where your last submitted review stood: ``{ head_sha, at }``,
+       the snapshot head it was written against and when (Unix seconds).
+       Absent when no review was submitted from this store. ``diff
+       --since-reviewed`` compares against it.
    * - ``neighbors``
      - object
      - This MR's place in its stack (table below).

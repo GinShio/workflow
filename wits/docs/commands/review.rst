@@ -116,7 +116,7 @@ Seven verbs; only ``fetch`` and ``submit`` touch the network.
    * - ``show [mr] [--details] [filters] [--json]``
      - —
      - The inbox, or one MR's merged review view.
-   * - ``diff <mr> [--range SPEC] [--against SPEC] [--patch[=MODE]\|--json]``
+   * - ``diff <mr> [--range SPEC] [--against SPEC\|--since-reviewed] [--patch[=MODE]\|--json]``
      - —
      - Describe one range's commits/files/coordinates, or compare two.
    * - ``draft <mr> [FILE\|-] [--json] [--dedup]``
@@ -426,17 +426,24 @@ which for a review point means some ``fetch`` saw that head:
 
 .. code-block:: sh
 
-   wits review fetch 123                  # records review point 1; you review it
-   wits review show 123 --details         # copy its head SHA from the history
+   wits review fetch 123                  # records review point 1
+   wits review submit 123                 # your review of it; submit records the point
    #   … the author force-pushes …
    wits review fetch 123                  # records review point 2
-   wits review diff 123 --against <that SHA> --patch    # what they changed in between
+   wits review diff 123 --since-reviewed --patch    # what they changed since your review
 
-There is deliberately no shorthand for "the previous one" — ``--against``
-takes the same grammar as ``--range``, so a bare flag would be ambiguous rather
-than convenient, and a ``prev`` keyword would collide with a branch of that
-name. You copy the SHA from ``show --details``, which is why that view prints
-the history.
+``--since-reviewed`` is ``--against`` the review point your last submitted
+review was written on: ``submit`` records the snapshot head whenever any of a
+review lands, a lone verdict included, and ``show --details`` prints it and
+marks it in the history. When the MR has not moved since, it says so instead
+of printing an empty comparison. A review drafted elsewhere, or never
+submitted, records nothing; name the point with ``--against`` then.
+
+``--against`` takes any review point. There is deliberately no shorthand for
+"the previous one" — ``--against`` takes the same grammar as ``--range``, so a
+bare flag would be ambiguous rather than convenient, and a ``prev`` keyword
+would collide with a branch of that name. You copy the SHA from ``show
+--details``, which is why that view prints the history.
 
 If you only ever fetched *after* the force-push, there is nothing to compare
 against. This is also why ``fetch`` pins every snapshot's objects — the older

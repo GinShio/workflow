@@ -289,6 +289,18 @@ impl Info {
     }
 }
 
+/// `reviewed.json` — the review point the last submitted review was written
+/// against, so a later look can ask what changed since (`diff
+/// --since-reviewed`). Written by `submit` whenever anything of a review lands,
+/// and by nothing else; `fetch` leaves it alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reviewed {
+    /// The snapshot head the review was submitted against.
+    pub head_sha: String,
+    /// When, in Unix seconds.
+    pub at: i64,
+}
+
 /// The single source of the anchor-inference rule, shared by the read view
 /// ([`Action::read_anchor`]) and submit (`build_batch`): `file`+`line` ⇒ a
 /// line anchor, `file` alone ⇒ a file anchor, neither ⇒ `None` (an MR-level

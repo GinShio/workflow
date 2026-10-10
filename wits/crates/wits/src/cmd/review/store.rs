@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use wits_util::forge::RemoteInfo;
 use wits_util::git::Repository;
 
-use super::model::{Comments, Info, Local};
+use super::model::{Comments, Info, Local, Reviewed};
 
 /// The per-repo root under which one repo's review state lives.
 pub struct Store {
@@ -47,6 +47,13 @@ impl Store {
             .join(&target.owner)
             .join(&target.repo);
         Ok(Store { root })
+    }
+
+    /// A store at `root`, whatever the environment says — tests must never land
+    /// in the user's own store under `$XDG_STATE_HOME`.
+    #[cfg(test)]
+    pub fn at(root: PathBuf) -> Store {
+        Store { root }
     }
 
     fn mr_dir(&self, id: &str) -> PathBuf {
@@ -99,6 +106,18 @@ impl Store {
             return remove_if_present(&path);
         }
         write_json(&path, local)
+    }
+
+    // -- the last submitted review point -------------------------------------
+
+    /// Where the last submitted review of the MR stood, if one was submitted
+    /// from this store.
+    pub fn load_reviewed(&self, id: &str) -> Option<Reviewed> {
+        read_json(&self.mr_dir(id).join("reviewed.json"))
+    }
+
+    pub fn save_reviewed(&self, id: &str, reviewed: &Reviewed) -> Result<()> {
+        write_json(&self.mr_dir(id).join("reviewed.json"), reviewed)
     }
 
     // -- in-flight cleanup (deferred, id-keyed) ------------------------------

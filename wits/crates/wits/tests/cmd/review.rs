@@ -1183,3 +1183,59 @@ fn unknown_mr_is_a_clean_error_not_a_panic() {
     assert!(!out.success);
     assert!(out.stderr.contains("isn't in the store") || out.stderr.contains("fetch"));
 }
+
+/// `--since-reviewed` is `--against` the review point `submit` recorded.
+#[test]
+fn since_reviewed_compares_against_the_recorded_review_point() {
+    let fx = Fixture::new();
+    let history = fx.two_snapshots();
+    std::fs::write(
+        fx.mr_dir("7").join("reviewed.json"),
+        format!(r#"{{"head_sha": "{}", "at": 1}}"#, history.head1),
+    )
+    .unwrap();
+
+    let since = fx.run(&["review", "diff", "7", "--since-reviewed", "--json"]);
+    assert!(since.success, "stderr: {}", since.stderr);
+    let against = fx.run(&["review", "diff", "7", "--against", &history.head1, "--json"]);
+    assert_eq!(since.stdout, against.stdout);
+
+    let details = fx.run(&["review", "show", "7", "--details"]);
+    assert!(details.stdout.contains("reviewed"), "{}", details.stdout);
+    assert!(
+        details.stdout.contains("(reviewed)"),
+        "the history marks it: {}",
+        details.stdout
+    );
+}
+
+#[test]
+fn since_reviewed_says_so_when_nothing_moved() {
+    let fx = Fixture::new();
+    let history = fx.two_snapshots();
+    std::fs::write(
+        fx.mr_dir("7").join("reviewed.json"),
+        format!(r#"{{"head_sha": "{}", "at": 1}}"#, history.head2),
+    )
+    .unwrap();
+    let out = fx.run(&["review", "diff", "7", "--since-reviewed"]);
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("has not moved since your review"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn since_reviewed_needs_a_submitted_review() {
+    let fx = Fixture::new();
+    fx.two_snapshots();
+    let out = fx.run(&["review", "diff", "7", "--since-reviewed"]);
+    assert!(!out.success);
+    assert!(
+        out.stderr.contains("no review of MR 7 has been submitted"),
+        "{}",
+        out.stderr
+    );
+}
