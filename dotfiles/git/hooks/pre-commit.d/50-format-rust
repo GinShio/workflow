@@ -2,7 +2,70 @@
 . "$HOOKS_DIR/core/lib.sh"
 
 # Format staged Rust with rustfmt. A missing tool is a silent skip.
+#
+# Only a file the project already keeps rustfmt clean — its HEAD version comes
+# out of rustfmt unchanged — or a new file is formatted, so a whole-file
+# formatter never rewrites lines the commit did not touch.
 command -v rustfmt >/dev/null 2>&1 || exit 0
+
+TAB=$(printf '\t')
+
+# `<package edition>\t<workspace.package edition>` of one Cargo.toml, either
+# empty when absent; the package one reads `workspace` when it is inherited.
+toml_editions() {
+    awk '
+        function value(s) {
+            sub(/#.*/, "", s)
+            sub(/^[^=]*=/, "", s)
+            gsub("[\"\047[:space:]]", "", s)
+            return s
+        }
+        /^[[:space:]]*\[/ { section = $0; gsub(/[[:space:]]/, "", section); next }
+        section == "[package]" && /^[[:space:]]*edition[[:space:]]*\.[[:space:]]*workspace/ {
+            package = "workspace"; next
+        }
+        section == "[package]" && /^[[:space:]]*edition[[:space:]]*=/ {
+            package = ($0 ~ /workspace[[:space:]]*=[[:space:]]*true/) ? "workspace" : value($0)
+            next
+        }
+        section == "[workspace.package]" && /^[[:space:]]*edition[[:space:]]*=/ {
+            workspace = value($0); next
+        }
+        END { printf "%s\t%s\n", package, workspace }
+    ' "$1"
+}
+
+# The edition the crate owning a file is written in — what cargo fmt would pass.
+# rustfmt reading stdin sees no Cargo.toml, and on its own assumes 2015, whose
+# grammar and style both differ from later editions. The nearest manifest with a
+# [package] decides; an inherited edition is read from the nearest
+# [workspace.package] above it; a package naming none is 2015, as Cargo reads it.
+# A file in no crate gets 2021.
+rust_edition() {
+    case $1 in */*) _re_dir=${1%/*} ;; *) _re_dir=. ;; esac
+    _re_want=package
+    while :; do
+        if [ -f "$_re_dir/Cargo.toml" ]; then
+            _re_found=$(toml_editions "$_re_dir/Cargo.toml")
+            if [ "$_re_want" = package ] &&
+               grep -q '^[[:space:]]*\[package\]' "$_re_dir/Cargo.toml"; then
+                _re_package=${_re_found%%"$TAB"*}
+                case $_re_package in
+                    workspace) _re_want=workspace ;;
+                    '') echo 2015; return ;;
+                    *) echo "$_re_package"; return ;;
+                esac
+            fi
+            if [ "$_re_want" = workspace ]; then
+                _re_workspace=${_re_found#*"$TAB"}
+                [ -n "$_re_workspace" ] && { echo "$_re_workspace"; return; }
+            fi
+        fi
+        [ "$_re_dir" = . ] && break
+        case $_re_dir in */*) _re_dir=${_re_dir%/*} ;; *) _re_dir=. ;; esac
+    done
+    echo 2021
+}
 
 files=$(staged_lang_files .rs)
 oldifs=$IFS
@@ -11,7 +74,10 @@ IFS='
 set -f
 rc=0
 for f in $files; do
-    apply_to_staged "$f" rustfmt --edition 2021 || rc=1
+    set -- rustfmt --edition "$(rust_edition "$f")"
+    base_formatted "$f" "$@"
+    [ $? -eq 1 ] && continue
+    apply_to_staged "$f" "$@" || rc=1
 done
 IFS=$oldifs
 set +f

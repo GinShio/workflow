@@ -4,8 +4,26 @@
 # Format staged Python: ruff (format + import sort) preferred, else black
 # (+ isort). Both read the staged blob on stdin with the real path so config
 # resolution and reporting stay accurate. A missing tool is a silent skip.
+#
+# Each step runs only on a file the project already keeps that way — its HEAD
+# version comes out of the step unchanged — or on a new file, so a whole-file
+# formatter never rewrites lines the commit did not touch. A file the project
+# does not format is left alone rather than formatted around the edit: unlike
+# C/C++, where git-clang-format makes formatting a change the norm, Python has
+# no convention that would make a style the file does not use welcome on the
+# lines you changed.
 files=$(staged_lang_files .py .pyi)
 [ -n "$files" ] || exit 0
+
+# Run one formatting step on a file the project keeps formatted by it.
+# Usage: step <file> <formatter> [args...]
+step() {
+    _step_file="$1"
+    shift
+    base_formatted "$_step_file" "$@"
+    [ $? -eq 1 ] && return 0
+    apply_to_staged "$_step_file" "$@"
+}
 
 oldifs=$IFS
 IFS='
@@ -14,21 +32,16 @@ set -f
 rc=0
 if command -v ruff >/dev/null 2>&1; then
     for f in $files; do
-        if ! apply_to_staged "$f" ruff format --stdin-filename "$f" -; then
-            rc=1
-            continue
-        fi
-        apply_to_staged "$f" ruff check --fix --select I --stdin-filename "$f" - ||
-            rc=1
+        step "$f" ruff format --stdin-filename "$f" - || { rc=1; continue; }
+        step "$f" ruff check --fix --select I --stdin-filename "$f" - || rc=1
     done
 elif command -v black >/dev/null 2>&1; then
     for f in $files; do
-        if command -v isort >/dev/null 2>&1 &&
-           ! apply_to_staged "$f" isort -; then
+        if command -v isort >/dev/null 2>&1 && ! step "$f" isort -; then
             rc=1
             continue
         fi
-        apply_to_staged "$f" black -q - || rc=1
+        step "$f" black -q - || rc=1
     done
 fi
 IFS=$oldifs

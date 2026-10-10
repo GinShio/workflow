@@ -2,6 +2,10 @@
 . "$HOOKS_DIR/core/lib.sh"
 
 # Format staged Zig with `zig fmt`. A missing tool is a silent skip.
+#
+# Only a file the project already keeps `zig fmt` clean — its HEAD version comes
+# out unchanged — or a new file is formatted, so a whole-file formatter never
+# rewrites lines the commit did not touch.
 command -v zig >/dev/null 2>&1 || exit 0
 
 files=$(staged_lang_files .zig .zon)
@@ -11,6 +15,8 @@ IFS='
 set -f
 rc=0
 for f in $files; do
+    base_formatted "$f" zig fmt --stdin
+    [ $? -eq 1 ] && continue
     apply_to_staged "$f" zig fmt --stdin || rc=1
 done
 IFS=$oldifs

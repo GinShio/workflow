@@ -116,34 +116,55 @@ busiest hook here and the only one, with ``pre-push``, that can reject a commit
 now instead of in review. To bypass the whole hook for one commit,
 ``git commit --no-verify``.
 
+One rule runs through every script here: **a commit is judged on what it
+adds.** A file you touch may predate these hooks — an upstream file with
+trailing whitespace, a stray CRLF, a lint finding, or a style its project never
+adopted — and none of that is your commit's doing. So the checks look at the
+lines the commit adds, and the formatters leave alone what the commit did not
+touch. The same hooks are therefore right in your own trees and in upstream
+ones, with nothing to configure per repository.
+
 The formatter
 ~~~~~~~~~~~~~
 
-Keeps the tree consistently formatted without you having to think about it, so
-what you commit is already clean. Each language is handled on its own — C/C++
-through ``clang-format``, Rust through ``rustfmt``, Zig through ``zig fmt``,
-Python through ``ruff`` (falling back to ``black`` plus ``isort``) — and a
-generic pass guarantees a final newline on every other text file, trimming
-trailing whitespace where that is safe. A language is handled only when its
-formatter is on your ``PATH``.
+Keeps what you commit consistently formatted without you having to think about
+it. Each language is handled on its own — C/C++ through ``clang-format``, Rust
+through ``rustfmt``, Zig through ``zig fmt``, Python through ``ruff`` (falling
+back to ``black`` plus ``isort``) — and a generic pass covers every other text
+file. A language is handled only when its formatter is on your ``PATH``.
 
-The C/C++ pass is *diff-scoped* by default: clang-format is fed the whole
-staged file, but may only change the lines the commit touches plus three
-lines of context around each — the staged diff's hunks at ``-U3``. A one-line
-fix in a file that predates the formatter stays a handful of lines instead of
-arriving as a wall of unrelated churn, and the context window gives the
-formatter room to keep the edited region locally consistent. Set
-``wits.hooks.pre-commit.format-clang-whole-file-enable`` to hand the whole
-file to clang-format instead. Rust, Zig and Python format whole files —
-their formatters are whole-file tools by design.
+Whether a file is formatted whole is decided by the file itself: its last
+committed version is run through the same formatter, and if nothing changes, the
+project keeps that file formatted, so formatting the whole staged file can only
+touch what your commit changed. That file — or a new one, which has no history
+to churn — is formatted whole. Any other file is one the project does not keep
+formatted:
+
+* **C/C++** formats a window around the lines the commit touches, the way
+  ``git clang-format`` formats a change: clang-format is fed the whole staged
+  file, but may only change those lines plus three lines of context around each
+  — the staged diff's hunks at ``-U3``. A one-line fix in a file that predates
+  the formatter stays a handful of lines instead of arriving as a wall of
+  unrelated churn.
+* **Rust, Zig and Python** leave the file alone. Their formatters are
+  whole-file tools, and a style the file does not use is not welcome on the few
+  lines you changed either.
+
+``rustfmt`` reads a file through stdin and sees no ``Cargo.toml``, so the hook
+passes the edition the way ``cargo fmt`` would: the ``edition`` of the nearest
+manifest with a ``[package]``, following ``edition.workspace = true`` to the
+workspace root; a package that names none is 2015, as Cargo reads it, and a file
+in no crate gets 2021.
 
 It formats the **staged content**, not the working tree: it rewrites the version
 in the index and, when your working copy has no unstaged edits, updates that
 too. A partially staged file therefore keeps its in-progress changes intact —
 the commit gets the formatted version, your edits are left alone.
 
-The generic pass withholds the trailing-whitespace trim where it would corrupt
-meaning, while still guaranteeing the harmless final newline. Markdown keeps
+The generic pass trims trailing whitespace from the lines the commit adds, and
+ends the file with a newline when its last line is one of them; every other line
+is left byte for byte. It withholds the trim where it would corrupt meaning,
+while still ensuring the harmless final newline. Markdown keeps
 its trailing spaces (two of them are a hard line break), CSV/TSV keep theirs
 (a trailing tab or space is a delimiter or an empty last field), and
 ``patch``/``diff`` files are left byte-exact — trimming or appending a newline

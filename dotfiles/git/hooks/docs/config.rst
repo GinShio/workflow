@@ -122,10 +122,6 @@ Its scripts and their keys:
      - A named style (``llvm``, ``google``, …) for ``clang-format`` when the
        repo has no ``.clang-format`` of its own. When unset, format
        discovery falls back to ``-style=file`` then LLVM.
-   * - ``wits.hooks.pre-commit.format-clang-whole-file-enable``
-     - off
-     - Format the whole staged C/C++ file instead of only the commit's
-       diff-scoped window (the ``-U3`` hunks). ``-enable``: off until set.
    * - ``wits.hooks.pre-commit.format-generic-notrim``
      - — (unset)
      - A space-separated list of extra file extensions whose trailing

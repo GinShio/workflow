@@ -1,10 +1,18 @@
 #!/bin/sh
 . "$HOOKS_DIR/core/lib.sh"
 
-# Generic whitespace pass for staged text files: guarantee a final newline, and
-# trim trailing whitespace where doing so is safe. Language formatters run
-# earlier and leave their files clean, so this is a no-op on them; it exists to
-# cover everything else. Binary and encrypted blobs are skipped.
+# Bytes, not characters: a text file need not be valid UTF-8 (the encoding check
+# judges only added lines), and awk must neither choke on it nor reinterpret it.
+LC_ALL=C
+export LC_ALL
+
+# Generic whitespace pass for staged text files: trim trailing whitespace from
+# the lines this commit adds, and end the file with a newline when its last line
+# is one of them. Lines the commit did not touch are left byte for byte, so an
+# edit to a file that predates this hook does not drag the rest of it along.
+# Language formatters run earlier and leave their files clean, so this is a
+# no-op on them; it exists to cover everything else. Binary and encrypted blobs
+# are skipped.
 #
 # Trailing whitespace carries meaning in some formats, so trimming is withheld
 # there while the (harmless) final newline is still ensured:
@@ -27,6 +35,23 @@ notrim="$notrim $(cfg_value wits.hooks.pre-commit.format-generic-notrim)"
 # Extensions left completely untouched (content is byte-significant).
 skip=".patch .diff"
 
+# Reads the staged blob; `lines` lists the added line numbers, `trim` says
+# whether to trim them, `nl` whether the blob already ends with a newline. Each
+# line is printed once the next one is seen, so the last can keep a missing
+# final newline unless the commit added that line.
+program='
+BEGIN { n = split(lines, a, ","); for (i = 1; i <= n; i++) added[a[i]] = 1 }
+{
+    if (NR > 1) printf "%s\n", prev
+    prev = $0
+    if (trim && (NR in added)) sub(/[ \t]+$/, "", prev)
+}
+END {
+    if (NR == 0) exit
+    if (nl || (NR in added)) printf "%s\n", prev
+    else printf "%s", prev
+}'
+
 oldifs=$IFS
 set -f
 
@@ -40,6 +65,8 @@ notrim=$(printf '%s\n' $notrim)
 skip=$(printf '%s\n' $skip)
 
 files=$(staged_files)
+[ -n "$files" ] || exit 0
+added=$(staged_added_lines)
 IFS='
 '
 rc=0
@@ -53,18 +80,19 @@ for f in $files; do
     done
     [ "$_leave" = 1 ] && continue
 
+    _lines=$(added_lines_of "$f" "$added")
+    [ -n "$_lines" ] || continue
+
     _trim=1
     for _e in $notrim; do
         case "$f" in *"$_e") _trim=0; break ;; esac
     done
 
-    if [ "$_trim" = 1 ]; then
-        # Trim trailing whitespace and guarantee a final newline.
-        apply_to_staged "$f" awk '{ sub(/[ \t]+$/, ""); print }' || rc=1
-    else
-        # Guarantee a final newline only; leave trailing whitespace intact.
-        apply_to_staged "$f" awk '{ print }' || rc=1
-    fi
+    _nl=0
+    [ "$(staged_blob "$f" | tail -c 1 | od -An -tx1 | tr -d ' \n')" = 0a ] && _nl=1
+
+    apply_to_staged "$f" awk -v lines="$_lines" -v trim="$_trim" -v nl="$_nl" "$program" ||
+        rc=1
 done
 IFS=$oldifs
 set +f

@@ -480,6 +480,60 @@ added_text_of() {
         $1 == ENVIRON["_AL_PATH"] { print substr($0, length($1) + length($2) + 3) }'
 }
 
+# The path a staged file had at HEAD: its own path when HEAD has it, else the
+# path it was renamed from. Fails when HEAD has no version of it at all — a new
+# file, or a branch with no commit yet.
+staged_base_path() {
+    if git cat-file -e "HEAD:$1" 2>/dev/null; then
+        printf '%s\n' "$1"
+        return 0
+    fi
+    git diff --cached -M --name-status --diff-filter=R 2>/dev/null | _BP_PATH="$1" awk -F'\t' '
+        $3 == ENVIRON["_BP_PATH"] { print $2; found = 1; exit }
+        END { exit !found }'
+}
+
+# Whether the project already keeps a file the way a formatter would write it,
+# judged on the file's last committed version, so formatting the whole staged
+# file cannot rewrite lines the commit never touched:
+#   0  the HEAD version comes out of the command unchanged;
+#   1  the command changes the HEAD version, or fails on it;
+#   2  there is no HEAD version (see staged_base_path): nothing to churn.
+# The command reads stdin and writes stdout, as apply_to_staged's does.
+# Usage: base_formatted <file> <formatter> [args...]
+base_formatted() {
+    _bf_file="$1"
+    shift
+    _bf_base=$(staged_base_path "$_bf_file") || return 2
+    _bf_in=$(mktemp) || return 1
+    _bf_out=$(mktemp) || { rm -f "$_bf_in"; return 1; }
+    _bf_status=1
+    if git cat-file blob "HEAD:$_bf_base" > "$_bf_in" 2>/dev/null &&
+       "$@" < "$_bf_in" > "$_bf_out" 2>/dev/null &&
+       cmp -s "$_bf_in" "$_bf_out"; then
+        _bf_status=0
+    fi
+    rm -f "$_bf_in" "$_bf_out"
+    return "$_bf_status"
+}
+
+# The new-side line ranges of a file's staged hunks, `<first>:<last>` per line,
+# at <context> lines of context. A hunk that only deletes has no new side and is
+# left out. A renamed file is diffed against the path it was renamed from, so
+# only what the commit changed counts, not the whole moved file.
+# Usage: staged_line_ranges <file> <context>
+staged_line_ranges() {
+    _slr_base=$(staged_base_path "$1") || _slr_base="$1"
+    git diff --cached --no-color --no-ext-diff --no-textconv -M -U"$2" \
+        -- "$_slr_base" "$1" 2>/dev/null | awk '
+        /^@@ / {
+            split($3, n, ",")
+            s = substr(n[1], 2) + 0
+            c = (2 in n) ? n[2] + 0 : 1
+            if (c > 0) printf "%d:%d\n", s, s + c - 1
+        }'
+}
+
 # The staged content of a file, straight from the index.
 staged_blob() {
     git cat-file blob ":$1" 2>/dev/null
