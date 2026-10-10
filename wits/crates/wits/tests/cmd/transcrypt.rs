@@ -235,12 +235,13 @@ fn textconv_passes_binary_through() {
 }
 
 #[test]
-fn textconv_decrypts_an_encrypted_file() {
-    let plaintext: &[u8] = b"diff me please\n";
-    let cleaned = sealed(plaintext);
+fn textconv_passes_a_packet_through() {
+    // A packet reaches textconv only when smudge had no key to open it with;
+    // textconv never decrypts, even with one.
+    let cleaned = sealed(b"diff me please\n");
     let out = run_textconv("secret.txt", &cleaned, &[PASSWORD]);
     assert!(out.success);
-    assert_eq!(out.stdout.as_slice(), plaintext);
+    assert_eq!(out.stdout, cleaned);
 }
 
 #[test]
@@ -287,12 +288,19 @@ impl Repo {
                 format!("'{bin}' transcrypt smudge %f"),
             ),
             ("filter.transcrypt.required", "true".to_owned()),
+            (
+                "diff.transcrypt.textconv",
+                format!("'{bin}' transcrypt textconv"),
+            ),
             ("wits.transcrypt.password", "test-passphrase".to_owned()),
             ("wits.transcrypt.salt", "0123456789abcdef".to_owned()),
         ] {
             repo.git(&["config", key, &value]);
         }
-        repo.write(".gitattributes", "secret/** filter=transcrypt\n");
+        repo.write(
+            ".gitattributes",
+            "secret/** filter=transcrypt diff=transcrypt\n",
+        );
         repo
     }
 
@@ -301,7 +309,11 @@ impl Repo {
         cmd.args(args)
             .current_dir(self.dir.path())
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null");
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid");
         for (key, _) in std::env::vars() {
             if key.starts_with("WITS_TRANSCRYPT_") {
                 cmd.env_remove(key);
@@ -371,4 +383,19 @@ fn a_changed_file_gets_a_new_packet_that_opens() {
         repo.git(&["cat-file", "--filters", ":secret/a.txt"]),
         "v2\n"
     );
+}
+
+#[test]
+fn git_diff_reads_plaintext_through_a_pass_through_textconv() {
+    // Git smudges each blob into the file it hands textconv; this pins that,
+    // since it is the whole reason textconv may pass its input through.
+    let repo = Repo::new();
+    repo.write("secret/a.txt", "v1\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-qm", "v1"]);
+    repo.write("secret/a.txt", "v2\n");
+    repo.git(&["commit", "-qam", "v2"]);
+
+    let diff = repo.git(&["diff", "HEAD~1", "HEAD", "--", "secret/a.txt"]);
+    assert!(diff.contains("\n-v1\n+v2\n"), "{diff}");
 }

@@ -33,8 +33,9 @@ tree). ``wits transcrypt`` is both ends, plus a third for ``git diff``:
    * - ``wits transcrypt smudge <file>``
      - base64 ciphertext on stdin → plaintext on stdout
    * - ``wits transcrypt textconv <file>``
-     - decrypts a file on disk for ``git diff``, so diffs read as plaintext
-       instead of two blobs of base64
+     - passes through the file ``git diff`` hands it — git has already
+       smudged each blob into it — so diffs read as plaintext instead of two
+       blobs of base64
 
 You almost never run these by hand. You register them once, tell git which
 paths they apply to, and from then on ``git add`` encrypts and ``git checkout``

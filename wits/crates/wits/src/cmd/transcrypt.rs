@@ -4,8 +4,9 @@
 //! into the index) and a *smudge* filter (run on the way out to the working
 //! tree). Pointing both at this command turns committing a secret into storing
 //! ciphertext and checking it out into recovering plaintext, with nothing in
-//! the normal `git add` / `git checkout` workflow to remember. `textconv` is
-//! the same idea for `git diff`, so diffs read as plaintext.
+//! the normal `git add` / `git checkout` workflow to remember. Configuring a
+//! `textconv` is what makes `git diff` smudge each blob before diffing it, so
+//! diffs read as plaintext; the command itself only passes that file through.
 //!
 //! The one design decision worth understanding is what happens to a teammate
 //! who clones the repo without the password. The naive thing — error out — would
@@ -60,7 +61,7 @@ pub enum TranscryptAction {
         #[arg(value_name = "FILE")]
         file: Option<String>,
     },
-    /// textconv: decrypt a file on disk to stdout for `git diff`.
+    /// textconv: copy a file git has already smudged to stdout, for `git diff`.
     Textconv {
         #[arg(value_name = "FILE")]
         file: String,
@@ -76,7 +77,7 @@ pub fn run(args: &TranscryptArgs) -> anyhow::Result<()> {
         TranscryptAction::Status => status(&resolver, &args.context),
         TranscryptAction::Clean { file } => clean(&resolver, &repo, file.as_deref()),
         TranscryptAction::Smudge { file } => smudge(&resolver, file.as_deref()),
-        TranscryptAction::Textconv { file } => textconv(&resolver, file),
+        TranscryptAction::Textconv { file } => textconv(file),
     }
 }
 
@@ -281,17 +282,19 @@ fn smudge(resolver: &Resolver<'_>, file: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn textconv(resolver: &Resolver<'_>, file: &str) -> anyhow::Result<()> {
-    let data = std::fs::read(file)?;
-    let recovered = recover(resolver, Some(file), &data)?;
-    std::io::stdout().write_all(&recovered)?;
+/// Git writes each blob through smudge into the temp file it hands a textconv,
+/// so what arrives here is already plaintext — or the packet smudge passed
+/// through for want of a key. Decrypting here could only fail anyway: the temp
+/// file's path is not the path the packet is bound to.
+fn textconv(file: &str) -> anyhow::Result<()> {
+    std::io::stdout().write_all(&std::fs::read(file)?)?;
     Ok(())
 }
 
-/// Turn stored bytes back into plaintext for smudge and textconv, which share
-/// exactly this logic. The guiding rule: never abort git over content we simply
-/// can't read. The one case we *do* fail on is a genuine packet the configured
-/// password does not open — passing it through would hide a wrong key.
+/// Turn stored bytes back into plaintext for smudge. The guiding rule: never
+/// abort git over content we simply can't read. The one case we *do* fail on is
+/// a genuine packet the configured password does not open — passing it through
+/// would hide a wrong key.
 fn recover(resolver: &Resolver<'_>, file: Option<&str>, data: &[u8]) -> anyhow::Result<Vec<u8>> {
     // Plaintext, binary, anything that isn't our packet: hand it back untouched.
     // This is what lets `git diff` work on a not-yet-encrypted or binary file.
