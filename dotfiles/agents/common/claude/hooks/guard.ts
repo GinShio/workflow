@@ -26,7 +26,7 @@
 
 import { evaluate, isUnattended, workspaceRoot, type Intent } from "./core/mod.ts"; // paths are written against the deployed layout (~/.claude/hooks/) — guard.ts sits beside core/, not against this repo tree
 import { homedir } from "node:os";
-import { readFileSync, writeSync } from "node:fs";
+import { writeSync } from "node:fs";
 import process from "node:process";
 
 const OUT = new TextEncoder();
@@ -48,8 +48,7 @@ function isForeignHost(event: { cursor_version?: string; hook_event_name?: strin
 		(event.hook_event_name !== undefined && event.hook_event_name !== "PreToolUse");
 }
 
-function main() {
-	const raw = readFileSync(0, "utf8");
+function main(raw: string) {
 	const event = JSON.parse(raw) as {
 		tool_name?: string;
 		tool_input?: Record<string, string>;
@@ -109,8 +108,20 @@ function main() {
 	);
 }
 
+/**
+ * Cursor's compatibility layer can hand this adapter a non-blocking stdin,
+ * where readFileSync(0) throws EAGAIN once the payload outruns the pipe
+ * buffer — before isForeignHost can stand down — and the crash handler then
+ * denies the action. The stream read waits for the writer instead.
+ */
+async function readStdin(): Promise<string> {
+	const chunks: Buffer[] = [];
+	for await (const chunk of process.stdin) chunks.push(chunk);
+	return Buffer.concat(chunks).toString("utf8");
+}
+
 try {
-	main();
+	main(await readStdin());
 } catch (e) {
 	writeSync(
 		1,
