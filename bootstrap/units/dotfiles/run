@@ -30,14 +30,38 @@ WITS_BIN=$(command -v wits)
 DOTDROP_BIN=$(command -v dotdrop)
 
 TMPDIR_DOT=$(mktemp -d) || exit 1
-trap 'rm -rf "$TMPDIR_DOT"' EXIT
 
 CONTEXTS_FILE="$TMPDIR_DOT/contexts"
 CATALOG_FILE="$TMPDIR_DOT/catalog"
+WRITTEN_FILE="$TMPDIR_DOT/written"
 : > "$CONTEXTS_FILE"
+: > "$WRITTEN_FILE"
+
+# The transcrypt configuration this run writes into the repository's
+# .git/config lasts for the run alone, so that afterwards a context is
+# configured exactly where the deployed configuration configures it — and a
+# password given to this run does not stay behind in a file. Exactly the keys
+# written are removed, from a trap so that a run failing partway removes them
+# too.
+unconfigure_transcrypt() {
+    while IFS= read -r _key || [ -n "$_key" ]; do
+        [ -n "$_key" ] || continue
+        git -C "$DOTFILES_ROOT_PATH" config --local --unset-all -- "$_key" \
+            2>/dev/null || :
+    done < "$WRITTEN_FILE"
+}
+trap 'unconfigure_transcrypt; rm -rf "$TMPDIR_DOT"' EXIT
 
 lower() { printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]'; }
-upper() { printf '%s\n' "$1" | tr '[:lower:]' '[:upper:]'; }
+
+# A setting's environment name, as wits forms it: upper-cased, with a dash
+# turned into an underscore, since a shell cannot name a variable with one.
+env_part() { printf '%s\n' "$1" | tr '[:lower:]-' '[:upper:]_'; }
+
+# Write one key to the repository's own config, and remember it for removal.
+set_local_config() {
+    git config --local -- "$1" "$2" && printf '%s\n' "$1" >> "$WRITTEN_FILE"
+}
 
 add_context() {
     [ -n "$1" ] || return 0
@@ -46,7 +70,7 @@ add_context() {
 }
 
 context_password() {
-    printenv "WITS_TRANSCRYPT_$(upper "$1")_PASSWORD" 2>/dev/null || true
+    printenv "WITS_TRANSCRYPT_$(env_part "$1")_PASSWORD" 2>/dev/null || true
 }
 
 # Every context this run was given a password for, starting with this
@@ -83,19 +107,19 @@ configure_transcrypt() {
     _filter="transcrypt-${_ctx}"
     printf 'Configuring encryption for overlay %s...\n' "$_ctx"
 
-    git config --local -- "filter.${_filter}.clean" \
+    set_local_config "filter.${_filter}.clean" \
         "$WITS_BIN transcrypt -C ${_ctx} clean %f"
-    git config --local -- "filter.${_filter}.smudge" \
+    set_local_config "filter.${_filter}.smudge" \
         "$WITS_BIN transcrypt -C ${_ctx} smudge %f"
-    git config --local -- "filter.${_filter}.required" true
-    git config --local -- "diff.${_filter}.textconv" \
+    set_local_config "filter.${_filter}.required" true
+    set_local_config "diff.${_filter}.textconv" \
         "$WITS_BIN transcrypt -C ${_ctx} textconv"
-    git config --local -- "wits.transcrypt.${_ctx}.password" "$_pw"
-    for _key in cipher digest kdf iterations; do
-        _val=$(printenv "WITS_TRANSCRYPT_$(upper "$_ctx")_$(upper "$_key")" \
+    set_local_config "wits.transcrypt.${_ctx}.password" "$_pw"
+    for _key in cipher digest kdf iterations memory lanes salt salt-mode; do
+        _val=$(printenv "WITS_TRANSCRYPT_$(env_part "$_ctx")_$(env_part "$_key")" \
             2>/dev/null || true)
         if [ -n "$_val" ]; then
-            git config --local -- "wits.transcrypt.${_ctx}.${_key}" "$_val"
+            set_local_config "wits.transcrypt.${_ctx}.${_key}" "$_val"
         fi
     done
 
