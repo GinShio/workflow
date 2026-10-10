@@ -143,6 +143,32 @@ pub fn roles_in_force(repo: &RawRepo, checkout: &Repository) -> RemoteRoles {
 ///
 /// See the module docs for why the three outcomes stay distinct.
 pub fn for_checkout(checkout: &Repository) -> Result<RemoteRoles> {
+    declared_for_checkout(checkout).map(|declared| declared.roles)
+}
+
+/// What a checkout's authority says about where its work goes: the roles in
+/// force, and the trunk the owning repo declares.
+///
+/// The two are read from one load of the registry because every command that
+/// needs the trunk needs the roles as well, and two loads could disagree.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Declared {
+    pub roles: RemoteRoles,
+    /// The owning repo's `main_branch`; `None` for a checkout no project owns,
+    /// and for a subtree, which shares its anchor's git and declares none.
+    pub main_branch: Option<String>,
+}
+
+impl Declared {
+    /// The checkout's trunk, by the one rule every tool shares
+    /// ([`super::trunk`]).
+    pub fn trunk(&self, checkout: &Repository) -> Option<super::trunk::Trunk> {
+        super::trunk::resolve(checkout, &self.roles, self.main_branch.as_deref())
+    }
+}
+
+/// [`for_checkout`], together with the trunk the owning repo declares.
+pub fn declared_for_checkout(checkout: &Repository) -> Result<Declared> {
     // A registry that cannot be read is not the same answer as a registry that
     // does not mention this path, so the error propagates instead of falling back.
     // No registry *at all*, though, is the second answer and not the third: on a
@@ -156,8 +182,17 @@ pub fn for_checkout(checkout: &Repository) -> Result<RemoteRoles> {
     )?;
     let declared = ws.as_ref().and_then(|ws| ws.repo_for_path(checkout.path()));
     Ok(match declared {
-        Some((project, repo_name)) => roles_in_force(&project.repos[&repo_name], checkout),
-        None => RemoteRoles::from_git(checkout),
+        Some((project, repo_name)) => {
+            let repo = &project.repos[&repo_name];
+            Declared {
+                roles: roles_in_force(repo, checkout),
+                main_branch: repo.main_branch.clone(),
+            }
+        }
+        None => Declared {
+            roles: RemoteRoles::from_git(checkout),
+            main_branch: None,
+        },
     })
 }
 

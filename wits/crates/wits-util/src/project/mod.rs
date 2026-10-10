@@ -24,6 +24,7 @@ pub mod remotes;
 pub mod resolve;
 pub mod skip;
 mod toolchain;
+pub mod trunk;
 pub mod workspace;
 
 use anyhow::{Context, Result};

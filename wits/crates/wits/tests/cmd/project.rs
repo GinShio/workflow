@@ -1314,3 +1314,84 @@ install_dir = "{{repos.main.workdir}}/_install/{{branch.slug}}""#,
     assert!(overridden.success, "stderr: {}", overridden.stderr);
     assert!(override_dir.join("debug/reviewable").exists());
 }
+
+/// A repo forked from an upstream whose default branch is `main` while the
+/// project develops on `stable`, its tracking refs made by hand. Returns the
+/// checkout and an empty registry root.
+fn trunk_fixture(root: &Path) -> (PathBuf, PathBuf) {
+    let repo = Fixture::seed(root, "r", &["f"]);
+    git(
+        &repo,
+        &["remote", "add", "upstream", "https://example.com/r.git"],
+    );
+    for branch in ["main", "stable"] {
+        git(
+            &repo,
+            &[
+                "update-ref",
+                &format!("refs/remotes/upstream/{branch}"),
+                "HEAD",
+            ],
+        );
+    }
+    git(
+        &repo,
+        &[
+            "symbolic-ref",
+            "refs/remotes/upstream/HEAD",
+            "refs/remotes/upstream/main",
+        ],
+    );
+    let config = root.join("config");
+    std::fs::create_dir_all(&config).unwrap();
+    (repo, config)
+}
+
+fn trunk_query(repo: &Path, config: &Path, args: &[&str]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_wits"))
+        .arg("__trunk")
+        .args(args)
+        .current_dir(repo)
+        .envs(hermetic_git())
+        .env("WITS_PROJECT_CONFIG", config)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// The hooks and aliases ask `__trunk`, so it must give the commands' answer: a
+/// project's declared `main_branch` over the server's default branch, measured
+/// at the merge target's tracking ref.
+#[test]
+fn the_trunk_query_answers_a_declared_main_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (repo, config) = trunk_fixture(tmp.path());
+    std::fs::write(
+        config.join("r.toml"),
+        format!(
+            "[project]\n[repos.main]\npath = \"{}\"\nmain_branch = \"stable\"\n\
+             [repos.main.remotes]\nupstream = \"https://example.com/r.git\"\n",
+            repo.display()
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(trunk_query(&repo, &config, &[]), "stable");
+    assert_eq!(trunk_query(&repo, &config, &["--rev"]), "upstream/stable");
+}
+
+/// A repo no project declares answers from its remotes alone.
+#[test]
+fn the_trunk_query_reads_an_undeclared_repos_remote_head() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (repo, config) = trunk_fixture(tmp.path());
+
+    assert_eq!(trunk_query(&repo, &config, &[]), "main");
+    assert_eq!(trunk_query(&repo, &config, &["--rev"]), "upstream/main");
+}

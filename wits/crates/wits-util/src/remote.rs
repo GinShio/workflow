@@ -126,9 +126,8 @@ impl RemoteRoles {
     ///
     /// Nearly every caller wants [`merge_target`](Self::merge_target) instead.
     /// This exists for the one that must tell "tracks a separate fork source" apart
-    /// from "origin doubles as the merge target" — trunk detection prefers the
-    /// fork's own tip, so it walks the two roles in its own order rather than
-    /// taking the merge target.
+    /// from "origin doubles as the merge target": a stack push refuses to aim at
+    /// the repository it merges into.
     pub fn upstream(&self) -> Option<&str> {
         self.upstream.as_deref()
     }

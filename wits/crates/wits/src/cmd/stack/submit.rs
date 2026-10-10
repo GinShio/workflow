@@ -13,7 +13,7 @@
 use wits_util::forge::{HeadRepo, NewMr};
 use wits_util::git::Repository;
 use wits_util::log as wits_log;
-use wits_util::remote::RemoteRoles;
+use wits_util::project::remotes::Declared;
 
 use super::{
     fail_if_any, map_parallel, resolution, BranchMrs, ForgeSession, SubmitArgs, TitleSource,
@@ -27,14 +27,14 @@ enum Decision {
     SkipClosed(String),
 }
 
-pub fn run(repo: &Repository, roles: &RemoteRoles, args: &SubmitArgs) -> anyhow::Result<()> {
-    let plan = resolution::plan_scoped(repo, roles, &args.scope)?;
+pub fn run(repo: &Repository, declared: &Declared, args: &SubmitArgs) -> anyhow::Result<()> {
+    let plan = resolution::plan_scoped(repo, declared, &args.scope)?;
     if plan.selected.is_empty() {
         log::info!("no branches in scope");
         return Ok(());
     }
 
-    let session = ForgeSession::open(repo, roles)?;
+    let session = ForgeSession::open(repo, &declared.roles)?;
     let (forge, noun) = (&session.forge, session.noun);
     let tips = repo.branch_tips();
 

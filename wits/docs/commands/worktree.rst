@@ -7,10 +7,18 @@ Make, inspect, and reclaim git worktrees — in **any** repository.
 
 ``wits worktree`` needs no project declaration and keeps no state of its own. It
 works on whatever repo you are standing in, asking git for everything it needs
-— the project registry is consulted only for which remote holds the ``origin``
-and ``upstream`` roles, the question every ``wits`` command asks, and a repo no
-project declares answers it by remote name — so it serves a registered project
-and a repo you cloned five minutes ago equally well.
+— the project registry is consulted only for the trunk ``merged`` is measured
+against, by the same rule every ``wits`` command and the git hooks use, and a
+repo no project declares answers from its remotes — so it serves a registered
+project and a repo you cloned five minutes ago equally well.
+
+That rule names the trunk by the ``main_branch`` the owning project declares,
+else the merge target's default branch (its remote HEAD), else the first of
+``main``, ``master``, ``trunk`` that exists; and measures against the merge
+target's tracking ref of it — ``upstream/main`` in a fork — falling back to the
+local branch when that is not fetched. A fork's own ``origin/main`` is never the
+yardstick: it moves only when you push to it, so work that landed upstream would
+not read as merged.
 
 It is deliberately *not* a wrapper around ``git worktree``. Each verb does
 **one** thing, and each exists because git leaves a gap:
@@ -201,8 +209,9 @@ because the symptoms look like bugs elsewhere. It maps the remote's
 with one local branch per branch anyone ever pushed — thousands in a shared
 tree — and nothing distinguishes the one you are working on. It writes **no
 fetch refspec**, so ``git fetch`` afterwards updates no ref at all. And it
-publishes no ``origin/HEAD``, so no trunk is found and nothing ever reads as
-``merged`` — use ``--gone`` or ``--older-than`` in such a repository.
+publishes no ``origin/HEAD``, so the trunk falls back to the local ``main`` the
+clone copied, which no fetch ever moves: only work merged before the clone reads
+as ``merged`` — use ``--gone`` or ``--older-than`` in such a repository.
 
 ``wits update`` builds a bare-backed project's repository with
 ``git init --bare`` + ``git remote add`` + ``git fetch`` instead, which

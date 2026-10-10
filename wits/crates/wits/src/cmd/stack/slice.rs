@@ -33,7 +33,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use wits_util::git::{Commit, Repository};
 use wits_util::process::Command;
-use wits_util::remote::RemoteRoles;
+use wits_util::project::remotes::Declared;
 
 use super::resolution;
 use super::topology::Topology;
@@ -46,7 +46,7 @@ const FOOTER: &[&str] = &[
     "# checked-out branch to the end of the rebase itself.",
 ];
 
-pub fn run(repo: &Repository, roles: &RemoteRoles, base: Option<&str>) -> anyhow::Result<()> {
+pub fn run(repo: &Repository, declared: &Declared, base: Option<&str>) -> anyhow::Result<()> {
     // `slice` is driven by an interactive `git rebase -i`; there is nothing to
     // preview and no safe way to run it non-interactively, so under `-n` it does
     // nothing rather than write temp files and then misreport an empty result.
@@ -59,7 +59,7 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, base: Option<&str>) -> anyhow
 
     let base = match base {
         Some(b) => b.to_owned(),
-        None => resolution::base_branch(repo, roles)?,
+        None => resolution::base_branch(repo, declared)?,
     };
 
     let commits = repo.commits(&format!("{base}..HEAD"));

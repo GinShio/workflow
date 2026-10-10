@@ -2,11 +2,11 @@
 //!
 //! Deliberately **project-agnostic**: it works on whatever repository you are
 //! standing in and keeps no state of its own. Everything it needs it asks git,
-//! except which remote holds the `origin` and `upstream` roles — the trunk
-//! `merged` is judged against — which comes from [`remotes::for_checkout`] like
-//! in every other command, and answers by remote name where no project declares
-//! the checkout. That is what lets it serve both a registered project and a
-//! repo you cloned five minutes ago.
+//! except the trunk `merged` is judged against, which comes from
+//! [`remotes::declared_for_checkout`] by the rule every command shares, and
+//! answers from the remote names where no project declares the checkout. That is
+//! what lets it serve both a registered project and a repo you cloned five
+//! minutes ago.
 //!
 //! It is not a wrapper around `git worktree`. Three verbs exist because git
 //! leaves three gaps:
@@ -286,14 +286,22 @@ fn create(repo: &Repository, args: &CreateArgs) -> Result<()> {
     Ok(())
 }
 
+/// Every worktree of `repo`, with "merged" judged against the checkout's trunk.
+fn inventory(repo: &Repository) -> Result<Inventory> {
+    let trunk = remotes::declared_for_checkout(repo)?.trunk(repo);
+    Ok(Inventory::gather(
+        repo,
+        trunk.as_ref().and_then(|trunk| trunk.rev.as_deref()),
+    ))
+}
+
 // --- switch -------------------------------------------------------------------
 
 fn switch(repo: &Repository, args: &SwitchArgs) -> Result<()> {
-    let roles = remotes::for_checkout(repo)?;
     require_checkoutable(repo, &args.rev)?;
     let rev = &args.rev.rev;
 
-    let inventory = Inventory::gather(repo, &roles);
+    let inventory = inventory(repo)?;
     let entry = match &args.target {
         Some(target) => inventory.resolve(target)?,
         // No target means "the one I am in", which is the only worktree a bare
@@ -346,8 +354,7 @@ fn past_or_planned(past: &'static str, planned: &'static str) -> &'static str {
 // --- info ---------------------------------------------------------------------
 
 fn info(repo: &Repository, args: &InfoArgs) -> Result<()> {
-    let roles = remotes::for_checkout(repo)?;
-    let inventory = Inventory::gather(repo, &roles);
+    let inventory = inventory(repo)?;
     let filter = build_filter(&args.select)?;
 
     // A named target is shown whatever its state; otherwise the filter decides,
@@ -637,8 +644,7 @@ fn prune_phrase(entry: &Entry, filter: &Filter, trunk: Option<&str>) -> String {
 // --- prune --------------------------------------------------------------------
 
 fn prune(repo: &Repository, args: &PruneArgs) -> Result<()> {
-    let roles = remotes::for_checkout(repo)?;
-    let inventory = Inventory::gather(repo, &roles);
+    let inventory = inventory(repo)?;
 
     // A named worktree is dropped whatever its state — the explicit request. It
     // still refuses to discard uncommitted work without `--force`, and it is an

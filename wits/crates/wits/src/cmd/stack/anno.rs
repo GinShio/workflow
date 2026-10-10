@@ -22,7 +22,7 @@ use anyhow::Context;
 use wits_util::forge::{Forge, MergeRequest, MrComment};
 use wits_util::git::Repository;
 use wits_util::log as wits_log;
-use wits_util::remote::RemoteRoles;
+use wits_util::project::remotes::Declared;
 
 use super::topology::Topology;
 use super::{fail_if_any, find_open_mrs, map_parallel, resolution, ForgeSession, ScopeArgs};
@@ -35,8 +35,8 @@ use super::{fail_if_any, find_open_mrs, map_parallel, resolution, ForgeSession, 
 const HEADER: &str = "<!-- wits stack: generated navigation, do not edit below -->";
 const FOOTER: &str = "<!-- wits stack: end navigation -->";
 
-pub fn run(repo: &Repository, roles: &RemoteRoles, scope: &ScopeArgs) -> anyhow::Result<()> {
-    let plan = resolution::plan_scoped(repo, roles, scope)?;
+pub fn run(repo: &Repository, declared: &Declared, scope: &ScopeArgs) -> anyhow::Result<()> {
+    let plan = resolution::plan_scoped(repo, declared, scope)?;
 
     if plan.standalone {
         log::info!("standalone branch: a lone MR has nothing to navigate, skipping");
@@ -47,7 +47,7 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, scope: &ScopeArgs) -> anyhow:
         return Ok(());
     }
 
-    let session = ForgeSession::open(repo, roles)?;
+    let session = ForgeSession::open(repo, &declared.roles)?;
     let noun = session.noun;
 
     // Discover the open MR for each branch up front; rendering is local.

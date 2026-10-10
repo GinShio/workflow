@@ -117,6 +117,18 @@ enum Commands {
         /// Where to write the inherited environment.
         file: PathBuf,
     },
+    /// Print the trunk of the repository in the current directory, by the rule
+    /// every command shares: its branch name, or with `--rev` the revision that
+    /// says where it is. Hidden like [`Commands::Applets`] — plumbing the git
+    /// hooks and aliases read, so that they ask the same question the commands
+    /// do instead of keeping a copy of the answer.
+    #[command(name = "__trunk", hide = true)]
+    Trunk {
+        /// Print the revision to compare against — the merge target's tracking
+        /// ref when fetched, else the local branch — instead of the name.
+        #[arg(long)]
+        rev: bool,
+    },
 
     /// Any other `wits <name>` runs a `wits-<name>` executable from `$PATH`.
     #[command(external_subcommand)]
@@ -153,6 +165,7 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::SliceEditor { spec, todo } => cmd::stack::slice::edit_todo(spec, todo),
         Commands::DevenvCapture { file } => cmd::devenv::capture(file),
+        Commands::Trunk { rev } => print_trunk(*rev),
         Commands::External(args) => dispatch_plugin(args),
     }
 }
@@ -298,6 +311,31 @@ fn is_executable(_path: &Path) -> bool {
     false
 }
 
+/// Print the current repository's trunk name, or its revision with `rev`.
+fn print_trunk(rev: bool) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    let repo = wits_util::git::Repository::new(std::env::current_dir()?);
+    let trunk = wits_util::project::remotes::declared_for_checkout(&repo)?
+        .trunk(&repo)
+        .context(
+            "no trunk: no declared main_branch, no remote HEAD on the merge target, and no \
+             main/master/trunk",
+        )?;
+    let answer = if rev {
+        trunk.rev.with_context(|| {
+            format!(
+                "the trunk '{}' exists neither locally nor on the merge target",
+                trunk.name
+            )
+        })?
+    } else {
+        trunk.name
+    };
+    println!("{answer}");
+    Ok(())
+}
+
 /// Write the completion script for `shell` to stdout, generated from the live
 /// clap tree so that script and CLI cannot disagree.
 fn print_completions(shell: Shell) -> anyhow::Result<()> {
@@ -362,12 +400,16 @@ mod tests {
 
     #[test]
     fn hidden_plumbing_stays_out_of_the_applet_set() {
-        // `__completions` is consumed by shells, `__slice-editor` by git, and
-        // `__devenv-capture` by a build tool, not typed by people: like
-        // `__applets` they must not surface in the applet list.
+        // `__completions` is consumed by shells, `__slice-editor` by git,
+        // `__devenv-capture` by a build tool, and `__trunk` by the git hooks, not
+        // typed by people: like `__applets` they must not surface in the applet
+        // list.
         let names = builtin_names();
         assert!(!names.iter().any(|name| {
-            name == "__completions" || name == "__slice-editor" || name == "__devenv-capture"
+            name == "__completions"
+                || name == "__slice-editor"
+                || name == "__devenv-capture"
+                || name == "__trunk"
         }));
     }
 }

@@ -45,7 +45,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use crate::git::{self, BranchStatus, Repository, StatusCounts, Submodule};
-use crate::remote::RemoteRoles;
 
 /// A worktree plus the facts that decide whether it can be reclaimed.
 ///
@@ -160,13 +159,16 @@ pub struct Inventory {
 }
 
 impl Inventory {
-    /// Read the repository's worktrees and derive each one's reclaim facts.
+    /// Read the repository's worktrees and derive each one's reclaim facts,
+    /// judging "merged" against `trunk`, the revision of the checkout's trunk
+    /// ([`crate::project::trunk`]). With none, every worktree is un-merged rather
+    /// than guessed at.
     ///
     /// One pass, because a `prune` must act on exactly the state its `info`
     /// showed. Costs a handful of `git` invocations per worktree, which is
     /// nothing next to the human deciding what to delete.
-    pub fn gather(repo: &Repository, roles: &RemoteRoles) -> Inventory {
-        let trunk = trunk_rev(repo, roles);
+    pub fn gather(repo: &Repository, trunk: Option<&str>) -> Inventory {
+        let trunk = trunk.map(str::to_owned);
         // One query answers every branch's position. A worktree on a branch — the
         // overwhelming majority — then needs no per-worktree ref reads at all;
         // only a detached HEAD, which is in no ref, is looked up individually.
@@ -857,35 +859,6 @@ fn detached_status(repo: &Repository, head: &str, trunk: Option<&str>) -> Branch
     }
 }
 
-/// The revision worktrees are judged merged against: the trunk, preferring the
-/// remote-tracking ref over the local branch because the remote is what actually
-/// decides whether work has landed (a local `main` may be days behind).
-///
-/// The **`origin` role is tried before `upstream`**, which is the one place in the
-/// toolset that prefers the push side. Everywhere else the sync side answers,
-/// because the question is about the repository work merges *into*; here the
-/// question is whether a worktree's branch has landed, and a fork's own trunk is
-/// the first place its author's work lands. Asking the roles in this order is now
-/// a decision rather than the coincidence of two hardcoded lists disagreeing.
-///
-/// `None` when neither role publishes a default branch, which leaves every
-/// worktree un-merged rather than guessing.
-fn trunk_rev(repo: &Repository, roles: &RemoteRoles) -> Option<String> {
-    for remote in [roles.origin(), roles.upstream()].into_iter().flatten() {
-        let Some(default) = repo.remote_default_branch(remote) else {
-            continue;
-        };
-        let tracking = format!("{remote}/{default}");
-        if repo.rev_exists(&tracking) {
-            return Some(tracking);
-        }
-        if repo.rev_exists(&default) {
-            return Some(default);
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1122,7 +1095,7 @@ mod tests {
 
         // The inventory sees both worktrees and can name the new one three ways.
         // No roles: this fixture has no remotes, and naming is what is under test.
-        let inv = Inventory::gather(&repo, &RemoteRoles::default());
+        let inv = Inventory::gather(&repo, None);
         assert_eq!(inv.entries().len(), 2);
         for target in ["feat", "P.feat", wt.to_str().unwrap()] {
             let found = inv.resolve(target).unwrap();

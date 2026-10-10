@@ -12,15 +12,15 @@
 //! and moves are refused if they would form a cycle.
 
 use wits_util::git::Repository;
-use wits_util::remote::RemoteRoles;
+use wits_util::project::remotes::Declared;
 
 use super::{fail_if_any, resolution, MvArgs, RenameArgs, RmArgs, TreeAction};
 
-pub fn run(repo: &Repository, roles: &RemoteRoles, action: &TreeAction) -> anyhow::Result<()> {
+pub fn run(repo: &Repository, declared: &Declared, action: &TreeAction) -> anyhow::Result<()> {
     match action {
-        TreeAction::Prune => prune(repo, roles),
-        TreeAction::Rm(args) => rm(repo, roles, args),
-        TreeAction::Mv(args) => mv(repo, roles, args),
+        TreeAction::Prune => prune(repo, declared),
+        TreeAction::Rm(args) => rm(repo, declared, args),
+        TreeAction::Mv(args) => mv(repo, declared, args),
         TreeAction::Rename(args) => rename(repo, args),
     }
 }
@@ -29,8 +29,8 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, action: &TreeAction) -> anyho
 /// locally. This is the automation-friendly cleanup — it needs no branch names,
 /// is idempotent, and is safe because a branch that still exists (a live fork
 /// sibling included) keeps its node; only genuinely deleted refs are pruned.
-fn prune(repo: &Repository, roles: &RemoteRoles) -> anyhow::Result<()> {
-    let base = resolution::base_branch(repo, roles)?;
+fn prune(repo: &Repository, declared: &Declared) -> anyhow::Result<()> {
+    let base = resolution::base_branch(repo, declared)?;
     let _lock = resolution::MacheteLock::acquire(repo)?;
     let mut topology = resolution::load_topology(repo)?;
     if topology.is_empty() {
@@ -60,8 +60,8 @@ fn prune(repo: &Repository, roles: &RemoteRoles) -> anyhow::Result<()> {
     resolution::save_topology(repo, &topology)
 }
 
-fn rm(repo: &Repository, roles: &RemoteRoles, args: &RmArgs) -> anyhow::Result<()> {
-    let base = resolution::base_branch(repo, roles)?;
+fn rm(repo: &Repository, declared: &Declared, args: &RmArgs) -> anyhow::Result<()> {
+    let base = resolution::base_branch(repo, declared)?;
     let mut failures = 0usize;
     let mut deletions = Vec::new();
 
@@ -114,8 +114,8 @@ fn rm(repo: &Repository, roles: &RemoteRoles, args: &RmArgs) -> anyhow::Result<(
     fail_if_any(failures)
 }
 
-fn mv(repo: &Repository, roles: &RemoteRoles, args: &MvArgs) -> anyhow::Result<()> {
-    let base = resolution::base_branch(repo, roles)?;
+fn mv(repo: &Repository, declared: &Declared, args: &MvArgs) -> anyhow::Result<()> {
+    let base = resolution::base_branch(repo, declared)?;
     let branch = &args.branch;
     let onto = &args.onto;
 

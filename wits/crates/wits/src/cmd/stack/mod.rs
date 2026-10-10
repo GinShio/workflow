@@ -191,19 +191,19 @@ pub fn run(args: &StackArgs) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
     let repo = Repository::new(&cwd);
     // Resolved once for the whole invocation, and threaded rather than re-derived:
-    // every verb here asks which remote holds a role at least twice (a base branch
-    // and a push, say), and two answers that could differ mid-command is a bug
-    // waiting to happen. Reading the registry costs a few milliseconds, so the
-    // reason to do it once is atomicity, not speed.
-    let roles = remotes::for_checkout(&repo)?;
+    // every verb here asks which remote holds a role, or what the trunk is, at
+    // least twice (a base branch and a push, say), and two answers that could
+    // differ mid-command is a bug waiting to happen. Reading the registry costs a
+    // few milliseconds, so the reason to do it once is atomicity, not speed.
+    let declared = remotes::declared_for_checkout(&repo)?;
 
     match &args.action {
-        StackAction::Sync(s) => sync::run(&repo, &roles, s),
-        StackAction::Submit(s) => submit::run(&repo, &roles, s),
-        StackAction::Anno(s) => anno::run(&repo, &roles, s),
-        StackAction::Decorate(d) => decorate::run(&repo, &roles, d),
-        StackAction::Slice(s) => slice::run(&repo, &roles, s.base.as_deref()),
-        StackAction::Tree(t) => tree::run(&repo, &roles, &t.action),
+        StackAction::Sync(s) => sync::run(&repo, &declared, s),
+        StackAction::Submit(s) => submit::run(&repo, &declared, s),
+        StackAction::Anno(s) => anno::run(&repo, &declared, s),
+        StackAction::Decorate(d) => decorate::run(&repo, &declared, d),
+        StackAction::Slice(s) => slice::run(&repo, &declared, s.base.as_deref()),
+        StackAction::Tree(t) => tree::run(&repo, &declared, &t.action),
     }
 }
 

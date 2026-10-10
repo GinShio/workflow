@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use wits_util::git::Repository;
 use wits_util::log as wits_log;
-use wits_util::remote::RemoteRoles;
+use wits_util::project::remotes::Declared;
 
 use super::topology::Topology;
 
@@ -196,27 +196,15 @@ fn machete_lock_path(repo: &Repository) -> anyhow::Result<PathBuf> {
     Ok(PathBuf::from(path))
 }
 
-/// Resolve the base branch: the merge target's remote HEAD, then whichever
-/// conventional trunk name actually exists locally. There is no config override
-/// on purpose — the answer should come from project identity, not a
-/// hand-maintained setting (`docs/reference/stack-design.rst`, "Base branch
-/// resolution").
-pub fn base_branch(repo: &Repository, roles: &RemoteRoles) -> anyhow::Result<String> {
-    // An MR at the root of the tree targets the base branch *in the repository it
-    // merges into*. Only that one remote is consulted — the push side's default
-    // branch answers a different question.
-    if let Some(branch) = roles
-        .merge_target()
-        .and_then(|r| repo.remote_default_branch(r))
-    {
-        return Ok(branch);
-    }
-    for candidate in ["main", "master", "trunk"] {
-        if repo.rev_parse(candidate).is_some() {
-            return Ok(candidate.to_owned());
-        }
-    }
-    anyhow::bail!("could not determine the base branch: no remote HEAD and no main/master/trunk")
+/// Resolve the base branch: the checkout's trunk, by the rule every command
+/// shares ([`wits_util::project::trunk`]). There is no config override on
+/// purpose — the answer comes from project identity, not a hand-maintained
+/// setting (`docs/reference/stack-design.rst`, "Base branch resolution").
+pub fn base_branch(repo: &Repository, declared: &Declared) -> anyhow::Result<String> {
+    declared.trunk(repo).map(|trunk| trunk.name).context(
+        "could not determine the base branch: no declared main_branch, no remote HEAD on the \
+         merge target, and no main/master/trunk",
+    )
 }
 
 /// Build the plan for one invocation. `anchor` is the branch the scope is
@@ -224,11 +212,11 @@ pub fn base_branch(repo: &Repository, roles: &RemoteRoles) -> anyhow::Result<Str
 /// the scope from the anchor's line of work to its whole stack.
 fn plan(
     repo: &Repository,
-    roles: &RemoteRoles,
+    declared: &Declared,
     anchor: Option<&str>,
     all: bool,
 ) -> anyhow::Result<StackPlan> {
-    let base_branch = base_branch(repo, roles)?;
+    let base_branch = base_branch(repo, declared)?;
     let topology = load_topology(repo)?;
     select(topology, base_branch, anchor, all)
 }
@@ -242,7 +230,7 @@ fn plan(
 /// anchor is in force to that anchor's whole stack.
 pub fn plan_scoped(
     repo: &Repository,
-    roles: &RemoteRoles,
+    declared: &Declared,
     scope: &super::ScopeArgs,
 ) -> anyhow::Result<StackPlan> {
     let anchor = match scope.branch.as_deref() {
@@ -257,7 +245,7 @@ pub fn plan_scoped(
         }
         None => repo.current_branch(),
     };
-    plan(repo, roles, anchor.as_deref(), scope.all)
+    plan(repo, declared, anchor.as_deref(), scope.all)
 }
 
 /// The scope decision, factored out from git so it can be exercised on literal

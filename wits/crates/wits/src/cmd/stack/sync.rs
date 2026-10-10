@@ -8,13 +8,14 @@
 
 use anyhow::Context;
 use wits_util::git::Repository;
+use wits_util::project::remotes::Declared;
 use wits_util::remote::RemoteRoles;
 
 use super::{fail_if_any, map_parallel, resolution, ScopeArgs};
 
-pub fn run(repo: &Repository, roles: &RemoteRoles, scope: &ScopeArgs) -> anyhow::Result<()> {
-    let target = push_target(roles, None)?;
-    let plan = resolution::plan_scoped(repo, roles, scope)?;
+pub fn run(repo: &Repository, declared: &Declared, scope: &ScopeArgs) -> anyhow::Result<()> {
+    let target = push_target(&declared.roles, None)?;
+    let plan = resolution::plan_scoped(repo, declared, scope)?;
 
     // Only push branches that actually exist locally; a name in the file with no
     // ref is a stale entry, not something to push.

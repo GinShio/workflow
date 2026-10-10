@@ -123,12 +123,12 @@ Worked examples, on the sample forest above:
 Base resolution and per-branch base
 -----------------------------------
 
-The **base branch** is resolved once: the merge target's remote HEAD (the
-``upstream`` role's holder, else ``origin``'s), then the first of
-``main``/``master``/``trunk``
-that exists. (The project registry is not consulted — see :doc:`stack-design`
-— and there is deliberately no config key.) If nothing resolves, that is a
-hard error.
+The **base branch** is resolved once, as the checkout's trunk: the
+``main_branch`` the owning project declares, else the merge target's remote
+HEAD (the ``upstream`` role's holder, else ``origin``'s), else the first of
+``main``/``master``/``trunk`` that exists. (The rule is shared with
+``worktree`` and the git hooks — see :doc:`stack-design` — and there is
+deliberately no config key.) If nothing resolves, that is a hard error.
 
 A branch's **MR base** is its parent in the forest, or the base branch when the
 branch is a root. This is the only place the origin/upstream distinction

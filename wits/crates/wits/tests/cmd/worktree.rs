@@ -635,9 +635,9 @@ fn a_panel_omits_rows_that_have_nothing_to_say() {
         "no trunk row: {}",
         out.stdout
     );
-    // A bare clone publishes no origin/HEAD, so the block says so outright rather
-    // than leaving the reader to wonder why nothing reads as merged.
-    assert!(out.stdout.contains("trunk       (none"), "{}", out.stdout);
+    // A bare clone publishes no origin/HEAD, so its own `main` stands in, as it
+    // does for any checkout whose merge target names no default branch.
+    assert!(out.stdout.contains("trunk       main\n"), "{}", out.stdout);
 }
 
 /// `--long` is the same listing in panel form: the repository block, then every

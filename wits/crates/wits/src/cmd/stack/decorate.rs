@@ -15,14 +15,14 @@
 use wits_util::forge::Attributes;
 use wits_util::git::Repository;
 use wits_util::log as wits_log;
-use wits_util::remote::RemoteRoles;
+use wits_util::project::remotes::Declared;
 
 use super::resolution::StackPlan;
 use super::{
     fail_if_any, find_open_mrs, map_parallel, resolution, DecorateArgs, ForgeSession, ScopeArgs,
 };
 
-pub fn run(repo: &Repository, roles: &RemoteRoles, args: &DecorateArgs) -> anyhow::Result<()> {
+pub fn run(repo: &Repository, declared: &Declared, args: &DecorateArgs) -> anyhow::Result<()> {
     let attrs = Attributes {
         labels: args.labels.clone(),
         assignees: args.assignees.clone(),
@@ -31,13 +31,13 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, args: &DecorateArgs) -> anyho
     if attrs.is_empty() {
         anyhow::bail!("nothing to set: pass at least one --label / --assignee / --reviewer");
     }
-    let (branches, plan) = target_branches(repo, roles, args)?;
+    let (branches, plan) = target_branches(repo, declared, args)?;
     if branches.is_empty() {
         log::info!("no branches in scope");
         return Ok(());
     }
 
-    let session = ForgeSession::open(repo, roles)?;
+    let session = ForgeSession::open(repo, &declared.roles)?;
     let noun = session.noun;
 
     // Find the open MRs (shared with `anno`), then apply attributes to each in
@@ -77,7 +77,7 @@ pub fn run(repo: &Repository, roles: &RemoteRoles, args: &DecorateArgs) -> anyho
 /// target.
 fn target_branches(
     repo: &Repository,
-    roles: &RemoteRoles,
+    declared: &Declared,
     args: &DecorateArgs,
 ) -> anyhow::Result<(Vec<String>, Option<StackPlan>)> {
     if args.all {
@@ -85,7 +85,7 @@ fn target_branches(
             branch: args.branch.clone(),
             all: true,
         };
-        let plan = resolution::plan_scoped(repo, roles, &scope)?;
+        let plan = resolution::plan_scoped(repo, declared, &scope)?;
         return Ok((plan.selected.clone(), Some(plan)));
     }
     let branch = match &args.branch {

@@ -459,8 +459,9 @@ tokens under the shared ``wits.forge.*``, and ``stack``'s own settings under
      - ``slice`` name suggestions (default: slug of ``user.name``, else
        ``stack/``)
 
-There is intentionally **no** base-branch config key: the base is resolved from
-the merge target's remote HEAD, then ``main``/``master``/``trunk``.
+There is intentionally **no** base-branch config key: the base is the
+checkout's trunk — the ``main_branch`` a declared project names, else the merge
+target's remote HEAD, else ``main``/``master``/``trunk``.
 
 Per-run choices — drafts (``--no-draft``), title source (``--title-source``),
 force (``--force``), scope (``--all``) — are flags, not config, because they
@@ -469,8 +470,9 @@ describe one invocation rather than a standing preference.
 How it resolves things
 ----------------------
 
-The short version: the **base branch** comes from the merge target's remote
-HEAD (the ``upstream`` role's holder, else ``origin``'s), then
+The short version: the **base branch** is the checkout's trunk — a declared
+project's ``main_branch``, else the merge target's remote HEAD (the
+``upstream`` role's holder, else ``origin``'s), else
 ``main``/``master``/``trunk``; each
 **MR's base** is its parent in the machete file (or the base branch at a
 root); **cross-fork** MRs work on all platforms (GitHub by the fork's

@@ -223,20 +223,27 @@ scope.
 Base branch resolution
 ~~~~~~~~~~~~~~~~~~~~~~
 
-In order: the **merge target's** default branch (its remote HEAD) → first
-existing of ``main``/``master``/``trunk``. Resolved once per run.
+The base branch is the checkout's **trunk**, by the one rule ``worktree``, the
+git hooks (through ``wits __trunk``) and this tool all share
+(``wits_util::project::trunk``): the ``main_branch`` the owning repo declares
+in the project registry, for a checkout a project owns; else the **merge
+target's** default branch (its remote HEAD); else the first existing of
+``main``/``master``/``trunk``. Resolved once per run.
+
+The declaration comes first because it is the user's statement of the
+project's trunk, where a remote HEAD is only the server's default; the two part
+ways for a project developed on a release branch. Before the rule was shared,
+the hooks asked the registry first and this tool did not, so git-branchless and
+``stack`` could disagree about the same checkout's trunk.
 
 Only the merge target is consulted, not both remotes in turn. An MR at the root
 of the tree targets the base branch *in the repository it merges into*, so the
 push side's default branch answers a different question; asking it as a fallback
 was only ever a way to paper over an unresolved merge target.
 
-The project registry is not consulted, although :doc:`/commands/project` can
-answer "what project is this checkout, and what is its main branch?"; whether
-the base should come from there is recorded under `Open questions / future`_.
 We deliberately do **not** add a ``wits.stack.base-branch`` config key — the
-answer should come from project identity, not a hand-maintained per-repo
-setting. If nothing resolves, that is a hard error, not a guess.
+answer comes from project identity, not a hand-maintained per-repo setting. If
+nothing resolves, that is a hard error, not a guess.
 
 MR base mapping
 ~~~~~~~~~~~~~~~
@@ -593,8 +600,7 @@ invocation, not a standing preference.
 Open questions / future
 -----------------------
 
-* **open** whether a declared checkout's base branch should be the project
-  registry's ``main_branch`` rather than the merge target's remote HEAD — the
-  git hooks' branchless bootstrap already asks the registry first, so the two
-  can disagree today.
+* **settled** — a declared checkout's base branch is the registry's
+  ``main_branch``: the trunk rule is now one, shared with ``worktree`` and the
+  git hooks (`Base branch resolution`_).
 * future CI status read-back into the navigation comment.
