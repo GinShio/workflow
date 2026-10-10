@@ -233,7 +233,27 @@ impl<'repo> Resolver<'repo> {
         })
     }
 
+    /// Where to set `key` for this resolver's context — the environment name and
+    /// the git config key a user would reach for, the bare ones for the default
+    /// context — as the hint an error about a missing setting gives.
+    pub fn where_to_set(&self, key: &str) -> String {
+        let ctx = self.context.as_deref().filter(|c| *c != "default");
+        format!(
+            "{} or git config {}",
+            self.env_name(ctx, key),
+            self.git_name(ctx, key)
+        )
+    }
+
     fn get_env(&self, ctx: Option<&str>, key: &str) -> Option<String> {
+        std::env::var(self.env_name(ctx, key)).ok()
+    }
+
+    fn get_git(&self, repo: &Repository, ctx: Option<&str>, key: &str) -> Option<String> {
+        repo.get_config(&self.git_name(ctx, key)).ok().flatten()
+    }
+
+    fn env_name(&self, ctx: Option<&str>, key: &str) -> String {
         let name = match ctx {
             Some(c) => format!("{}_{}_{}", self.prefix, c, key),
             None => format!("{}_{}", self.prefix, key),
@@ -241,15 +261,15 @@ impl<'repo> Resolver<'repo> {
         // A dotted prefix (`wits.transcrypt`) is the git-config spelling; in an
         // env var the dots become underscores, and so does a dash, so
         // `wits.transcrypt`/`salt-mode` reads `WITS_TRANSCRYPT_SALT_MODE`.
-        std::env::var(name.replace(['.', '-'], "_").to_uppercase()).ok()
+        name.replace(['.', '-'], "_").to_uppercase()
     }
 
-    fn get_git(&self, repo: &Repository, ctx: Option<&str>, key: &str) -> Option<String> {
-        let name = match ctx {
+    fn git_name(&self, ctx: Option<&str>, key: &str) -> String {
+        match ctx {
             Some(c) => format!("{}.{}.{}", self.prefix, c, key),
             None => format!("{}.{}", self.prefix, key),
-        };
-        repo.get_config(&name.to_lowercase()).ok().flatten()
+        }
+        .to_lowercase()
     }
 }
 
@@ -370,6 +390,20 @@ mod tests {
         let resolved = resolved.expect("the underscored env name should resolve");
         assert_eq!(resolved.value, "context");
         assert_eq!(resolved.source, ConfigSource::Env);
+    }
+
+    #[test]
+    fn names_where_a_missing_setting_is_set() {
+        let scoped = Resolver::new(None::<&Repository>, "wits.transcrypt", Some("my-ctx"));
+        assert_eq!(
+            scoped.where_to_set("salt-mode"),
+            "WITS_TRANSCRYPT_MY_CTX_SALT_MODE or git config wits.transcrypt.my-ctx.salt-mode"
+        );
+        let default = Resolver::new(None::<&Repository>, "wits.transcrypt", Some("default"));
+        assert_eq!(
+            default.where_to_set("salt"),
+            "WITS_TRANSCRYPT_SALT or git config wits.transcrypt.salt"
+        );
     }
 
     #[test]

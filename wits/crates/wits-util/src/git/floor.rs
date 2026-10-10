@@ -149,6 +149,23 @@ impl Repository {
             .unwrap_or_default()
     }
 
+    /// The bytes the index holds for `path` at stage 0, or `None` when it holds
+    /// none there — the path is untracked, or conflicted. Raw, because a blob
+    /// can be anything; the caller decides what it is. `path` is relative to
+    /// the top of the working tree, as git passes it to a filter.
+    pub fn index_blob(&self, path: &str) -> Option<Vec<u8>> {
+        // `:0:` names the stage explicitly, so a path that itself starts with a
+        // digit and a colon still reads as a path.
+        let spec = format!(":0:{path}");
+        let result = self
+            .git()
+            .args(["cat-file", "blob", spec.as_str()])
+            .force_run()
+            .exec_raw()
+            .ok()?;
+        result.is_success().then_some(result.stdout)
+    }
+
     /// The editor git would open a commit message in, as the shell command string
     /// git itself would run, or `None` when git finds no usable editor. Git
     /// resolves the whole precedence (`GIT_EDITOR`, `core.editor`, `VISUAL`,

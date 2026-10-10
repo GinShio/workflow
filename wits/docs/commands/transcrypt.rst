@@ -47,12 +47,13 @@ This walks through encrypting a ``secrets/`` directory in an existing
 repository, using the default context. You need the ``wits`` binary on your
 ``$PATH``.
 
-**1. Set a password.** The password is the only thing ``transcrypt`` cannot
-work without. Put it in the repo's git config:
+**1. Set a password and a context salt.** These are the two things
+``transcrypt`` cannot seal without. Put them in the repo's git config:
 
 .. code-block:: sh
 
    git config wits.transcrypt.password 'correct horse battery staple'
+   git config wits.transcrypt.salt "$(openssl rand -hex 8)"
 
 This lives in ``.git/config``, which is local to your clone and never
 committed — so the password is *not* pushed, but it does sit in plaintext on
@@ -62,6 +63,11 @@ through the environment instead and skip this step:
 .. code-block:: sh
 
    export WITS_TRANSCRYPT_PASSWORD='correct horse battery staple'
+   export WITS_TRANSCRYPT_SALT=0123456789abcdef
+
+The salt is not a secret, but it is part of every key: each clone that seals
+needs the same one, and it changes whenever the password does (see `Salt
+modes`_). Checking out needs only the password.
 
 **2. Register the filters.** These four settings tell git what to run. Put them
 in the repo's ``.git/config``, or in your global ``~/.gitconfig`` if you want
@@ -131,6 +137,7 @@ into plaintext, set the password and re-run the smudge filter:
 
    git clone <url> && cd repo
    git config wits.transcrypt.password 'correct horse battery staple'
+   git config wits.transcrypt.salt 0123456789abcdef   # the repo's salt
 
    # force the working tree to be re-smudged now that the password exists
    rm -rf secrets && git checkout -- secrets/
@@ -138,15 +145,17 @@ into plaintext, set the password and re-run the smudge filter:
 The ``rm`` is there because git will not re-run the filter on files it thinks
 are already up to date; removing them first makes the checkout repopulate them
 through ``smudge``. This is the whole onboarding story — tell the teammate the
-password, they run those three lines, done.
+password and the salt, they run those lines, done.
 
 Choosing algorithms
 -------------------
 
 The defaults — AES-256-GCM, PBKDF2, SHA-256 — are fine for most uses. To change
 them, set the values *before* encrypting anything and keep them consistent. A
-file encrypted under one cipher / KDF / digest can only be decrypted with the
-same ones:
+file sealed under one cipher, KDF, digest, or set of KDF parameters can only be
+opened with the same ones — packets do not record them — so once files are
+sealed, change these only together with the password (see `Rotating the
+password`_):
 
 .. code-block:: sh
 
@@ -167,17 +176,48 @@ Accepted values:
      - both take a 256-bit key
    * - ``kdf``
      - ``pbkdf2`` \| ``argon2id``
-     - argon2id defaults to 4 time-cost iterations over 128 MiB
+     - argon2id defaults to 4 time-cost iterations over 128 MiB and 2 lanes
    * - ``digest``
      - ``sha256`` \| ``sha384`` \| ``sha512`` \| ``sha3256`` \| ``sha3384`` \|
        ``sha3512`` \| ``blake2b`` \| ``blake2s``
-     - BLAKE2 cannot be paired with PBKDF2 — use it with ``argon2id``, or pick
-       a SHA digest
+     - the PBKDF2 PRF; argon2id ignores it. BLAKE2 cannot be paired with
+       PBKDF2 — use it with ``argon2id``, or pick a SHA digest
+   * - ``memory``
+     - a whole number of MiB
+     - argon2id memory, default 128
+   * - ``lanes``
+     - a whole number
+     - argon2id lanes, default 2
 
-These exact spellings are a wire format, not display names — changing one
-silently breaks decryption of old data, which is why the parser in ``wits`` is
-also lenient about a couple of obvious renderings (``sha3-256`` for ``sha3256``
-and so on).
+What a file was sealed with is the algorithm, not its spelling, so the parser
+in ``wits`` is lenient about a couple of obvious renderings (``sha3-256`` for
+``sha3256`` and so on).
+
+Salt modes
+----------
+
+Nothing in a packet is computed from the password without the KDF: the IV is a
+keyed hash of the path and the content, under a key the KDF derives from the
+password and the *context salt*. So a published packet never lets a guess at
+the password be checked for less than the KDF costs, however guessable the
+file's content is. What a salt mode decides is where the packet's own salt —
+and so the key its content is sealed under — comes from:
+
+* ``file`` (the default) — a fresh random salt for every content version, so
+  every version is sealed under its own key. Re-cleaning an unchanged file would
+  therefore produce a new packet each time; instead, clean reads the packet the
+  index already holds at that path and hands it back whenever it carries this
+  content's IV, so git sees no change. Sealing a changed file costs one KDF more
+  than ``context`` mode.
+* ``context`` — the context salt itself, so the context has one key and sealing
+  is deterministic on its own.
+
+.. code-block:: sh
+
+   git config wits.transcrypt.salt-mode context
+
+Switching mode re-seals nothing that is unchanged: both modes compute the same
+IV, and clean keeps any index packet that already carries it.
 
 Multiple contexts
 -----------------
@@ -190,6 +230,7 @@ passwords. Each context gets its own password, its own filter, and its own
 .. code-block:: sh
 
    git config wits.transcrypt.prod.password 'a different password'
+   git config wits.transcrypt.prod.salt "$(openssl rand -hex 8)"
 
    git config filter.transcrypt-prod.clean    'wits transcrypt -C prod clean %f'
    git config filter.transcrypt-prod.smudge   'wits transcrypt -C prod smudge %f'
@@ -238,6 +279,25 @@ named ``<ctx>``, insert it as shown; the default context omits that segment.
      - ``WITS_TRANSCRYPT_[<CTX>_]ITERATIONS``
      - ``wits.transcrypt.[<ctx>.]iterations``
      - the KDF's historical default
+   * - Memory (MiB)
+     - ``WITS_TRANSCRYPT_[<CTX>_]MEMORY``
+     - ``wits.transcrypt.[<ctx>.]memory``
+     - ``128``
+   * - Lanes
+     - ``WITS_TRANSCRYPT_[<CTX>_]LANES``
+     - ``wits.transcrypt.[<ctx>.]lanes``
+     - ``2``
+   * - Context salt
+     - ``WITS_TRANSCRYPT_[<CTX>_]SALT``
+     - ``wits.transcrypt.[<ctx>.]salt``
+     - *required to seal* — 16 hex digits
+   * - Salt mode
+     - ``WITS_TRANSCRYPT_[<CTX>_]SALT_MODE``
+     - ``wits.transcrypt.[<ctx>.]salt-mode``
+     - ``file``
+
+A dash in a key becomes an underscore in its environment name, since a shell
+cannot name a variable with one.
 
 Resolution order
 ~~~~~~~~~~~~~~~~
@@ -267,9 +327,29 @@ The clean/smudge filters use the file's path (the ``%f`` you passed) as part
 of the encryption, binding each ciphertext to its location. Moving an encrypted
 blob to a different path makes it fail to authenticate rather than silently
 decrypt — which is why ``%f`` belongs in the filter command, and why the same
-path must be intact when decrypting. Unchanged content re-encrypts to the same
-bytes (that is the determinism guarantee), and the path is part of what makes
-that stable and safe.
+path must be intact when decrypting. Re-cleaning unchanged content gives git
+the blob it already holds (that is the determinism guarantee, see `Salt
+modes`_), and the path is part of what makes that stable and safe.
+
+Rotating the password
+---------------------
+
+The password, the context salt, and the KDF parameters change together:
+packets record none of them, so a new parameter on its own would leave every
+existing file unopenable, and a salt kept across a rotation would let work
+precomputed against the old one carry over. Seal everything again under the
+new values:
+
+.. code-block:: sh
+
+   git config wits.transcrypt.password 'the new password'
+   git config wits.transcrypt.salt "$(openssl rand -hex 8)"
+   git add --renormalize -- secrets/ && git commit -m 'Rotate the secrets password'
+
+Every other clone then needs the new password and salt before it checks out the
+rotated files, and history sealed under the old password still needs the old
+one — supply it, with the old parameters, through the environment for the
+command that reads that history.
 
 Missing vs. wrong password
 --------------------------
@@ -279,16 +359,19 @@ These two cases are treated very differently on purpose.
 * **No password configured.** ``smudge`` passes the encrypted bytes through
   untouched. A teammate who clones without the key gets unreadable files and a
   *working* checkout, rather than a wedged repository.
-* **Wrong password.** This fails loudly, because quietly writing corrupted
-  plaintext into the working tree is worse than stopping. If you need to force
-  the raw ciphertext through anyway — say, to unblock a checkout and
-  investigate — set ``WITS_TRANSCRYPT_ALLOW_RAW_FALLBACK=1``.
+* **Wrong password.** This fails loudly: a packet the configured password does
+  not open means the key is wrong, and a checkout that quietly kept the
+  ciphertext would hide that. If you need to force the raw ciphertext through
+  anyway — say, to unblock a checkout and investigate — set
+  ``WITS_TRANSCRYPT_ALLOW_RAW_FALLBACK=1``.
 
 A third case is content that is not a transcrypt packet at all: a file matched
 by ``.gitattributes`` but committed before encryption was set up, or a binary
 blob. Decryption is never attempted on these — they are passed through
 untouched — so ``git diff`` and checkout keep working instead of aborting. Only
-a genuine packet under the wrong password trips the loud failure above.
+a genuine packet the configured settings do not open trips the loud failure
+above — and so does a setting that is present but malformed, such as an
+unknown cipher, which is never mistaken for a missing password.
 
 Troubleshooting
 ---------------
@@ -303,6 +386,10 @@ Troubleshooting
      - Set ``wits.transcrypt.password`` (or ``WITS_TRANSCRYPT_PASSWORD``)
        before adding. With ``required = true``, a failing filter correctly
        stops the operation.
+   * - ``git add`` of a secret aborts with *no context salt configured*
+     - Set ``wits.transcrypt.salt`` (or ``WITS_TRANSCRYPT_SALT``) to 16 hex
+       digits — ``openssl rand -hex 8`` makes one — and use the same salt on
+       every clone that seals.
    * - Working-tree files are base64 gibberish
      - The password is not set in this clone, so ``smudge`` passed the
        ciphertext through. Set the password, then ``rm`` and re-checkout the
@@ -312,11 +399,12 @@ Troubleshooting
        was encrypted). Fix the password, or set
        ``WITS_TRANSCRYPT_ALLOW_RAW_FALLBACK=1`` to check out the raw bytes and
        investigate.
-   * - Old files will not decrypt after changing ``cipher`` / ``kdf`` /
-       ``digest``
-     - Those settings are part of how each file was sealed. Restore the
-       previous values, or decrypt with the old settings and re-encrypt with
-       the new ones.
+   * - Old files will not decrypt after changing ``cipher``, ``kdf``,
+       ``digest``, ``iterations``, ``memory``, or ``lanes``
+     - Those settings are part of how each file was sealed, and packets do not
+       record them. Restore the previous values, or decrypt with the old
+       settings and re-encrypt with the new ones (see `Rotating the
+       password`_).
    * - ``wits transcrypt status`` shows a value you did not expect
      - Check the source column — an environment variable will quietly override
        git config. The resolution order above explains who wins.

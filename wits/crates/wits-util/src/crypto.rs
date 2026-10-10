@@ -1,33 +1,37 @@
 //! Authenticated encryption sized for git's clean/smudge filters.
 //!
-//! Two domain constraints shape everything in this module.
+//! Three constraints shape everything in this module.
 //!
-//! First, **compatibility**. Repositories already hold data encrypted by the
-//! earlier `transcrypt` tool, so the on-disk packet layout is fixed — we must
-//! reproduce it byte for byte or those repositories become unreadable. The
-//! packet is base64 over:
+//! **The password reaches nothing but the KDF.** A packet sits in public history
+//! for good, so any value in it computed from the password *without* the KDF
+//! would let an offline attacker check a guess at the speed of that computation
+//! instead of the KDF's — whenever the file's content can be guessed, which for
+//! configuration is the normal case. The salt and IV are therefore keyed from the
+//! KDF's output, and the password's one use is as the KDF's input.
+//!
+//! **Determinism.** A clean filter runs on every `git add`, and re-cleaning
+//! unchanged content must hand git the blob it already holds, or the file reads
+//! as modified forever. The IV is a keyed function of the path and the content,
+//! so it is reproducible, and [`seal`] hands back the packet the index already
+//! holds when that packet carries the IV this content gets — which is the only
+//! thing that keeps [`SaltMode::File`], whose salt is random, stable. The price
+//! is that identical content at one path is observably identical across
+//! revisions.
+//!
+//! **One way in.** Every packet — whichever mode sealed it, and the ones sealed
+//! before the IV was keyed — has the same layout, base64 over:
 //!
 //! ```text
 //! "Salted__" (8) | salt (8) | "IVed__" (6) | iv (12) | ciphertext | tag (16)
 //! ```
 //!
-//! Second, **determinism**. A clean filter runs on every `git add`, and if
-//! encrypting unchanged content produced fresh randomness each time, git would
-//! report the file as modified forever. So the default mode derives the salt
-//! and IV from the content itself (a synthetic-IV construction): same input,
-//! same output, no phantom diffs. The trade-off is that identical plaintext is
-//! observably identical when encrypted — acceptable here, and the price of a
-//! filter that doesn't fight git.
-//!
-//! The derivation also folds in the file path as the AEAD's additional data.
-//! That binds a ciphertext to its location, so moving an encrypted blob to a
-//! different path makes it fail to authenticate rather than silently decrypt —
-//! it closes a file-swap avenue that pure content encryption would leave open.
-//!
-//! A non-deterministic random mode also exists for callers off the filter path
-//! that can afford fresh randomness and want the stronger guarantee.
+//! and [`decrypt`] takes the salt and IV straight from it, so one path opens them
+//! all. The file's path is the AEAD's additional data, binding a ciphertext to
+//! its location: a blob moved to another path fails to authenticate rather than
+//! decrypting there.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use rand::RngCore;
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
@@ -44,6 +48,16 @@ pub const SALT_SIZE: usize = 8;
 pub const TAG_SIZE: usize = 16;
 /// IV/nonce length for both AES-256-GCM and ChaCha20-Poly1305.
 pub const NONCE_SIZE: usize = 12;
+/// Length of every derived key; both ciphers take 256-bit keys.
+pub const KEY_SIZE: usize = 32;
+/// The Argon2id memory, in KiB, that every packet up to now was sealed with.
+pub const DEFAULT_ARGON2_MEMORY_KIB: u32 = 128 * 1024;
+/// The Argon2id lane count that every packet up to now was sealed with.
+pub const DEFAULT_ARGON2_LANES: u32 = 2;
+
+/// The message the context key is MACed over to make the key behind every IV.
+/// A wire format: change it and no index packet is reused again.
+const IV_KEY_LABEL: &[u8] = b"wits-transcrypt iv key";
 
 // ---------------------------------------------------------------------------
 // Algorithm enumerations
@@ -60,12 +74,8 @@ pub enum CipherAlgorithm {
 }
 
 impl CipherAlgorithm {
-    /// Key length in bytes (both ciphers use 256-bit keys).
-    pub const fn key_size(self) -> usize {
-        32
-    }
-
-    /// The canonical lowercase name used in packet metadata and SIV strings.
+    /// The canonical lowercase name. It is one of the fields the IV is computed
+    /// over, so it is a wire format rather than a display name.
     pub const fn as_siv_str(self) -> &'static str {
         match self {
             Self::Aes256Gcm => "aes-256-gcm",
@@ -107,14 +117,6 @@ impl KdfAlgorithm {
             Self::Argon2id => 4,
         }
     }
-
-    /// Canonical name used in SIV strings.
-    pub const fn as_siv_str(self) -> &'static str {
-        match self {
-            Self::Pbkdf2 => "pbkdf2",
-            Self::Argon2id => "argon2id",
-        }
-    }
 }
 
 impl std::str::FromStr for KdfAlgorithm {
@@ -129,7 +131,7 @@ impl std::str::FromStr for KdfAlgorithm {
     }
 }
 
-/// Supported cryptographic hash algorithms.
+/// Supported cryptographic hash algorithms — the PBKDF2 PRF.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HashAlgorithm {
     /// SHA-256 (default).
@@ -144,24 +146,6 @@ pub enum HashAlgorithm {
     Blake2b,
     /// BLAKE2s (256-bit output).
     Blake2s,
-}
-
-impl HashAlgorithm {
-    // These exact spellings are baked into the SIV derivation string, which is
-    // in turn baked into every existing ciphertext. They are a wire format, not
-    // a display name — changing one silently breaks decryption of old data.
-    pub const fn as_siv_str(self) -> &'static str {
-        match self {
-            Self::Sha256 => "sha256",
-            Self::Sha384 => "sha384",
-            Self::Sha512 => "sha512",
-            Self::Sha3_256 => "sha3256",
-            Self::Sha3_384 => "sha3384",
-            Self::Sha3_512 => "sha3512",
-            Self::Blake2b => "blake2b",
-            Self::Blake2s => "blake2s",
-        }
-    }
 }
 
 impl std::str::FromStr for HashAlgorithm {
@@ -183,64 +167,110 @@ impl std::str::FromStr for HashAlgorithm {
     }
 }
 
-// ---------------------------------------------------------------------------
-// SIV mode
-// ---------------------------------------------------------------------------
-
-/// Controls how the salt and IV/nonce are produced for each encryption.
-#[derive(Debug, Clone)]
-pub enum SivMode {
-    /// **Local-deterministic** (the standard transcrypt mode).
-    ///
-    /// Both salt *and* IV are derived from the content via the SIV
-    /// construction.  `context` is typically the file path; it is also used
-    /// as the AEAD additional-data (AAD) binding the ciphertext to a specific
-    /// file, preventing silent file-swap attacks.
-    LocalDeterministic { context: String },
-    /// Fresh random salt and IV. Strongest, but non-deterministic, so it must
-    /// not be used in a filter — re-encrypting an unchanged file would yield a
-    /// new ciphertext and a phantom diff. Here for callers off the filter path.
-    Random,
+/// Where a filter's packet salt comes from, and so which key the AEAD runs
+/// under. The IV is the same in both modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SaltMode {
+    /// A fresh random salt for every content version, so every version is
+    /// sealed under its own key. Stable only through [`seal`] handing back the
+    /// index's packet, and one KDF dearer than `Context` for every change.
+    #[default]
+    File,
+    /// The context salt itself: one key for the whole context, and a seal that
+    /// is deterministic on its own.
+    Context,
 }
 
-// ---------------------------------------------------------------------------
-// Options structs
-// ---------------------------------------------------------------------------
-
-/// Configuration for an encryption operation.
-#[derive(Debug, Clone)]
-pub struct EncryptOptions {
-    pub cipher: CipherAlgorithm,
-    pub kdf: KdfAlgorithm,
-    pub hash: HashAlgorithm,
-    /// Explicit iteration count; falls back to [`KdfAlgorithm::default_iterations`].
-    pub iterations: Option<u32>,
-    pub siv_mode: SivMode,
-}
-
-impl Default for EncryptOptions {
-    fn default() -> Self {
-        Self {
-            cipher: CipherAlgorithm::Aes256Gcm,
-            kdf: KdfAlgorithm::Pbkdf2,
-            hash: HashAlgorithm::Sha256,
-            iterations: None,
-            siv_mode: SivMode::Random,
+impl SaltMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Context => "context",
         }
     }
 }
 
-/// Configuration for a decryption operation.
+impl std::str::FromStr for SaltMode {
+    type Err = CryptoError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "file" => Ok(Self::File),
+            "context" => Ok(Self::Context),
+            other => Err(CryptoError::UnsupportedSaltMode(other.to_owned())),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Options
+// ---------------------------------------------------------------------------
+
+/// A KDF with every parameter it takes: what turns a password and a salt into
+/// a key. Packets do not record it, so a packet opens only under the parameters
+/// that sealed it — changing them belongs with rotating the password.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KdfParams {
+    pub kdf: KdfAlgorithm,
+    /// The PBKDF2 PRF. Argon2id has its own hash and ignores it.
+    pub hash: HashAlgorithm,
+    /// PBKDF2 rounds, or Argon2id passes.
+    pub iterations: u32,
+    /// Argon2id memory in KiB. PBKDF2 ignores it.
+    pub memory_kib: u32,
+    /// Argon2id lanes. PBKDF2 ignores it.
+    pub lanes: u32,
+}
+
+impl KdfParams {
+    /// `kdf` over `hash` at the parameters every packet up to now was sealed with.
+    pub const fn defaults(kdf: KdfAlgorithm, hash: HashAlgorithm) -> Self {
+        Self {
+            kdf,
+            hash,
+            iterations: kdf.default_iterations(),
+            memory_kib: DEFAULT_ARGON2_MEMORY_KIB,
+            lanes: DEFAULT_ARGON2_LANES,
+        }
+    }
+}
+
+impl Default for KdfParams {
+    fn default() -> Self {
+        Self::defaults(KdfAlgorithm::Pbkdf2, HashAlgorithm::Sha256)
+    }
+}
+
+/// How a filter seals, apart from the password and the file itself.
+#[derive(Debug, Clone)]
+pub struct SealOptions {
+    pub cipher: CipherAlgorithm,
+    pub kdf: KdfParams,
+    pub mode: SaltMode,
+    /// The context's public salt: what the key behind every IV is derived
+    /// with, and in [`SaltMode::Context`] the packet salt itself.
+    pub context_salt: [u8; SALT_SIZE],
+}
+
+/// How to open a packet. The salt and IV come from the packet; everything else
+/// has to match what sealed it.
 #[derive(Debug, Clone, Default)]
 pub struct DecryptOptions {
     pub cipher: CipherAlgorithm,
-    pub kdf: KdfAlgorithm,
-    pub hash: HashAlgorithm,
-    /// Must match the value used during encryption.
-    pub iterations: Option<u32>,
-    /// When `Some`, the context bytes are used as AEAD AAD and the SIV
-    /// integrity check is performed after decryption.
-    pub verify_context: Option<String>,
+    pub kdf: KdfParams,
+    /// The path a filter sealed the packet for — its AEAD additional data — or
+    /// `None` for a packet [`encrypt`] sealed off the filter path.
+    pub path: Option<String>,
+}
+
+/// What [`seal`] made of a plaintext.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sealed {
+    /// The `previous` packet already seals this plaintext: hand it back byte
+    /// for byte, so git sees the blob it already holds.
+    Unchanged,
+    /// A new packet, base64, without a trailing newline.
+    Packet(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -256,20 +286,18 @@ pub enum CryptoError {
     UnsupportedKdf(String),
     #[error("unsupported hash algorithm: {0}")]
     UnsupportedHash(String),
+    #[error("unsupported salt mode: {0} (expected file or context)")]
+    UnsupportedSaltMode(String),
     #[error("AEAD encryption failed")]
     EncryptionFailed,
-    #[error("AEAD authentication failed — wrong password or tampered data")]
+    #[error("AEAD authentication failed — wrong password, wrong path, or tampered data")]
     AuthenticationFailed,
-    #[error("SIV integrity check failed — content may have been tampered with")]
-    IntegrityCheckFailed,
     #[error("missing 'Salted__' header in encrypted packet")]
     MissingSaltHeader,
     #[error("missing 'IVed__' header in encrypted packet")]
     MissingIVHeader,
     #[error("encrypted packet is too short")]
     DataTooShort,
-    #[error("hash digest ({digest_len} B) too short to produce SIV material ({needed} B)")]
-    DigestTooShort { digest_len: usize, needed: usize },
     #[error("invalid base64: {0}")]
     Base64(#[from] base64::DecodeError),
     #[error("KDF error: {0}")]
@@ -280,153 +308,74 @@ pub enum CryptoError {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Returns the finished packet as base64, ready to hand straight to git.
+/// Seal `plaintext` for the file at `path`, as a filter does — or, when
+/// `previous` (the packet the index already holds there) carries the IV this
+/// plaintext gets, report [`Sealed::Unchanged`].
+///
+/// The IV is keyed from the context key, so a matching one means the same path,
+/// content, password, context salt, KDF parameters, and cipher; that is what
+/// makes handing `previous` back safe, and anything else — a missing or
+/// non-packet `previous` included — seals afresh. Both modes apply the rule, so a
+/// context that switches mode re-seals nothing unchanged.
+pub fn seal(
+    plaintext: &[u8],
+    password: &str,
+    path: &str,
+    previous: Option<&[u8]>,
+    options: &SealOptions,
+) -> Result<Sealed, CryptoError> {
+    let context_key = derive_key(password.as_bytes(), &options.context_salt, &options.kdf)?;
+    let iv = synthetic_iv(&context_key, options.cipher, path, plaintext);
+    if previous
+        .and_then(|bytes| Packet::parse(bytes).ok())
+        .is_some_and(|packet| packet.iv == iv)
+    {
+        return Ok(Sealed::Unchanged);
+    }
+
+    let (salt, key) = match options.mode {
+        SaltMode::Context => (options.context_salt, context_key),
+        SaltMode::File => {
+            let salt = random_salt();
+            (salt, derive_key(password.as_bytes(), &salt, &options.kdf)?)
+        }
+    };
+    let body = aead_encrypt(options.cipher, &key, &iv, plaintext, path.as_bytes())?;
+    Ok(Sealed::Packet(assemble(&salt, &iv, &body)))
+}
+
+/// Seal off the filter path: a fresh random salt and IV, and no path binding.
+/// Never for a filter — re-encrypting unchanged content yields a new packet
+/// every time, which git reads as a modification.
 pub fn encrypt(
     plaintext: &[u8],
     password: &str,
-    options: &EncryptOptions,
+    cipher: CipherAlgorithm,
+    kdf: &KdfParams,
 ) -> Result<String, CryptoError> {
-    let iters = options
-        .iterations
-        .unwrap_or_else(|| options.kdf.default_iterations());
-
-    let mut salt = [0u8; SALT_SIZE];
+    let salt = random_salt();
     let mut iv = [0u8; NONCE_SIZE];
-
-    // 1. Determine salt, IV, and AAD
-    let aad: &[u8] = match &options.siv_mode {
-        SivMode::LocalDeterministic { context } => {
-            compute_siv_params(
-                password.as_bytes(),
-                plaintext,
-                context.as_bytes(),
-                AlgoSuite {
-                    cipher: options.cipher,
-                    kdf: options.kdf,
-                    hash: options.hash,
-                    iterations: iters,
-                },
-                &mut salt,
-                &mut iv,
-            )?;
-            context.as_bytes()
-        }
-        SivMode::Random => {
-            use rand::RngCore;
-            rand::thread_rng().fill_bytes(&mut salt);
-            rand::thread_rng().fill_bytes(&mut iv);
-            b""
-        }
-    };
-
-    // 2. Derive key
-    let key = derive_key(password.as_bytes(), &salt, options.hash, options.kdf, iters)?;
-
-    // 3. AEAD encrypt — returns ciphertext || tag
-    let ciphertext_with_tag = aead_encrypt(options.cipher, &key, &iv, plaintext, aad)?;
-
-    // 4. Assemble packet
-    let mut packet = Vec::with_capacity(
-        SALT_HEADER.len() + SALT_SIZE + IV_HEADER.len() + NONCE_SIZE + ciphertext_with_tag.len(),
-    );
-    packet.extend_from_slice(SALT_HEADER);
-    packet.extend_from_slice(&salt);
-    packet.extend_from_slice(IV_HEADER);
-    packet.extend_from_slice(&iv);
-    packet.extend_from_slice(&ciphertext_with_tag);
-
-    // 5. Base64-encode
-    Ok(BASE64.encode(&packet))
+    rand::rngs::OsRng.fill_bytes(&mut iv);
+    let key = derive_key(password.as_bytes(), &salt, kdf)?;
+    let body = aead_encrypt(cipher, &key, &iv, plaintext, b"")?;
+    Ok(assemble(&salt, &iv, &body))
 }
 
+/// Open a packet: one sealed by [`seal`] in either mode, by [`encrypt`], or
+/// before the IV was keyed — all of them carry their salt and IV.
+///
+/// There is deliberately no check that the IV is the one the content dictates.
+/// The AEAD already rejects a packet whose IV was changed, so such a check
+/// could only ever refuse a packet a different sealing rule produced.
 pub fn decrypt(
     ciphertext_b64: &str,
     password: &str,
     options: &DecryptOptions,
 ) -> Result<Vec<u8>, CryptoError> {
-    // 1. Base64-decode
-    let packet = BASE64.decode(ciphertext_b64.trim())?;
-
-    let mut offset = 0;
-
-    // 2. Parse salt
-    if !packet
-        .get(offset..)
-        .is_some_and(|s| s.starts_with(SALT_HEADER))
-    {
-        return Err(CryptoError::MissingSaltHeader);
-    }
-    offset += SALT_HEADER.len();
-
-    if packet.len() < offset + SALT_SIZE {
-        return Err(CryptoError::DataTooShort);
-    }
-    let salt: [u8; SALT_SIZE] = packet[offset..offset + SALT_SIZE].try_into().unwrap();
-    offset += SALT_SIZE;
-
-    // 3. Parse IV
-    if !packet
-        .get(offset..)
-        .is_some_and(|s| s.starts_with(IV_HEADER))
-    {
-        return Err(CryptoError::MissingIVHeader);
-    }
-    offset += IV_HEADER.len();
-
-    if packet.len() < offset + NONCE_SIZE {
-        return Err(CryptoError::DataTooShort);
-    }
-    let iv: [u8; NONCE_SIZE] = packet[offset..offset + NONCE_SIZE].try_into().unwrap();
-    offset += NONCE_SIZE;
-
-    // 4. Remaining bytes = ciphertext || tag
-    let ciphertext_with_tag = &packet[offset..];
-    if ciphertext_with_tag.len() < TAG_SIZE {
-        return Err(CryptoError::DataTooShort);
-    }
-
-    // 5. Derive key
-    let iters = options
-        .iterations
-        .unwrap_or_else(|| options.kdf.default_iterations());
-    let key = derive_key(password.as_bytes(), &salt, options.hash, options.kdf, iters)?;
-
-    // 6. AEAD decrypt
-    let aad: &[u8] = options
-        .verify_context
-        .as_deref()
-        .map(str::as_bytes)
-        .unwrap_or(b"");
-    let plaintext = aead_decrypt(options.cipher, &key, &iv, ciphertext_with_tag, aad)?;
-
-    // The AEAD tag already proves the ciphertext wasn't tampered with under
-    // this key. This extra step proves something subtly different: that the IV
-    // in the packet is the one the *content itself* dictates. Re-deriving it
-    // and comparing catches an IV that was swapped for another validly-keyed
-    // packet's. We compare only the IV, never the salt, so the same check holds
-    // whether the salt came from the content or from a global seed.
-    if let Some(context) = &options.verify_context {
-        let mut expected_salt = [0u8; SALT_SIZE];
-        let mut expected_iv = [0u8; NONCE_SIZE];
-        compute_siv_params(
-            password.as_bytes(),
-            &plaintext,
-            context.as_bytes(),
-            AlgoSuite {
-                cipher: options.cipher,
-                kdf: options.kdf,
-                hash: options.hash,
-                iterations: iters,
-            },
-            &mut expected_salt,
-            &mut expected_iv,
-        )?;
-        if iv != expected_iv {
-            return Err(CryptoError::IntegrityCheckFailed);
-        }
-    }
-
-    Ok(plaintext)
+    let packet = Packet::parse(ciphertext_b64.as_bytes())?;
+    let key = derive_key(password.as_bytes(), &packet.salt, &options.kdf)?;
+    let aad = options.path.as_deref().map(str::as_bytes).unwrap_or(b"");
+    aead_decrypt(options.cipher, &key, &packet.iv, &packet.body, aad)
 }
 
 /// A cheap "is this even one of ours?" check for the git filters.
@@ -445,99 +394,111 @@ pub fn is_encrypted(data: &[u8]) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// SIV parameter computation
+// Packets
 // ---------------------------------------------------------------------------
 
-/// The four parameters that get serialized into the SIV derivation string, and
-/// so define a ciphertext's algorithm identity. Grouped together because they
-/// always travel together and have to be reproduced exactly to decrypt.
-#[derive(Clone, Copy)]
-struct AlgoSuite {
-    cipher: CipherAlgorithm,
-    kdf: KdfAlgorithm,
-    hash: HashAlgorithm,
-    iterations: u32,
+/// A packet's fields, split out of its base64.
+struct Packet {
+    salt: [u8; SALT_SIZE],
+    iv: [u8; NONCE_SIZE],
+    /// The ciphertext followed by its tag.
+    body: Vec<u8>,
 }
 
-/// Derives the salt and IV deterministically from the content plus the
-/// algorithm parameters. The field framing below (length-prefix, value, NUL
-/// separator) is part of the fixed wire format — it exists so that, say, a
-/// password ending in the bytes of the next field can't be confused for a
-/// different input that hashes the same way.
-fn compute_siv_params(
-    password: &[u8],
-    data: &[u8],
-    context: &[u8],
-    algo: AlgoSuite,
-    out_salt: &mut [u8; SALT_SIZE],
-    out_iv: &mut [u8; NONCE_SIZE],
-) -> Result<(), CryptoError> {
-    let algo_params = format!(
-        "{}:{}:{}:{}",
-        algo.hash.as_siv_str(),
-        algo.cipher.as_siv_str(),
-        algo.iterations,
-        algo.kdf.as_siv_str(),
-    );
-
-    // Helper that feeds all fields into a `digest::Update` implementor. The
-    // `digest` traits are used via `sha2`'s re-export so we don't need a direct
-    // dependency on the `digest` crate (all RustCrypto hashes share it).
-    fn feed<H: sha2::digest::Update>(h: &mut H, algo: &[u8], pwd: &[u8], ctx: &[u8], data: &[u8]) {
-        let sep = b"\x00";
-        h.update(&(algo.len() as u32).to_be_bytes());
-        h.update(algo);
-        h.update(sep);
-        h.update(&(pwd.len() as u32).to_be_bytes());
-        h.update(pwd);
-        h.update(sep);
-        h.update(&(ctx.len() as u32).to_be_bytes());
-        h.update(ctx);
-        h.update(sep);
-        h.update(data);
-    }
-
-    // Helper that extracts iv || salt from the leading bytes of a digest.
-    fn extract(
-        digest_bytes: &[u8],
-        out_iv: &mut [u8; NONCE_SIZE],
-        out_salt: &mut [u8; SALT_SIZE],
-    ) -> Result<(), CryptoError> {
-        let needed = NONCE_SIZE + SALT_SIZE;
-        if digest_bytes.len() < needed {
-            return Err(CryptoError::DigestTooShort {
-                digest_len: digest_bytes.len(),
-                needed,
-            });
+impl Packet {
+    fn parse(base64: &[u8]) -> Result<Self, CryptoError> {
+        let raw = BASE64.decode(base64.trim_ascii())?;
+        let rest = raw
+            .strip_prefix(SALT_HEADER)
+            .ok_or(CryptoError::MissingSaltHeader)?;
+        if rest.len() < SALT_SIZE {
+            return Err(CryptoError::DataTooShort);
         }
-        out_iv.copy_from_slice(&digest_bytes[..NONCE_SIZE]);
-        out_salt.copy_from_slice(&digest_bytes[NONCE_SIZE..NONCE_SIZE + SALT_SIZE]);
-        Ok(())
+        let (salt, rest) = rest.split_at(SALT_SIZE);
+        let rest = rest
+            .strip_prefix(IV_HEADER)
+            .ok_or(CryptoError::MissingIVHeader)?;
+        if rest.len() < NONCE_SIZE + TAG_SIZE {
+            return Err(CryptoError::DataTooShort);
+        }
+        let (iv, body) = rest.split_at(NONCE_SIZE);
+        Ok(Self {
+            salt: salt.try_into().expect("split at SALT_SIZE"),
+            iv: iv.try_into().expect("split at NONCE_SIZE"),
+            body: body.to_vec(),
+        })
     }
+}
 
-    let ap = algo_params.as_bytes();
+fn assemble(salt: &[u8; SALT_SIZE], iv: &[u8; NONCE_SIZE], body: &[u8]) -> String {
+    let mut packet = Vec::with_capacity(
+        SALT_HEADER.len() + SALT_SIZE + IV_HEADER.len() + NONCE_SIZE + body.len(),
+    );
+    packet.extend_from_slice(SALT_HEADER);
+    packet.extend_from_slice(salt);
+    packet.extend_from_slice(IV_HEADER);
+    packet.extend_from_slice(iv);
+    packet.extend_from_slice(body);
+    BASE64.encode(&packet)
+}
 
-    // Every RustCrypto hash implements the same `digest::Digest`/`Update` traits
-    // (re-exported identically by sha2/sha3/blake2), so one macro covers all
-    // eight: build the hasher, feed the framed fields, split out iv‖salt.
-    use sha2::digest::Digest;
-    macro_rules! siv {
-        ($ty:ty) => {{
-            let mut h = <$ty>::new();
-            feed(&mut h, ap, password, context, data);
-            extract(h.finalize().as_slice(), out_iv, out_salt)
-        }};
+fn random_salt() -> [u8; SALT_SIZE] {
+    let mut salt = [0u8; SALT_SIZE];
+    rand::rngs::OsRng.fill_bytes(&mut salt);
+    salt
+}
+
+// ---------------------------------------------------------------------------
+// The synthetic IV
+// ---------------------------------------------------------------------------
+
+/// The IV a filter seals `plaintext` at `path` under: keyed BLAKE2b over the
+/// cipher's name, the path, and the content, keyed from the context key so that
+/// no password guess can be checked against it without running the KDF. The
+/// cipher is in it so that a context switching cipher without a rotation never
+/// reuses one key and nonce under two AEADs.
+///
+/// The fields are framed `u32be(len) ‖ bytes ‖ 0x00` so that a path ending in
+/// bytes that look like content cannot read as a different input; the content,
+/// last, needs no frame. Labels and framing are a wire format.
+fn synthetic_iv(
+    context_key: &[u8; KEY_SIZE],
+    cipher: CipherAlgorithm,
+    path: &str,
+    plaintext: &[u8],
+) -> [u8; NONCE_SIZE] {
+    let iv_key = keyed_blake2b(context_key, &[IV_KEY_LABEL]);
+    let cipher = cipher.as_siv_str().as_bytes();
+    let path = path.as_bytes();
+    let digest = keyed_blake2b(
+        &iv_key,
+        &[
+            &(cipher.len() as u32).to_be_bytes(),
+            cipher,
+            b"\x00",
+            &(path.len() as u32).to_be_bytes(),
+            path,
+            b"\x00",
+            plaintext,
+        ],
+    );
+    let mut iv = [0u8; NONCE_SIZE];
+    iv.copy_from_slice(&digest[..NONCE_SIZE]);
+    iv
+}
+
+/// BLAKE2b keyed with `key`, 32 bytes out, over the concatenation of `parts`.
+fn keyed_blake2b(key: &[u8; KEY_SIZE], parts: &[&[u8]]) -> [u8; KEY_SIZE] {
+    use blake2::digest::{consts::U32, FixedOutput, KeyInit, Update};
+
+    let mut mac = <blake2::Blake2bMac<U32> as KeyInit>::new_from_slice(key)
+        .expect("a 32-byte key is within BLAKE2b's 64-byte limit");
+    for part in parts {
+        Update::update(&mut mac, part);
     }
-    match algo.hash {
-        HashAlgorithm::Sha256 => siv!(sha2::Sha256),
-        HashAlgorithm::Sha384 => siv!(sha2::Sha384),
-        HashAlgorithm::Sha512 => siv!(sha2::Sha512),
-        HashAlgorithm::Sha3_256 => siv!(sha3::Sha3_256),
-        HashAlgorithm::Sha3_384 => siv!(sha3::Sha3_384),
-        HashAlgorithm::Sha3_512 => siv!(sha3::Sha3_512),
-        HashAlgorithm::Blake2b => siv!(blake2::Blake2b512),
-        HashAlgorithm::Blake2s => siv!(blake2::Blake2s256),
-    }
+    let mut out = [0u8; KEY_SIZE];
+    out.copy_from_slice(&FixedOutput::finalize_fixed(mac));
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -547,14 +508,11 @@ fn compute_siv_params(
 fn derive_key(
     password: &[u8],
     salt: &[u8; SALT_SIZE],
-    hash: HashAlgorithm,
-    kdf: KdfAlgorithm,
-    iters: u32,
-) -> Result<Vec<u8>, CryptoError> {
-    let key_len = CipherAlgorithm::Aes256Gcm.key_size(); // Both ciphers use 32 B
-    let mut key = vec![0u8; key_len];
+    params: &KdfParams,
+) -> Result<[u8; KEY_SIZE], CryptoError> {
+    let mut key = [0u8; KEY_SIZE];
 
-    match kdf {
+    match params.kdf {
         KdfAlgorithm::Pbkdf2 => {
             // Easy to trip on: `pbkdf2_hmac` wants the bare hash type and wraps
             // it in HMAC for you. Handing it `Hmac<H>` compiles but double-wraps
@@ -563,10 +521,10 @@ fn derive_key(
 
             macro_rules! kdf {
                 ($ty:ty) => {
-                    pbkdf2_hmac::<$ty>(password, salt, iters, &mut key)
+                    pbkdf2_hmac::<$ty>(password, salt, params.iterations, &mut key)
                 };
             }
-            match hash {
+            match params.hash {
                 HashAlgorithm::Sha256 => kdf!(sha2::Sha256),
                 HashAlgorithm::Sha384 => kdf!(sha2::Sha384),
                 HashAlgorithm::Sha512 => kdf!(sha2::Sha512),
@@ -576,9 +534,9 @@ fn derive_key(
                 HashAlgorithm::Blake2b | HashAlgorithm::Blake2s => {
                     // BLAKE2's buffer kind doesn't satisfy the trait bound
                     // pbkdf2_hmac requires, so this combination can't be
-                    // expressed at all. BLAKE2 still works fine for SIV hashing;
-                    // it just can't be the PBKDF2 PRF. Fail loudly rather than
-                    // silently substituting a different hash.
+                    // expressed at all — BLAKE2 just can't be the PBKDF2 PRF.
+                    // Fail loudly rather than silently substituting a different
+                    // hash.
                     return Err(CryptoError::UnsupportedHash(
                         "BLAKE2 cannot be used as the PBKDF2 PRF; \
                          choose sha256/sha512/sha3-256 or switch to argon2id"
@@ -591,12 +549,15 @@ fn derive_key(
         KdfAlgorithm::Argon2id => {
             use argon2::{Algorithm, Argon2, Params, Version};
 
-            // 128 MiB / 2 lanes are fixed parameters of the historical format,
-            // not tunables — they have to match what old data was sealed with.
-            let params = Params::new(131_072, iters, 2, Some(key_len))
-                .map_err(|e| CryptoError::Kdf(e.to_string()))?;
+            let argon = Params::new(
+                params.memory_kib,
+                params.iterations,
+                params.lanes,
+                Some(KEY_SIZE),
+            )
+            .map_err(|e| CryptoError::Kdf(e.to_string()))?;
 
-            Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+            Argon2::new(Algorithm::Argon2id, Version::V0x13, argon)
                 .hash_password_into(password, salt, &mut key)
                 .map_err(|e| CryptoError::Kdf(e.to_string()))?;
         }
@@ -691,56 +652,317 @@ fn aead_decrypt(
 mod tests {
     use super::*;
 
+    const SALT: [u8; SALT_SIZE] = *b"ctxsalt!";
+
+    /// Argon2id small enough to keep the suite fast; the construction does not
+    /// care how expensive the KDF is.
+    const FAST_ARGON2: KdfParams = KdfParams {
+        kdf: KdfAlgorithm::Argon2id,
+        hash: HashAlgorithm::Blake2b,
+        iterations: 1,
+        memory_kib: 8 * 1024,
+        lanes: 1,
+    };
+    const FAST_PBKDF2: KdfParams = KdfParams {
+        kdf: KdfAlgorithm::Pbkdf2,
+        hash: HashAlgorithm::Sha256,
+        iterations: 10,
+        memory_kib: DEFAULT_ARGON2_MEMORY_KIB,
+        lanes: DEFAULT_ARGON2_LANES,
+    };
+
+    fn options(cipher: CipherAlgorithm, kdf: KdfParams, mode: SaltMode) -> SealOptions {
+        SealOptions {
+            cipher,
+            kdf,
+            mode,
+            context_salt: SALT,
+        }
+    }
+
+    fn sealed(outcome: Sealed) -> String {
+        match outcome {
+            Sealed::Packet(packet) => packet,
+            Sealed::Unchanged => panic!("expected a fresh packet"),
+        }
+    }
+
+    fn open(packet: &str, password: &str, path: &str, options: &SealOptions) -> Vec<u8> {
+        decrypt(
+            packet,
+            password,
+            &DecryptOptions {
+                cipher: options.cipher,
+                kdf: options.kdf,
+                path: Some(path.to_owned()),
+            },
+        )
+        .unwrap()
+    }
+
+    fn fields(packet: &str) -> Packet {
+        Packet::parse(packet.as_bytes()).unwrap()
+    }
+
     // -----------------------------------------------------------------------
-    // SIV determinism
+    // The construction, against an independent implementation
     // -----------------------------------------------------------------------
 
+    // These two packets were computed by an independent Python implementation
+    // of the construction — argon2-cffi, `hashlib.blake2b`, and `cryptography`
+    // following the design's derivation, not this code: `context` mode,
+    // password "kat-test-passphrase", context salt 0011223344556677, path
+    // "secret/kat.txt", plaintext "known answer\n". Reproducing them byte for
+    // byte pins the KDF use, the IV key label, the IV framing, and the AEAD.
+    const KAT_SALT: [u8; SALT_SIZE] = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77];
+    const KAT_PASSWORD: &str = "kat-test-passphrase";
+    const KAT_PATH: &str = "secret/kat.txt";
+    const KAT_PLAINTEXT: &[u8] = b"known answer\n";
+
     #[test]
-    fn siv_is_deterministic_for_same_inputs() {
-        let (mut s1, mut iv1) = ([0u8; SALT_SIZE], [0u8; NONCE_SIZE]);
-        let (mut s2, mut iv2) = ([0u8; SALT_SIZE], [0u8; NONCE_SIZE]);
-        let algo = AlgoSuite {
-            cipher: CipherAlgorithm::Aes256Gcm,
-            kdf: KdfAlgorithm::Pbkdf2,
-            hash: HashAlgorithm::Sha256,
-            iterations: 100,
+    fn reproduces_the_independent_chacha20_argon2id_vector() {
+        let options = SealOptions {
+            context_salt: KAT_SALT,
+            ..options(
+                CipherAlgorithm::ChaCha20Poly1305,
+                FAST_ARGON2,
+                SaltMode::Context,
+            )
         };
-        compute_siv_params(
-            b"password",
-            b"hello world",
-            b"path/to/file.txt",
-            algo,
-            &mut s1,
-            &mut iv1,
-        )
-        .unwrap();
-        compute_siv_params(
-            b"password",
-            b"hello world",
-            b"path/to/file.txt",
-            algo,
-            &mut s2,
-            &mut iv2,
-        )
-        .unwrap();
-        assert_eq!(s1, s2);
-        assert_eq!(iv1, iv2);
+        let packet = sealed(seal(KAT_PLAINTEXT, KAT_PASSWORD, KAT_PATH, None, &options).unwrap());
+        assert_eq!(
+            packet,
+            "U2FsdGVkX18AESIzRFVmd0lWZWRfX8g3lagbjv0AG7CMbh86mHQNRp4cbL27LsXDbAuYXTEoMrcUsNA4HRlt"
+        );
     }
 
     #[test]
-    fn siv_changes_when_data_changes() {
-        let (mut s1, mut iv1) = ([0u8; SALT_SIZE], [0u8; NONCE_SIZE]);
-        let (mut s2, mut iv2) = ([0u8; SALT_SIZE], [0u8; NONCE_SIZE]);
-        let algo = AlgoSuite {
-            cipher: CipherAlgorithm::Aes256Gcm,
-            kdf: KdfAlgorithm::Pbkdf2,
-            hash: HashAlgorithm::Sha256,
-            iterations: 100,
+    fn reproduces_the_independent_aes_pbkdf2_vector() {
+        let options = SealOptions {
+            context_salt: KAT_SALT,
+            ..options(
+                CipherAlgorithm::Aes256Gcm,
+                KdfParams {
+                    iterations: 1000,
+                    ..FAST_PBKDF2
+                },
+                SaltMode::Context,
+            )
         };
-        compute_siv_params(b"password", b"data1", b"ctx", algo, &mut s1, &mut iv1).unwrap();
-        compute_siv_params(b"password", b"data2", b"ctx", algo, &mut s2, &mut iv2).unwrap();
-        assert_ne!(s1, s2);
-        assert_ne!(iv1, iv2);
+        let packet = sealed(seal(KAT_PLAINTEXT, KAT_PASSWORD, KAT_PATH, None, &options).unwrap());
+        assert_eq!(
+            packet,
+            "U2FsdGVkX18AESIzRFVmd0lWZWRfX1rk+kKsI10lvzFZBymPPIAToFfEiS2OjYk5oHqSYNF00+akoVdjLrRQ"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Packets sealed before the IV was keyed still open
+    // -----------------------------------------------------------------------
+
+    // This base64 was produced by the original Python `transcrypt`
+    // (workflow/core/crypto.py), not by this code: AES-256-GCM / PBKDF2 /
+    // SHA-256, 1000 iterations, path "docs/note.txt".
+    const REFERENCE_VECTOR: &str =
+        "U2FsdGVkX19eEmo+67ljNUlWZWRfX6BVVr6P6FZp1v1RY6ZPe7lRhl2X2XJSyQVUbJnvvA7+VrppiD0+mFsmSxZEOQ==";
+
+    #[test]
+    fn decrypts_vector_from_the_reference_implementation() {
+        let opts = DecryptOptions {
+            cipher: CipherAlgorithm::Aes256Gcm,
+            kdf: KdfParams {
+                iterations: 1000,
+                ..KdfParams::defaults(KdfAlgorithm::Pbkdf2, HashAlgorithm::Sha256)
+            },
+            path: Some("docs/note.txt".to_owned()),
+        };
+        let plaintext = decrypt(REFERENCE_VECTOR, "test-passphrase", &opts).unwrap();
+        assert_eq!(plaintext, b"hello transcrypt\n");
+    }
+
+    // Sealed by wits before the IV was keyed — salt and IV cut from an unkeyed
+    // hash over the password — with ChaCha20-Poly1305 / Argon2id at its fixed
+    // 128 MiB over 2 lanes, 1 pass, password "legacy-test-passphrase", path
+    // "secret/legacy.txt". It opens through the one decryption path.
+    const LEGACY_ARGON2ID_VECTOR: &str = "U2FsdGVkX1+2RKPTiuszSElWZWRfXxNQm7BWIU7mwMeD4oXRBIDXtpTzDT5M5xPTuyfoYhhYCkC4GskPkyKht3ZiubGcXHwfBZDMtyKOjzpO";
+
+    #[test]
+    fn opens_a_packet_sealed_before_the_iv_was_keyed() {
+        let opts = DecryptOptions {
+            cipher: CipherAlgorithm::ChaCha20Poly1305,
+            kdf: KdfParams {
+                iterations: 1,
+                ..KdfParams::defaults(KdfAlgorithm::Argon2id, HashAlgorithm::Blake2b)
+            },
+            path: Some("secret/legacy.txt".to_owned()),
+        };
+        let plaintext = decrypt(LEGACY_ARGON2ID_VECTOR, "legacy-test-passphrase", &opts).unwrap();
+        assert_eq!(plaintext, b"sealed before the iv was keyed\n");
+    }
+
+    // -----------------------------------------------------------------------
+    // Sealing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn seals_and_opens_in_both_modes_and_ciphers() {
+        for cipher in [
+            CipherAlgorithm::Aes256Gcm,
+            CipherAlgorithm::ChaCha20Poly1305,
+        ] {
+            for mode in [SaltMode::File, SaltMode::Context] {
+                for kdf in [FAST_ARGON2, FAST_PBKDF2] {
+                    let options = options(cipher, kdf, mode);
+                    let packet =
+                        sealed(seal(b"Secret message", "pass", "a/b.txt", None, &options).unwrap());
+                    assert_eq!(
+                        open(&packet, "pass", "a/b.txt", &options),
+                        b"Secret message"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn context_mode_is_deterministic() {
+        let options = options(
+            CipherAlgorithm::ChaCha20Poly1305,
+            FAST_ARGON2,
+            SaltMode::Context,
+        );
+        let a = sealed(seal(b"same", "pass", "f.txt", None, &options).unwrap());
+        let b = sealed(seal(b"same", "pass", "f.txt", None, &options).unwrap());
+        assert_eq!(a, b);
+        assert_eq!(fields(&a).salt, SALT);
+    }
+
+    #[test]
+    fn file_mode_salts_differ_but_the_iv_does_not() {
+        let options = options(
+            CipherAlgorithm::ChaCha20Poly1305,
+            FAST_ARGON2,
+            SaltMode::File,
+        );
+        let a = sealed(seal(b"same", "pass", "f.txt", None, &options).unwrap());
+        let b = sealed(seal(b"same", "pass", "f.txt", None, &options).unwrap());
+        assert_ne!(a, b, "a fresh random salt per seal");
+        assert_ne!(fields(&a).salt, fields(&b).salt);
+        assert_eq!(
+            fields(&a).iv,
+            fields(&b).iv,
+            "the IV depends on content alone"
+        );
+    }
+
+    #[test]
+    fn both_modes_give_one_iv() {
+        let file = options(CipherAlgorithm::Aes256Gcm, FAST_PBKDF2, SaltMode::File);
+        let context = SealOptions {
+            mode: SaltMode::Context,
+            ..file.clone()
+        };
+        let a = sealed(seal(b"x", "pass", "f.txt", None, &file).unwrap());
+        let b = sealed(seal(b"x", "pass", "f.txt", None, &context).unwrap());
+        assert_eq!(fields(&a).iv, fields(&b).iv);
+    }
+
+    #[test]
+    fn the_iv_is_keyed_from_the_context_key() {
+        // The same password, path, and content under another context salt: a
+        // different context key, so a different IV.
+        let a = options(CipherAlgorithm::Aes256Gcm, FAST_PBKDF2, SaltMode::Context);
+        let b = SealOptions {
+            context_salt: *b"othersal",
+            ..a.clone()
+        };
+        let pa = sealed(seal(b"x", "pass", "f.txt", None, &a).unwrap());
+        let pb = sealed(seal(b"x", "pass", "f.txt", None, &b).unwrap());
+        assert_ne!(fields(&pa).iv, fields(&pb).iv);
+    }
+
+    #[test]
+    fn hands_back_the_index_packet_for_unchanged_content() {
+        let options = options(
+            CipherAlgorithm::ChaCha20Poly1305,
+            FAST_ARGON2,
+            SaltMode::File,
+        );
+        let previous = sealed(seal(b"v1\n", "pass", "f.txt", None, &options).unwrap());
+        let again = seal(
+            b"v1\n",
+            "pass",
+            "f.txt",
+            Some(format!("{previous}\n").as_bytes()),
+            &options,
+        );
+        assert_eq!(again.unwrap(), Sealed::Unchanged);
+    }
+
+    #[test]
+    fn reseals_whatever_differs_from_the_index_packet() {
+        let base = options(
+            CipherAlgorithm::ChaCha20Poly1305,
+            FAST_ARGON2,
+            SaltMode::File,
+        );
+        let previous = sealed(seal(b"v1\n", "pass", "f.txt", None, &base).unwrap());
+        let previous = Some(previous.as_bytes());
+
+        let fresh = |plaintext: &[u8], password, path, options: &SealOptions| {
+            seal(plaintext, password, path, previous, options).unwrap()
+        };
+        assert!(matches!(
+            fresh(b"v2\n", "pass", "f.txt", &base),
+            Sealed::Packet(_)
+        ));
+        assert!(matches!(
+            fresh(b"v1\n", "other", "f.txt", &base),
+            Sealed::Packet(_)
+        ));
+        assert!(matches!(
+            fresh(b"v1\n", "pass", "g.txt", &base),
+            Sealed::Packet(_)
+        ));
+        let other_salt = SealOptions {
+            context_salt: *b"othersal",
+            ..base.clone()
+        };
+        assert!(matches!(
+            fresh(b"v1\n", "pass", "f.txt", &other_salt),
+            Sealed::Packet(_)
+        ));
+        let other_cipher = SealOptions {
+            cipher: CipherAlgorithm::Aes256Gcm,
+            ..base.clone()
+        };
+        assert!(matches!(
+            fresh(b"v1\n", "pass", "f.txt", &other_cipher),
+            Sealed::Packet(_)
+        ));
+    }
+
+    #[test]
+    fn ignores_an_index_entry_that_is_not_a_packet() {
+        let options = options(CipherAlgorithm::Aes256Gcm, FAST_PBKDF2, SaltMode::File);
+        let outcome = seal(b"v1\n", "pass", "f.txt", Some(b"v1\n"), &options).unwrap();
+        assert!(matches!(outcome, Sealed::Packet(_)));
+    }
+
+    #[test]
+    fn random_mode_roundtrip() {
+        let ct = encrypt(
+            b"hello random",
+            "pass",
+            CipherAlgorithm::Aes256Gcm,
+            &FAST_PBKDF2,
+        )
+        .unwrap();
+        let opts = DecryptOptions {
+            kdf: FAST_PBKDF2,
+            ..Default::default()
+        };
+        assert_eq!(decrypt(&ct, "pass", &opts).unwrap(), b"hello random");
     }
 
     // -----------------------------------------------------------------------
@@ -748,207 +970,104 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn pbkdf2_produces_correct_key_length() {
-        let key = derive_key(
-            b"pass",
-            &[1u8; 8],
-            HashAlgorithm::Sha256,
-            KdfAlgorithm::Pbkdf2,
-            100,
-        )
-        .unwrap();
-        assert_eq!(key.len(), 32);
+    fn both_kdfs_produce_a_full_key() {
+        for params in [FAST_PBKDF2, FAST_ARGON2] {
+            assert_eq!(
+                derive_key(b"pass", &[1u8; 8], &params).unwrap().len(),
+                KEY_SIZE
+            );
+        }
     }
 
     #[test]
-    fn argon2id_produces_correct_key_length() {
-        let key = derive_key(
-            b"pass",
-            &[1u8; 8],
-            HashAlgorithm::Sha256,
-            KdfAlgorithm::Argon2id,
-            1,
-        )
-        .unwrap();
-        assert_eq!(key.len(), 32);
-    }
-
-    // -----------------------------------------------------------------------
-    // Encrypt / decrypt roundtrips
-    // -----------------------------------------------------------------------
-
-    fn roundtrip(
-        plaintext: &[u8],
-        cipher: CipherAlgorithm,
-        kdf: KdfAlgorithm,
-        hash: HashAlgorithm,
-        iters: u32,
-        context: &str,
-    ) {
-        let enc_opts = EncryptOptions {
-            cipher,
-            kdf,
-            hash,
-            iterations: Some(iters),
-            siv_mode: SivMode::LocalDeterministic {
-                context: context.to_owned(),
-            },
+    fn argon2id_rejects_impossible_parameters() {
+        let params = KdfParams {
+            memory_kib: 1,
+            ..FAST_ARGON2
         };
-        let ct = encrypt(plaintext, "strong_pass", &enc_opts).unwrap();
-
-        let dec_opts = DecryptOptions {
-            cipher,
-            kdf,
-            hash,
-            iterations: Some(iters),
-            verify_context: Some(context.to_owned()),
-        };
-        let pt = decrypt(&ct, "strong_pass", &dec_opts).unwrap();
-        assert_eq!(pt, plaintext);
+        assert!(matches!(
+            derive_key(b"pass", &[1u8; 8], &params),
+            Err(CryptoError::Kdf(_))
+        ));
     }
 
     #[test]
-    fn roundtrip_aes256gcm_pbkdf2_sha256() {
-        roundtrip(
-            b"Secret message",
+    fn pbkdf2_paired_with_blake2_is_refused() {
+        // BLAKE2 can't drive PBKDF2; the failure must be explicit rather than a
+        // silent substitution to another hash.
+        let options = options(
             CipherAlgorithm::Aes256Gcm,
-            KdfAlgorithm::Pbkdf2,
-            HashAlgorithm::Sha256,
-            100,
-            "docs/secret.txt",
-        );
-    }
-
-    #[test]
-    fn roundtrip_chacha20poly1305_argon2id_blake2b() {
-        roundtrip(
-            b"Another secret",
-            CipherAlgorithm::ChaCha20Poly1305,
-            KdfAlgorithm::Argon2id,
-            HashAlgorithm::Blake2b,
-            1,
-            "data/file.bin",
-        );
-    }
-
-    #[test]
-    fn roundtrip_empty_plaintext() {
-        roundtrip(
-            b"",
-            CipherAlgorithm::Aes256Gcm,
-            KdfAlgorithm::Pbkdf2,
-            HashAlgorithm::Sha256,
-            10,
-            "empty.txt",
-        );
-    }
-
-    #[test]
-    fn random_mode_roundtrip() {
-        let enc_opts = EncryptOptions {
-            siv_mode: SivMode::Random,
-            iterations: Some(10),
-            ..Default::default()
-        };
-        let ct = encrypt(b"hello random", "pass", &enc_opts).unwrap();
-        let dec_opts = DecryptOptions {
-            iterations: Some(10),
-            ..Default::default()
-        };
-        let pt = decrypt(&ct, "pass", &dec_opts).unwrap();
-        assert_eq!(pt, b"hello random");
-    }
-
-    #[test]
-    fn deterministic_mode_is_idempotent() {
-        let opts = EncryptOptions {
-            iterations: Some(10),
-            siv_mode: SivMode::LocalDeterministic {
-                context: "file.txt".to_owned(),
+            KdfParams {
+                hash: HashAlgorithm::Blake2b,
+                ..FAST_PBKDF2
             },
-            ..Default::default()
-        };
-        let ct1 = encrypt(b"same content", "pass", &opts).unwrap();
-        let ct2 = encrypt(b"same content", "pass", &opts).unwrap();
-        assert_eq!(ct1, ct2);
+            SaltMode::File,
+        );
+        let err = seal(b"data", "pass", "f.txt", None, &options).unwrap_err();
+        assert!(matches!(err, CryptoError::UnsupportedHash(_)));
     }
 
     // -----------------------------------------------------------------------
-    // Error cases
+    // What fails to open
     // -----------------------------------------------------------------------
+
+    fn sealed_packet() -> (String, SealOptions) {
+        let options = options(CipherAlgorithm::Aes256Gcm, FAST_PBKDF2, SaltMode::File);
+        let packet = sealed(seal(b"secret", "correct", "f.txt", None, &options).unwrap());
+        (packet, options)
+    }
+
+    fn try_open(packet: &str, password: &str, path: &str, options: &SealOptions) -> CryptoError {
+        decrypt(
+            packet,
+            password,
+            &DecryptOptions {
+                cipher: options.cipher,
+                kdf: options.kdf,
+                path: Some(path.to_owned()),
+            },
+        )
+        .unwrap_err()
+    }
 
     #[test]
     fn wrong_password_fails_with_auth_error() {
-        let enc_opts = EncryptOptions {
-            iterations: Some(10),
-            siv_mode: SivMode::LocalDeterministic {
-                context: "f.txt".to_owned(),
-            },
-            ..Default::default()
-        };
-        let ct = encrypt(b"secret", "correct", &enc_opts).unwrap();
-        let dec_opts = DecryptOptions {
-            iterations: Some(10),
-            verify_context: Some("f.txt".to_owned()),
-            ..Default::default()
-        };
-        let err = decrypt(&ct, "wrong", &dec_opts).unwrap_err();
+        let (packet, options) = sealed_packet();
+        let err = try_open(&packet, "wrong", "f.txt", &options);
         assert!(matches!(err, CryptoError::AuthenticationFailed));
     }
 
     #[test]
-    fn wrong_context_fails_authentication() {
-        let enc_opts = EncryptOptions {
-            iterations: Some(10),
-            siv_mode: SivMode::LocalDeterministic {
-                context: "file1.txt".to_owned(),
-            },
-            ..Default::default()
-        };
-        let ct = encrypt(b"data", "pass", &enc_opts).unwrap();
-        let dec_opts = DecryptOptions {
-            iterations: Some(10),
-            verify_context: Some("file2.txt".to_owned()), // wrong context → wrong AAD
-            ..Default::default()
-        };
-        let err = decrypt(&ct, "pass", &dec_opts).unwrap_err();
+    fn wrong_path_fails_authentication() {
+        let (packet, options) = sealed_packet();
+        let err = try_open(&packet, "correct", "g.txt", &options);
         assert!(matches!(err, CryptoError::AuthenticationFailed));
     }
 
     #[test]
     fn tampered_ciphertext_fails_authentication() {
-        let enc_opts = EncryptOptions {
-            iterations: Some(10),
-            siv_mode: SivMode::LocalDeterministic {
-                context: "f.txt".to_owned(),
-            },
-            ..Default::default()
-        };
-        let ct_b64 = encrypt(b"important data", "pass", &enc_opts).unwrap();
-
-        // Decode, flip a byte in the ciphertext body, re-encode
-        let mut raw = BASE64.decode(&ct_b64).unwrap();
+        let (packet, options) = sealed_packet();
+        let mut raw = BASE64.decode(&packet).unwrap();
         let last = raw.len() - 1;
         raw[last] ^= 0x01;
-        let tampered = BASE64.encode(&raw);
+        let err = try_open(&BASE64.encode(&raw), "correct", "f.txt", &options);
+        assert!(matches!(err, CryptoError::AuthenticationFailed));
+    }
 
-        let dec_opts = DecryptOptions {
-            iterations: Some(10),
-            verify_context: Some("f.txt".to_owned()),
-            ..Default::default()
-        };
-        let err = decrypt(&tampered, "pass", &dec_opts).unwrap_err();
+    #[test]
+    fn a_changed_iv_fails_authentication() {
+        // What a re-check of the IV would have caught, the AEAD already does.
+        let (packet, options) = sealed_packet();
+        let mut raw = BASE64.decode(&packet).unwrap();
+        raw[SALT_HEADER.len() + SALT_SIZE + IV_HEADER.len()] ^= 0x01;
+        let err = try_open(&BASE64.encode(&raw), "correct", "f.txt", &options);
         assert!(matches!(err, CryptoError::AuthenticationFailed));
     }
 
     #[test]
     fn missing_salt_header_returns_error() {
         let garbage = BASE64.encode(b"WrongHeader12345678IVed__012345678901ciphertext");
-        let dec_opts = DecryptOptions {
-            iterations: Some(10),
-            ..Default::default()
-        };
-        let err = decrypt(&garbage, "pass", &dec_opts).unwrap_err();
+        let err = decrypt(&garbage, "pass", &DecryptOptions::default()).unwrap_err();
         assert!(matches!(err, CryptoError::MissingSaltHeader));
     }
 
@@ -958,71 +1077,9 @@ mod tests {
         raw.extend_from_slice(b"Salted__");
         raw.extend_from_slice(b"12345678"); // salt
         raw.extend_from_slice(b"BadIVHdr"); // wrong IV header
-        let encoded = BASE64.encode(&raw);
-        let dec_opts = DecryptOptions {
-            iterations: Some(10),
-            ..Default::default()
-        };
-        let err = decrypt(&encoded, "pass", &dec_opts).unwrap_err();
+        let err = decrypt(&BASE64.encode(&raw), "pass", &DecryptOptions::default()).unwrap_err();
         assert!(matches!(err, CryptoError::MissingIVHeader));
     }
-
-    // -----------------------------------------------------------------------
-    // Cross-implementation compatibility
-    // -----------------------------------------------------------------------
-
-    // This base64 was produced by the original Python `transcrypt`
-    // (workflow/core/crypto.py), not by this code. It is the anchor that proves
-    // we still speak the exact same packet format: salt/IV framing, the SIV
-    // derivation string, and the AEAD parameters. If any of those drift, one of
-    // the two tests below fails — and a silent drift would mean every existing
-    // encrypted repository becomes unreadable. AES-256-GCM / PBKDF2 / SHA-256,
-    // deterministic, 1000 iterations, context "docs/note.txt".
-    const REFERENCE_VECTOR: &str =
-        "U2FsdGVkX19eEmo+67ljNUlWZWRfX6BVVr6P6FZp1v1RY6ZPe7lRhl2X2XJSyQVUbJnvvA7+VrppiD0+mFsmSxZEOQ==";
-    const REFERENCE_PLAINTEXT: &[u8] = b"hello transcrypt\n";
-    const REFERENCE_PASSWORD: &str = "test-passphrase";
-    const REFERENCE_CONTEXT: &str = "docs/note.txt";
-
-    fn reference_encrypt_options() -> EncryptOptions {
-        EncryptOptions {
-            cipher: CipherAlgorithm::Aes256Gcm,
-            kdf: KdfAlgorithm::Pbkdf2,
-            hash: HashAlgorithm::Sha256,
-            iterations: Some(1000),
-            siv_mode: SivMode::LocalDeterministic {
-                context: REFERENCE_CONTEXT.to_owned(),
-            },
-        }
-    }
-
-    #[test]
-    fn decrypts_vector_from_the_reference_implementation() {
-        let opts = DecryptOptions {
-            cipher: CipherAlgorithm::Aes256Gcm,
-            kdf: KdfAlgorithm::Pbkdf2,
-            hash: HashAlgorithm::Sha256,
-            iterations: Some(1000),
-            verify_context: Some(REFERENCE_CONTEXT.to_owned()),
-        };
-        let plaintext = decrypt(REFERENCE_VECTOR, REFERENCE_PASSWORD, &opts).unwrap();
-        assert_eq!(plaintext, REFERENCE_PLAINTEXT);
-    }
-
-    #[test]
-    fn re_encrypting_reproduces_the_reference_vector_byte_for_byte() {
-        let ciphertext = encrypt(
-            REFERENCE_PLAINTEXT,
-            REFERENCE_PASSWORD,
-            &reference_encrypt_options(),
-        )
-        .unwrap();
-        assert_eq!(ciphertext, REFERENCE_VECTOR);
-    }
-
-    // -----------------------------------------------------------------------
-    // Error contracts
-    // -----------------------------------------------------------------------
 
     #[test]
     fn rejects_input_that_is_not_base64() {
@@ -1030,22 +1087,9 @@ mod tests {
         assert!(matches!(err, CryptoError::Base64(_)));
     }
 
-    #[test]
-    fn pbkdf2_paired_with_blake2_is_refused() {
-        // BLAKE2 is fine for SIV hashing but can't drive PBKDF2; the failure
-        // must be explicit rather than a silent substitution to another hash.
-        let opts = EncryptOptions {
-            cipher: CipherAlgorithm::Aes256Gcm,
-            kdf: KdfAlgorithm::Pbkdf2,
-            hash: HashAlgorithm::Blake2b,
-            iterations: Some(10),
-            siv_mode: SivMode::LocalDeterministic {
-                context: "f.txt".to_owned(),
-            },
-        };
-        let err = encrypt(b"data", "pass", &opts).unwrap_err();
-        assert!(matches!(err, CryptoError::UnsupportedHash(_)));
-    }
+    // -----------------------------------------------------------------------
+    // Names and detection
+    // -----------------------------------------------------------------------
 
     #[test]
     fn algorithm_names_parse_and_reject_cleanly() {
@@ -1058,6 +1102,7 @@ mod tests {
             HashAlgorithm::from_str("sha3-256").unwrap(),
             HashAlgorithm::Sha3_256
         );
+        assert_eq!(SaltMode::from_str("Context").unwrap(), SaltMode::Context);
         assert!(matches!(
             CipherAlgorithm::from_str("rot13"),
             Err(CryptoError::UnsupportedCipher(_))
@@ -1069,6 +1114,10 @@ mod tests {
         assert!(matches!(
             HashAlgorithm::from_str("md5"),
             Err(CryptoError::UnsupportedHash(_))
+        ));
+        assert!(matches!(
+            SaltMode::from_str("path"),
+            Err(CryptoError::UnsupportedSaltMode(_))
         ));
     }
 

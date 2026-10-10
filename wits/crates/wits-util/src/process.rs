@@ -41,6 +41,20 @@ pub struct CommandResult {
     pub stderr: String,
 }
 
+/// What [`Command::exec_raw`] captured: stdout kept as the bytes the child wrote.
+pub struct RawResult {
+    pub exit_code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: String,
+}
+
+impl RawResult {
+    #[inline]
+    pub fn is_success(&self) -> bool {
+        self.exit_code == 0
+    }
+}
+
 impl CommandResult {
     #[inline]
     pub fn is_success(&self) -> bool {
@@ -158,11 +172,23 @@ impl Command {
     /// rather than executed, and a synthetic success is returned so callers can
     /// proceed as if nothing failed.
     pub fn exec(&self) -> Result<CommandResult, ProcessError> {
+        let raw = self.exec_raw()?;
+        Ok(CommandResult {
+            exit_code: raw.exit_code,
+            stdout: String::from_utf8(raw.stdout)?,
+            stderr: raw.stderr,
+        })
+    }
+
+    /// [`exec`](Command::exec) for output that is data rather than text:
+    /// stdout comes back as raw bytes. A blob git stores can be anything, and
+    /// decoding it as UTF-8 would either fail or misreport what it holds.
+    pub fn exec_raw(&self) -> Result<RawResult, ProcessError> {
         if wits_log::is_dry_run() && !self.force_run {
             wits_log::dry_run(&self.format_cmd());
-            return Ok(CommandResult {
+            return Ok(RawResult {
                 exit_code: 0,
-                stdout: String::new(),
+                stdout: Vec::new(),
                 stderr: String::new(),
             });
         }
@@ -180,9 +206,9 @@ impl Command {
                 source,
             })?;
 
-        Ok(CommandResult {
+        Ok(RawResult {
             exit_code: output.status.code().unwrap_or(-1),
-            stdout: String::from_utf8(output.stdout)?,
+            stdout: output.stdout,
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
     }

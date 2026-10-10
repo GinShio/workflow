@@ -111,23 +111,35 @@ not because they share machinery.
 Crypto — authenticated encryption shaped by git filters
 -------------------------------------------------------
 
-Two domain constraints drive everything here.
+Three domain constraints drive everything here.
 
-**Compatibility.** Repositories already hold data encrypted by the earlier
-``transcrypt`` tool. The packet layout, the algorithm-name spellings, and the
-default PBKDF2 iteration count are a frozen wire format: reproduce them exactly
-or that data becomes unreadable. This is why a few constants look arbitrary —
-they are, and they cannot change. The PBKDF2 default of 99 989 iterations is
-the value the original tool shipped; old repositories were encrypted with it.
+**The password reaches nothing but the KDF.** A packet sits in public history
+for good, so any value in it computed from the password without the KDF would
+let an offline attacker check a guess at that computation's speed rather than
+the KDF's — whenever the file's content can be guessed. Salt and IV are
+therefore keyed from the KDF's output: the IV is a keyed BLAKE2b over the path
+and the content, under a key derived from a per-context *salt* through the KDF.
 
-**Determinism.** A clean filter runs on every ``git add``. If encrypting
-unchanged content produced fresh randomness, git would see the file as modified
-forever. So the default mode derives salt and IV from the content itself: same
-input, same output, no phantom diffs. The cost is that identical plaintext is
-observably identical once encrypted — fine here, and the price of a filter that
-does not fight git. The derivation also folds in the file path as the AEAD's
-*additional data*, binding a ciphertext to its location so a moved blob fails to
-authenticate instead of silently decrypting.
+**Determinism.** A clean filter runs on every ``git add``. If re-encrypting
+unchanged content gave git a new blob, the file would read as modified
+forever. The IV depends only on the path, the content, and the context's key,
+so it is reproducible. In the default *file* salt mode every content version is
+also sealed under its own key with a fresh random salt, so clean hands git the
+packet the index already holds whenever that packet carries the IV this content
+gets; the *context* mode seals under the context's own key and is deterministic
+by itself. Either way identical plaintext at one path is observably identical
+once encrypted — the price of a filter that does not fight git. The path is also
+the AEAD's *additional data*, binding a ciphertext to its location so a moved
+blob fails to authenticate instead of silently decrypting.
+
+**One way in.** Every packet carries its salt and IV, so decryption needs no
+knowledge of how it was sealed: one path opens both modes, the off-filter random
+mode, and every packet sealed before the IV was keyed. The packet layout and the
+algorithm-name spellings are therefore kept exactly, and so are the defaults — the
+PBKDF2 default of 99 989 iterations is the value the original tool shipped, and
+Argon2id's 128 MiB over two lanes is what every packet up to now was sealed with.
+Packets do not record these parameters, which is why changing them belongs
+with rotating the password.
 
 There is also an explicit random mode for callers off the filter path — ones
 that can afford fresh randomness and want the stronger guarantee.
