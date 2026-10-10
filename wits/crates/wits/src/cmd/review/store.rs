@@ -108,6 +108,15 @@ impl Store {
         write_json(&path, local)
     }
 
+    // -- an unfinished `edit` --------------------------------------------------
+
+    /// Where `edit` keeps the buffer it opened and what that buffer showed, for
+    /// as long as the edit is unfinished.
+    pub fn edit_paths(&self, id: &str) -> (PathBuf, PathBuf) {
+        let dir = self.mr_dir(id);
+        (dir.join("edit.md"), dir.join("edit.json"))
+    }
+
     // -- the last submitted review point -------------------------------------
 
     /// Where the last submitted review of the MR stood, if one was submitted

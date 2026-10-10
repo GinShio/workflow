@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// (added and context lines); `Old` is the pre-image, used only for a line that
 /// a change deleted. Shared with the local model so an anchor round-trips
 /// without translation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Side {
     Old,

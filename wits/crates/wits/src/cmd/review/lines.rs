@@ -60,6 +60,19 @@ pub(crate) fn old_line_of(hunks: &[Hunk], new_line: u32) -> Option<u32> {
     u32::try_from(i64::from(new_line) + shift).ok()
 }
 
+/// The post-image number of pre-image line `old_line`, or `None` when the
+/// change removed it: [`old_line_of`] with the sides swapped.
+pub(crate) fn new_line_of(hunks: &[Hunk], old_line: u32) -> Option<u32> {
+    let mirrored: Vec<Hunk> = hunks
+        .iter()
+        .map(|h| Hunk {
+            old: h.new,
+            new: h.old,
+        })
+        .collect();
+    old_line_of(&mirrored, old_line)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,6 +131,18 @@ diff --git a/f.c b/f.c
         // Lines 10-12 replaced old 9-10, and after them the shift is two again.
         assert_eq!((old(10), old(12)), (None, None));
         assert_eq!(old(13), Some(11));
+    }
+
+    #[test]
+    fn an_old_line_maps_forward_unless_removed() {
+        let hunks = hunks(PATCH);
+        let new = |old| new_line_of(&hunks, old);
+        assert_eq!((new(1), new(2)), (Some(1), Some(2)));
+        assert_eq!((new(3), new(4)), (Some(5), Some(6)));
+        assert_eq!(new(5), None, "removed");
+        assert_eq!((new(6), new(8)), (Some(7), Some(9)));
+        assert_eq!((new(9), new(10)), (None, None), "replaced");
+        assert_eq!(new(11), Some(13));
     }
 
     #[test]

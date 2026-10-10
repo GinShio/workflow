@@ -112,7 +112,7 @@ function __wits_review_mrs
         printf '%s\t%s\n' (path basename "$mrd") (string replace "$base/" '' -- (path dirname "$mrd"))
     end
 end
-complete -c wits -f -n '__fish_seen_subcommand_from review; and __fish_seen_subcommand_from fetch show diff draft submit checkout prune' -a '(__wits_review_mrs)'
+complete -c wits -f -n '__fish_seen_subcommand_from review; and __fish_seen_subcommand_from fetch show diff draft edit submit checkout prune' -a '(__wits_review_mrs)'
 
 # Feeds: one global TOML file (wits/docs/commands/review.rst) declares one
 # [repo."host/…"] section per repo, each feed a `feed.<name> = { … }` key;

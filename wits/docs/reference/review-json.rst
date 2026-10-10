@@ -9,8 +9,8 @@ front-end).
 * **Read** through ``--json``: ``show``, ``diff``, and ``draft`` emit
   versioned JSON on stdout.
 * **Write** by editing ``local.json`` — the draft file whose schema is
-  defined below. A front-end writes this file; there are no authoring
-  commands.
+  defined below. A front-end writes this file; ``wits review edit`` is one,
+  turning text written in a patch into these actions.
 
 Every payload carries an integer ``schema`` (currently ``1``). A reader that
 meets a schema it does not know should refuse rather than guess.

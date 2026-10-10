@@ -230,12 +230,28 @@ impl Fixture {
     }
 
     fn run_as(&self, args: &[&str], stdin: Option<&str>, token: Option<&str>) -> Out {
+        self.run_full(args, stdin, token, &[])
+    }
+
+    /// [`run`](Self::run) with `editor` as git's editor.
+    fn run_editing(&self, args: &[&str], editor: &str) -> Out {
+        self.run_full(args, None, Some("x"), &[("GIT_EDITOR", editor)])
+    }
+
+    fn run_full(
+        &self,
+        args: &[&str],
+        stdin: Option<&str>,
+        token: Option<&str>,
+        env: &[(&str, &str)],
+    ) -> Out {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_wits"));
         cmd.args(args)
             .current_dir(&self.repo)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env("WITS_REVIEW_DIR", &self.store);
+            .env("WITS_REVIEW_DIR", &self.store)
+            .envs(env.iter().copied());
         match token {
             Some(token) => cmd.env("GITHUB_TOKEN", token),
             None => cmd.env_remove("GITHUB_TOKEN"),
@@ -1237,5 +1253,88 @@ fn since_reviewed_needs_a_submitted_review() {
         out.stderr.contains("no review of MR 7 has been submitted"),
         "{}",
         out.stderr
+    );
+}
+
+/// An editor that runs `script` on the file with `sed -i`.
+fn sed_editor(fx: &Fixture, name: &str, script: &str) -> String {
+    let path = fx.store.join(name);
+    std::fs::create_dir_all(&fx.store).unwrap();
+    std::fs::write(&path, script).unwrap();
+    format!("sed -i -f '{}'", path.display())
+}
+
+#[test]
+fn edit_turns_text_under_a_line_into_a_comment() {
+    let fx = Fixture::new();
+    fx.two_snapshots();
+    let editor = sed_editor(&fx, "comment.sed", "/^> +THREE (reworked)$/a well done\n");
+
+    let out = fx.run_editing(&["review", "edit", "7"], &editor);
+    assert!(out.success, "stderr: {}", out.stderr);
+    let draft = fx.run(&["review", "draft", "7", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&draft.stdout).unwrap();
+    let action = &v["actions"][0];
+    assert_eq!(action["file"], "shared.c");
+    assert_eq!(action["line"], 3);
+    assert_eq!(action["side"], "new");
+    assert_eq!(action["body"], "well done");
+    assert!(
+        !fx.mr_dir("7").join("edit.md").exists(),
+        "a finished edit leaves nothing behind"
+    );
+}
+
+#[test]
+fn an_untouched_buffer_changes_nothing() {
+    let fx = Fixture::new();
+    fx.two_snapshots();
+    let out = fx.run_editing(&["review", "edit", "7"], "cat");
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert!(out.stdout.contains("> +THREE (reworked)"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains(">> wits review edit · MR 7"),
+        "{}",
+        out.stdout
+    );
+    assert!(out.stderr.contains("nothing changed"), "{}", out.stderr);
+    assert!(!fx.local_exists("7"));
+}
+
+#[test]
+fn a_buffer_that_does_not_parse_is_kept_and_reopened() {
+    let fx = Fixture::new();
+    fx.two_snapshots();
+    let spoil = sed_editor(
+        &fx,
+        "spoil.sed",
+        "s/^> +THREE (reworked)$/> +THREE (rework)/\n/^> +THREE (rework)$/a my note\n",
+    );
+    let out = fx.run_editing(&["review", "edit", "7"], &spoil);
+    assert!(!out.success);
+    assert!(out.stderr.contains("stops matching"), "{}", out.stderr);
+    assert!(out.stderr.contains("reopens it"), "{}", out.stderr);
+    assert!(!fx.local_exists("7"));
+
+    // The next edit reopens the same buffer, note and all; mend the line.
+    let mend = sed_editor(
+        &fx,
+        "mend.sed",
+        "s/^> +THREE (rework)$/> +THREE (reworked)/\n",
+    );
+    let out = fx.run_editing(&["review", "edit", "7"], &mend);
+    assert!(out.success, "stderr: {}", out.stderr);
+    let draft = fx.run(&["review", "draft", "7", "--json"]);
+    assert!(draft.stdout.contains("my note"), "{}", draft.stdout);
+
+    // `--discard` starts over from the draft as it stands.
+    fx.run_editing(&["review", "edit", "7"], &spoil);
+    let out = fx.run_editing(&["review", "edit", "7", "--discard"], "cat");
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert!(!out.stdout.contains("(rework)"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains(">> draft "),
+        "the draft is shown: {}",
+        out.stdout
     );
 }

@@ -100,7 +100,7 @@ repo.
 The commands
 ------------
 
-Seven verbs; only ``fetch`` and ``submit`` touch the network.
+Eight verbs; only ``fetch`` and ``submit`` touch the network.
 
 .. list-table::
    :header-rows: 1
@@ -122,6 +122,10 @@ Seven verbs; only ``fetch`` and ``submit`` touch the network.
    * - ``draft <mr> [FILE\|-] [--json] [--dedup]``
      - —
      - Show the pending draft, append a batch of actions to it, or compact it.
+   * - ``edit <mr> [--discard]``
+     - —
+     - Write the review in the patch, in your editor, with the threads and the
+       draft in place.
    * - ``submit [mr] [--stack\|--all]``
      - write
      - Flush the draft(s) as batched reviews.
@@ -587,9 +591,12 @@ Authoring a review — edit ``local.json``
 ----------------------------------------
 
 There are **no authoring commands**. You produce the content; the tool writes
-it into ``local.json``. Two equivalent ways:
+it into ``local.json``. Three ways, all equivalent:
 
-* **Pipe a batch to the tool** (the path an editor extension uses):
+* **Write in the patch** with ``wits review edit 123`` (the path for a person;
+  see below).
+
+* **Pipe a batch to the tool** (the path an editor extension or an agent uses):
 
   .. code-block:: sh
 
@@ -652,6 +659,67 @@ Rules, all inferred so the file is pleasant to hand-write:
 * **``reply``** targets a thread id (the bare forge id, or the ``remote:`` form
   ``show`` prints).
 * **``resolve``** sets a thread's resolved state (supported on both forges).
+
+Writing in the patch: ``edit``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``wits review edit 123`` opens the current review point's patch in git's
+editor, quoted, with the forge's threads and your draft where they sit, and
+reads what you write back into draft actions. A buffer looks like this, with
+the reviewer's writing on the unquoted lines:
+
+.. code-block:: text
+
+   /request-changes
+   Close; one blocker below.
+
+   >> wits review edit · MR 123 · !123 Fix the lock ordering
+   >> review point 1a2b3c4d5e6..9f8e7d6c5b4
+   >>   (help)
+   > diff --git a/src/x.c b/src/x.c
+   > --- a/src/x.c
+   > +++ b/src/x.c
+   > @@ -40,6 +40,7 @@ static void flush(void)
+   >  	lock(&a);
+   > -	lock(&b);
+   > +	lock(&c);
+   This inverts the order the rest of the file takes.
+   >> thread 9987 · unresolved
+   >>   bob: why c before b?
+   Same question; see above.
+   /resolve
+   >> draft wits:5f0c… · comment
+   A comment an agent drafted, which you can reword here.
+
+What text means is where it sits:
+
+* **Above the first patch line**, outside a thread: the review's summary. A
+  line ``/approve``, ``/request-changes`` or ``/comment`` of its own sets the
+  verdict.
+* **Under a patch line**: a comment on that line — on its old side under a
+  ``-`` line, its new side otherwise. Under a file's header: a comment on the
+  file. ``/span`` alone on a line before a patch line starts a range; the next
+  comment in that hunk covers it.
+* **Under a thread**: a reply. ``/resolve`` or ``/unresolve`` alone resolves or
+  reopens it.
+* **Under a ``>> draft`` line**: that draft's text. Reword it, move it together
+  with its line to re-anchor a comment, or delete both, or just the text, to
+  drop it.
+
+Quoted lines — ``>`` for the patch, ``>>`` for the discussion and these notes
+— are never sent. Each comment's position comes from the patch as rendered,
+not from the buffer, so editing cannot shift a line number: a quoted patch line
+that no longer matches is refused, though whole files may be deleted to cut the
+noise. A ``>`` line that is not the patch's next line is your text, so a
+Markdown quote in a comment works.
+
+Saving applies the changes against what the buffer showed, never replacing the
+draft: a draft an agent added while you were editing survives, and anything
+you left alone is not rewritten. A buffer that does not parse is kept; the
+next ``edit`` reopens it, and ``--discard`` starts over. Threads and drafts
+that cannot be placed on this review point's patch — written on an earlier one
+whose lines moved, or on lines outside the hunks — are listed at the end; a
+draft there is shown for reference and changed with ``draft``.
 
 Preview what is recorded any time, without touching the forge:
 

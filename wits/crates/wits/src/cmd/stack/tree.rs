@@ -20,7 +20,6 @@ use std::io::Read as _;
 
 use anyhow::Context;
 use wits_util::git::Repository;
-use wits_util::process::Command;
 use wits_util::project::remotes::Declared;
 
 use super::topology::Topology;
@@ -211,24 +210,12 @@ fn parse_forest(repo: &Repository, base: &str, text: &str) -> anyhow::Result<Top
 /// opens under `--dry-run` too — reading what to do is not a change; the save
 /// that follows is what prints instead of writing.
 fn edit_in_editor(repo: &Repository, seed: &str) -> anyhow::Result<String> {
-    let editor = repo
-        .editor()
-        .context("git has no editor to open the stack in (set core.editor)")?;
     let file = tempfile::Builder::new()
         .prefix("wits-stack-")
         .suffix(".machete")
         .tempfile()
         .context("creating the stack edit file")?;
     fs::write(file.path(), seed)?;
-    let path = file.path().display().to_string();
-    let script = format!("{editor} \"$@\"");
-    let code = Command::new("sh")
-        .args(["-c", script.as_str(), editor.as_str(), path.as_str()])
-        .force_run()
-        .status()?;
-    anyhow::ensure!(
-        code == 0,
-        "the editor exited with status {code}; nothing was changed"
-    );
+    wits_util::editor::edit(repo, file.path()).context("nothing was changed")?;
     fs::read_to_string(file.path()).context("reading back the edited stack")
 }

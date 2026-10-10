@@ -9,8 +9,10 @@
 //! - [`Local`]   — your unsubmitted actions, edited by hand or an editor; this
 //!   is the sole *write* interface, so its shape is a public, versioned contract.
 //!
-//! There are no authoring commands: to review, you edit `local.json`, then
-//! `submit` merges, posts, and clears it. Everything is versioned by [`SCHEMA`].
+//! There are no authoring commands: to review, you edit `local.json` — by hand,
+//! through `draft <mr> -`, or by writing in the patch with `edit`, which turns
+//! the text into these actions — then `submit` merges, posts, and clears it.
+//! Everything is versioned by [`SCHEMA`].
 
 use rand::RngCore;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

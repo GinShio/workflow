@@ -42,6 +42,8 @@ directory::
    │   ├── comments.json   # the forge's discussion (a cache)
    │   ├── local.json      # your unsubmitted review (only present while drafting)
    │   ├── reviewed.json   # where your last submitted review stood
+   │   ├── edit.md         # an unfinished `edit` buffer (only after one failed to parse)
+   │   ├── edit.json       # what that buffer showed
    │   └── inflight.json   # deferred cleanup ids (only after a failed submit)
    ├── <id>/ …
    └── current             # the MR the last `checkout` materialized
@@ -163,6 +165,16 @@ writes it whenever anything of a review lands, a lone verdict included;
 ``fetch`` leaves it alone. ``diff --since-reviewed`` compares the current
 review point against it. Losing it loses nothing but that shorthand — the
 review point itself is still in ``info.json``'s history.
+
+``edit.md`` and ``edit.json`` — an unfinished edit (transient)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``edit`` writes the buffer it opens to ``edit.md``, and what that buffer
+showed — the review point, the verdict, the summary and the drafts under a
+marker — to ``edit.json``. What is read back is measured against
+``edit.json``, so a draft that changed meanwhile is not overwritten by a stale
+copy. Both are removed once the edit applies; a buffer that does not parse
+stays for the next ``edit`` to reopen, and ``edit --discard`` removes it.
 
 ``inflight.json`` — deferred forge-side cleanup (transient)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

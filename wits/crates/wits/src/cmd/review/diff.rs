@@ -604,7 +604,7 @@ fn series_differs(repo: &Repository, from: &Series, to: &Series) -> bool {
 /// reports "no output" and "the command failed" identically as `None`, so the
 /// endpoints are probed to tell an honestly empty diff (a series that changed
 /// nothing) from objects that aren't present.
-fn patch_text_between(repo: &Repository, from: &str, to: &str) -> Result<String> {
+pub(super) fn patch_text_between(repo: &Repository, from: &str, to: &str) -> Result<String> {
     if let Some(text) = repo.diff_patch(from, to, None) {
         return Ok(text + "\n");
     }

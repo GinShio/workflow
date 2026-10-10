@@ -9,12 +9,14 @@
 //! by number, and its objects are fetched and pinned locally, so any MR in the
 //! repo can be reviewed without a local branch. And you **author by editing a
 //! local file**, not by running commands — only two verbs touch the network,
-//! `fetch` (read) and `submit` (write); in between you edit `local.json` and
-//! `submit` flushes it as one batch. See `docs/reference/review-design.rst`.
+//! `fetch` (read) and `submit` (write); in between you edit `local.json`, or
+//! write in the patch with `edit`, and `submit` flushes it as one batch. See
+//! `docs/reference/review-design.rst`.
 
 mod checkout;
 mod config;
 mod diff;
+mod edit;
 mod fetch;
 mod lines;
 mod model;
@@ -52,6 +54,8 @@ pub enum ReviewAction {
     Diff(DiffArgs),
     /// Show the pending local draft for an MR (`--json` for editors).
     Draft(DraftArgs),
+    /// Write a review in the patch: comment under lines, reply under threads.
+    Edit(EditArgs),
     /// Flush the local draft to the forge (the only network write).
     Submit(SubmitArgs),
     /// Materialize an MR's code into a worktree (or in place) to build and test.
@@ -197,6 +201,15 @@ pub struct DraftArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct EditArgs {
+    /// The MR to review.
+    pub mr: String,
+    /// Throw away an unfinished edit and start from the draft as it stands.
+    #[arg(long)]
+    pub discard: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct SubmitArgs {
     /// The MR to submit. Omit with `--all`.
     pub mr: Option<String>,
@@ -256,6 +269,7 @@ pub fn run(args: &ReviewArgs) -> Result<()> {
         ReviewAction::Show(a) => show::run(&repo, a),
         ReviewAction::Diff(a) => diff::run(&repo, a),
         ReviewAction::Draft(a) => show::run_draft(&repo, a),
+        ReviewAction::Edit(a) => edit::run(&repo, a),
         ReviewAction::Submit(a) => submit::run(&repo, a),
         ReviewAction::Checkout(a) => checkout::run(&repo, a),
         ReviewAction::Prune(a) => prune::run(&repo, a),
