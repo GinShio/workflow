@@ -50,6 +50,8 @@ Org 的檔案散在 =~/cyber/blog/= 下。筆記與行動檔都放同一棵樹�
   (expand-file-name "agenda" ginshio-org-root))
 (defconst ginshio-org-capture-dir
   (expand-file-name "capture" ginshio-org-root))
+(defconst ginshio-org-archive-dir
+  (expand-file-name "archive" ginshio-org-root))
 (defconst ginshio-org-todo-file
   (expand-file-name "todo.org" ginshio-org-agenda-dir))
 (defconst ginshio-org-project-file
@@ -68,6 +70,7 @@ Org 的檔案散在 =~/cyber/blog/= 下。筆記與行動檔都放同一棵樹�
   (dolist (dir (list ginshio-org-root
                      ginshio-org-agenda-dir
                      ginshio-org-capture-dir
+                     ginshio-org-archive-dir
                      (file-name-directory (car ginshio-org-bibliography))))
     (unless (file-directory-p dir)
       (make-directory dir t))))
@@ -535,11 +538,14 @@ refile 的候選目標掃的是 agenda 檔，並顯示完整路徑（~outline-pa
       org-refile-allow-creating-parent-nodes 'confirm
       org-refile-targets '((org-agenda-files . (:maxlevel . 3)))
       org-archive-location
-      (expand-file-name "archive/%s_archive::datetree/"))
+      (expand-file-name "%s_archive::datetree/" ginshio-org-archive-dir))
 #+end_src
 
-~org-archive-location~ 用 ~%s~ 代入原檔名，把歸檔內容集中到 =archive/= 子目錄，並按
-完成日期分層（datetree），方便日後回查。refile 與 archive 的入口一起掛在 =o r= 下。
+~org-archive-location~ 用 ~%s~ 代入原檔名，把歸檔內容集中到資料根目錄底下的 =archive/=，
+並按完成日期分層（datetree），方便日後回查。路徑必須錨在 ~ginshio-org-root~ 上：在加載
+時對一個相對路徑 ~expand-file-name~，錨點是 Emacs 啓動時的工作目錄——從家目錄啓動，歸
+檔就落進 =~/archive/=。目錄由上面的 ~ginshio-org--ensure-directories~ 在 org 加載時建好。
+refile 與 archive 的入口一起掛在 =o r= 下。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
 (ginshio-leader-define
