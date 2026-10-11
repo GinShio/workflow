@@ -18,15 +18,33 @@ tree-sitter grammar、格式化或 =opt=/=llc=/=mlir-opt=/TableGen 工具。等�
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-llvm.el"
 (require 'ginshio-path)
 
-(dolist (library '("llvm/llvm-mode.el"
-                   "llvm/llvm-mir-mode.el"
-                   "llvm/tablegen-mode.el"
-                   "mlir/mlir-mode.el"))
+(defconst ginshio-lang-llvm-libraries
+  '("llvm/llvm-mode.el" "llvm/llvm-mir-mode.el" "llvm/tablegen-mode.el"
+    "mlir/mlir-mode.el")
+  "The vendored upstream modes, relative to `ginshio-modules-dir'.")
+
+(dolist (library ginshio-lang-llvm-libraries)
   (unless (file-readable-p (expand-file-name library ginshio-modules-dir))
     (error "Vendored language mode is missing: %s" library)))
 
 (add-to-list 'load-path (expand-file-name "llvm/" ginshio-modules-dir))
 (add-to-list 'load-path (expand-file-name "mlir/" ginshio-modules-dir))
+#+end_src
+
+四個文件都沒有 =lexical-binding= cookie。Emacs 31 載入這樣的源文件時用 ~display-warning~
+報一條，於是第一次打開 =.ll= 或 =.td= 就彈出 =*Warnings*=。snapshot 按 =README= 保持原
+樣，所以不在文件裏補 cookie，而是在這裏把這一條警告按文件壓掉。警告的類型是
+=(files missing-lexbind-cookie FILE)=，FILE 是 ~load~ 找到它時的路徑縮寫，而
+~warning-suppress-log-types~ 逐項用 ~equal~ 比較，所以別的文件的同類警告照常出現。四個
+文件仍按上游寫成時的動態作用域載入，行為不變。
+
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-llvm.el"
+(with-eval-after-load 'warnings
+  (dolist (library ginshio-lang-llvm-libraries)
+    (add-to-list 'warning-suppress-log-types
+                 `(files missing-lexbind-cookie
+                         ,(abbreviate-file-name
+                           (expand-file-name library ginshio-modules-dir))))))
 #+end_src
 
 ** 文件識別
