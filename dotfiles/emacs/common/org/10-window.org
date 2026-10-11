@@ -147,8 +147,14 @@ minibuffer 模塊的 consult 預覽也走 ~display-buffer~，所以上面這張�
 
 那條 bar 不顯示。有幾個項目不是需要持續盯着的信息。
 
+鍵也不要。~tab-bar-mode~ 打開時會往自己的 minor mode 映射裏裝 ~C-<tab>~ 與
+~C-S-<tab>~；那張映射不經過被清空的全域映射，於是這兩個鍵在每個緩衝區裏都能切 tab——
+和 diff-hl 的 ~C-x v~、outline 的 ~C-c @~ 是同一類洩漏。Emacs 31 的
+~tab-bar-define-keys~ 設成 nil 就一個都不裝，切項目仍然只走 =p ]= 與 =p [=。
+
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-window.el"
 (setq tab-bar-show nil
+      tab-bar-define-keys nil
       tab-bar-new-tab-choice "*scratch*"
       tab-bar-close-last-tab-choice nil   ; refuse to close the only project
       tab-bar-history-limit 20)
