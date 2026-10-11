@@ -249,49 +249,11 @@ Emacs 自己的大綱結構，所以內建的 ~outline-minor-mode~ 在這些模�
 
 不需要任何包。只要在能回答這個問題的模式裏把它打開。
 
-*** 一處要繞開的上游缺陷
-
-大綱接口有兩種問法：「往下一個標題在哪」和「當前這一行是不是標題」。Emacs 30.2 的
-tree-sitter 實現只答對了第一種。
-
-第二種它是這樣答的：看語法樹上標記標題的那個節點是否覆蓋光標所在位置。問題在於
-C/C++ 用來標記標題的節點是 *函數聲明符*——在 =int helper(int a) {= 這一行裏，它從第
-四列才開始，既不覆蓋行首也不覆蓋行尾。於是每一行都被判定為「不是標題」。
-
-後果是分裂的：全緩衝區的命令（全部收起、全部展開、跳到下一個聲明）正常，而所有需要
-「先確認你站在一個標題上」的命令——收起這一個、展開這一個、循環——一律報「Before
-first heading」。
-
-改用搜索來回答同一個問題：從本行行首往下找一個標題，找到的如果就是本行，那本行就是
-標題。這比原本的判斷貴一點，但它和第一種問法用的是同一套邏輯，所以兩者不可能再打架。
-
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang.el"
-(defun ginshio-lang-outline-search (&optional bound move backward looking-at)
-  "Find outline headings the way `outline-search-function' expects.
-
-Defers to the tree-sitter implementation except when asked whether point
-is already on a heading.  That question is answered there by testing
-whether the node marking a heading covers point, which is false on every
-heading line in C and C++: the node is the function declarator, and it
-starts several columns in.  Answering by search instead keeps both
-questions consistent.
-
-Delete this once the two agree upstream."
-  (if looking-at
-      (let ((origin (pos-bol)))
-        (save-excursion
-          (goto-char origin)
-          (and (treesit-outline-search (min (or bound (point-max)) (pos-eol))
-                                       t nil nil)
-               (= (pos-bol) origin))))
-    (treesit-outline-search bound move backward looking-at)))
-
 (defun ginshio-lang-enable-outline-h ()
   "Turn on folding where the major mode can say what its outline is.
 Tree-sitter modes answer from the syntax tree, so folds follow
 declarations rather than indentation or brace counting."
-  (when (eq outline-search-function #'treesit-outline-search)
-    (setq-local outline-search-function #'ginshio-lang-outline-search))
   (when (local-variable-p 'outline-search-function)
     (outline-minor-mode 1)))
 
