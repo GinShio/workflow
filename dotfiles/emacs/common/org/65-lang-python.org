@@ -31,13 +31,12 @@ EditorConfig 的明確聲明最後生效。
 
 (ginshio-lang-register
  :module 'lang-python
- :grammars '((python "https://github.com/tree-sitter/tree-sitter-python"
-                    "v0.23.6"))
+ :grammars '((python))
  :modes '((python-mode python-ts-mode python)))
 #+end_src
 
-=v0.23.6= 使用 ABI 14，能在 Emacs 30 支持的 runtime 範圍內工作。=.py=、=.pyi=、=.pyw=
-與 Python shebang 仍先由內建 classic mode 識別；grammar ready 時 lang 框架才 remap。
+grammar 的來源由 python.el 自己登記。=.py=、=.pyi=、=.pyw= 與 Python shebang 仍先由
+內建 classic mode 識別；grammar ready 時 lang 框架才 remap。
 
 ** 診斷
 

@@ -57,15 +57,34 @@ setup with it.")
 *先用系統裝好的。* 發行版打包的 grammar 已經編譯好、跟着系統更新、和其他用到
 tree-sitter 的程序共用一份。自己編譯只在系統沒有的時候才有必要。
 
-這一點決定了搜索路徑的順序：我們自己的目錄 *追加* 在系統目錄後面，而不是插在前面。
+但系統裝好的要 Emacs 找得到纔算數。openSUSE 的 =tree-sitter-LANG= 包把
+=libtree-sitter-LANG.so= 裝在 =/usr/lib64/tree-sitter/=（~rpm -ql tree-sitter-c~），而
+Emacs 只搜 ~treesit-extra-load-path~、配置目錄下的 =tree-sitter/= 和動態鏈接器的默認
+路徑，三處都不是它。不把這個目錄加進來，裝好的 grammar 一個都看不見：每種語言都安靜
+地停在傳統模式，doctor 還會建議你去裝一個已經裝了的包。
+
+順序決定誰優先：系統目錄在前，我們自己的目錄 *追加* 在後面。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang.el"
+(defconst ginshio-lang-system-grammar-dir "/usr/lib64/tree-sitter/"
+  "Where the distribution's tree-sitter-LANG packages install grammars.")
+
 (defconst ginshio-lang-grammar-dir
   (expand-file-name "tree-sitter/" ginshio-data-dir)
   "Grammars compiled here, for the ones the system does not provide.")
 
 (when ginshio-lang-treesit-available
-  (add-to-list 'treesit-extra-load-path ginshio-lang-grammar-dir t))
+  (dolist (dir (list ginshio-lang-system-grammar-dir ginshio-lang-grammar-dir))
+    (add-to-list 'treesit-extra-load-path dir t)))
+#+end_src
+
+Emacs 31 的 tree-sitter 主模式在 grammar 缺失時會先調用 ~treesit-ensure-installed~，而
+~treesit-auto-install-grammar~ 默認是 ~ask~：打開一個文件的路上停下來，問你要不要現場
+下載、編譯一個動態庫。這正是普通會話不該做的事。關掉之後，缺 grammar 的主模式照樣
+打開文件，只是沒有語法樹；安裝仍然是下面那條顯式命令。
+
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang.el"
+(setq treesit-auto-install-grammar 'never)
 #+end_src
 
 按「丟了損失什麼」的標準，編譯好的 grammar 接近緩存——刪掉重編即可。但重編需要網絡
@@ -85,12 +104,18 @@ grammar 的節點名寫的，上游改了節點名之後，你得到的不是報
 亮悄悄消失，或者縮進在某種寫法下悄悄偏移。等你察覺，已經想不起是哪一次更新引入的。
 釘住之後升級變成一個明確的動作：改版本號、重裝、有問題就改回去。
 
+釘的應該是寫查詢的那一方。Emacs 31 起，內建的 tree-sitter 主模式在自己的庫裏登記了
+查詢所對應的 grammar commit（~treesit-language-source-alist~）；這裏再寫一份，到下一次
+升級 Emacs 時就成了一份蓋在新選擇上面的舊選擇。所以內建主模式的語言只聲明名字，來源
+交給主模式；第三方主模式沒有登記的，纔在這裏釘。
+
 註冊是冪等的：同一種語言註冊兩次是替換而不是累積，所以重新加載一個語言模塊不會留下
 重複條目。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang.el"
 (defvar ginshio-lang-grammars nil
-  "Alist of LANGUAGE to (URL REVISION), filled in by the language modules.")
+  "Alist of LANGUAGE to (URL REVISION), filled in by the language modules.
+The value is nil when the tree-sitter mode declares the source itself.")
 
 (defvar ginshio-lang-modes nil
   "Alist of CLASSIC-MODE to (TREE-SITTER-MODE . LANGUAGES).")
@@ -101,7 +126,9 @@ grammar 的節點名寫的，上游改了節點名之後，你得到的不是報
 PROPERTIES is a plist:
 
   :module     required symbol naming the language module and doctor section
-  :grammars   list of (LANGUAGE URL REVISION), pinned to a known-good tag
+  :grammars   list of (LANGUAGE) when the tree-sitter mode declares the
+              grammar its queries were written against, or
+              (LANGUAGE URL REVISION) to pin one here
   :compilers  list of (LABEL PROGRAMS . PROPS) for this language's own
               compilers; finding any executable in PROGRAMS satisfies one
               check, and PROPS are passed to doctor
@@ -111,7 +138,7 @@ PROPERTIES is a plist:
                     (error "Language registration requires :module"))))
     (dolist (grammar (plist-get properties :grammars))
       (setf (alist-get (car grammar) ginshio-lang-grammars) (cdr grammar))
-      (when ginshio-lang-treesit-available
+      (when (and ginshio-lang-treesit-available (cdr grammar))
         (setf (alist-get (car grammar) treesit-language-source-alist)
               (cdr grammar)))
       (ginshio-lang--declare-grammar-check module (car grammar)))
@@ -124,12 +151,16 @@ PROPERTIES is a plist:
 
 ** 主模式
 
-Emacs 30 為每種語言帶了兩套主模式：傳統的和 tree-sitter 的。切換方式是往
+Emacs 為許多語言帶了兩套主模式：傳統的和 tree-sitter 的。切換方式是往
 ~major-mode-remap-alist~ 裏放一條轉發。這裏 *逐條* 添加而不是整體賦值——那張表是公
 共的，整體賦值會不聲不響地刪掉別人的條目。
 
-替換是有條件的，這是本節的重點。tree-sitter 主模式在 grammar 缺失時直接報錯，不是
-降級。無條件替換的結果是：一個沒編譯的動態庫，讓你連文件都打不開。
+替換是有條件的，這是本節的重點。內建的 tree-sitter 主模式在 grammar 缺失時不會退回
+傳統模式：它照樣進入，只是沒有語法樹，於是既沒有高亮也沒有縮進規則。無條件替換的結
+果是：一個沒編譯的動態庫，換來一個比 fundamental-mode 好不了多少的緩衝區。
+
+Emacs 31 有一個做同樣轉發的開關 ~treesit-enabled-modes~，但它的 setter 不看 grammar 在
+不在，選中的模式一律寫進 ~major-mode-remap-alist~。它缺的正是下面這個條件，所以不用它。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang.el"
 (defun ginshio-lang-grammar-ready-p (language)
@@ -152,19 +183,41 @@ Emacs 30 為每種語言帶了兩套主模式：傳統的和 tree-sitter 的。�
 安裝是一個顯式命令，不在啓動時自動進行——拉倉庫再調用編譯器是以分鐘計的事，不該發生
 在你只想打開一個文件的時候。
 
+系統提供的 grammar 從不在這裏構建。系統目錄排在搜索路徑最前面，本地構建的那份永遠不
+會被載入，構建它只是白白下載一次。所以前綴參數重建的也只是本地構建的那些。
+
+內建主模式的 grammar 來源寫在它們自己的庫裏，庫沒載入之前那條記錄並不存在。所以安裝
+之前先把註冊過的 tree-sitter 主模式載入；仍然找不到來源就停下，而不是讓
+~treesit-install-language-grammar~ 轉成逐項詢問 URL 的互動流程。
+
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang.el"
+(defun ginshio-lang-system-grammar-p (language)
+  "Return non-nil when LANGUAGE's grammar comes from the distribution."
+  (equal (ginshio-lang-grammar-origin language) ginshio-lang-system-grammar-dir))
+
+(defun ginshio-lang--load-grammar-sources ()
+  "Load each registered tree-sitter mode, whose library declares its grammar."
+  (pcase-dolist (`(,_classic ,replacement . ,_languages) ginshio-lang-modes)
+    (let ((definition (symbol-function replacement)))
+      (when (autoloadp definition)
+        (autoload-do-load definition replacement)))))
+
 (defun ginshio/lang-install-grammars (&optional reinstall)
-  "Build the grammars the system does not already provide.
-With a prefix argument, REINSTALL the ones that are present -- what you
-want after changing a pinned revision, since a grammar that already
-loads is otherwise left alone."
+  "Download and build the grammars the distribution does not provide.
+With a prefix argument, REINSTALL the local builds that are present --
+what you want after changing a pinned revision, since a grammar that
+already loads is otherwise left alone."
   (interactive "P")
   (unless ginshio-lang-treesit-available
     (user-error "This Emacs was built without tree-sitter support"))
+  (ginshio-lang--load-grammar-sources)
   (let ((built 0))
     (dolist (grammar ginshio-lang-grammars)
       (let ((language (car grammar)))
-        (when (or reinstall (not (treesit-ready-p language t)))
+        (when (and (not (ginshio-lang-system-grammar-p language))
+                   (or reinstall (not (treesit-ready-p language t))))
+          (unless (assq language treesit-language-source-alist)
+            (user-error "No source is declared for the %s grammar" language))
           (message "Building the %s grammar..." language)
           (treesit-install-language-grammar language ginshio-lang-grammar-dir)
           (setq built (1+ built)))))
@@ -347,7 +400,8 @@ Python interpreter 這類不是 compiler 的 runtime 仍由語言模塊直接聲
                           :detail (lambda ()
                                     (format "not found under %s"
                                             (string-join treesit-extra-load-path " ")))
-                          :remedy "install it from the distribution, or M-x ginshio/lang-install-grammars"
+                          :remedy (format "zypper install tree-sitter-%s; without a package, M-x ginshio/lang-install-grammars downloads and builds it"
+                                          language)
                           :when (lambda () ginshio-lang-treesit-available)))
 
 (defun ginshio-lang--declare-compiler-check (module compiler)

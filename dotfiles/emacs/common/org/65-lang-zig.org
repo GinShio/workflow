@@ -78,7 +78,8 @@ autoload association 是它自己加入的。
 #+end_src
 
 兩個 mode 都用四格作兜底；EditorConfig 原本只認 classic mode，上面的新增條目讓 TS mode
-遵循同一份項目聲明。grammar 固定在已和這個 TS mode 驗證過的 =v1.1.2=。
+遵循同一份項目聲明。zig-ts-mode 不往 ~treesit-language-source-alist~ 登記來源，所以
+grammar 在這裏固定在已和它驗證過的 =v1.1.2=。
 
 ** 項目構建與 zls
 

@@ -418,7 +418,9 @@ Emacs 自己拼出的命令固定交給 POSIX shell；Eat 使用 =$SHELL= 作為
 | ~M-m z m~ / ~z r~       | 全部收起 / 全部展開                |
 | ~M-m z n~ / ~z p~ / ~z u~ | 下一個 / 上一個 / 上層 heading  |
 
-Tree-sitter grammar 缺失時保留可用的傳統 major mode，doctor 以 warn 報告。手冊：
+Tree-sitter grammar 默認用發行版的 =tree-sitter-LANG= 包（裝在 =/usr/lib64/tree-sitter/=），
+配置從不自動下載。缺失時保留可用的傳統 major mode，doctor 以 warn 報告；發行版沒有打包的
+grammar 用 ~M-x ginshio/lang-install-grammars~ 手動下載構建。手冊：
 [[info:elisp#Parsing Program Source][Elisp: Parsing Program Source]]、[[file:org/50-lang.org][lang 模塊]]。
 
 ** Eglot、xref、Eldoc 與 Flymake

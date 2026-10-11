@@ -18,7 +18,7 @@ lang/lsp/dap 邊界，不讓 =cargo= 或 rustfmt 在保存時暗中改寫文件�
 
 ** 主模式與 grammar
 
-Emacs 30 自帶 =rust-ts-mode=，卻沒有不依賴 grammar 的 =rust-mode=。後者由 NonGNU ELPA
+Emacs 自帶 =rust-ts-mode=，卻沒有不依賴 grammar 的 =rust-mode=。後者由 NonGNU ELPA
 補上，並且刻意不讓它自己轉成 tree-sitter 派生模式：grammar 壞掉時 fallback 必須真的
 不再依賴 grammar。
 
@@ -38,14 +38,14 @@ mode hook 之後覆蓋這裏的默認值。
 
 (ginshio-lang-register
  :module 'lang-rust
- :grammars '((rust "https://github.com/tree-sitter/tree-sitter-rust" "v0.23.2"))
+ :grammars '((rust))
  :compilers '(("rustc" ("rustc")
                :remedy "rustup toolchain install stable"))
  :modes '((rust-mode rust-ts-mode rust)))
 #+end_src
 
-=v0.23.2= 是 Emacs 30 可使用的 ABI 14 grammar；這份配置支持的 tree-sitter runtime
-仍能向後載入它。系統打包的 grammar 照既有策略優先，本地 revision 只在系統沒有時使用。
+grammar 的來源由 rust-ts-mode 自己登記，它按 tree-sitter runtime 的 ABI 選 commit；系
+統打包的 grammar 照既有策略優先。
 
 ** 診斷
 
