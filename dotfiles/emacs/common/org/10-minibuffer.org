@@ -196,8 +196,10 @@ vertico 改候選項怎麼顯示，[[https://github.com/minad/consult][consult]]
 URL 或符號。它認類型的依據正是 marginalia 提供的那些元數據。
 
 真正用得上的是導出。~consult-ripgrep~ 找到一批匹配之後，導出成一個 grep 緩衝區，
-[[https://github.com/mhayashi1120/Emacs-wgrep][wgrep]] 讓你在那裏直接改再寫回原文件。「先搜出來看，再決定改哪幾條」這條路徑沒有別的
-走法——Emacs 30 還沒有內建的 ~grep-edit-mode~，那要等 31。
+[[https://github.com/mhayashi1120/Emacs-wgrep][wgrep]] 讓你在那裏直接改再寫回原文件。Emacs 31 內建了 ~grep-edit-mode~（在 grep 緩衝區
+按 =e=），但它把每一處修改即時寫進來源緩衝區，也沒有整體放棄或刪掉整行的操作；wgrep
+先在結果裏改完再一次套用，可以 ~C-c C-k~ 整體放棄、~C-c C-d~ 刪掉整行。批量修改要的是
+「看完再提交」，所以仍然用 wgrep。
 
 慣例的 ~C-.~ 這裏不用，終端未必送得到；改掛在 leader 的 ~.~ 上。
 

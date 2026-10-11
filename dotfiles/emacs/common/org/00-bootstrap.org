@@ -18,7 +18,7 @@ Emacs 在讀取主配置之前會先讀 =early-init.el=。這個時間點的特�
 ;;; ginshio-early-init.el --- generated early-init payload -*- lexical-binding: t; -*-
 #+end_src
 
-這份配置只支持 Emacs 30，以及一個完整的 XDG 會話。這不是要提供兼容層的地方：版本或
+這份配置只支持 Emacs 31，以及一個完整的 XDG 會話。這不是要提供兼容層的地方：版本或
 環境不對時，越早停下來，錯誤越接近真正原因。尤其不使用 XDG 規範裏的默認回退；啓動器
 沒有傳入這些變量，本身就是需要修正的環境錯誤。
 
@@ -28,8 +28,8 @@ Emacs 在讀取主配置之前會先讀 =early-init.el=。這個時間點的特�
 在整棵樹裏只有一個定義。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-early-init.el"
-(when (version< emacs-version "30.1")
-  (error "Ginshio Emacs requires Emacs 30.1 or newer; found %s" emacs-version))
+(when (version< emacs-version "31.1")
+  (error "Ginshio Emacs requires Emacs 31.1 or newer; found %s" emacs-version))
 
 (load (expand-file-name "modules/ginshio/ginshio-path.el" user-emacs-directory)
       nil 'nomessage)

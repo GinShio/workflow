@@ -374,7 +374,7 @@ whenever straight had to ask for it: a recipe carrying an explicit
                         (straight--process-output "git" "rev-parse" "HEAD")))
                      (straight--process-run-p
                       "git" "symbolic-ref" head-ref target)
-                     (cl-incf adopted))))))))))
+                     (incf adopted))))))))))
     (unless (zerop adopted)
       (straight--output "Recorded the default branch of %d repositories"
                         adopted))))
@@ -531,7 +531,7 @@ disagree in a way no further round will settle.")
   (let ((moved (ginshio-maintain--thaw))
         (round 0))
     (while moved
-      (when (> (cl-incf round) ginshio-maintain--thaw-rounds)
+      (when (> (incf round) ginshio-maintain--thaw-rounds)
         (error "Package graph did not settle after %d rounds"
                ginshio-maintain--thaw-rounds))
       (ginshio-maintain--resolve (ginshio-maintain--rebuild-table moved))

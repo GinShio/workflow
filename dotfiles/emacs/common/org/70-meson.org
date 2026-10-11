@@ -16,7 +16,7 @@
 
 ** 文件與縮進
 
-Emacs 30.2 沒有 =meson-ts-mode=，現有 Meson grammar 也沒有一個可接入的 Emacs major
+Emacs 31.1 沒有 =meson-ts-mode=，現有 Meson grammar 也沒有一個可接入的 Emacs major
 mode。只有 parser 沒有 mode，不能帶來高亮、縮進或導航；所以這裏不註冊一份用不到的
 grammar，直接使用成熟的 classic mode。
 

@@ -168,7 +168,7 @@ unchanged."
          "</label>"))
       (when (and (plist-get info :with-title)
                  (plist-get info :title))
-        (when-let ((meta (ginshio-org-html--page-meta info)))
+        (when-let* ((meta (ginshio-org-html--page-meta info)))
           (let ((header-start
                  (if (plist-get info :html-html5-fancy) "<header>\n" "")))
             (goto-char (point-min))

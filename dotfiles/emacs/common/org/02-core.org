@@ -56,12 +56,11 @@ forge 訪問互不干擾。
 (add-hook 'emacs-startup-hook #'ginshio-restore-gc-h)
 #+end_src
 
-子進程輸出緩衝區的默認大小只有幾 KiB，遠小於語言服務器單次回應的體量，會讓交互退化
-成反覆的小塊讀取。
+子進程輸出緩衝區默認 64 KiB，仍遠小於語言服務器單次回應的體量，會讓交互退化成反覆
+的小塊讀取。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-core.el"
-(setq read-process-output-max (* 1024 1024)
-      process-adaptive-read-buffering nil)
+(setq read-process-output-max (* 1024 1024))
 #+end_src
 
 ** 編碼
@@ -230,8 +229,11 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
 (column-number-mode 1)
 #+end_src
 
-終端下鼠標默認完全不工作。~xterm-mouse-mode~ 讓終端模擬器把點擊和滾輪翻譯成 Emacs 認
-得的事件，keys 模塊召回的那組鼠標鍵才有東西可接。
+終端裏的鼠標要靠 ~xterm-mouse-mode~：它讓終端模擬器把點擊和滾輪翻譯成 Emacs 認得的事
+件，keys 模塊召回的那組鼠標鍵才有東西可接。Emacs 31 起它會自己打開，但只對一份白名單
+裏的終端（按 XTVERSION 認 Konsole、kitty、foot、WezTerm 等，按 =TERM= 認 alacritty 與
+contour，見 bug#74833）；tmux 不在名單裏，而這份配置常跑在 tmux 裏（見 tty 模塊）。所以
+仍然顯式打開，顯式調用也讓那套自動判斷不再介入。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-core.el"
 (xterm-mouse-mode 1)

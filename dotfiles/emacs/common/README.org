@@ -8,7 +8,7 @@
 
 * 契約
 
-- 支持 Emacs 30.1 或更新版本。
+- 支持 Emacs 31.1 或更新版本。
 - =XDG_CONFIG_HOME=、=XDG_DATA_HOME=、=XDG_STATE_HOME=、=XDG_CACHE_HOME= 與
   =XDG_RUNTIME_DIR= 必須存在於環境中，而且必須是絕對路徑。
 - =XDG_RUNTIME_DIR= 必須已存在、可寫，且權限是 =0700=。
@@ -35,8 +35,8 @@ activation 快照；新增宣告追加 pin、移除的宣告會從 lock 與套�
 $XDG_DATA_HOME/emacs/straight/
 #+end_example
 
-由 straight 管理。構建目錄與 activation 快照都按 Emacs 版本分家（=build-30.2/=、
-=activation-30.2.elc=），clone 與鎖則由所有版本共用：換一個 Emacs 版本只需要再跑一次
+由 straight 管理。構建目錄與 activation 快照都按 Emacs 版本分家（=build-31.1/=、
+=activation-31.1.elc=），clone 與鎖則由所有版本共用：換一個 Emacs 版本只需要再跑一次
 =sync=，不重新下載，而且換回去不用重建。
 
 * 控制命令

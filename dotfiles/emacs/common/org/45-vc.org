@@ -433,7 +433,7 @@ magit 沒加載時，上一節那兩個觸發條件都不成立。所以本模�
 
 上面那兩個是 git 在一次操作中途交出來的，用完就刪。還有一類長期躺在倉庫裏：
 =.gitignore=、=.gitattributes=、=.gitconfig= 與 =.gitmodules=。出廠的 Emacs 對它們
-同樣沒有準備——Emacs 30.2 的 ~auto-mode-alist~ 裏與 git 有關的只有 =gitconfig= 一條，
+同樣沒有準備——Emacs 31.1 的 ~auto-mode-alist~ 裏與 git 有關的只有 =gitconfig= 一條，
 =.gitignore= 落進 fundamental-mode，連 =#= 是註釋都不知道。
 
 [[https://github.com/magit/git-modes][git-modes]] 提供這三個模式。它和 magit 同一個維護者、同一個 GitHub 組織，卻 *不是*
