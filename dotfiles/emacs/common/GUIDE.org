@@ -431,6 +431,7 @@ grammar 用 ~M-x ginshio/lang-install-grammars~ 手動下載構建。手冊：
 | ~M-m c d~ / ~c D~       | 定義 / 引用                          |
 | ~M-m c b~               | 回到跳轉前                           |
 | ~M-m c i~ / ~c t~       | 實現 / 類型定義                      |
+| ~M-m c c~ / ~c T~       | 調用層級 / 類型層級；前綴參數選方向  |
 | ~M-m c S~               | 全項目符號搜索                       |
 | ~M-m c a~ / ~c r~       | code action / rename                 |
 | ~M-m c h~               | 完整 Eldoc 文檔緩衝區                |

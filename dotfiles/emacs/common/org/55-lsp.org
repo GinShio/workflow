@@ -49,6 +49,8 @@
                    eglot-find-implementation
                    eglot-find-typeDefinition
                    eglot-rename
+                   eglot-show-call-hierarchy
+                   eglot-show-type-hierarchy
                    eglot-shutdown
                    eglot-reconnect))
   (autoload command "eglot" nil t))
@@ -112,9 +114,10 @@ eglot 默認把與服務器往來的每一條 JSON 留在一個緩衝區裏，�
 
 ** 用哪些能力，不用哪些
 
-LSP 服務器啓動時會報告它能做什麼，eglot 回答它打算用什麼。這張表列出全部二十二項，
-因為「我沒有選擇的東西」和「我選擇了的東西」同樣需要能被查到——半年後想起某個功能沒
-有，第一個要看的就是這裏。
+LSP 服務器啓動時會報告它能做什麼，eglot 回答它打算用什麼。這張表列出
+~eglot-ignored-server-capabilities~ 認得的全部二十六項，因為「我沒有選擇的東西」和「我
+選擇了的東西」同樣需要能被查到——半年後想起某個功能沒有，第一個要看的就是這裏。eglot
+升級帶來新的一項時，它默認是開的，所以要回到這裏補一行。
 
 | 能力                    | 用 | 理由                                               |
 |-------------------------+----+----------------------------------------------------|
@@ -126,20 +129,23 @@ LSP 服務器啓動時會報告它能做什麼，eglot 回答它打算用什麼�
 | implementation          | 是 | ~M-m c i~                                            |
 | declaration             | 是 | 保留能力，沒給鍵；C++ 裏用得極少                   |
 | references              | 是 | ~M-m c D~                                            |
-| documentSymbol          | 是 | imenu 的來源，~M-m c s~                              |
+| documentSymbol          | 是 | imenu 的來源，~M-m s i~                              |
 | workspaceSymbol         | 是 | 按名字搜整個項目，~M-m c S~                          |
-| codeAction              | 是 | ~M-m c a~                                            |
+| codeAction              | 是 | ~M-m c a~；光標處有可用動作時回音區提示，見「診斷」  |
 | rename                  | 是 | ~M-m c r~                                            |
 | documentHighlight       | 是 | 光標停在符號上，同名的其他出現處一起淡淡標出       |
 | executeCommand          | 是 | 一部分 code action 靠它落地，關掉會連帶弄壞它們    |
-| diagnostics             | 是 | 不在這張表裏，服務器主動推送，由 flymake 呈現      |
+| callHierarchy           | 是 | ~M-m c c~：誰調用它、它調用誰                        |
+| typeHierarchy           | 是 | ~M-m c T~：基類與派生類                              |
+| diagnostic              | 是 | 拉取式診斷；推送式不經這項協商，兩者都由 flymake 呈現 |
 |-------------------------+----+----------------------------------------------------|
 | documentFormatting      | 否 | 格式化由提交時的鉤子負責，編輯器不參與             |
 | documentRangeFormatting | 否 | 同上                                               |
 | documentOnTypeFormatting| 否 | 同上，而且是在你還沒寫完時就改寫你的那一行         |
 | inlayHint               | 否 | 行內插入的類型與參數名，信息密度換來的是持續的視覺噪音 |
 | foldingRange            | 否 | 摺疊已經由 tree-sitter 的大綱回答，不必讓服務器再算 |
-| codeLens                | 否 | eglot 1.17 沒有實現，關掉只是少一次協商            |
+| semanticTokens          | 否 | 高亮同理已由 tree-sitter 回答；兩個來源疊着畫，結果取決於誰後到 |
+| codeLens                | 否 | eglot 1.24 仍沒有實現，關掉只是少一次協商          |
 | color                   | 否 | 在色值旁邊畫色塊                                   |
 | documentLink            | 否 | 把註釋裏的 URL 變成可點的鏈接                      |
 
@@ -150,6 +156,7 @@ LSP 服務器啓動時會報告它能做什麼，eglot 回答它打算用什麼�
         :documentOnTypeFormattingProvider
         :inlayHintProvider
         :foldingRangeProvider
+        :semanticTokensProvider
         :codeLensProvider
         :colorProvider
         :documentLinkProvider))
@@ -195,6 +202,14 @@ flymake 的指示器和版本控制的邊欄改動標記都想要 fringe。左�
 (setq flymake-fringe-indicator-position 'right-fringe
       flymake-suppress-zero-counters t
       flymake-wrap-around nil)
+#+end_src
+
+eglot 也想要那一格。1.19 起它問服務器光標處有沒有 code action，默認在左 fringe 畫一個
+提示，終端裏退到 margin——而終端裏 diff-hl 用的也是 margin。兩個標記搶同一格，總有一
+個看不見。所以只留回音區那一行提示，動作仍然從 =c a= 執行。
+
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lsp.el"
+(setq eglot-code-action-indications '(eldoc-hint))
 #+end_src
 
 計數器為零時不顯示。默認只隱藏為零的警告數而保留為零的錯誤數，於是狀態欄上長期掛着
@@ -414,6 +429,8 @@ Emacs 自己的符號表，老倉庫問 TAGS 表，兩者都沒有就直接報�
  "c b" #'xref-go-back
  "c i" #'eglot-find-implementation
  "c t" #'eglot-find-typeDefinition
+ "c T" #'eglot-show-type-hierarchy
+ "c c" #'eglot-show-call-hierarchy
  "c S" #'xref-find-apropos
  "c r" #'eglot-rename
  "c h" #'eldoc-doc-buffer
@@ -436,6 +453,7 @@ Emacs 自己的符號表，老倉庫問 TAGS 表，兩者都沒有就直接報�
 | ~M-m c D~    | 列出所有引用            | 本模塊，經 xref                  |
 | ~M-m c b~    | 回到跳走之前的位置      | 本模塊，可連續退棧               |
 | ~M-m c i~ ~c t~ | 實現 / 類型定義      | 本模塊                           |
+| ~M-m c c~ ~c T~ | 調用層級 / 類型層級  | 本模塊，前綴參數選方向           |
 | ~M-m s i~    | 本緩衝區的符號          | minibuffer 模塊，經 imenu 讀服務器的符號 |
 | ~M-m c S~    | 全項目的符號            | 本模塊                           |
 | ~M-m c a~ ~c r~ | 代碼操作 / 重命名    | 本模塊                           |
@@ -463,6 +481,7 @@ Emacs 自己的符號表，老倉庫問 TAGS 表，兩者都沒有就直接報�
 | =*Flymake diagnostics …*=               | ~M-m c x~            |
 | =*Flymake diagnostics for project …*=   | ~M-m c X~            |
 | =*xref*=                                | 跳轉有多個候選時   |
+| =*EGLOT … call / type hierarchy*=       | ~M-m c c~ / ~M-m c T~ |
 | =*eglot-help*=                          | 部分服務器的懸浮文檔 |
 | =*EGLOT … events*=                      | 只在打開事件日誌後 |
 
