@@ -1,6 +1,8 @@
 {%@@ set pi_vendor = agents.vendors['pi'] @@%}
 {%@@ set m = agents.model[pi_vendor] @@%}
 {
+  "extensions": ["-builtin:mcp"],
+
   "packages": [
     "npm:@juicesharp/rpiv-ask-user-question",
     "npm:@juicesharp/rpiv-todo",
