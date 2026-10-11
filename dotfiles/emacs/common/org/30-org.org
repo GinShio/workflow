@@ -235,10 +235,54 @@ language; otherwise a temp file is used."
 
 *** 加密塊：org-crypt
 
-不是所有標題都該躺在硬盤上。掛上 ~crypt~ 標籤的標題用 GPG 加密，寫回時自動處理，避免
-把機密資料洩漏成明文的同級標題。
+不是所有標題都該躺在硬盤上。掛上 ~crypt~ 標籤的標題用 GPG 加密；解密之後，明文只該活
+在緩衝區裏，寫到磁盤上的每一份副本要麼是密文，要麼不存在。這樣的副本有三份，各關一次。
+
+*文件本身。* ~org-crypt-use-before-save-magic~ 讓每個 org 緩衝區在保存前重新加密帶標籤
+的標題。這一步必須顯式接上：org-crypt 被加載並不會做這件事，那時保存一個解密過的緩衝
+區，寫下去的就是明文。
+
+*自動保存。* 自動保存不經過保存鉤子。~org-crypt-disable-auto-save~ 設成 ~t~：解密之前
+直接關掉這個緩衝區的自動保存，而不是每次都問一遍。
+
+*撤銷歷史。* edit 模塊的 undo-fu-session 在保存時把撤銷歷史寫進 state 目錄，而解密那一
+步留下的撤銷記錄裏就是明文——保存前的重新加密改得了緩衝區，改不了歷史。所以一個緩衝
+區只要解密過，從此不再寫它的撤銷歷史。這個標記要是 permanent-local：revert 會重跑主模
+式，undo-fu-session 的全局模式也會跟着把本地模式重新打開，只有標記本身能活過這一步。
+判斷「解密過」要在調用之前問：~org-decrypt-entry~ 有沒有解密都回傳 nil，而它掛在展開
+標題的鉤子上，對沒加密的標題也會被調用。
+
+~crypt~ 標籤不往下繼承。否則子標題也算帶標籤，org-crypt 會在已經整段加密的父標題裏面
+再找要加密的東西。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-org.el"
+(setq org-crypt-disable-auto-save t
+      org-tags-exclude-from-inheritance '("crypt"))
+
+(defvar-local ginshio-org--held-plaintext nil
+  "Non-nil once an entry in this buffer has been decrypted.")
+(put 'ginshio-org--held-plaintext 'permanent-local t)
+
+(defun ginshio-org-note-decryption-a (decrypt &rest args)
+  "Run DECRYPT with ARGS, remembering whether it exposed an encrypted entry."
+  (let ((encrypted (org-at-encrypted-entry-p)))
+    (prog1 (apply decrypt args)
+      (when encrypted
+        (setq ginshio-org--held-plaintext t)))))
+
+(defun ginshio-org-held-plaintext-p (file)
+  "Return non-nil when the buffer visiting FILE has held decrypted text."
+  (when-let* ((buffer (get-file-buffer file)))
+    (buffer-local-value 'ginshio-org--held-plaintext buffer)))
+
+(with-eval-after-load 'org
+  (require 'org-crypt)
+  (org-crypt-use-before-save-magic)
+  (advice-add 'org-decrypt-entry :around #'ginshio-org-note-decryption-a))
+
+(with-eval-after-load 'undo-fu-session
+  (add-to-list 'undo-fu-session-incompatible-files #'ginshio-org-held-plaintext-p))
+
 (ginshio-leader-define
  "o e" "encrypt"
  "o e e" #'org-encrypt-entry
@@ -247,7 +291,8 @@ language; otherwise a temp file is used."
  "o e D" #'org-decrypt-entries)
 #+end_src
 
-需要另一把鑰匙時，在標題的 ~cryptkey~ 屬性裏寫下指紋即可。
+默認的鑰匙（~org-crypt-key~）是空串，不匹配任何公鑰，於是落到對稱加密，每次問口令。
+要用某把公鑰時，在標題的 ~cryptkey~ 屬性裏寫下指紋即可。
 
 ** 視覺
 
