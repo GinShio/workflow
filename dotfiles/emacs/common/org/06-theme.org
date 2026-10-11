@@ -111,21 +111,24 @@
 
 當前行高亮在兩種緩衝區裏有用：代碼裏跳轉之後一眼找回光標，以及按行選擇的那些
 ——dired、ibuffer、occur 與 grep 的結果——看清自己停在哪一行。散文緩衝區裏它只是一
-條橫貫屏幕的色帶，所以和行號一樣按模式開。
+條橫貫屏幕的色帶，所以和行號一樣按模式開：~global-hl-line-buffers~ 收一個
+~buffer-match-p~ 條件，全局模式只在這幾類緩衝區裏畫。
 
-高亮跟着緩衝區，不跟着焦點。~hl-line-sticky-flag~ 關掉會讓它只畫在當前窗口，並且每
-次切換緩衝區時刪掉上一個的——當焦點指示器用是够了，代價是這條橫貫屏幕的色帶不停地消
-失又出現，比它本來要解決的問題更引人注意。留默認值，它就一直待在那兒。
+高亮跟着窗口，不跟着焦點。只畫在選中窗口的話，這條色帶在每次切換窗口時消失又出現，比
+它本來要解決的問題更引人注意，所以每個窗口都畫。畫在哪一行由
+~global-hl-line-sticky-flag~ 的 ~window~ 決定：同一個緩衝區開在兩個窗口時，每個窗口畫自
+己光標所在的那一行，而不是兩邊都畫在緩衝區的 point 上；非選中窗口用
+~hl-line-nonselected~，它默認繼承 ~hl-line~。這個值只有全局模式認，本地的
+~hl-line-mode~ 沒有對應——這是用全局模式加條件、而不是在各模式鉤子上開本地模式的原因。
 
-代價寫在同一枚硬幣的背面：同一個緩衝區開在兩個窗口時，兩邊都畫，而且畫在緩衝區的
-point 上——那個位置未必是非選中窗口自己的光標所在。
-
-dired 要單獨掛一次：它比 ~special-mode~ 出現得早，至今沒有從它派生。
+dired 要單獨列一次：它比 ~special-mode~ 出現得早，至今沒有從它派生。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-theme.el"
-(add-hook 'prog-mode-hook #'hl-line-mode)
-(add-hook 'special-mode-hook #'hl-line-mode)
-(add-hook 'dired-mode-hook #'hl-line-mode)
+(setq global-hl-line-sticky-flag 'window
+      global-hl-line-buffers '(or (derived-mode . prog-mode)
+                                  (derived-mode . special-mode)
+                                  (derived-mode . dired-mode)))
+(global-hl-line-mode 1)
 #+end_src
 
 透明背景在兩種環境下走不同的路。圖形界面由 Emacs 自己合成；終端裏沒有這個能力，唯一
