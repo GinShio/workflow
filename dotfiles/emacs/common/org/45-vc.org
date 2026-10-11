@@ -652,7 +652,8 @@ ediff 默認把控制面板放進一個獨立的 frame。在平鋪的窗口管�
              diff-hl-stage-dwim diff-hl-revert-hunk diff-hl-update)
   :init
   (setq diff-hl-draw-borders nil
-        diff-hl-show-staged-changes nil)
+        diff-hl-show-staged-changes nil
+        diff-hl-update-async t)
   :hook ((find-file . diff-hl-mode)
          (dired-mode . diff-hl-dired-mode))
   :config
@@ -665,14 +666,13 @@ ediff 默認把控制面板放進一個獨立的 frame。在平鋪的窗口管�
 #+end_src
 
 ~diff-hl-flydiff-mode~ 讓標記在你打字時就更新，而不是等到保存。它每次空閒都要跑一次
-diff，是本模塊唯一一處持續的開銷；如果在很大的文件上感覺到了，關掉它就回到保存時更新。
+diff，是本模塊唯一一處持續的開銷。~diff-hl-update-async~ 讓這次 diff 異步地跑，不再卡住
+輸入。diff-hl 有兩種異步實現：這裏的 ~t~ 在主線程裏異步調用 diff 進程，要求 Emacs 31；
+另一種 ~thread~ 用 Lisp 線程，上游文檔說明它在某些配置下會崩。with-editor 的緩衝區與遠
+程文件默認仍走同步，見 ~diff-hl-async-inhibit-functions~。在很大的文件上仍然感覺得到的
+話，關掉 flydiff 就回到保存時更新。
 
 終端下沒有 fringe，diff-hl 會自動改用邊距，不需要為此配置什麼。
-
-#+begin_quote
-~diff-hl-update-async~ 可以把 diff 挪到後台，但它的兩種實現一個要求 Emacs 31，另一
-個用線程且在某些配置下會崩。等升級到 31 之後再打開。
-#+end_quote
 
 *** 挑出要暫存的幾行
 
