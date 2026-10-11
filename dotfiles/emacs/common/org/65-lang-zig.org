@@ -20,7 +20,6 @@ classic mode 直接取官方 GitHub；TS mode 的 canonical repository 在 Codeb
 (require 'ginshio-lsp)
 
 (defvar dape-configs)
-(defvar editorconfig-indentation-alist)
 #+end_src
 
 ** 主模式與 grammar
@@ -62,9 +61,6 @@ autoload association 是它自己加入的。
   (ginshio-lang-zig-prefer-fallback-h)
   (ginshio-lang-apply-mode-remap))
 
-(add-to-list 'editorconfig-indentation-alist
-             '(zig-ts-mode zig-ts-indent-offset))
-
 (ginshio-lang-register
  :module 'lang-zig
  :grammars '((zig "https://github.com/tree-sitter-grammars/tree-sitter-zig"
@@ -77,9 +73,10 @@ autoload association 是它自己加入的。
 (add-hook 'after-init-hook #'ginshio-lang-zig-prefer-fallback-h)
 #+end_src
 
-兩個 mode 都用四格作兜底；EditorConfig 原本只認 classic mode，上面的新增條目讓 TS mode
-遵循同一份項目聲明。zig-ts-mode 不往 ~treesit-language-source-alist~ 登記來源，所以
-grammar 在這裏固定在已和它驗證過的 =v1.1.2=。
+兩個 mode 都用四格作兜底；EditorConfig 從 mode 名推得 =zig-indent-offset= 與
+=zig-ts-indent-offset=，兩者遵循同一份項目聲明。zig-ts-mode 不往
+~treesit-language-source-alist~ 登記來源，所以 grammar 在這裏固定在已和它驗證過的
+=v1.1.2=。
 
 ** 項目構建與 zls
 

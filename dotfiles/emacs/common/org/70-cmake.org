@@ -28,7 +28,7 @@ Emacs 自帶 =cmake-ts-mode=，但沒有不依賴 grammar 的 CMake mode。Kitwa
   :init
   (setq cmake-tab-width 2))
 
-(setq cmake-ts-mode-indent-offset 2)
+(setq cmake-ts-indent-offset 2)
 
 (ginshio-lang-register
  :module 'cmake
@@ -37,7 +37,7 @@ Emacs 自帶 =cmake-ts-mode=，但沒有不依賴 grammar 的 CMake mode。Kitwa
 #+end_src
 
 grammar 的來源由 cmake-ts-mode 自己登記。兩套 mode 都以二格為兜底；內建 EditorConfig
-已同時認識 ~cmake-tab-width~ 與 ~cmake-ts-mode-indent-offset~。
+認識 ~cmake-tab-width~，~cmake-ts-indent-offset~ 則從 mode 名推得。
 
 =CMakePresets.json= 是 JSON，不強行交給 CMake mode。它繼續由 JSON mode 和 schema-aware
 工具處理。

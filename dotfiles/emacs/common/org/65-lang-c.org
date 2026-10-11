@@ -57,7 +57,7 @@ compiler 則由本模塊的 ~:compilers~ 分開聲明。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-lang-c.el"
 (setq c-ts-mode-indent-style 'k&r
-      c-ts-mode-indent-offset 4)
+      c-ts-indent-offset 4)
 #+end_src
 
 上面兩行是兜底：一個沒有 =.clang-format= 的目錄裏，只能靠猜。
@@ -158,7 +158,7 @@ re-indent every C file on the machine that belongs to no project."
   (when-let* ((file buffer-file-name)
               (settings (ginshio-lang-c-format-settings file)))
     (when-let* ((width (alist-get "IndentWidth" settings nil nil #'equal)))
-      (setq-local c-ts-mode-indent-offset (string-to-number width)
+      (setq-local c-ts-indent-offset (string-to-number width)
                   c-basic-offset (string-to-number width)))
     (when-let* ((width (alist-get "TabWidth" settings nil nil #'equal)))
       (setq-local tab-width (string-to-number width)))
