@@ -20,7 +20,7 @@ Org 是這份配置裏的知識與行動中樞：純文本的結構化筆記、�
 (require 'ginshio-keys)
 #+end_src
 
-Emacs 30 的 org 主體本身就是 autoload：開啟 ~.org~ 檔、呼叫 ~org-agenda~ 或
+Emacs 自帶的 Org 主體本身就是 autoload：開啟 ~.org~ 檔、呼叫 ~org-agenda~ 或
 ~org-capture~ 才會真正把 org 載入。這裡**不**在啟動時 ~require~ org——org 是整份配置最
 重的模組（單獨載入約 0.2s），讓它延到真的用到時才進記憶體。下面的設定只 `setq` 變數，
 不載入 org；需要 org 已載入才能執行的部分（~org-crypt~、~org-tempo~、~org-id~、

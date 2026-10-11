@@ -44,6 +44,22 @@ form 都收成參數，所以 ~:straight a b~ 是兩條 recipe。讀取側照同
 另一道保險在啓動側：啓動確實會求值模塊，~:straight~ handler 在那時記錄同一份宣告，
 =init.el= 結束前拿它跟快照比對。兩邊對不上就是啓動錯誤。
 
+** 內建庫
+
+straight 只把少數幾個名字當作內建（=emacs=、=nadvice= 之類）；其他任何被依賴的名字
+都會被克隆、構建，而它的構建目錄排在 Emacs 自帶的那份前面。citar 與 org-modern 依賴
+org，dape 依賴 jsonrpc，magit 依賴 seq 與 compat——不攔住的話，運行時的 Org 是 git 上
+的開發分支，tangle 用的卻是 Emacs 自帶的發行版；Eglot 是內建的，它底下的 jsonrpc 卻
+被換成了另一份。
+
+這些依賴聲明的最低版本，Emacs 31.1 自帶的都滿足。所以 =maintain.el= 把 org、jsonrpc、
+seq、map 與 compat 列為內建（~ginshio-maintain-built-in-libraries~）：不克隆、不構建、
+不進鎖。transient 例外，它跟 magit 一起由鎖固定，理由在 vc 模塊。
+
+改動這份清單之後先 =sync= 再 =rebuild=。=sync= 把不再需要的 pin 從鎖裏拿掉、清掉那幾個
+倉庫，但它只重建 revision 動過的包；已經構建好的包裏內聯的仍是舊那份的宏，要由
+=rebuild= 全量重建。
+
 ** 命令
 
 | 命令       | 做什麼                                                     |

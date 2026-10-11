@@ -190,6 +190,16 @@ walks is the order startup loads; no second list is maintained."
 (defvar straight-vc-git-default-protocol 'https)
 (defvar straight-repository-branch "develop")
 
+(defconst ginshio-maintain-built-in-libraries '(org jsonrpc seq map compat)
+  "Dependencies satisfied by the copy Emacs ships, never cloned or locked.
+straight treats only a few names as built in.  Any other dependency is
+cloned and built, and its build directory then sits ahead of Emacs's own
+copy on `load-path': Org would run from its development branch while the
+tangle uses the bundled release, and the bundled Eglot would run on a
+cloned jsonrpc.  Emacs 31.1 meets every Package-Requires floor these
+libraries are declared with.  `transient' is absent on purpose: it is
+pinned together with magit, see the vc module.")
+
 (defun ginshio-maintain--load-straight ()
   "Load straight.el, bootstrapping it from the network exactly once."
   (let ((bootstrap (expand-file-name "straight/repos/straight.el/bootstrap.el"
@@ -207,6 +217,12 @@ walks is the order startup loads; no second list is maintained."
         (load install nil 'nomessage)))
     (load bootstrap nil 'nomessage))
   (require 'straight)
+  ;; Extended after loading, unlike the settings above, so straight's own
+  ;; defaults are kept rather than restated.  It must precede the first
+  ;; declaration that depends on one of these.
+  (setq straight-built-in-pseudo-packages
+        (append ginshio-maintain-built-in-libraries
+                straight-built-in-pseudo-packages))
   ;; Packages are byte-compiled here; native compilation is left to the
   ;; sessions that actually load them.
   (setq native-comp-jit-compilation nil))

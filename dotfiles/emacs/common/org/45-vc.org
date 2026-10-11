@@ -314,15 +314,15 @@ Magit 為這兩個文件各提供了一個成熟的模式。它們雖然裝在 m
 `magit-status` 那套 porcelain 是兩回事：porcelain 的目的是 *取代* 命令行，而這兩個模
 式是命令行 *主動交出來* 的那一段。這裏只要後者，porcelain 一個鍵都不綁。
 
-Magit 的界面框架 =transient= 要單獨聲明一行，否則整個包裝不上。
+Magit 的界面框架 =transient= 單獨聲明一行，和 magit 一起由鎖固定。
 
-包管理器默認不去動任何內建包——這個策略本身是對的，內建包在 Emacs 啓動時就已經加載，
-半路換掉一個是麻煩的來源。但它的實現方式是把 *所有* 內建包列進忽略名單，於是「內建的
-那個版本太舊」這種情況也一起被忽略了：Emacs 30.2 帶的 transient 是 0.7.2.2，magit 要
-0.13 以上，而包管理器不會主動去補這個差。它只是不裝，然後 magit 靜靜地建不起來——源碼
-克隆下來了，構建目錄始終不出現，啓動時也不會有人抱怨。
+Emacs 31.1 自帶 transient 0.13.3，已經滿足 magit 聲明的 0.13；其他被依賴的內建庫也都
+直接用 Emacs 那份，見 packages 模塊。transient 是例外：它和 magit 同一個維護者、成對
+演進，被鎖住的那個 magit 是對着同期的 transient 寫的，而聲明裏的 0.13 只是一個粗略的
+下限。兩者都由鎖決定，升級時一起動，比讓 magit 跑在一份更早的 transient 上可靠。
 
-那份名單的說明寫着「除非用戶明確要求，否則不安裝」。下面這一行就是那個明確要求。
+所以下面這一行明確宣告 transient：它作為一條宣告進鎖，和 magit 並排可見，而不是藏在依
+賴解析的結果裏。
 
 #+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-vc.el"
 (use-package transient
@@ -336,12 +336,6 @@ Magit 的界面框架 =transient= 要單獨聲明一行，否則整個包裝不�
   (setq magit-define-global-key-bindings nil
         git-commit-summary-max-length 50))
 #+end_src
-
-#+begin_quote
-magit 依賴的另一個內建包 =seq= 沒有這個問題：它要 2.24，而 Emacs 30.2 帶的正好是
-2.24。同一條規則下一個過關一個不過關，差別只在版本號——所以這類問題只能一個個查，看不
-出規律。
-#+end_quote
 
 *為什麼可以延遲加載。* magit 是這份配置裏最重的一個包——單獨 ~require~ 要兩百毫秒，
 比整份配置的其餘部分加起來還多。而它只在 git 交出一個文件、或者你按下衝突相關的鍵時
