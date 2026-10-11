@@ -186,6 +186,17 @@ Emacs 默認把備份 (=file~=) 和自動保存 (=#file#=) 放在被編輯文件
   (set-file-modes directory #o700))
 #+end_src
 
+這幾份狀態裏只有 savehist 會自己定時寫盤（默認每 300 秒）；最近文件與光標位置只在
+Emacs 退出時寫。daemon 一跑就是幾天，期間崩潰或被殺一次，從啓動以來的這兩份記錄全部
+丟失。Emacs 31 起兩者也能定時寫，間隔取 savehist 的同一個值。這兩個變量的 setter 負責
+啓停計時器，所以用 ~setopt~。定時寫最近文件默認每次都在回音區報一句 =Wrote …=，一併關掉。
+
+#+begin_src emacs-lisp :tangle "modules/ginshio/ginshio-core.el"
+(setq recentf-show-messages nil)
+(setopt recentf-autosave-interval 300
+        save-place-autosave-interval 300)
+#+end_src
+
 ** 編輯
 
 長行保持一條顯示行，超出窗口後水平滾動；窗口寬度不應改變文件在屏幕上的行結構。
