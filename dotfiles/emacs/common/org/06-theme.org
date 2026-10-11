@@ -450,10 +450,8 @@ file has already been visited by the time this runs."
 以 =client= frame parameter 辨認；這條路永遠返回 dashboard，而不是從長期會話的全域
 ~buffer-list~ 裏撿到一個舊文件。有文件的 client 不調用這個函數，server 會直接顯示目標。
 
-#+begin_quote
-window 模塊在同一個鉤子上恢復上次的會話，排在這之後。有存檔時它會蓋掉這一屏——想保留
-啓動畫面就把那邊的 ~desktop-save-mode~ 關掉，兩者回答的是同一個問題。
-#+end_quote
+啓動時不恢復上次的佈局：window 模塊的 layout 只在按 ~M-m w l r~ 時讀回，所以這一屏不
+會被蓋掉。
 
 *** 鍵位
 
