@@ -1,7 +1,7 @@
 #!/bin/sh
 # Decrypt what this run has keys for, compile the Dotdrop config of every host
 # whose overlays that leaves readable, then install the two planes for this
-# host.
+# host. On a personal machine it also creates the ledger worktree.
 #
 # The system plane escalates from inside this unit rather than the unit being
 # `root: yes` wholesale: generate, transcrypt and the user plane all have to
@@ -267,3 +267,16 @@ printf 'Deploying host %s (overlay %s).\n' "$HOST" "$BOOTSTRAP_PROFILE"
     install_plane user "$HOST"
     install_plane system "$HOST"
 )
+
+# The ledger lives in its own worktree at ~/cyber/ledger — the fava container
+# mounts it from there — rather than in this checkout, where resets have lost
+# it before. It is born here rather than in an earlier unit because only the
+# filters configured above let a checkout smudge the personal overlay: created
+# before them it would hold ciphertext nothing later re-smudges. A run
+# without the personal key creates nothing and leaves it to a run that has.
+if [ "$BOOTSTRAP_PROFILE" = personal ] &&
+    [ -n "$(context_password personal)" ] &&
+    [ ! -e "$HOME/cyber/ledger/.git" ]; then
+    mkdir -p "$HOME/cyber"
+    git -C "$DOTFILES_ROOT_PATH" worktree add --detach "$HOME/cyber/ledger"
+fi
