@@ -257,9 +257,10 @@ bottom, and no layer is revisited:
 toolchain injection (L0) → org config (L0.5) → project config (L1) → presets
 (L2) → CLI extra args (L3). The final set of ``environment``, ``definitions``,
 and the three ``extra_*_args`` lists is handed to the backend, which turns them
-into the exact command lines. A toolchain's compiler identity is an immutable
-input — presets cannot clobber it; changing the compiler means moving along
-the selection chain (``env (WITS_PROJECT_TOOLCHAIN)`` → ``--toolchain`` → the
-project's field, resolved against ``[toolchains]``). The precise rules and the
-template language are in
+into the exact command lines. The toolchain is *selected* once and resolved at
+L0, before every other layer; its native env and definitions enter there as
+ordinary values, so a project, preset, or CLI key of the same name wins. Which
+toolchain applies is chosen along the selection chain (``env
+(WITS_PROJECT_TOOLCHAIN)`` → ``--toolchain`` → the project's field, resolved
+against ``[toolchains]``). The precise rules and the template language are in
 :doc:`/reference/project-reference`.

@@ -4,8 +4,9 @@
 //! whose "Build configuration layering" is this pipeline.
 //!
 //! The pass is strictly one-directional — toolchain → org → project → presets → CLI —
-//! and no later layer can overwrite a toolchain's compiler identity, so nothing
-//! is ever re-asserted or recomputed. Context values may reference each other
+//! and the toolchain's native env and definitions are injected first, so a
+//! later layer (preset or CLI) that sets the same key wins; nothing is ever
+//! re-asserted or recomputed. Context values may reference each other
 //! (`env.BIN` from `env.TOOLS`); the template engine resolves those lazily, so
 //! the order entries appear in a map never matters.
 //!
@@ -1127,14 +1128,16 @@ mod tests {
     }
 
     /// A stand-in for a real backend, so the pipeline can be tested without any
-    /// build-system dependency: it echoes the toolchain's `cc` into a definition
-    /// (the way a backend would) so we can assert L0 ran. Real per-backend
-    /// translation is tested in `crate::build_system`.
+    /// build-system dependency: it echoes the toolchain's `cc` into one
+    /// definition and one environment variable (the way a backend would) so we
+    /// can assert L0 ran. Real per-backend translation is tested in
+    /// `crate::build_system`.
     struct MockInjector;
     impl ToolchainInjector for MockInjector {
         fn apply_toolchain(&self, tc: &Toolchain, cfg: &mut LogicalConfig) {
             if let Some(cc) = &tc.cc {
                 cfg.set_definition("MOCK_CC", Value::from(cc.clone()));
+                cfg.set_env("MOCK_CC_ENV", cc.clone());
             }
         }
     }
@@ -1261,8 +1264,63 @@ anchor = "main"
             PathBuf::from("/src/hello/_build/clang/release")
         );
         // The injector ran at L0: the selected toolchain's `cc` was translated
-        // into the backend-shaped definition the mock emits.
+        // into the backend-shaped definition and env var the mock emits.
         assert!(plan.logical.definitions.iter().any(|(k, _)| k == "MOCK_CC"));
+        assert_eq!(plan.logical.env_entry("MOCK_CC_ENV"), Some("clang"));
+    }
+
+    /// The toolchain's values are injected at L0, so a later layer that sets
+    /// the same key wins ("The toolchain hard constraint") — the property that
+    /// lets the pass stay one-directional. A preset overrides both the
+    /// definition and the env var the injector emits.
+    #[test]
+    fn a_preset_overriding_an_injected_toolchain_key_wins() {
+        let body = r#"
+            [project]
+            build_system = "cmake"
+            toolchain = "clang"
+
+            [repos.main]
+            path = "/src/hello"
+            main_branch = "main"
+
+            [toolchains.clang]
+            cc = "clang"
+
+            [project.presets.override]
+            definitions = { MOCK_CC = "gcc" }
+            environment = { MOCK_CC_ENV = "gcc" }
+        "#;
+        let (_d, ws) = ws_with(body, "hello");
+        let project = ws.project("hello").unwrap();
+        let profile = Profile {
+            presets: vec!["override".into()],
+            ..Default::default()
+        };
+        let injector = MockInjector;
+        let input = PlanInput {
+            profile: &profile,
+            branch: Some("main"),
+            inject_toolchain: true,
+            injector: Some(&injector),
+            extra_config_args: &[],
+            extra_build_args: &[],
+            extra_install_args: &[],
+            build_dir_override: None,
+            install_dir_override: None,
+        };
+        let plan = plan(&ws, project, &input).unwrap();
+        let def = |key: &str| {
+            plan.logical
+                .definitions
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_else(|| panic!("no definition {key}"))
+        };
+        // The preset's values survived, not the injected ones.
+        assert_eq!(def("MOCK_CC"), Value::from("gcc"));
+        assert_eq!(plan.logical.env_entry("MOCK_CC_ENV"), Some("gcc"));
     }
 
     /// The resolved outputs are bound back into the context in the order they

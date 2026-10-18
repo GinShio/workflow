@@ -30,11 +30,13 @@ and every read-only operation — listing, validating, reporting — gets dragge
 through build *planning* just to introspect, which is complexity no one asked
 for.
 
-A subtler trap lies in the layering itself. If each configuration layer's
-templates can reference *and overwrite* the previous layer's resolved values,
-the resolver has to keep looping back on itself — rebuilding its context and
-re-asserting authoritative values after every layer. The design forecloses
-that by making the layering strictly one-directional.
+A subtler trap lies in the layering itself. If a later layer's rewrite could
+invalidate what an earlier layer had already resolved — sending the resolver
+back to redo it — the resolver would have to keep looping, rebuilding its
+context after every layer. The design forecloses that by making the layering
+strictly one-directional: each layer resolves at the moment it merges, against
+the context accumulated so far, and a later overwrite lands only after the
+earlier resolutions are made.
 
 The design draws two hard lines.
 
@@ -860,10 +862,11 @@ The pipeline
    Emit (backend)
      backend.steps(mode)            → ordered [Step{ argv, cwd, env }]; definition→argv spelling is private
 
-Because the order is single-directional and no later layer can rewrite a
-toolchain's compiler identity, **no layer is ever revisited** — there is no
-context rebuild between layers and no re-assertion of the toolchain after
-presets.
+Because the order is strictly one-directional — each layer resolves against
+the context accumulated so far, and a later layer overwrites keys in place
+rather than sending the resolver back over earlier work — **no layer is ever
+revisited**: there is no context rebuild between layers and no re-assertion
+of the toolchain after presets.
 
 Template resolution is not a literal single pass at the very end; each
 layer's newly-added keys are resolved *as the layer merges*, against the
@@ -874,15 +877,16 @@ recursion, not a separate topological-sort pass.
 The toolchain hard constraint
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**A toolchain's compiler identity (cc/cxx/rustc/linker/launcher) enters the
-context as an immutable input; presets cannot overwrite it.** Changing the
-compiler is done only by moving along the selection chain, never by patching
-from a preset. This is the constraint that makes the pipeline
-single-directional: since a preset can never clobber the toolchain, there is
-never a need to re-assert the toolchain after presets. (A user who
-*explicitly* sets, say, ``CMAKE_C_COMPILER`` via ``-Xconfig`` is exercising
-pass-through, not re-asserting a toolchain — and their explicit value wins,
-as the highest layer.)
+**A toolchain's compiler identity (cc/cxx/rustc/linker/launcher) is
+*selected and resolved once*, at the base layer, and its native env and
+definitions are injected into the context *first* — before org, project,
+presets, and the CLI.** The selection chain picks which toolchain applies;
+the toolchain's own values enter as ordinary context values, not a protected
+namespace, so any later layer that sets the same key wins — a preset is
+patching the same context a template would. (A user who *explicitly* sets,
+say, ``CMAKE_C_COMPILER`` via ``-Xconfig`` is exercising pass-through, not
+re-asserting a toolchain — and their explicit value wins, as the highest
+layer.)
 
 Selection vs injection, and trusting an existing config
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1514,8 +1518,10 @@ and ``update`` actions. The surface as it exists (the annotated form lives in
 The consumers are the ``wits`` commands themselves: ``build``/``update`` and
 the ``project`` CLI drive ``resolve::plan``/``resolve_target``; git hooks and
 cleanup scripts lean on ``work_dir``/``build_dir`` resolution for an arbitrary
-branch. (``stack`` resolves its base branch from the remote HEAD, not from
-this registry — see :doc:`stack-design`.)
+branch. (``stack``'s base branch is the checkout's **trunk**, by the one rule
+this registry, ``worktree`` and the git hooks all share: the owning repo's
+declared ``main_branch``, else the merge target's remote HEAD — see
+:doc:`stack-design`.)
 
 CLI contract
 ~~~~~~~~~~~~
