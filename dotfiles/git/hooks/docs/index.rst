@@ -55,8 +55,8 @@ so the table doubles as a map of the scripts.
      - What it runs
    * - ``pre-commit``
      - The gate that can reject a commit. Block markers, sanity checks, secret
-       scan, encoding check, then the formatters and linters for every language
-       on your ``PATH``.
+       scan, encoding check, a transcrypt sealed-packet check, then the
+       formatters and linters for every language on your ``PATH``.
    * - ``prepare-commit-msg``
      - Seeds the message before your editor opens: an issue-ID prefix read from
        the branch name (opt-in) and a provenance trailer on merges,
@@ -104,6 +104,8 @@ stage at a glance:
      - Block markers
    * - ``30-``
      - Encoding check
+   * - ``35-``
+     - Encrypted-file check (transcrypt)
    * - ``40-``
      - Secret scan
    * - ``50-``

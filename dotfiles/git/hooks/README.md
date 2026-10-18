@@ -15,7 +15,7 @@ shared state and helpers live in `core/lib.sh`.
 
 | Hook | Runs |
 |---|---|
-| `pre-commit` | protected-branch prompt (opt-in), sanity checks, marker guard, encoding, secret scan, formatters, linters |
+| `pre-commit` | protected-branch prompt (opt-in), sanity checks, marker guard, encoding, transcrypt sealed-packet check, secret scan, formatters, linters |
 | `prepare-commit-msg` | issue-ID prefix from the branch name (opt-in) |
 | `pre-push` | protected-branch prompt (opt-in), Git LFS |
 | `post-checkout` | branchless init/record, LFS, encrypted-file modes, workspace restore, lockfile warning, maintenance |
