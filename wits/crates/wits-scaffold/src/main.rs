@@ -205,11 +205,11 @@ impl BindingArgs {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    wits_util::log::init(cli.verbose, cli.dry_run);
+    wits_core::log::init(cli.verbose, cli.dry_run);
 
     let config = match &cli.config {
         Some(path) => path.clone(),
-        None => wits_util::config::resolve_root(&catalog::CONFIG_ROOT)
+        None => wits_core::config::resolve_root(&catalog::CONFIG_ROOT)
             .context("cannot find the scaffold config tree")?,
     };
 

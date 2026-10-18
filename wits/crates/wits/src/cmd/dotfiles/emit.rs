@@ -161,8 +161,8 @@ fn write(repo: &Repo, relative: &Path, document: &Table, report: &mut Report) ->
         report.unchanged += 1;
         return Ok(());
     }
-    if wits_util::log::is_dry_run() {
-        wits_util::log::dry_run(&format!("write {}", relative.display()));
+    if wits_core::log::is_dry_run() {
+        wits_core::log::dry_run(&format!("write {}", relative.display()));
         report.written.push(relative.to_path_buf());
         return Ok(());
     }

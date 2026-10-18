@@ -25,13 +25,17 @@
 //!   in colour, and which a dry-run prints instead of running.
 //!
 //! The surface is split across two files purely by concern — [`floor`] holds the
-//! reads and the ref/push plumbing; [`worktree`] holds the working-tree porcelain
-//! and its helpers ([`RestoreGuard`], [`clone`]) — but they are one type, so a
-//! caller never has to decide which of two overlapping handles it wants.
+//! reads and the ref/push plumbing; [`worktree`] holds the working-tree porcelain,
+//! its helpers ([`RestoreGuard`], [`clone`]), and [`primary_checkout`] — but they
+//! are one type, so a caller never has to decide which of two overlapping handles
+//! it wants.
 //!
 //! This module is the *porcelain* — one call, one `git` invocation, no policy.
 //! Decisions built on top of it (where a worktree belongs, when one may be
-//! reclaimed) live in [`crate::worktree`].
+//! reclaimed) live in [`crate::worktree`]. [`primary_checkout`] is the one
+//! exception: naming a repository's working-tree checkout is a property of the
+//! repository, and the project layer must be able to ask without linking the
+//! worktree subsystem.
 
 mod floor;
 mod worktree;
@@ -43,8 +47,9 @@ use crate::process::{Command, ProcessError};
 pub use floor::{BranchStatus, Commit, FileChange, StatusCounts};
 pub use worktree::{
     clone, clone_reference_store, create_reference_store, init_bare_host, is_object_store,
-    RestoreGuard, Submodule, Worktree,
+    primary_checkout, RestoreGuard, Submodule, Worktree,
 };
+pub(crate) use worktree::{primary, Primary};
 
 /// The environment variables git uses to *pin* a repository/worktree location.
 /// We always run against an explicit `current_dir`, so any of these inherited

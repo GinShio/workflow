@@ -10,7 +10,7 @@ name = "wits-scaffold"
 path = "src/main.rs"
 
 [dependencies]
-wits-util.workspace = true
+wits-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde = { workspace = true }

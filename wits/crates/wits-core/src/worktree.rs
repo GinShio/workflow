@@ -44,7 +44,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-use crate::git::{self, BranchStatus, Repository, StatusCounts, Submodule};
+use crate::git::{self, primary, BranchStatus, Primary, Repository, StatusCounts, Submodule};
 
 /// A worktree plus the facts that decide whether it can be reclaimed.
 ///
@@ -161,7 +161,7 @@ pub struct Inventory {
 impl Inventory {
     /// Read the repository's worktrees and derive each one's reclaim facts,
     /// judging "merged" against `trunk`, the revision of the checkout's trunk
-    /// ([`crate::project::trunk`]). With none, every worktree is un-merged rather
+    /// ([`crate::trunk`]). With none, every worktree is un-merged rather
     /// than guessed at.
     ///
     /// One pass, because a `prune` must act on exactly the state its `info`
@@ -364,60 +364,6 @@ impl Filter {
             }
         }
         None
-    }
-}
-
-/// What a repository offers as the checkout worktrees are placed beside — and,
-/// with it, which of the two layouts that placement follows.
-enum Primary {
-    /// The repository's own main worktree. Its parent is shared with whatever
-    /// else lives there.
-    Main(PathBuf),
-    /// A live checkout of a **bare** repository, which has no main worktree.
-    Checkout(PathBuf),
-    /// No checkout at all: a bare repository nobody has checked out yet.
-    None,
-}
-
-/// A worktree that is a checkout you could actually run git in.
-fn live(wt: &crate::git::Worktree) -> bool {
-    wt.is_live()
-}
-
-/// The checkout this repository is anchored on, never depending on the caller's
-/// cwd — so the answer is the same from anywhere, and linked worktrees can never
-/// nest inside one another.
-///
-/// A bare repository's stand-in is the live worktree holding its symbolic HEAD
-/// branch (the project bootstrap, in the layout `wits update` builds), then any
-/// other live worktree.
-fn primary(repo: &Repository) -> Primary {
-    if let Some(main) = repo.main_worktree() {
-        return Primary::Main(main);
-    }
-    let head = repo.current_branch();
-    let worktrees = repo.worktrees();
-    worktrees
-        .iter()
-        .find(|wt| live(wt) && wt.branch.as_deref() == head.as_deref())
-        .or_else(|| worktrees.iter().find(|wt| live(wt)))
-        .map(|wt| Primary::Checkout(wt.path.clone()))
-        .unwrap_or(Primary::None)
-}
-
-/// The checkout a repository's **working-tree** work belongs in: its own main
-/// worktree, or — a bare repository having none — a live worktree standing in for
-/// it, preferring the one on its symbolic HEAD branch.
-///
-/// `None` only for a bare repository with no checkout at all, where there really
-/// is no working tree to run in. That is the case a caller must handle rather than
-/// silently falling back to the repository path: `git switch`, `git submodule`, and
-/// `git merge` all refuse to run in a git-dir, and a `skip` mask has nothing there
-/// to be in force over.
-pub fn primary_checkout(repo: &Repository) -> Option<PathBuf> {
-    match primary(repo) {
-        Primary::Main(dir) | Primary::Checkout(dir) => Some(dir),
-        Primary::None => None,
     }
 }
 

@@ -1,7 +1,7 @@
 //! Turning a repo's declared remotes into roles, and answering the role question
 //! for any checkout at all.
 //!
-//! The vocabulary itself lives in [`crate::remote`]; this is where a *user's
+//! The vocabulary itself lives in [`wits_core::remote`]; this is where a *user's
 //! declaration* of it is read, checked, and — for the write side — turned into the
 //! state a checkout should reach.
 //!
@@ -12,7 +12,7 @@
 //! truth, and the drift between the two would have to be adjudicated on every
 //! read. Instead the config file answers directly, and a checkout that no project
 //! declares answers by the privileged names alone
-//! ([`RemoteRoles::from_git`](crate::remote::RemoteRoles::from_git)).
+//! ([`RemoteRoles::from_git`](wits_core::remote::RemoteRoles::from_git)).
 //!
 //! [`for_checkout`] routes between those two, which is what lets `stack` and
 //! `review` serve a hand-cloned repo and a declared project through one call.
@@ -161,9 +161,9 @@ pub struct Declared {
 
 impl Declared {
     /// The checkout's trunk, by the one rule every tool shares
-    /// ([`super::trunk`]).
-    pub fn trunk(&self, checkout: &Repository) -> Option<super::trunk::Trunk> {
-        super::trunk::resolve(checkout, &self.roles, self.main_branch.as_deref())
+    /// ([`wits_core::trunk`]).
+    pub fn trunk(&self, checkout: &Repository) -> Option<wits_core::trunk::Trunk> {
+        wits_core::trunk::resolve(checkout, &self.roles, self.main_branch.as_deref())
     }
 }
 
@@ -462,12 +462,12 @@ mod tests {
     /// command fail on a fresh install, which is the opposite of the point.
     #[test]
     fn a_checkout_with_no_registry_falls_back_to_privileged_names() {
-        let _guard = crate::log::test_flag_guard();
+        let _guard = wits_core::log::test_flag_guard();
         let tmp = tempfile::tempdir().unwrap();
         let checkout = tmp.path().join("co");
         std::fs::create_dir_all(&checkout).unwrap();
         let run = |args: &[&str]| {
-            crate::process::Command::new("git")
+            wits_core::process::Command::new("git")
                 .args(args.iter().copied())
                 .current_dir(&checkout)
                 .force_run()
@@ -495,7 +495,7 @@ mod tests {
     /// "no projects declared".
     #[test]
     fn a_named_but_missing_config_root_is_an_error() {
-        let _guard = crate::log::test_flag_guard();
+        let _guard = wits_core::log::test_flag_guard();
         let tmp = tempfile::tempdir().unwrap();
         let checkout = tmp.path().join("co");
         std::fs::create_dir_all(&checkout).unwrap();

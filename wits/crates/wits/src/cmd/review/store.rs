@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use wits_util::forge::RemoteInfo;
-use wits_util::git::Repository;
+use wits_core::forge::RemoteInfo;
+use wits_core::git::Repository;
 
 use super::model::{Comments, Info, Local, Reviewed};
 

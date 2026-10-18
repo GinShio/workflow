@@ -231,7 +231,7 @@ pub struct RawRemote {
     pub url: String,
     /// Which role this remote holds. Omitted for the privileged names, whose name
     /// already says it; **required** for any other name that is to hold a role,
-    /// since a name is the only signal a bare checkout has (see [`crate::remote`]).
+    /// since a name is the only signal a bare checkout has (see [`wits_core::remote`]).
     pub role: Option<Role>,
     /// Extra push URLs, so one push fans out to copies of the same repository.
     ///

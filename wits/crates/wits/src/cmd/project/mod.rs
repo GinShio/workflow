@@ -25,8 +25,8 @@ use clap::{Args, Subcommand, ValueEnum};
 
 use anyhow::Context;
 
+use wits_core::git;
 use wits_util::build_system::backend_for;
-use wits_util::git;
 use wits_util::project::context::value_to_string;
 use wits_util::project::model::{DevenvOp, Kind, Profile, DEVENV_SEPARATOR};
 use wits_util::project::skip;
@@ -1020,7 +1020,7 @@ fn check_one(ws: &Workspace, project: &ProjectData) -> Vec<String> {
                 for v in skip::violations(&checkout, &repo.skip) {
                     issues.push(format!("repo '{name}': {v}"));
                 }
-                if wits_util::log::is_verbose() {
+                if wits_core::log::is_verbose() {
                     for cmd in skip::remedy(&checkout, &repo.skip) {
                         log::debug!(
                             "repo '{name}' fix: (cd {} && {cmd})",

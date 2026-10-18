@@ -10,7 +10,7 @@
 //! still numbers in its neighbours' navigation; and navigation is written only
 //! to MRs that exist.
 
-use wits_util::git::Repository;
+use wits_core::git::Repository;
 use wits_util::project::remotes::Declared;
 
 use super::{anno, fail_if_any, push, resolution, submit, ForgeSession, SubmitArgs};

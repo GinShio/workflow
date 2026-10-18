@@ -25,7 +25,7 @@
 //! pass-throughs, and `git worktree` already spells them.
 //!
 //! The mechanics — where a worktree goes, how the add is driven, the submodule
-//! borrow, the reclaim predicates — are [`wits_util::worktree`], shared with
+//! borrow, the reclaim predicates — are [`wits_core::worktree`], shared with
 //! `wits review checkout`. This module owns the *rendering*, plus the one policy
 //! the library deliberately leaves to its caller: [`default_sweep`], what a bare
 //! `prune` reclaims.
@@ -35,10 +35,10 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 
-use wits_util::git::{Repository, StatusCounts};
+use wits_core::git::{Repository, StatusCounts};
+use wits_core::time::{age_since, parse_cutoff};
+use wits_core::worktree::{self, Entry, Filter, Inventory};
 use wits_util::project::remotes;
-use wits_util::time::{age_since, parse_cutoff};
-use wits_util::worktree::{self, Entry, Filter, Inventory};
 
 /// Width of the label column, sized to the longest label (`submodules`) plus a
 /// gap. Shared by the repository block and the panel so the two line up.
@@ -212,8 +212,8 @@ fn require_checkoutable(repo: &Repository, args: &RevArgs) -> Result<()> {
 fn report_submodules(dir: &std::path::Path) -> Result<()> {
     // A dry run never moved the checkout, so there is nothing to inspect: say what
     // would happen instead of reporting on a directory that may not be there.
-    if wits_util::log::is_dry_run() && !dir.exists() {
-        wits_util::log::dry_run(&format!("materialise submodules in {}", dir.display()));
+    if wits_core::log::is_dry_run() && !dir.exists() {
+        wits_core::log::dry_run(&format!("materialise submodules in {}", dir.display()));
         return Ok(());
     }
     match worktree::sync_submodules(dir)? {
@@ -344,7 +344,7 @@ fn switch(repo: &Repository, args: &SwitchArgs) -> Result<()> {
 /// are printed rather than performed, so a line that claimed to have removed
 /// something would be a plain lie about what happened.
 fn past_or_planned(past: &'static str, planned: &'static str) -> &'static str {
-    if wits_util::log::is_dry_run() {
+    if wits_core::log::is_dry_run() {
         planned
     } else {
         past

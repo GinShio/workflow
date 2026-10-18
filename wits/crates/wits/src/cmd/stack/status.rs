@@ -16,8 +16,8 @@ use std::fmt::Write as _;
 use std::io::IsTerminal as _;
 
 use serde::Serialize;
-use wits_util::forge::{HeadRepo, MergeRequest, MrState};
-use wits_util::git::Repository;
+use wits_core::forge::{HeadRepo, MergeRequest, MrState};
+use wits_core::git::Repository;
 use wits_util::project::remotes::Declared;
 
 use super::topology::Topology;

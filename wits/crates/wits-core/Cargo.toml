@@ -1,0 +1,23 @@
+[package]
+name = "wits-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Floor, git, forge, and worktree primitives shared by the wits CLI and its plugins"
+
+[lib]
+name = "wits_core"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+log.workspace = true
+minijinja.workspace = true
+ureq.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

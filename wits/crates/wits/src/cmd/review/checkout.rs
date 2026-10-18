@@ -9,7 +9,7 @@
 //! so reviewing someone else's work never buries yours).
 //!
 //! The worktree mechanics themselves — where it goes, how `git worktree add` is
-//! driven, how submodules are materialised — are [`wits_util::worktree`]'s, shared
+//! driven, how submodules are materialised — are [`wits_core::worktree`]'s, shared
 //! with `wits worktree`. What stays here is review's own policy: *one* worktree
 //! for the whole store, pointed at whichever snapshot you are reading.
 //!
@@ -23,8 +23,8 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 
-use wits_util::git::Repository;
-use wits_util::worktree;
+use wits_core::git::Repository;
+use wits_core::worktree;
 
 use super::model::short;
 use super::{default_worktree_dir, local, CheckoutArgs, ReviewCtx};

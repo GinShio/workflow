@@ -12,9 +12,9 @@
 
 use std::collections::HashMap;
 
-use wits_util::forge::{HeadRepo, MergeRequest, NewMr};
-use wits_util::git::Repository;
-use wits_util::log as wits_log;
+use wits_core::forge::{HeadRepo, MergeRequest, NewMr};
+use wits_core::git::Repository;
+use wits_core::log as wits_log;
 use wits_util::project::remotes::Declared;
 
 use super::resolution::StackPlan;
@@ -208,7 +208,7 @@ fn title_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wits_util::forge::{MergeRequest, MrState};
+    use wits_core::forge::{MergeRequest, MrState};
 
     fn mr(id: &str, base: &str, sha: Option<&str>, state: MrState) -> MergeRequest {
         MergeRequest {
@@ -302,10 +302,10 @@ mod tests {
         use std::path::Path;
         use std::sync::{Arc, Mutex};
 
-        use wits_util::forge::{
+        use wits_core::forge::{
             Attributes, Forge, HeadRepo, MergeRequest, MrComment, MrState, NewMr,
         };
-        use wits_util::git::Repository;
+        use wits_core::git::Repository;
 
         use super::super::reconcile;
         use crate::cmd::stack::resolution::StackPlan;
@@ -380,7 +380,7 @@ mod tests {
         fn git(dir: &Path, args: &[&str]) {
             let mut all = vec!["-c", "user.name=T", "-c", "user.email=t@e.com"];
             all.extend_from_slice(args);
-            wits_util::process::Command::new("git")
+            wits_core::process::Command::new("git")
                 .args(all)
                 .current_dir(dir)
                 .force_run()

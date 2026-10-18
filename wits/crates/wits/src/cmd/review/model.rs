@@ -17,7 +17,7 @@
 use rand::RngCore;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use wits_util::forge::{
+use wits_core::forge::{
     Anchor, DiffVersion, LineRef, MrState, MrSummary, RemoteComment, RemoteThread, Side, Verdict,
 };
 
@@ -87,7 +87,7 @@ impl<'de> Deserialize<'de> for ThreadId {
         Ok(ThreadId::from(s.as_str()))
     }
 }
-use wits_util::git::Repository;
+use wits_core::git::Repository;
 
 /// The store/JSON schema version. (Personal tooling — shapes change freely
 /// without a bump; this stays `1`.)

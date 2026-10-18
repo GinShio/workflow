@@ -11,9 +11,9 @@ use std::collections::{BTreeSet, HashSet};
 
 use anyhow::{Context, Result};
 
-use wits_util::forge::{HeadRepo, MergeRequest, MrState, MrSummary};
-use wits_util::git::Repository;
-use wits_util::time::now_secs;
+use wits_core::forge::{HeadRepo, MergeRequest, MrState, MrSummary};
+use wits_core::git::Repository;
+use wits_core::time::now_secs;
 
 use super::config::{self, Config};
 use super::model::{
@@ -161,7 +161,7 @@ fn fetch_mr(ctx: &Online, remote: &str, seed_id: &str, mode: StackMode) -> Resul
 /// and a fork checkout's own repository holds none of someone else's stack. Of
 /// several MRs from it, an open one wins, else the most recently updated.
 fn climb(
-    forge: &dyn wits_util::forge::Forge,
+    forge: &dyn wits_core::forge::Forge,
     branch: &str,
     trunk: Option<&str>,
 ) -> Result<Option<MergeRequest>> {
@@ -440,7 +440,7 @@ fn fork_point(
     remote: &str,
     id: &str,
     target_branch: &str,
-    version: &wits_util::forge::DiffVersion,
+    version: &wits_core::forge::DiffVersion,
     head: &str,
 ) -> Result<String> {
     let repo = &ctx.local.repo;
@@ -491,7 +491,7 @@ fn local_range(repo: &Repository, snapshot: &Snapshot) -> (Vec<StoredCommit>, Ve
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wits_util::forge::MrState;
+    use wits_core::forge::MrState;
 
     /// A tiny in-memory stack: `(id, base, source)` per MR. The link functions
     /// stand in for the forge — `parent_of(branch)` = the MR whose source is

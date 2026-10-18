@@ -27,14 +27,14 @@ use clap::Args;
 
 use wits_util::project::context::Ctx;
 
-use wits_util::git::{self, Repository, RestoreGuard};
+use wits_core::git::{self, Repository, RestoreGuard};
+use wits_core::worktree;
 use wits_util::project::model::{infer_kind, BranchStrategy, Kind, RawRepo};
 use wits_util::project::remotes;
 use wits_util::project::resolve;
 use wits_util::project::resolve_target;
 use wits_util::project::skip;
 use wits_util::project::workspace::{ProjectData, Workspace};
-use wits_util::worktree;
 
 #[derive(Debug, Args)]
 pub struct UpdateArgs {
@@ -111,7 +111,7 @@ fn verify_skip(git: &Repository, name: &str, repo: &RawRepo) -> Result<()> {
     for v in &violations {
         log::error!("repo '{name}': {v}");
     }
-    if wits_util::log::is_verbose() {
+    if wits_core::log::is_verbose() {
         log::debug!("bring it in line with:");
         for cmd in skip::remedy(git, &repo.skip) {
             log::debug!("  (cd {} && {cmd})", git.path().display());
@@ -144,7 +144,7 @@ fn apply_skip(git: &Repository, name: &str, repo: &RawRepo) -> Result<()> {
     git.submodule_deinit(&subs)?;
 
     if git.is_sparse() && !skip::sparse_already_ours(git, &repo.skip) {
-        if wits_util::log::is_verbose() {
+        if wits_core::log::is_verbose() {
             log::debug!("existing patterns: {}", git.sparse_list().join(" "));
             log::debug!("declared 'skip' wants to add exclusions for:");
             for entry in &repo.skip {
@@ -194,7 +194,7 @@ fn clone_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Repositor
 
     let checkout = if strategy.is_bare_backed() {
         let dir = resolve::bootstrap_worktree_dir(ws, project, name)?;
-        if !wits_util::log::is_dry_run() && !dir.exists() {
+        if !wits_core::log::is_dry_run() && !dir.exists() {
             bail!(
                 "repo '{name}': bare clone has no bootstrap worktree at {}",
                 dir.display()
@@ -527,7 +527,7 @@ fn run_hook(ctx: &Ctx, cwd: Option<&Path>, command: &str, phase: &str) -> Result
     // of text; only a whole-expression hook could arrive as anything else.
     let script = rendered.to_string();
     log::info!("hook {phase}: {script}");
-    let mut cmd = wits_util::process::Command::new("sh");
+    let mut cmd = wits_core::process::Command::new("sh");
     cmd.args(["-c".to_string(), script]);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);

@@ -31,10 +31,10 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
-use wits_util::forge::{self, Forge, RemoteInfo, Remotes};
-use wits_util::git::Repository;
+use wits_core::forge::{self, Forge, RemoteInfo, Remotes};
+use wits_core::git::Repository;
+use wits_core::remote::RemoteRoles;
 use wits_util::project::remotes;
-use wits_util::remote::RemoteRoles;
 
 use store::Store;
 
@@ -363,9 +363,9 @@ where
 ///
 /// The `review` suffix is review's contribution; where a worktree of that name
 /// goes (and why it is anchored on the repository rather than the caller's cwd)
-/// belongs to [`wits_util::worktree::default_dir`].
+/// belongs to [`wits_core::worktree::default_dir`].
 pub(crate) fn default_worktree_dir(repo: &Repository) -> PathBuf {
-    wits_util::worktree::default_dir(repo, "review")
+    wits_core::worktree::default_dir(repo, "review")
 }
 
 /// Parse an MR handle: a bare number, or a forge URL whose last numeric path
@@ -463,10 +463,10 @@ pub(crate) fn stack_chain(infos: &[model::Info], current: &str) -> (Vec<String>,
 pub(crate) fn stub_info(id: &str, base: &str, source: &str) -> model::Info {
     model::Info {
         schema: model::SCHEMA,
-        mr: wits_util::forge::MrSummary {
+        mr: wits_core::forge::MrSummary {
             id: id.into(),
             display: format!("#{id}"),
-            state: wits_util::forge::MrState::Open,
+            state: wits_core::forge::MrState::Open,
             draft: false,
             title: String::new(),
             author: String::new(),

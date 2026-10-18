@@ -1,49 +1,14 @@
-//! `wits-util` — the shared library behind the `wits` CLI and its plugins.
+//! `wits-util` — the project subsystem and the build-system backends, in transit.
 //!
-//! Everything a command needs that isn't the command itself lives here: the thin
-//! OS/git/process floor, the Jinja and config machinery, and the larger
-//! self-contained subsystems (project resolution, build systems, forge/remote).
-//! The `wits` binary composes these into built-in subcommands; an out-of-tree
-//! plugin binary (`wits-<name>`) can depend on this same crate to reuse the
-//! floor instead of reinventing it.
-//!
-//! The modules are flat on purpose. There is still a rough gradient — `config`,
-//! `crypto`, `editor`, `git`, `jinja`, `log`, `pager`, `process`, `time` are the
-//! thin floor; `build_system`, `forge`, `project`, `remote`, `worktree` are
-//! subsystems with real domain logic — but they sit side by side so a consumer names
-//! `wits_util::process` or `wits_util::forge` directly, without a grouping layer
-//! in between.
-//!
-//! The gradient is a real line, not a label. `jinja` is on the floor because it
-//! defines a language and decides nothing; resolving a *config* against it — where
-//! an entry may itself be a template naming another entry — is policy, so it lives
-//! with the config it serves, in [`project::context`].
-//!
-//! Two pairs that were once separate modules are now unified where they belong:
-//! `config` folds in the single-setting `Resolver` (both answer "where does this
-//! come from?"), and the git-remote parsing that feeds forge detection lives in
-//! `forge::remote` (re-exported from `forge`), beside the forge it serves.
-//!
-//! Two modules say "remote" and mean different halves of the word. [`remote`]
-//! owns what a remote *is to us* — the `origin`/`upstream` role vocabulary and
-//! which local remote holds each — and depends only on `git`, so `forge` can take
-//! a resolved mapping without knowing the project registry exists. `forge::remote`
-//! owns what a remote *URL says* — host, owner, repo, and therefore which forge to
-//! call. Resolving roles from a *user's declaration* is neither, and lives with
-//! the declaration, in [`project::remotes`].
+//! Everything except `project`, `build_system`, and `crypto` now lives in
+//! `wits-core`. The crate-internal re-exports below keep those three compiling
+//! against their original `crate::…` paths while the rest of the migration
+//! proceeds; nothing here is public API, and new consumers name `wits_core`
+//! directly. This crate is deleted when the last of the three has a home of its
+//! own.
+
+pub(crate) use wits_core::{config, git, jinja, remote, system};
 
 pub mod build_system;
-pub mod config;
 pub mod crypto;
-pub mod editor;
-pub mod forge;
-pub mod git;
-pub mod jinja;
-pub mod log;
-pub mod pager;
-pub mod process;
 pub mod project;
-pub mod remote;
-pub mod system;
-pub mod time;
-pub mod worktree;

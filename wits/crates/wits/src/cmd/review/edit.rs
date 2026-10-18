@@ -32,9 +32,9 @@ use std::fs;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use wits_util::forge::{Anchor, Side, Verdict};
-use wits_util::git::Repository;
-use wits_util::log as wits_log;
+use wits_core::forge::{Anchor, Side, Verdict};
+use wits_core::git::Repository;
+use wits_core::log as wits_log;
 
 use super::lines;
 use super::model::{short, Action, Local, Thread, ThreadId};
@@ -102,7 +102,7 @@ pub fn run(repo: &Repository, args: &EditArgs) -> Result<()> {
             buffer.display()
         )
     };
-    wits_util::editor::edit(repo, &buffer).map_err(kept)?;
+    wits_core::editor::edit(repo, &buffer).map_err(kept)?;
     let text =
         fs::read_to_string(&buffer).with_context(|| format!("reading {}", buffer.display()))?;
     let (actions, verdict) = parse(&text, &patch)
@@ -1169,7 +1169,7 @@ fn rewrite(shown: &Action, d: &DraftText, head: &str) -> Result<Option<Action>> 
 mod tests {
     use super::*;
     use crate::cmd::review::model::Comment;
-    use wits_util::forge::LineRef;
+    use wits_core::forge::LineRef;
 
     const HEAD: &str = "headheadheadhead";
 

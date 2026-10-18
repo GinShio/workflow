@@ -86,8 +86,11 @@ pub fn dry_run(msg: &str) {
 /// the same flag mid-body makes both flaky. Such tests hold this guard for their
 /// duration. Poisoning is ignored: a panicking test still leaves the flags in a
 /// known state because every guarded test resets them on the way out.
-#[cfg(test)]
-pub(crate) fn test_flag_guard() -> std::sync::MutexGuard<'static, ()> {
+///
+/// Public because dependents' unit tests hold it too (a `#[cfg(test)]` item is
+/// compiled out of the library a dependent links); it is not consumer API.
+#[doc(hidden)]
+pub fn test_flag_guard() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

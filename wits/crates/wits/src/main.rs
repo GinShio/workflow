@@ -144,7 +144,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let cli = parse_args();
-    wits_util::log::init(cli.verbose, cli.dry_run);
+    wits_core::log::init(cli.verbose, cli.dry_run);
 
     match &cli.command {
         Commands::Transcrypt(args) => cmd::transcrypt::run(args),
@@ -315,7 +315,7 @@ fn is_executable(_path: &Path) -> bool {
 fn print_trunk(rev: bool) -> anyhow::Result<()> {
     use anyhow::Context;
 
-    let repo = wits_util::git::Repository::new(std::env::current_dir()?);
+    let repo = wits_core::git::Repository::new(std::env::current_dir()?);
     let trunk = wits_util::project::remotes::declared_for_checkout(&repo)?
         .trunk(&repo)
         .context(

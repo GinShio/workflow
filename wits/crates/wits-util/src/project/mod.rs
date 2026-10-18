@@ -3,8 +3,8 @@
 //!
 //! This is the one place that knows what a project *is* — `model`, `workspace`,
 //! and `resolve` describe and resolve without side effects. The git surface
-//! those actions drive is *not* here: it moved to the unified [`crate::git`]
-//! module (as [`crate::git::Repository`]), beside the read/ref floor it shares
+//! those actions drive is *not* here: it moved to the unified [`wits_core::git`]
+//! module (as [`wits_core::git::Repository`]), beside the read/ref floor it shares
 //! a binary with. This core lives under `util` (not `cmd`) because it is a
 //! self-contained subsystem the commands *compose*, not a command itself: the
 //! `wits project` CLI shell (`cmd::project`), and the separate `wits build` /
@@ -24,7 +24,6 @@ pub mod remotes;
 pub mod resolve;
 pub mod skip;
 mod toolchain;
-pub mod trunk;
 pub mod workspace;
 
 use anyhow::{Context, Result};

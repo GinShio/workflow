@@ -21,7 +21,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use wits_util::git::Repository;
+use wits_core::git::Repository;
 
 use super::topology::Topology;
 
@@ -306,7 +306,7 @@ mod tests {
             "core.hooksPath=/nonexistent-wits-test-hooks",
         ];
         all.extend_from_slice(args);
-        wits_util::process::Command::new("git")
+        wits_core::process::Command::new("git")
             .args(all)
             .current_dir(dir)
             .force_run()

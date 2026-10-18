@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 
 use anyhow::Context;
-use wits_util::git::Repository;
+use wits_core::git::Repository;
 use wits_util::project::remotes::Declared;
 
 use super::store;
@@ -38,7 +38,7 @@ impl StackPlan {
 }
 
 /// Resolve the base branch: the checkout's trunk, by the rule every command
-/// shares ([`wits_util::project::trunk`]). There is no config override on
+/// shares ([`wits_core::trunk`]). There is no config override on
 /// purpose — the answer comes from project identity, not a hand-maintained
 /// setting (`docs/reference/stack-design.rst`, "Base branch resolution").
 pub fn base_branch(repo: &Repository, declared: &Declared) -> anyhow::Result<String> {

@@ -31,8 +31,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use wits_util::git::{Commit, Repository};
-use wits_util::process::Command;
+use wits_core::git::{Commit, Repository};
+use wits_core::process::Command;
 use wits_util::project::remotes::Declared;
 
 use super::topology::Topology;
@@ -50,7 +50,7 @@ pub fn run(repo: &Repository, declared: &Declared, base: Option<&str>) -> anyhow
     // `slice` is driven by an interactive `git rebase -i`; there is nothing to
     // preview and no safe way to run it non-interactively, so under `-n` it does
     // nothing rather than write temp files and then misreport an empty result.
-    if wits_util::log::is_dry_run() {
+    if wits_core::log::is_dry_run() {
         log::info!(
             "slice drives an interactive rebase and cannot be previewed; skipping under --dry-run"
         );

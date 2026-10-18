@@ -7,10 +7,10 @@
 
 use anyhow::Result;
 
-use wits_util::forge::MrState;
-use wits_util::git::Repository;
-use wits_util::log as wits_log;
-use wits_util::time::parse_cutoff;
+use wits_core::forge::MrState;
+use wits_core::git::Repository;
+use wits_core::log as wits_log;
+use wits_core::time::parse_cutoff;
 
 use super::model::state_word;
 use super::store::refs;
@@ -120,7 +120,7 @@ fn reclaim_worktree_if_empty(ctx: &ReviewCtx, pruned: &[String]) {
     if !dir.exists() {
         return;
     }
-    match wits_util::worktree::remove(&ctx.repo, &dir, true) {
+    match wits_core::worktree::remove(&ctx.repo, &dir, true) {
         // `remove` drives git through the streamed path, which under dry-run
         // prints the command and reports success without touching anything — so
         // the past tense below would be a lie there.

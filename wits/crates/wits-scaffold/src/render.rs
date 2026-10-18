@@ -4,7 +4,7 @@
 //! than owned by whichever stage happens to render first: a target's tree root is
 //! resolved before any edit is planned, and both go through here.
 //!
-//! The dialect is [`wits_util::jinja`], the same one project config resolves
+//! The dialect is [`wits_core::jinja`], the same one project config resolves
 //! against, so a template reads the same wherever it is written. What this module
 //! adds is the two filters only a Vulkan/SPIR-V catalogue needs, and the checks
 //! that make a catalogue's mistakes legible.
@@ -30,7 +30,7 @@ use sha2::{Digest, Sha256};
 /// belongs in that tree's catalogue instead — where it is also the only half of
 /// this repository that is not published in the clear.
 pub fn environment() -> Environment<'static> {
-    let mut env = wits_util::jinja::environment();
+    let mut env = wits_core::jinja::environment();
     env.add_filter("sha256", sha256_prefix);
     env
 }

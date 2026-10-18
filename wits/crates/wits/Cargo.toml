@@ -10,6 +10,7 @@ name = "wits"
 path = "src/main.rs"
 
 [dependencies]
+wits-core.workspace = true
 wits-util.workspace = true
 clap.workspace = true
 clap_complete.workspace = true

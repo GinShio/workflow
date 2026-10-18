@@ -30,12 +30,12 @@ use std::io::{Read, Write};
 use anyhow::{anyhow, bail, Context};
 use clap::Args;
 
-use wits_util::config::Resolver;
+use wits_core::config::Resolver;
+use wits_core::git::Repository;
 use wits_util::crypto::{
     self, CipherAlgorithm, DecryptOptions, HashAlgorithm, KdfAlgorithm, KdfParams, SaltMode,
     SealOptions, Sealed, SALT_SIZE,
 };
-use wits_util::git::Repository;
 
 #[derive(Debug, Args)]
 pub struct TranscryptArgs {

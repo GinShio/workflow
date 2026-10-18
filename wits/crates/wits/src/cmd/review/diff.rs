@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use wits_util::git::Repository;
+use wits_core::git::Repository;
 
 use super::model::{range_artifacts, short, Info, Snapshot, StoredCommit, StoredFile, SCHEMA};
 use super::{local, modulo, DiffArgs, PatchMode};
@@ -306,7 +306,7 @@ fn describe_one(repo: &Repository, id: &str, series: &Series, args: &DiffArgs) -
              range — add `--against <SPEC>`"
         ),
         Some(PatchMode::TwoWay) => {
-            return wits_util::pager::show_patch(repo, &patch_text(repo, series)?);
+            return wits_core::pager::show_patch(repo, &patch_text(repo, series)?);
         }
         None => {}
     }
@@ -347,7 +347,7 @@ fn compare_two(
     args: &DiffArgs,
 ) -> Result<()> {
     if let Some(mode) = args.patch {
-        return wits_util::pager::show_patch(repo, &render_comparison(repo, from, to, mode)?);
+        return wits_core::pager::show_patch(repo, &render_comparison(repo, from, to, mode)?);
     }
 
     let view = InterdiffView {

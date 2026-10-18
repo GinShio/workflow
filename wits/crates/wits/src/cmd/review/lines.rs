@@ -2,7 +2,7 @@
 //!
 //! A comment on a line the change left untouched names it by its new-side
 //! number, and GitLab will only place such a line by both of its numbers (see
-//! [`LineRef::old_line`](wits_util::forge::LineRef::old_line)). The old number
+//! [`LineRef::old_line`](wits_core::forge::LineRef::old_line)). The old number
 //! is read off the change's zero-context hunk headers: a line inside a hunk was
 //! added; any other line is unchanged, shifted by what the hunks before it
 //! removed and added.

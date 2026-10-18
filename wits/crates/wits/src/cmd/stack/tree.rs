@@ -19,7 +19,7 @@ use std::fs;
 use std::io::Read as _;
 
 use anyhow::Context;
-use wits_util::git::Repository;
+use wits_core::git::Repository;
 use wits_util::project::remotes::Declared;
 
 use super::topology::Topology;
@@ -216,6 +216,6 @@ fn edit_in_editor(repo: &Repository, seed: &str) -> anyhow::Result<String> {
         .tempfile()
         .context("creating the stack edit file")?;
     fs::write(file.path(), seed)?;
-    wits_util::editor::edit(repo, file.path()).context("nothing was changed")?;
+    wits_core::editor::edit(repo, file.path()).context("nothing was changed")?;
     fs::read_to_string(file.path()).context("reading back the edited stack")
 }

@@ -16,8 +16,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use wits_util::forge::RemoteInfo;
-use wits_util::forge::{FeedQuery, FeedStates};
+use wits_core::forge::RemoteInfo;
+use wits_core::forge::{FeedQuery, FeedStates};
 
 use super::StackMode;
 

@@ -12,9 +12,9 @@
 //! re-running is safe. Like `submit`, it leaves the work of *finding* the MR to
 //! the forge and never pushes.
 
-use wits_util::forge::Attributes;
-use wits_util::git::Repository;
-use wits_util::log as wits_log;
+use wits_core::forge::Attributes;
+use wits_core::git::Repository;
+use wits_core::log as wits_log;
 use wits_util::project::remotes::Declared;
 
 use super::resolution::StackPlan;

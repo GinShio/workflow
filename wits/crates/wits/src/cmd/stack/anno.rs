@@ -19,9 +19,9 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
-use wits_util::forge::{Forge, MergeRequest, MrComment};
-use wits_util::git::Repository;
-use wits_util::log as wits_log;
+use wits_core::forge::{Forge, MergeRequest, MrComment};
+use wits_core::git::Repository;
+use wits_core::log as wits_log;
 use wits_util::project::remotes::Declared;
 
 use super::resolution::StackPlan;
@@ -396,7 +396,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use wits_util::forge::{Attributes, HeadRepo, MrState, NewMr};
+    use wits_core::forge::{Attributes, HeadRepo, MrState, NewMr};
 
     fn mr(display: &str) -> MergeRequest {
         MergeRequest {

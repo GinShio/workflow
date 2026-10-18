@@ -1337,7 +1337,23 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml",
+ "wits-core",
  "wits-util",
+]
+
+[[package]]
+name = "wits-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "minijinja",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tempfile",
+ "thiserror",
+ "ureq",
 ]
 
 [[package]]
@@ -1355,7 +1371,7 @@ dependencies = [
  "similar",
  "tempfile",
  "toml",
- "wits-util",
+ "wits-core",
 ]
 
 [[package]]
@@ -1373,14 +1389,12 @@ dependencies = [
  "pbkdf2",
  "rand",
  "serde",
- "serde_json",
- "sha1",
  "sha2",
  "sha3",
  "tempfile",
  "thiserror",
  "toml",
- "ureq",
+ "wits-core",
 ]
 
 [[package]]

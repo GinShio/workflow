@@ -37,13 +37,13 @@
 //! upstream and has no push remote is a legitimate read-only state, so push-side
 //! operations report the absence instead of pushing somewhere unasked.
 //!
-//! # Why this is neither in `git` nor in `project`
+//! # Why this is neither in `git` nor in the project layer
 //!
 //! [`crate::git`] is porcelain with no policy, and "there are exactly two roles,
-//! spelled thus" is policy. [`crate::project`] is where a *user's declaration* of
+//! spelled thus" is policy. The project layer is where a *user's declaration* of
 //! the roles lives, but the tools must also serve a checkout no project declares.
 //! So the vocabulary and the name-only reading sit below both, and the
-//! registry-aware resolution sits above, in [`crate::project::remotes`].
+//! registry-aware resolution sits above, in the project layer's `remotes`.
 
 use serde::de::{self, Deserializer};
 use serde::Deserialize;

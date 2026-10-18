@@ -18,7 +18,7 @@
 //! order nobody declared — `alive2` has an `env` entry reading a sibling that
 //! sorts *after* it. Bridging those two is a project-config policy, not a
 //! property of the template language, so it sits beside the config it serves
-//! while [`crate::jinja`] stays a dialect definition with no policy in it.
+//! while [`wits_core::jinja`] stays a dialect definition with no policy in it.
 //!
 //! [`Ctx`] is that bridge. It resolves *by dotted path, on demand*: asked for a
 //! template, it discovers which paths the template reads, resolves each of those
@@ -508,7 +508,7 @@ pub(crate) fn resolve_replace(ctx: &Ctx, raw: &[String], out: &mut Vec<String>) 
 // --- context builders ---------------------------------------------------------
 
 /// The `system.*` template namespace: the shared host-facts tree from
-/// [`crate::system`].
+/// [`wits_core::system`].
 pub fn system_facts() -> Value {
     crate::system::facts()
 }
@@ -685,7 +685,7 @@ pub fn value_to_string(v: &Value) -> String {
 /// interpolated **inside** a larger template (`"p-{{ flag }}"`) is formatted by
 /// MiniJinja while it renders, before any of this runs, and still reads `True`.
 /// Changing that means installing a formatter on the shared environment in
-/// [`crate::jinja`], which would redefine the dialect for every renderer in the
+/// [`wits_core::jinja`], which would redefine the dialect for every renderer in the
 /// tree (the scaffold plugin included) — a wider decision than spelling a
 /// definition, and no config in this tree writes that form.
 pub fn scalar_text(v: &Value) -> Option<String> {

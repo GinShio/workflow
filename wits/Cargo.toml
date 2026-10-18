@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/wits-util", "crates/wits", "crates/wits-scaffold"]
+members = ["crates/wits-core", "crates/wits-util", "crates/wits", "crates/wits-scaffold"]
 
 [workspace.package]
 version = "0.1.0"
@@ -45,4 +45,5 @@ regex = "1"
 similar = "3"
 # Read-only DOM: vk.xml is navigated by element/attribute, never mutated.
 roxmltree = "0.21"
+wits-core = { path = "crates/wits-core" }
 wits-util = { path = "crates/wits-util" }

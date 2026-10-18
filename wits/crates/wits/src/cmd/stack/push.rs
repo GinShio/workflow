@@ -7,9 +7,9 @@
 //! with MR logic.
 
 use anyhow::Context;
-use wits_util::git::Repository;
+use wits_core::git::Repository;
+use wits_core::remote::RemoteRoles;
 use wits_util::project::remotes::Declared;
-use wits_util::remote::RemoteRoles;
 
 use super::{fail_if_any, map_parallel, resolution, ScopeArgs};
 

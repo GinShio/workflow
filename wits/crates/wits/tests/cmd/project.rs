@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use wits_util::git::Repository;
+use wits_core::git::Repository;
 
 struct Fixture {
     _dir: tempfile::TempDir,

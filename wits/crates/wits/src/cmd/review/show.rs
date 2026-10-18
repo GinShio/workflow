@@ -8,9 +8,9 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use wits_util::forge::{Anchor, MrSummary, Side};
-use wits_util::git::Repository;
-use wits_util::time::age_since;
+use wits_core::forge::{Anchor, MrSummary, Side};
+use wits_core::git::Repository;
+use wits_core::time::age_since;
 
 use super::model::{
     short, state_word, Action, Comment, Info, Local, Reviewed, Snapshot, StoredCommit, StoredFile,
@@ -69,7 +69,7 @@ struct Neighbors {
 #[derive(Serialize)]
 struct DraftView {
     #[serde(skip_serializing_if = "Option::is_none")]
-    verdict: Option<wits_util::forge::Verdict>,
+    verdict: Option<wits_core::forge::Verdict>,
     #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
     pending: usize,

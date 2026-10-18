@@ -27,11 +27,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use clap::Args;
 
-use wits_util::process::Command;
+use wits_core::process::Command;
 
 use crate::cmd::project::ProfileArgs;
+use wits_core::git::{Repository, RestoreGuard};
 use wits_util::build_system::{backend_for, Backend, BuildMode, EmitContext};
-use wits_util::git::{Repository, RestoreGuard};
 use wits_util::project::model::{BranchStrategy, Profile};
 use wits_util::project::resolve::{self, Plan, PlanInput, ToolchainInjector};
 use wits_util::project::resolve_target;

@@ -4,7 +4,7 @@
 //! recorded actions, and hands the whole review to the forge as one
 //! [`ReviewBatch`]. The forge folds as many actions as its native primitive
 //! allows into one notification and reports a granular
-//! [`BatchOutcome`](wits_util::forge::BatchOutcome) keyed by action, so
+//! [`BatchOutcome`](wits_core::forge::BatchOutcome) keyed by action, so
 //! reconciliation is **per action**: whatever landed is cleared, whatever
 //! failed stays in the draft to retry. Only a fully-flushed draft triggers a
 //! re-fetch, so a partial failure never loses unposted work.
@@ -13,9 +13,9 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 
-use wits_util::forge::{Anchor, BatchAction, DiffVersion, Forge, ReviewBatch, Side};
-use wits_util::git::Repository;
-use wits_util::log as wits_log;
+use wits_core::forge::{Anchor, BatchAction, DiffVersion, Forge, ReviewBatch, Side};
+use wits_core::git::Repository;
+use wits_core::log as wits_log;
 
 use super::lines;
 use super::model::{comment_anchor, Action, Local, Reviewed, Snapshot, StoredFile};
@@ -193,7 +193,7 @@ fn submit_draft(ctx: &Online, id: &str, mut local: Local, stale: Vec<String>) ->
     if reconciled.posted > 0 || outcome.verdict_ok == Some(true) {
         let reviewed = Reviewed {
             head_sha: version.head_sha.clone(),
-            at: wits_util::time::now_secs(),
+            at: wits_core::time::now_secs(),
         };
         if let Err(e) = store.save_reviewed(id, &reviewed) {
             log::warn!("MR {id}: submitted, but recording the review point failed: {e}");
@@ -243,7 +243,7 @@ struct ReconcileStats {
 /// Apply a forge outcome to a normalized local draft. Batch actions are keyed by
 /// their persistent action ids; summary is tracked separately by the forge outcome
 /// because it is submitted as the review body.
-fn reconcile_local(local: &mut Local, outcome: &wits_util::forge::BatchOutcome) -> ReconcileStats {
+fn reconcile_local(local: &mut Local, outcome: &wits_core::forge::BatchOutcome) -> ReconcileStats {
     let posted = local
         .actions
         .iter()
@@ -358,7 +358,7 @@ fn build_batch(
 /// from `old_path`); a change it cannot compute leaves the number unknown, for
 /// the forge to refuse rather than misplace.
 ///
-/// [`LineRef::old_line`]: wits_util::forge::LineRef::old_line
+/// [`LineRef::old_line`]: wits_core::forge::LineRef::old_line
 fn place_unchanged_lines(
     batch: &mut ReviewBatch,
     mut hunks_of: impl FnMut(&DiffVersion, &str, Option<&str>) -> Option<Vec<lines::Hunk>>,
@@ -496,8 +496,8 @@ fn preview(id: &str, local: &Local, noun: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wits_util::forge::github::GitHub;
-    use wits_util::forge::{RemoteInfo, Service};
+    use wits_core::forge::github::GitHub;
+    use wits_core::forge::{RemoteInfo, Service};
 
     fn github() -> GitHub {
         GitHub::new(
@@ -537,8 +537,8 @@ mod tests {
         landed: &[(&str, bool)],
         summary_ok: bool,
         verdict_ok: Option<bool>,
-    ) -> wits_util::forge::BatchOutcome {
-        wits_util::forge::BatchOutcome {
+    ) -> wits_core::forge::BatchOutcome {
+        wits_core::forge::BatchOutcome {
             landed: landed
                 .iter()
                 .map(|(key, ok)| ((*key).to_owned(), *ok))
@@ -554,7 +554,7 @@ mod tests {
     fn reconcile_clears_fully_landed_draft() {
         let mut local = Local {
             schema: super::super::model::SCHEMA,
-            verdict: Some(wits_util::forge::Verdict::Approve),
+            verdict: Some(wits_core::forge::Verdict::Approve),
             actions: vec![summary("s"), comment("c")],
         };
 
@@ -568,7 +568,7 @@ mod tests {
     fn reconcile_keeps_failed_actions_summary_and_verdict() {
         let mut local = Local {
             schema: super::super::model::SCHEMA,
-            verdict: Some(wits_util::forge::Verdict::RequestChanges),
+            verdict: Some(wits_core::forge::Verdict::RequestChanges),
             actions: vec![summary("s"), comment("ok"), comment("fail")],
         };
 
@@ -580,7 +580,7 @@ mod tests {
         assert_eq!(stats, ReconcileStats { posted: 1, kept: 2 });
         assert_eq!(
             local.verdict,
-            Some(wits_util::forge::Verdict::RequestChanges)
+            Some(wits_core::forge::Verdict::RequestChanges)
         );
         assert!(matches!(local.actions[0], Action::Summary { .. }));
         assert!(matches!(
@@ -590,7 +590,7 @@ mod tests {
     }
 
     fn line_comment(end: (u32, Side), start: Option<(u32, Side)>) -> BatchAction {
-        let at = |(line, side)| wits_util::forge::LineRef {
+        let at = |(line, side)| wits_core::forge::LineRef {
             line,
             side,
             old_line: None,
@@ -675,12 +675,12 @@ mod tests {
 
     /// What `submit` records for `diff --since-reviewed` to measure from.
     mod review_point {
-        use wits_util::forge::{
+        use wits_core::forge::{
             Attributes, BatchOutcome, Forge, HeadRepo, MergeRequest, MrComment, NewMr, RemoteInfo,
             ReviewBatch, Service, Verdict,
         };
-        use wits_util::git::Repository;
-        use wits_util::remote::RemoteRoles;
+        use wits_core::git::Repository;
+        use wits_core::remote::RemoteRoles;
 
         use super::super::submit_draft;
         use crate::cmd::review::model::{Action, Info, Local};

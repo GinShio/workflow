@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::de::DeserializeOwned;
 
-use wits_util::config::Resolver;
-use wits_util::git::Repository;
+use wits_core::config::Resolver;
+use wits_core::git::Repository;
 
 use super::layout::{Config, Resolved, CONFIG_NAME};
 

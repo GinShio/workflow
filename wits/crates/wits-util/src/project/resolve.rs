@@ -912,13 +912,13 @@ pub fn checkout_holding(
 ///
 /// Independent of the caller's cwd, which is what a *lifecycle* command needs — a
 /// verification whose target moved with your shell would report different things on
-/// different runs. See [`crate::worktree::primary_checkout`].
+/// different runs. See [`wits_core::git::primary_checkout`].
 pub fn primary_checkout(
     ws: &Workspace,
     project: &ProjectData,
     repo_name: &str,
 ) -> Result<Option<PathBuf>> {
-    Ok(crate::worktree::primary_checkout(&repository_of(
+    Ok(wits_core::git::primary_checkout(&repository_of(
         ws, project, repo_name,
     )?))
 }
@@ -947,7 +947,7 @@ pub fn current_checkout(
             }
         }
     }
-    Ok(crate::worktree::primary_checkout(&repository))
+    Ok(wits_core::git::primary_checkout(&repository))
 }
 
 /// The branch `repo_name` is on, read from [`current_checkout`]. `None` on a

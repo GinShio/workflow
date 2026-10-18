@@ -28,8 +28,8 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
 
+use wits_core::process::Command;
 use wits_util::build_system::backend_for;
-use wits_util::process::Command;
 use wits_util::project::resolve::{self, PlanInput};
 use wits_util::project::resolve_target;
 use wits_util::project::workspace::{ProjectData, Workspace};

@@ -44,7 +44,7 @@ use crate::model::Plane;
 
 /// How this tool names its config directory, following the same env -> XDG ->
 /// HOME search every other wits subsystem uses.
-pub const CONFIG_ROOT: wits_util::config::Root<'static> = wits_util::config::Root {
+pub const CONFIG_ROOT: wits_core::config::Root<'static> = wits_core::config::Root {
     env: "WITS_SCAFFOLD_CONFIG",
     xdg: "wits/scaffold",
     home: ".config/wits/scaffold",
@@ -310,7 +310,7 @@ impl Catalog {
 pub fn load_all(root: &Path) -> Result<Vec<(PathBuf, Catalog)>> {
     let dir = root.join("target");
     let mut found = Vec::new();
-    for path in wits_util::config::discover_toml(&dir)
+    for path in wits_core::config::discover_toml(&dir)
         .with_context(|| format!("cannot scan {}", dir.display()))?
     {
         found.push((path.clone(), Catalog::load(&path)?));
