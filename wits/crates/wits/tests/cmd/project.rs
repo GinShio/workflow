@@ -1395,3 +1395,75 @@ fn the_trunk_query_reads_an_undeclared_repos_remote_head() {
     assert_eq!(trunk_query(&repo, &config, &[]), "main");
     assert_eq!(trunk_query(&repo, &config, &["--rev"]), "upstream/main");
 }
+
+/// `__names` is the completion surface fish reads at TAB time: a scoped
+/// answer offers only spellings the target's flag accepts, the no-target union
+/// is the over-approximation completion uses while the target is still being
+/// typed, and the hidden command must stay out of the help like the other
+/// plumbing.
+#[test]
+fn the_names_query_lists_candidates_for_completion() {
+    let fx = Fixture::new();
+
+    std::fs::write(
+        fx.config.join("toolchains.toml"),
+        "[toolchains.clang]\ncc = \"clang\"\n[toolchains.gcc]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fx.config.join("presets.toml"),
+        format!(
+            r#"
+[project]
+org = "demo"
+[project.presets.common]
+environment = {{ CFLAGS = "-O2" }}
+[project.presets.unix]
+extends = "common"
+[repos.main]
+path = "{}"
+main_branch = "main"
+[org]
+name = "demo"
+[org.presets.shared]
+environment = {{ CXXFLAGS = "-std=c++20" }}
+"#,
+            fx.path("src-presets").display()
+        ),
+    )
+    .unwrap();
+    // A second provider, so the union mode has something the scoped one does
+    // not: `extra` lands inside work.toml's `[repos.main]` region, and the
+    // table header opens its own namespace from there.
+    Fixture::declare_work(&fx.root, "[project.presets.local]\n");
+
+    // Toolchains are registry-wide.
+    let out = fx.ok(&["project", "__names", "toolchains"]);
+    assert_eq!(out.stdout, "clang\ngcc\n");
+
+    // A scoped presets answer: bare names the project resolves (its own, and
+    // its org's — bare org names merge on lookup), plus the org's qualified
+    // `org/name` forms — the spellings `--preset` accepts.
+    let out = fx.ok(&["project", "__names", "presets", "presets"]);
+    assert_eq!(out.stdout, "common\ndemo/shared\nshared\nunix\n");
+
+    // Union mode: every project's candidates, deduplicated and sorted.
+    let out = fx.ok(&["project", "__names", "presets"]);
+    assert_eq!(out.stdout, "common\ndemo/shared\nlocal\nshared\nunix\n");
+
+    // Repos, scoped and union.
+    let out = fx.ok(&["project", "__names", "repos", "work"]);
+    assert_eq!(out.stdout, "main\n");
+    let out = fx.ok(&["project", "__names", "repos"]);
+    assert_eq!(out.stdout, "component\nmain\n");
+
+    // An unknown target is an error, so completion can fall back to the
+    // union instead of offering an empty list.
+    let out = fx.run(&["project", "__names", "repos", "missing"]);
+    assert!(!out.success);
+    assert!(out.stderr.contains("no project 'missing'"));
+
+    // Hidden plumbing: no help entry, like the other `__` queries.
+    let help = fx.ok(&["project", "--help"]);
+    assert!(!help.stdout.contains("__names"));
+}

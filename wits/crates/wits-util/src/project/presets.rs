@@ -1,10 +1,10 @@
 //! Preset selection, merging, and recursive application (L2 of the pipeline).
 //!
 //! Three questions live here, and only here: *which* presets apply and in what
-//! order ([`applied_presets`] — defaults, `applies_when` matches, then CLI
+//! order (`applied_presets` — defaults, `applies_when` matches, then CLI
 //! `--preset`), how a same-named preset *merges* across org → project → repo
-//! ([`effective_preset`]), and how one preset's `extends` chain *folds* into the
-//! accumulating config ([`resolve_preset_into`]). The actual env/def/args folding
+//! (`effective_preset`), and how one preset's `extends` chain *folds* into the
+//! accumulating config (`resolve_preset_into`). The actual env/def/args folding
 //! is delegated to [`super::context`], so this module stays about preset policy.
 
 use std::collections::BTreeMap;
@@ -60,7 +60,13 @@ pub(crate) fn applied_presets(
     out
 }
 
-fn candidate_preset_names(ws: &Workspace, project: &ProjectData, focus: &str) -> Vec<String> {
+/// Every preset name the target project's `--preset` accepts as a bare name
+/// *at `focus`*: its org's, the project's own, and the focus repo's, merged
+/// on lookup (`effective_preset`). The bare-name surface shared by the
+/// auto-match pass in `applied_presets` and shell completion (`wits project
+/// __names`), so the two cannot drift about bare names — completion adds the
+/// qualified `org/name` forms itself.
+pub fn candidate_preset_names(ws: &Workspace, project: &ProjectData, focus: &str) -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
     if let Some(org) = &project.org {
         if let Some(m) = ws.org_presets(org) {

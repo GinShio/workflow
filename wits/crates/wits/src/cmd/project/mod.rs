@@ -16,6 +16,7 @@
 //! worktrees meet at a path — see `build`'s `--work-dir` — and at the remote
 //! roles `wits worktree` asks the registry for, like every other command.
 
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -30,7 +31,7 @@ use wits_util::project::context::value_to_string;
 use wits_util::project::model::{DevenvOp, Kind, Profile, DEVENV_SEPARATOR};
 use wits_util::project::skip;
 use wits_util::project::workspace::{expand_tilde, looks_like_path, ProjectData, Workspace};
-use wits_util::project::{resolve, resolve_target};
+use wits_util::project::{presets, resolve, resolve_target};
 
 /// `wits project` — the read-only half of the tool: one verb per shape of
 /// question it answers.
@@ -75,6 +76,44 @@ pub enum ProjectSub {
     /// Print a repo's commit hash for a branch, optionally with its submodules'
     /// pinned hashes — read from the tree, so no checkout or branch switch.
     Hash(HashArgs),
+    /// Print the name lists shell completion needs. Hidden like the top-level
+    /// plumbing (`__applets`, `__trunk`): fish calls this at TAB time, so
+    /// completion asks the registry instead of keeping its own TOML parser of
+    /// it — the same one-question-one-command bargain `__trunk` made for the
+    /// git hooks.
+    #[command(name = "__names", hide = true)]
+    Names(NamesArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct NamesArgs {
+    /// Which names to print.
+    #[arg(value_enum)]
+    pub kind: NamesKind,
+    /// Scope the answer to one project, by name (`org/name` disambiguates) or
+    /// path. Presets and repos become that project's own; without it, the
+    /// union over every project — the over-approximation completion offers
+    /// when no target is on the line yet.
+    pub target: Option<String>,
+}
+
+/// The name lists [`NamesArgs`] can print. Each serves one flag family —
+/// `--toolchain` takes a registry toolchain, `--preset` a preset the target
+/// resolves, `--focus` and `repos.<name>.*` a repo of the target. With a
+/// target, every line is a spelling that flag accepts for it; without one,
+/// the union is the over-approximation completion falls back to while the
+/// target is still being typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum NamesKind {
+    /// Toolchains declared in the registry.
+    Toolchains,
+    /// Presets: bare names the target merges at its default focus, plus its
+    /// org's `org/name` forms. The list is for that focus — a `--focus`
+    /// override is a different merge: it adds the override repo's own names
+    /// and drops the default focus's.
+    Presets,
+    /// Repo names of the target project.
+    Repos,
 }
 
 #[derive(Debug, Args)]
@@ -243,6 +282,7 @@ pub fn run(args: &ProjectArgs) -> Result<()> {
         ProjectSub::Exists(a) => exists(&ws, a),
         ProjectSub::BranchBuildDirs(a) => branch_build_dirs(&ws, a, profile),
         ProjectSub::Hash(a) => hash(&ws, a, profile),
+        ProjectSub::Names(a) => names(&ws, a),
     }
 }
 
@@ -378,7 +418,78 @@ fn get_paths(ws: &Workspace, args: &InfoArgs, profile: &ProfileArgs) -> Result<(
     for value in values {
         println!("{value}");
     }
+
     Ok(())
+}
+
+/// `__names`: one candidate per line for shell completion, spelled the way
+/// the matching flag accepts it. The consumer is fish completion, which reads
+/// this instead of holding its own parser of the registry — so the contract
+/// is the output shape alone: sorted, deduplicated, one line per name,
+/// nothing else on stdout. The lists are the candidates completion should
+/// offer, not an exhaustive enumeration of every accepted spelling — a
+/// `--preset` may also reach another org's presets as `org/name`.
+fn names(ws: &Workspace, args: &NamesArgs) -> Result<()> {
+    match args.kind {
+        NamesKind::Toolchains => {
+            for name in ws.toolchains().keys() {
+                println!("{name}");
+            }
+        }
+        NamesKind::Presets => {
+            for name in preset_names(ws, args.target.as_deref())? {
+                println!("{name}");
+            }
+        }
+        NamesKind::Repos => {
+            for name in repo_names(ws, args.target.as_deref())? {
+                println!("{name}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The preset candidates to print for `--preset`: for a target, that
+/// project's candidates at its default focus — the bare mergeable names plus
+/// its org's qualified `org/name` forms; without one, the union over every
+/// project. The same name may be declared at several layers and deduplicates
+/// to one line.
+fn preset_names(ws: &Workspace, target: Option<&str>) -> Result<Vec<String>> {
+    let mut names = BTreeSet::new();
+    for project in targets(ws, target)? {
+        let focus = project.focus_name(None);
+        names.extend(presets::candidate_preset_names(ws, project, focus));
+        if let Some(org) = &project.org {
+            if let Some(org_presets) = ws.org_presets(org) {
+                for name in org_presets.keys() {
+                    names.insert(format!("{org}/{name}"));
+                }
+            }
+        }
+    }
+    Ok(names.into_iter().collect())
+}
+
+/// The repo names a project's flags can address: `--focus` and the
+/// `repos.<name>.*` paths, for the target or across the registry.
+fn repo_names(ws: &Workspace, target: Option<&str>) -> Result<Vec<String>> {
+    let mut names = BTreeSet::new();
+    for project in targets(ws, target)? {
+        names.extend(project.repos.keys().cloned());
+    }
+    Ok(names.into_iter().collect())
+}
+
+/// The projects a name query answers for: one resolved target, or every
+/// project in the registry. A target goes through [`resolve_target`], the one
+/// name/path funnel the other verbs share; absent, a union needs no cwd
+/// context and answers for the whole registry.
+fn targets<'a>(ws: &'a Workspace, target: Option<&str>) -> Result<Vec<&'a ProjectData>> {
+    match target {
+        None => Ok(ws.projects().collect()),
+        Some(target) => resolve_target(ws, Some(target)).map(|p| vec![p]),
+    }
 }
 
 /// `branch-build-dirs`: every existing build directory that `--branch` of the
