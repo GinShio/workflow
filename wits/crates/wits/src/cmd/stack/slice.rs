@@ -33,7 +33,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use wits_core::git::{Commit, Repository};
 use wits_core::process::Command;
-use wits_util::project::remotes::Declared;
+use wits_project::remotes::Declared;
 
 use super::topology::Topology;
 use super::{resolution, store};

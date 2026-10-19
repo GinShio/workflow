@@ -11,22 +11,24 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
 
-use super::context::{apply_def_map, apply_devenv_map, apply_env_map, resolve_replace, Ctx};
-use super::model::{LogicalConfig, Profile, RawPreset, Toolchain};
-use super::workspace::{ProjectData, Workspace};
+use crate::context::{apply_def_map, apply_devenv_map, apply_env_map, resolve_replace, Ctx};
+use crate::decl::PresetDecl;
+use crate::plan::{LogicalConfig, Toolchain};
+use crate::profile::Profile;
+use crate::workspace::{Project, Workspace};
 
 /// The ordered, de-duplicated list of presets to apply: `default_presets`, then
 /// `applies_when` matches, then CLI `--preset`; last occurrence wins position.
 pub(crate) fn applied_presets(
     ws: &Workspace,
-    project: &ProjectData,
+    project: &Project,
     focus: &str,
     profile: &Profile,
     toolchain: &Option<Toolchain>,
     build_type: &str,
     generator: &Option<String>,
 ) -> Vec<String> {
-    let mut ordered: Vec<String> = project.project.default_presets.clone();
+    let mut ordered: Vec<String> = project.settings.default_presets.clone();
 
     // Auto-applied: any candidate whose merged applies_when matches.
     let axes = MatchAxes {
@@ -66,16 +68,16 @@ pub(crate) fn applied_presets(
 /// auto-match pass in `applied_presets` and shell completion (`wits project
 /// __names`), so the two cannot drift about bare names — completion adds the
 /// qualified `org/name` forms itself.
-pub fn candidate_preset_names(ws: &Workspace, project: &ProjectData, focus: &str) -> Vec<String> {
+pub fn candidate_preset_names(ws: &Workspace, project: &Project, focus: &str) -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
     if let Some(org) = &project.org {
-        if let Some(m) = ws.org_presets(org) {
+        if let Some(m) = ws.org(org).map(|o| &o.presets) {
             names.extend(m.keys().cloned());
         }
     }
-    names.extend(project.project.presets.keys().cloned());
+    names.extend(project.settings.presets.keys().cloned());
     if let Some(repo) = project.repos.get(focus) {
-        names.extend(repo.presets.keys().cloned());
+        names.extend(repo.decl.presets.keys().cloned());
     }
     names.into_iter().collect()
 }
@@ -86,29 +88,37 @@ pub fn candidate_preset_names(ws: &Workspace, project: &ProjectData, focus: &str
 /// org's presets directly, without merging.
 fn effective_preset(
     ws: &Workspace,
-    project: &ProjectData,
+    project: &Project,
     focus: &str,
     name: &str,
-) -> Option<RawPreset> {
+) -> Option<PresetDecl> {
     if let Some((org, base)) = name.split_once('/') {
-        return ws.org_presets(org).and_then(|m| m.get(base)).cloned();
+        return ws
+            .org(org)
+            .map(|o| &o.presets)
+            .and_then(|m| m.get(base))
+            .cloned();
     }
-    let mut layers: Vec<&RawPreset> = Vec::new();
+    let mut layers: Vec<&PresetDecl> = Vec::new();
     if let Some(org) = &project.org {
-        if let Some(p) = ws.org_presets(org).and_then(|m| m.get(name)) {
+        if let Some(p) = ws.org(org).map(|o| &o.presets).and_then(|m| m.get(name)) {
             layers.push(p);
         }
     }
-    if let Some(p) = project.project.presets.get(name) {
+    if let Some(p) = project.settings.presets.get(name) {
         layers.push(p);
     }
-    if let Some(p) = project.repos.get(focus).and_then(|r| r.presets.get(name)) {
+    if let Some(p) = project
+        .repos
+        .get(focus)
+        .and_then(|r| r.decl.presets.get(name))
+    {
         layers.push(p);
     }
     if layers.is_empty() {
         return None;
     }
-    let mut merged = RawPreset::default();
+    let mut merged = PresetDecl::default();
     for layer in layers {
         for (k, v) in &layer.environment {
             merged.environment.insert(k.clone(), v.clone());
@@ -116,8 +126,8 @@ fn effective_preset(
         for (k, v) in &layer.definitions {
             merged.definitions.insert(k.clone(), v.clone());
         }
-        merged.devenv.0.extend(layer.devenv.0.iter().cloned());
-        if !layer.extends.0.is_empty() {
+        merged.devenv.extend(layer.devenv.iter().cloned());
+        if !layer.extends.is_empty() {
             merged.extends = layer.extends.clone();
         }
         if layer.applies_when.is_some() {
@@ -140,7 +150,7 @@ pub(crate) fn resolve_preset_into(
     ctx: &mut Ctx,
     logical: &mut LogicalConfig,
     ws: &Workspace,
-    project: &ProjectData,
+    project: &Project,
     focus: &str,
     name: &str,
     seen: &mut Vec<String>,
@@ -152,7 +162,7 @@ pub(crate) fn resolve_preset_into(
     let preset = effective_preset(ws, project, focus, name)
         .with_context(|| format!("unknown preset '{name}'"))?;
     seen.push(name.to_owned());
-    for parent in &preset.extends.0 {
+    for parent in &preset.extends {
         resolve_preset_into(ctx, logical, ws, project, focus, parent, seen)?;
     }
     seen.pop();

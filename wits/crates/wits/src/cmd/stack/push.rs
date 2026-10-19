@@ -9,7 +9,7 @@
 use anyhow::Context;
 use wits_core::git::Repository;
 use wits_core::remote::RemoteRoles;
-use wits_util::project::remotes::Declared;
+use wits_project::remotes::Declared;
 
 use super::{fail_if_any, map_parallel, resolution, ScopeArgs};
 

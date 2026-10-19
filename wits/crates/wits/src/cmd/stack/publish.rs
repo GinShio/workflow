@@ -11,7 +11,7 @@
 //! to MRs that exist.
 
 use wits_core::git::Repository;
-use wits_util::project::remotes::Declared;
+use wits_project::remotes::Declared;
 
 use super::{anno, fail_if_any, push, resolution, submit, ForgeSession, SubmitArgs};
 

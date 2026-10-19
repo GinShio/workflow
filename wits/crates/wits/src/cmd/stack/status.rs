@@ -18,7 +18,7 @@ use std::io::IsTerminal as _;
 use serde::Serialize;
 use wits_core::forge::{HeadRepo, MergeRequest, MrState};
 use wits_core::git::Repository;
-use wits_util::project::remotes::Declared;
+use wits_project::remotes::Declared;
 
 use super::topology::Topology;
 use super::{map_parallel, resolution, store, BranchMrs, ForgeSession, StatusArgs};

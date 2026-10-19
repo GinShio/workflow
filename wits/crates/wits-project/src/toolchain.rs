@@ -6,7 +6,7 @@
 //! resolution renders its raw templated fields against the pipeline context and
 //! exposes the result under `toolchain.*` so config can reference `{{toolchain.cc}}`.
 //! The backend-native translation of a resolved [`Toolchain`] into env/definitions
-//! is a separate concern (the `ToolchainInjector` seam in [`super::resolve`]).
+//! is a separate concern (the `ToolchainInjector` seam in [`crate::plan`]).
 
 use std::collections::BTreeMap;
 
@@ -14,23 +14,25 @@ use anyhow::{Context, Result};
 
 use minijinja::Value;
 
-use super::context::{from_toml, Ctx};
-use super::model::{Profile, RawToolchain, Toolchain};
-use super::workspace::{ProjectData, Workspace};
+use crate::context::{from_toml, Ctx};
+use crate::decl::ToolchainDecl;
+use crate::plan::Toolchain;
+use crate::profile::Profile;
+use crate::workspace::{Project, Workspace};
 
 /// Select the toolchain by name via the chain: env → `--toolchain` → the
 /// project's `toolchain` field. (Env wins, per the codebase's "env is the
 /// deliberate override" rule.) Returns the name and its raw definition.
 pub(crate) fn select_toolchain(
     ws: &Workspace,
-    project: &ProjectData,
+    project: &Project,
     profile: &Profile,
-) -> Result<Option<(String, RawToolchain)>> {
+) -> Result<Option<(String, ToolchainDecl)>> {
     let name = std::env::var("WITS_PROJECT_TOOLCHAIN")
         .ok()
         .filter(|s| !s.is_empty())
         .or_else(|| profile.toolchain.clone())
-        .or_else(|| project.project.toolchain.clone());
+        .or_else(|| project.settings.toolchain.clone());
     let Some(name) = name else {
         return Ok(None);
     };
@@ -46,7 +48,7 @@ pub(crate) fn select_toolchain(
 pub(crate) fn resolve_toolchain(
     ctx: &mut Ctx,
     name: String,
-    raw: &RawToolchain,
+    raw: &ToolchainDecl,
 ) -> Result<Toolchain> {
     let opt = |ctx: &Ctx, s: &Option<String>| -> Result<Option<String>> {
         match s {

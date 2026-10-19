@@ -12,7 +12,7 @@
 //! one thing the core resolver still needs — translating a toolchain into
 //! native env/definitions at L0 ("Single source of truth for compilers,
 //! realised by the backend") — it gets through the `ToolchainInjector` seam,
-//! which each backend implements and `build` hands to `resolve::plan`.
+//! which each backend implements and `build` hands to `resolve_plan`.
 //!
 //! Under worktree/hybrid the target worktree must already exist — hybrid first
 //! discovers it from Git's inventory — and `build` never creates one
@@ -31,11 +31,12 @@ use wits_core::process::Command;
 
 use crate::cmd::project::ProfileArgs;
 use wits_core::git::{Repository, RestoreGuard};
+use wits_project::layout;
+use wits_project::{
+    resolve_plan, resolve_target, BranchStrategy, BuildInput, BuildPlan, PathInput, Profile,
+    Project, ToolchainInjector, Workspace,
+};
 use wits_util::build_system::{backend_for, Backend, BuildMode, EmitContext};
-use wits_util::project::model::{BranchStrategy, Profile};
-use wits_util::project::resolve::{self, Plan, PlanInput, ToolchainInjector};
-use wits_util::project::resolve_target;
-use wits_util::project::workspace::{ProjectData, Workspace};
 
 /// Which build a command means: the resolution profile, the detached-HEAD
 /// selector, and the two output-path overrides. `build` and `devenv` flatten the
@@ -108,7 +109,7 @@ pub struct BuildArgs {
 /// Extra args are verbatim and applied last, at the highest priority (L3 in
 /// "The pipeline").
 /// Lives here, not in `project::model`, because nothing outside this module
-/// reads it — `resolve::plan` receives only its extra-argument fields, passed
+/// reads it — `resolve_plan` receives only its extra-argument fields, passed
 /// separately so `project` doesn't need to know this type exists.
 #[derive(Debug, Clone, Default)]
 pub struct BuildOptions {
@@ -175,43 +176,37 @@ fn build_options(a: &BuildArgs) -> Result<BuildOptions> {
 /// build itself cannot disagree about which branch is meant.
 pub fn target_branch(
     ws: &Workspace,
-    project: &ProjectData,
+    project: &Project,
     profile: &Profile,
+    explicit_branch: Option<&str>,
     detach: bool,
 ) -> Result<Option<String>> {
-    // Clap rejects this combination; the check keeps direct callers honest too.
-    if detach && profile.branch.is_some() {
-        bail!("--branch and --detach cannot be used together");
-    }
-    if detach {
-        return Ok(None);
-    }
-    match &profile.branch {
-        Some(b) => Ok(Some(b.clone())),
-        None => {
-            let focus = project.focus_name(profile.focus.as_deref());
-            let identity = resolve::identity_repo(project, focus);
-            current_branch(ws, project, identity.as_deref()).map(Some)
-        }
-    }
+    let focus = project.focus_name(profile.focus.as_deref()).to_owned();
+    wits_project::target_branch(ws, project, &focus, explicit_branch, detach)
 }
 
 fn execute(
     ws: &Workspace,
-    project: &ProjectData,
+    project: &Project,
     identity: &IdentityArgs,
     opts: &BuildOptions,
 ) -> Result<()> {
     let profile = identity.profile.to_profile();
     let detach = identity.detach;
-    let branch = target_branch(ws, project, &profile, detach)?;
+    let branch = target_branch(
+        ws,
+        project,
+        &profile,
+        identity.profile.branch.as_deref(),
+        detach,
+    )?;
 
     // Resolve the backend once, from the project's declared build_system — it is
     // both the L0 toolchain injector for planning and the step emitter below.
     // (`build_system` is not profile-overridable, so this matches `plan`.) The
     // enum is total, so there is no "unsupported" error path here; an unknown
     // name was rejected when the project file was parsed.
-    let backend = project.project.build_system.map(backend_for);
+    let backend = project.settings().build_system.map(backend_for);
 
     let plan = make_plan(
         ws,
@@ -223,10 +218,10 @@ fn execute(
         backend.as_deref(),
     )?;
 
-    let Some(build_dir) = plan.build_dir.clone() else {
+    let Some(build_dir) = plan.paths.build_dir.clone() else {
         log::warn!(
             "project '{}': no build_dir configured — nothing to build",
-            project.name
+            project.name()
         );
         return Ok(());
     };
@@ -236,14 +231,15 @@ fn execute(
     // The checkout the branch dance acts on: the identity repo's **workdir**, never
     // its `path`. Those differ for every bare-backed repo, where `path` is a git-dir
     // with no working tree — and the identity repo is not necessarily the build
-    // repo, so it is not necessarily the one `plan.strategy` describes. Reading
+    // repo, so it is not necessarily the one `plan.paths.strategy` describes. Reading
     // `path` here is what ran `git switch` inside a bare repository.
     //
     // Kept alive for the build scope so the restore guard can borrow it.
     let identity_git = plan
+        .paths
         .identity_repo
         .as_deref()
-        .and_then(|name| plan.work_dir_of(name))
+        .and_then(|name| plan.paths.work_dir_of(name))
         .map(Repository::new);
 
     // An explicit `--work-dir` means the caller already materialised the
@@ -251,9 +247,12 @@ fn execute(
     // it as-is and manages no branch or worktree of its own — so neither the
     // worktree-exists gate nor the in-place branch dance applies. This is the
     // whole point of the override: the two commands meet only at the path.
-    let _guard = if profile.work_dir.is_some() {
-        if !plan.work_dir.exists() {
-            bail!("--work-dir {} does not exist", plan.work_dir.display());
+    let _guard = if identity.profile.work_dir.is_some() {
+        if !plan.paths.work_dir.exists() {
+            bail!(
+                "--work-dir {} does not exist",
+                plan.paths.work_dir.display()
+            );
         }
         None
     } else if detach {
@@ -263,29 +262,30 @@ fn execute(
         None
     } else {
         let branch = plan
+            .paths
             .branch
             .as_ref()
             .context("attached build plan has no branch identity")?;
         // Two independent requirements, on two possibly different repos. The **build
         // repo's** checkout must exist where the plan says the sources are…
-        match plan.strategy {
-            BranchStrategy::Worktree => require_worktree(&plan.work_dir, &branch.raw)?,
+        match plan.paths.strategy {
+            BranchStrategy::Worktree => require_worktree(&plan.paths.work_dir, &branch.raw)?,
             BranchStrategy::Hybrid => require_hybrid_worktree(ws, project, &plan, &branch.raw)?,
             BranchStrategy::InPlace => {}
         }
         // …and the **identity repo** must be on the branch being built.
-        match (&identity_git, plan.identity_repo.as_deref()) {
+        match (&identity_git, plan.paths.identity_repo.as_deref()) {
             (Some(git), Some(name)) => prepare_branch(project, git, &branch.raw, name)?,
             _ => None,
         }
     };
 
     let steps = be.steps(&EmitContext {
-        source_dir: &plan.source_dir,
+        source_dir: &plan.paths.source_dir,
         build_dir: &build_dir,
-        install_dir: plan.install_dir.as_deref(),
-        build_type: &plan.build_type,
-        generator: plan.generator.as_deref(),
+        install_dir: plan.paths.install_dir.as_deref(),
+        build_type: &plan.paths.build_type,
+        generator: plan.paths.generator.as_deref(),
         target: opts.target.as_deref(),
         logical: &plan.logical,
         mode: opts.mode,
@@ -308,12 +308,14 @@ fn execute(
 }
 
 /// One repo's declared branch strategy.
-fn repo_strategy(project: &ProjectData, name: &str) -> Result<BranchStrategy> {
-    let repo = project
-        .repos
-        .get(name)
-        .with_context(|| format!("repo '{name}' is not defined in project '{}'", project.name))?;
-    BranchStrategy::parse(repo.branch_strategy.as_deref())
+fn repo_strategy(project: &Project, name: &str) -> Result<BranchStrategy> {
+    let repo = project.repo(name).with_context(|| {
+        format!(
+            "repo '{name}' is not defined in project '{}'",
+            project.name()
+        )
+    })?;
+    Ok(repo.decl().strategy)
 }
 
 /// A worktree that must already be there, on the branch being built. `build` never
@@ -341,41 +343,44 @@ fn require_worktree(dir: &Path, branch: &str) -> Result<()> {
 
 fn require_hybrid_worktree(
     ws: &Workspace,
-    project: &ProjectData,
-    plan: &Plan,
+    project: &Project,
+    plan: &BuildPlan,
     branch: &str,
 ) -> Result<()> {
-    let found = resolve::checkout_holding(ws, project, &plan.build_repo, branch)?;
+    let build = project
+        .repo(&plan.paths.build_repo)
+        .context("build repo not found")?;
+    let found = layout::checkout_holding(ws, project, build, branch)?;
     let Some(actual) = found else {
         bail!(
             "branch '{}' is not checked out in any worktree of repo '{}' — create it with \
              `wits worktree create {} {}`",
             branch,
-            plan.build_repo,
+            plan.paths.build_repo,
             branch,
-            plan.work_dir.display()
+            plan.paths.work_dir.display()
         );
     };
-    if actual != plan.work_dir {
+    if actual != plan.paths.work_dir {
         bail!(
             "worktree for branch '{}' moved from {} to {} while planning; retry the build",
             branch,
-            plan.work_dir.display(),
+            plan.paths.work_dir.display(),
             actual.display()
         );
     }
-    require_worktree(&plan.work_dir, branch)
+    require_worktree(&plan.paths.work_dir, branch)
 }
 
 fn make_plan(
     ws: &Workspace,
-    project: &ProjectData,
+    project: &Project,
     profile: &Profile,
     identity: &IdentityArgs,
     opts: &BuildOptions,
     branch: Option<&str>,
     be: Option<&dyn Backend>,
-) -> Result<Plan> {
+) -> Result<BuildPlan> {
     // Select-vs-inject ("Selection vs injection, and trusting an existing
     // config"): in auto/build-only, an already-configured build dir with no
     // explicit toolchain request is *trusted* — we skip toolchain
@@ -394,19 +399,22 @@ fn make_plan(
         matches!(opts.mode, BuildMode::Auto | BuildMode::BuildOnly) && !explicit_toolchain;
 
     let plan_with = |inject_toolchain: bool| {
-        resolve::plan(
+        resolve_plan(
             ws,
             project,
-            &PlanInput {
-                profile,
-                branch,
+            &BuildInput {
+                paths: PathInput {
+                    profile,
+                    branch,
+                    work_dir: identity.profile.work_dir.as_deref(),
+                    build_dir: identity.build_dir.as_deref(),
+                    install_dir: identity.install_dir.as_deref(),
+                },
                 inject_toolchain,
                 injector: be.map(|b| b as &dyn ToolchainInjector),
                 extra_config_args: &opts.extra_config_args,
                 extra_build_args: &opts.extra_build_args,
                 extra_install_args: &opts.extra_install_args,
-                build_dir_override: identity.build_dir.as_deref(),
-                install_dir_override: identity.install_dir.as_deref(),
             },
         )
     };
@@ -417,6 +425,7 @@ fn make_plan(
 
     let plan = plan_with(false)?;
     let configured = plan
+        .paths
         .build_dir
         .as_ref()
         .zip(be)
@@ -444,7 +453,7 @@ fn make_plan(
 ///   tree to switch, and moving a worktree onto another branch pulls it out from
 ///   under whoever else is in it.
 fn prepare_branch<'a>(
-    project: &ProjectData,
+    project: &Project,
     git: &'a Repository,
     branch: &str,
     name: &str,
@@ -480,17 +489,4 @@ fn prepare_branch<'a>(
         .collect();
     git.submodule_update(&subs, false)?;
     Ok(Some(guard))
-}
-
-/// The branch a bare `wits build` is for: whatever the identity repo is currently
-/// on. Read from that repo's *checkout* — see [`resolve::current_branch`], which is
-/// also what the `project` path queries default through, so the two cannot disagree.
-fn current_branch(ws: &Workspace, project: &ProjectData, identity: Option<&str>) -> Result<String> {
-    let name = identity.context("project has no own-git repo to take a branch from")?;
-    resolve::current_branch(ws, project, name)?.with_context(|| {
-        format!(
-            "repo '{name}' has no branch checked out; pass --detach to use HEAD as-is, \
-             or --branch to select a branch"
-        )
-    })
 }

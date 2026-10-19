@@ -12,7 +12,7 @@
 //! `docs/reference/project-design.rst`, "Library shape — core plus actions".
 //!
 //! A new build system is a new [`Backend`] impl (plus a `ToolchainInjector`
-//! impl), a variant on [`crate::project::model::BuildSystem`], and a line in
+//! impl), a variant on [`wits_project::BuildSystem`], and a line in
 //! [`backend_for`]. A backend does exactly three things: translate the
 //! *canonical* toolchain vocabulary into its native form ("Single source of
 //! truth for compilers, realised by the backend"), emit the ordered command
@@ -29,9 +29,7 @@ use std::path::{Path, PathBuf};
 use minijinja::value::ValueKind;
 use minijinja::Value;
 
-use crate::project::context::scalar_text;
-use crate::project::model::{BuildSystem, LogicalConfig, Toolchain};
-use crate::project::resolve::ToolchainInjector;
+use wits_project::{value_to_string, BuildSystem, LogicalConfig, Toolchain, ToolchainInjector};
 
 /// Which phase(s) of a build to run. Every backend's `steps()` branches on it;
 /// `build::BuildOptions` carries one of these plus the flags that never reach
@@ -174,14 +172,12 @@ fn cmake_definition(key: &str, value: &Value) -> String {
 
 /// Render a definition value for a meson `-D` option (`key=value`).
 ///
-/// The spelling comes from [`scalar_text`], not `Value::to_string()`: meson
+/// The spelling comes from [`value_to_string`], not `Value::to_string()`: meson
 /// requires a boolean option to be `true`/`false`, and minijinja renders one
 /// Jinja/Python-style as `True`, which meson rejects.
 fn meson_definition(key: &str, value: &Value) -> String {
     let v = match value.kind() {
-        ValueKind::Bool | ValueKind::Number | ValueKind::String => {
-            scalar_text(value).unwrap_or_default()
-        }
+        ValueKind::Bool | ValueKind::Number | ValueKind::String => value_to_string(value),
         _ => String::new(),
     };
     format!("{key}={v}")

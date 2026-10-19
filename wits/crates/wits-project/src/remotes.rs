@@ -34,17 +34,17 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
 
-use super::model::{RawRemote, RawRepo};
-use super::workspace::Workspace;
-use crate::git::Repository;
-use crate::remote::{RemoteRoles, Role};
+use crate::decl::{RemoteDecl, RepoDecl};
+use crate::workspace::Workspace;
+use wits_core::git::Repository;
+use wits_core::remote::{RemoteRoles, Role};
 
 /// Resolve the roles a repo's declaration assigns.
 ///
 /// A remote holds a role either by declaring one or by carrying that role's
 /// privileged name. Validation belongs to [`validate`], which the loader runs, so
 /// this is free to take the first holder it finds for each role.
-pub fn roles_of(repo: &RawRepo) -> RemoteRoles {
+pub fn roles_of(repo: &RepoDecl) -> RemoteRoles {
     let holder = |role: Role| {
         repo.remotes
             .iter()
@@ -62,7 +62,7 @@ pub fn roles_of(repo: &RawRepo) -> RemoteRoles {
 /// Three rules, each closing a way the name/role overlap could otherwise go wrong.
 /// They are checked here rather than in `--check` because all three are facts of
 /// the file, needing nothing from disk to settle.
-pub fn validate(repo_name: &str, repo: &RawRepo) -> Result<()> {
+pub fn validate(repo_name: &str, repo: &RepoDecl) -> Result<()> {
     for (name, remote) in &repo.remotes {
         if remote.url.trim().is_empty() {
             bail!("repo '{repo_name}', remote '{name}': url is empty");
@@ -130,7 +130,7 @@ fn role_named(name: &str) -> Option<Role> {
 /// free names and the shared checkout has no privileged name left to read. The
 /// real missing concept is "two declared repos resolving to one git repository",
 /// which nothing models yet — see the `update` design notes.
-pub fn roles_in_force(repo: &RawRepo, checkout: &Repository) -> RemoteRoles {
+pub fn roles_in_force(repo: &RepoDecl, checkout: &Repository) -> RemoteRoles {
     let declared = roles_of(repo);
     if declared == RemoteRoles::default() {
         RemoteRoles::from_git(checkout)
@@ -182,13 +182,10 @@ pub fn declared_for_checkout(checkout: &Repository) -> Result<Declared> {
     )?;
     let declared = ws.as_ref().and_then(|ws| ws.repo_for_path(checkout.path()));
     Ok(match declared {
-        Some((project, repo_name)) => {
-            let repo = &project.repos[&repo_name];
-            Declared {
-                roles: roles_in_force(repo, checkout),
-                main_branch: repo.main_branch.clone(),
-            }
-        }
+        Some((_project, repo)) => Declared {
+            roles: roles_in_force(&repo.decl, checkout),
+            main_branch: repo.decl.main_branch.clone(),
+        },
         None => Declared {
             roles: RemoteRoles::from_git(checkout),
             main_branch: None,
@@ -212,14 +209,14 @@ pub struct DesiredRemote {
 /// Plan the remote state for one repo. Only the declared names appear: a remote
 /// the config never mentions is none of its business, so reconciliation leaves it
 /// alone entirely.
-pub fn desired(repo: &RawRepo) -> BTreeMap<String, DesiredRemote> {
+pub fn desired(repo: &RepoDecl) -> BTreeMap<String, DesiredRemote> {
     repo.remotes
         .iter()
         .map(|(name, remote)| (name.clone(), desired_one(remote)))
         .collect()
 }
 
-fn desired_one(remote: &RawRemote) -> DesiredRemote {
+fn desired_one(remote: &RemoteDecl) -> DesiredRemote {
     // Git stops defaulting `push` to the fetch URL the moment any push URL exists,
     // so a fan-out set must name the remote's own URL too or pushing would reach
     // only the mirrors. With no mirrors there is no push URL at all: an explicit
@@ -246,7 +243,7 @@ fn desired_one(remote: &RawRemote) -> DesiredRemote {
 mod tests {
     use super::*;
 
-    fn repo(toml: &str) -> RawRepo {
+    fn repo(toml: &str) -> RepoDecl {
         toml::from_str(toml).unwrap()
     }
 
@@ -364,7 +361,7 @@ mod tests {
 
     #[test]
     fn an_unknown_role_fails_at_parse_time() {
-        let err = toml::from_str::<RawRepo>(
+        let err = toml::from_str::<RepoDecl>(
             r#"
             path = "~/src/x"
             [remotes.m]
@@ -379,7 +376,7 @@ mod tests {
 
     #[test]
     fn a_mistyped_remote_field_fails_at_parse_time() {
-        let err = toml::from_str::<RawRepo>(
+        let err = toml::from_str::<RepoDecl>(
             r#"
             path = "~/src/x"
             [remotes.origin]

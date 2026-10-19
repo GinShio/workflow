@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use anyhow::Context;
 use wits_core::git::Repository;
-use wits_util::project::remotes::Declared;
+use wits_project::remotes::Declared;
 
 use super::store;
 use super::topology::Topology;

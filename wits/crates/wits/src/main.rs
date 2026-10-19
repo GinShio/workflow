@@ -316,7 +316,7 @@ fn print_trunk(rev: bool) -> anyhow::Result<()> {
     use anyhow::Context;
 
     let repo = wits_core::git::Repository::new(std::env::current_dir()?);
-    let trunk = wits_util::project::remotes::declared_for_checkout(&repo)?
+    let trunk = wits_project::remotes::declared_for_checkout(&repo)?
         .trunk(&repo)
         .context(
             "no trunk: no declared main_branch, no remote HEAD on the merge target, and no \

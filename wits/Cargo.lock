@@ -1338,6 +1338,7 @@ dependencies = [
  "tempfile",
  "toml",
  "wits-core",
+ "wits-project",
  "wits-util",
 ]
 
@@ -1354,6 +1355,20 @@ dependencies = [
  "tempfile",
  "thiserror",
  "ureq",
+]
+
+[[package]]
+name = "wits-project"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "minijinja",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "toml",
+ "wits-core",
 ]
 
 [[package]]
@@ -1388,13 +1403,11 @@ dependencies = [
  "minijinja",
  "pbkdf2",
  "rand",
- "serde",
  "sha2",
  "sha3",
- "tempfile",
  "thiserror",
- "toml",
  "wits-core",
+ "wits-project",
 ]
 
 [[package]]

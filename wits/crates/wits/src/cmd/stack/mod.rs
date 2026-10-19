@@ -30,7 +30,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use wits_core::forge::{self, Forge, HeadRepo, MergeRequest, MrState, Remotes};
 use wits_core::git::Repository;
 use wits_core::remote::RemoteRoles;
-use wits_util::project::remotes::{self, Declared};
+use wits_project::remotes::{self, Declared};
 
 /// How many forge/push operations run at once. Stacks are small and the work is
 /// network-bound, so a modest fixed width keeps us from opening a connection per

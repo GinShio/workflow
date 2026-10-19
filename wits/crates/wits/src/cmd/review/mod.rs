@@ -34,7 +34,7 @@ use clap::{Args, Subcommand};
 use wits_core::forge::{self, Forge, RemoteInfo, Remotes};
 use wits_core::git::Repository;
 use wits_core::remote::RemoteRoles;
-use wits_util::project::remotes;
+use wits_project::remotes;
 
 use store::Store;
 

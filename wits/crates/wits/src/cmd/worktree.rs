@@ -38,7 +38,7 @@ use clap::{Args, Subcommand};
 use wits_core::git::{Repository, StatusCounts};
 use wits_core::time::{age_since, parse_cutoff};
 use wits_core::worktree::{self, Entry, Filter, Inventory};
-use wits_util::project::remotes;
+use wits_project::remotes;
 
 /// Width of the label column, sized to the longest label (`submodules`) plus a
 /// gap. Shared by the repository block and the panel so the two line up.

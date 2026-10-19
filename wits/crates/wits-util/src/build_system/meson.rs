@@ -3,8 +3,8 @@
 
 use std::path::Path;
 
-use crate::project::model::{LogicalConfig, Toolchain};
-use crate::project::resolve::ToolchainInjector;
+use wits_project::ToolchainInjector;
+use wits_project::{LogicalConfig, Toolchain};
 
 use super::{
     apply_passthrough, meson_definition, set_universal_env, Backend, BuildMode, EmitContext, Step,

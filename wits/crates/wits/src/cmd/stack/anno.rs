@@ -22,7 +22,7 @@ use anyhow::Context;
 use wits_core::forge::{Forge, MergeRequest, MrComment};
 use wits_core::git::Repository;
 use wits_core::log as wits_log;
-use wits_util::project::remotes::Declared;
+use wits_project::remotes::Declared;
 
 use super::resolution::StackPlan;
 use super::topology::Topology;

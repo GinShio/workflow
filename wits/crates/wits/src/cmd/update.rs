@@ -25,16 +25,12 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use clap::Args;
 
-use wits_util::project::context::Ctx;
-
 use wits_core::git::{self, Repository, RestoreGuard};
 use wits_core::worktree;
-use wits_util::project::model::{infer_kind, BranchStrategy, Kind, RawRepo};
-use wits_util::project::remotes;
-use wits_util::project::resolve;
-use wits_util::project::resolve_target;
-use wits_util::project::skip;
-use wits_util::project::workspace::{ProjectData, Workspace};
+use wits_project::layout;
+use wits_project::remotes;
+use wits_project::skip;
+use wits_project::{resolve_target, HookPhase, Project, Repo, RepoDecl, Workspace};
 
 #[derive(Debug, Args)]
 pub struct UpdateArgs {
@@ -55,10 +51,12 @@ pub fn run(args: &UpdateArgs) -> Result<()> {
     execute(&ws, project, args.with_borrowed)
 }
 
-fn execute(ws: &Workspace, project: &ProjectData, with_borrowed: bool) -> Result<()> {
+fn execute(ws: &Workspace, project: &Project, with_borrowed: bool) -> Result<()> {
     for name in repo_order(project) {
-        let repo = &project.repos[&name];
-        if infer_kind(&name, repo) == Kind::Subtree {
+        let repo = project
+            .repo(&name)
+            .with_context(|| format!("repo '{name}' not found"))?;
+        if repo.kind() == wits_project::Kind::Subtree {
             continue; // shares its anchor's git; no work of its own
         }
         if project.is_borrowed(&name) && !with_borrowed {
@@ -70,8 +68,12 @@ fn execute(ws: &Workspace, project: &ProjectData, with_borrowed: bool) -> Result
         // — and then the nested lifecycle has nowhere to happen, so it is skipped
         // rather than failed. Asked of the very root `repo_primary_path` nests under,
         // so the guard and the path it guards cannot disagree.
-        if infer_kind(&name, repo) == Kind::Submodule {
-            let root = resolve::nesting_root(ws, project, "main")?;
+        if repo.kind() == wits_project::Kind::Submodule {
+            let root = layout::nesting_root(
+                ws,
+                project,
+                project.repo("main").context("repo 'main' not found")?,
+            )?;
             if !root.exists() {
                 log::debug!(
                     "repo '{name}': main has no checkout at {}; nested lifecycle skipped",
@@ -80,15 +82,18 @@ fn execute(ws: &Workspace, project: &ProjectData, with_borrowed: bool) -> Result
                 continue;
             }
         }
-        let path = resolve::repo_primary_path(ws, project, &name)
-            .with_context(|| format!("cannot resolve path of repo '{name}'"))?;
+        let path =
+            layout::primary_path(ws, project, project.repo(&name).context("repo not found")?)
+                .with_context(|| format!("cannot resolve path of repo '{name}'"))?;
         let git = Repository::new(path);
         if !git.exists() {
-            clone_repo(ws, project, &name, &git)
-                .with_context(|| format!("cloning repo '{name}' of project '{}'", project.name))?;
+            clone_repo(ws, project, &name, &git).with_context(|| {
+                format!("cloning repo '{name}' of project '{}'", project.name())
+            })?;
         } else {
-            update_repo(ws, project, &name, &git)
-                .with_context(|| format!("updating repo '{name}' of project '{}'", project.name))?;
+            update_repo(ws, project, &name, &git).with_context(|| {
+                format!("updating repo '{name}' of project '{}'", project.name())
+            })?;
         }
     }
     Ok(())
@@ -100,7 +105,7 @@ fn execute(ws: &Workspace, project: &ProjectData, with_borrowed: bool) -> Result
 /// because doing so means deleting content on a tree we did not build. Under
 /// `-v` the exact commands are printed, so the destructive step stays an explicit
 /// act of yours.
-fn verify_skip(git: &Repository, name: &str, repo: &RawRepo) -> Result<()> {
+fn verify_skip(git: &Repository, name: &str, repo: &RepoDecl) -> Result<()> {
     if repo.skip.is_empty() {
         return Ok(());
     }
@@ -136,7 +141,7 @@ fn verify_skip(git: &Repository, name: &str, repo: &RawRepo) -> Result<()> {
 /// `clone` hook narrowed to a sparse cone would be silently *widened* to the
 /// entire tree while we masked one path out of it. Cone mode cannot express an
 /// exclusion at all, so there is no safe write to make there either.
-fn apply_skip(git: &Repository, name: &str, repo: &RawRepo) -> Result<()> {
+fn apply_skip(git: &Repository, name: &str, repo: &RepoDecl) -> Result<()> {
     if repo.skip.is_empty() {
         return Ok(());
     }
@@ -162,38 +167,37 @@ fn apply_skip(git: &Repository, name: &str, repo: &RawRepo) -> Result<()> {
 }
 
 /// `repos.main` first (nested repos are cloned through it), then the rest.
-fn repo_order(project: &ProjectData) -> Vec<String> {
+fn repo_order(project: &Project) -> Vec<String> {
     let mut order = Vec::new();
-    if project.repos.contains_key("main") {
+    if project.repo("main").is_some() {
         order.push("main".to_owned());
     }
-    for name in project.repos.keys() {
+    for (name, _) in project.repos() {
         if name != "main" {
-            order.push(name.clone());
+            order.push(name.to_owned());
         }
     }
     order
 }
 
-fn clone_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Repository) -> Result<()> {
-    let repo = &project.repos[name];
-    let ctx = Ctx::new(resolve::context_for_repo(ws, project, name));
-    let strategy = BranchStrategy::parse(repo.branch_strategy.as_deref())?;
+fn clone_repo(ws: &Workspace, project: &Project, name: &str, git: &Repository) -> Result<()> {
+    let repo = project
+        .repo(name)
+        .with_context(|| format!("repo '{name}' not found"))?;
+    let strategy = repo.decl().strategy;
 
     // A clone override owns repository creation. The default clone shape follows
     // the branch strategy: in-place creates a conventional checkout, while
     // worktree/hybrid create a bare common repository and an explicit bootstrap
     // checkout for main.
-    if let Some(action) = repo.hooks.clone.as_ref() {
-        run_hook(&ctx, None, action, "clone")?;
-    } else if strategy.is_bare_backed() {
-        clone_bare_repo(ws, project, name, git)?;
-    } else {
-        clone_in_place_repo(repo, git)?;
+    match project.render_hook(ws, repo, HookPhase::Clone)? {
+        Some(action) => run_script(None, &action, "clone")?,
+        None if strategy.is_bare_backed() => clone_bare_repo(ws, project, name, git)?,
+        None => clone_in_place_repo(repo.decl(), git)?,
     }
 
     let checkout = if strategy.is_bare_backed() {
-        let dir = resolve::bootstrap_worktree_dir(ws, project, name)?;
+        let dir = layout::bootstrap_worktree_dir(ws, project, repo)?;
         if !wits_core::log::is_dry_run() && !dir.exists() {
             bail!(
                 "repo '{name}': bare clone has no bootstrap worktree at {}",
@@ -209,16 +213,17 @@ fn clone_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Repositor
     // materialisation it has to precede. What is left for here is the `clone`
     // override, which built the tree its own way and may well have left the mask
     // off; for the other two this is idempotent.
-    apply_skip(&checkout, name, repo)?;
-    run_hook_opt(
-        &ctx,
+    apply_skip(&checkout, name, repo.decl())?;
+    run_hook(
+        ws,
+        project,
+        repo,
+        HookPhase::PostClone,
         Some(checkout.path()),
-        repo.hooks.post_clone.as_ref(),
-        "post_clone",
     )?;
     // A post hook can write into excluded paths. Verify again rather than
     // silently leaving a bootstrap checkout that contradicts its declaration.
-    verify_skip(&checkout, name, repo)?;
+    verify_skip(&checkout, name, repo.decl())?;
     Ok(())
 }
 
@@ -229,7 +234,7 @@ fn clone_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Repositor
 /// created on the server yet. The remaining declared remotes are added by
 /// [`ensure_remotes`] straight afterwards, and their first fetch is best-effort
 /// (see [`default_update`]), so the not-yet-created fork still costs nothing.
-fn clone_source(repo: &RawRepo) -> Result<(&str, &str)> {
+fn clone_source(repo: &RepoDecl) -> Result<(&str, &str)> {
     let roles = remotes::roles_of(repo);
     let target = roles
         .merge_target()
@@ -243,7 +248,7 @@ fn clone_source(repo: &RawRepo) -> Result<(&str, &str)> {
     Ok((remote.url.as_str(), name.as_str()))
 }
 
-fn clone_in_place_repo(repo: &RawRepo, git: &Repository) -> Result<()> {
+fn clone_in_place_repo(repo: &RepoDecl, git: &Repository) -> Result<()> {
     let (clone_url, remote) = clone_source(repo)?;
     // Install sparse patterns before the first checkout so excluded paths never
     // materialise in a conventional clone.
@@ -270,25 +275,23 @@ fn clone_in_place_repo(repo: &RawRepo, git: &Repository) -> Result<()> {
     Ok(())
 }
 
-fn clone_bare_repo(
-    ws: &Workspace,
-    project: &ProjectData,
-    name: &str,
-    git: &Repository,
-) -> Result<()> {
-    let repo = &project.repos[name];
-    let (clone_url, remote) = clone_source(repo)?;
+fn clone_bare_repo(ws: &Workspace, project: &Project, name: &str, git: &Repository) -> Result<()> {
+    let repo = project
+        .repo(name)
+        .with_context(|| format!("repo '{name}' not found"))?;
+    let (clone_url, remote) = clone_source(repo.decl())?;
     let main = repo
+        .decl()
         .main_branch
         .as_deref()
         .context("bare-backed repo has no main_branch")?;
-    let bootstrap = resolve::bootstrap_worktree_dir(ws, project, name)?;
+    let bootstrap = layout::bootstrap_worktree_dir(ws, project, repo)?;
 
     // A tracking bare host rather than `git clone --bare`: the remote's branches
     // belong in `refs/remotes/<remote>/*`, and `refs/heads` belongs to the
     // branches this repository works on. See `git::init_bare_host`.
     git::init_bare_host(clone_url, remote, git.path(), main)?;
-    ensure_remotes(git, repo)?;
+    ensure_remotes(git, repo.decl())?;
     // `create_known` deliberately skips a second ref lookup: during dry-run the
     // clone is only planned, so no branch exists on disk yet.
     worktree::create_known(git, &bootstrap, main)?;
@@ -303,7 +306,7 @@ fn clone_bare_repo(
     // not merely wasted: it is a clone that can fail and take the whole `update`
     // with it. The conventional clone below already has this ordering, through
     // `--no-checkout`.
-    apply_skip(&Repository::new(&bootstrap), name, repo)?;
+    apply_skip(&Repository::new(&bootstrap), name, repo.decl())?;
 
     // Through the worktree policy rather than a plain recursive init. The
     // bootstrap is a *linked* worktree, so git would file its submodule stores
@@ -316,9 +319,10 @@ fn clone_bare_repo(
     Ok(())
 }
 
-fn update_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Repository) -> Result<()> {
-    let repo = &project.repos[name];
-    let ctx = Ctx::new(resolve::context_for_repo(ws, project, name));
+fn update_repo(ws: &Workspace, project: &Project, name: &str, git: &Repository) -> Result<()> {
+    let repo = project
+        .repo(name)
+        .with_context(|| format!("repo '{name}' not found"))?;
 
     // Two different questions, which used to be one and so were answered wrongly
     // for a bare-backed repo.
@@ -327,9 +331,10 @@ fn update_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Reposito
     // only that one, since `update` never moves a branch a checkout is not on. It
     // may genuinely be absent, and then the branch moves as a ref instead.
     let holding = repo
+        .decl()
         .main_branch
         .as_deref()
-        .map(|branch| resolve::checkout_holding(ws, project, name, branch))
+        .map(|branch| layout::checkout_holding(ws, project, repo, branch))
         .transpose()?
         .flatten()
         .map(Repository::new);
@@ -345,17 +350,17 @@ fn update_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Reposito
     // unverified — while `skip` is a property of the repo and of nothing else.
     let workdir = match holding.clone() {
         Some(checkout) => Some(checkout),
-        None => resolve::primary_checkout(ws, project, name)?.map(Repository::new),
+        None => layout::primary_checkout(ws, project, repo)?.map(Repository::new),
     };
 
     // Before anything else: a checkout that contradicts its declared `skip` is a
     // config/reality conflict, and refreshing it would only entrench whichever
     // copy of a shared component should not be there.
     if let Some(checkout) = &workdir {
-        verify_skip(checkout, name, repo)?;
+        verify_skip(checkout, name, repo.decl())?;
     }
 
-    ensure_remotes(git, repo)?;
+    ensure_remotes(git, repo.decl())?;
 
     // Fail-fast with guaranteed restoration: if a hook or override switches the
     // branch, the guard returns us to where we started on any exit.
@@ -365,35 +370,32 @@ fn update_repo(ws: &Workspace, project: &ProjectData, name: &str, git: &Reposito
         .map(Repository::path)
         .unwrap_or_else(|| git.path());
 
-    run_hook_opt(
-        &ctx,
-        Some(hook_cwd),
-        repo.hooks.pre_update.as_ref(),
-        "pre_update",
-    )?;
+    run_hook(ws, project, repo, HookPhase::PreUpdate, Some(hook_cwd))?;
 
-    if let Some(action) = repo.hooks.update.as_ref() {
-        run_hook(&ctx, Some(hook_cwd), action, "update")?;
+    if let Some(action) = project.render_hook(ws, repo, HookPhase::Update)? {
+        run_script(Some(hook_cwd), &action, "update")?;
     } else {
-        default_update(project, name, git, holding.as_ref(), workdir.as_ref(), repo)?;
+        default_update(
+            project,
+            name,
+            git,
+            holding.as_ref(),
+            workdir.as_ref(),
+            repo.decl(),
+        )?;
     }
 
-    run_hook_opt(
-        &ctx,
-        Some(hook_cwd),
-        repo.hooks.post_update.as_ref(),
-        "post_update",
-    )?;
+    run_hook(ws, project, repo, HookPhase::PostUpdate, Some(hook_cwd))?;
     Ok(())
 }
 
 fn default_update(
-    project: &ProjectData,
+    project: &Project,
     name: &str,
     git: &Repository,
     holding: Option<&Repository>,
     workdir: Option<&Repository>,
-    repo: &RawRepo,
+    repo: &RepoDecl,
 ) -> Result<()> {
     let mb = repo
         .main_branch
@@ -455,16 +457,15 @@ fn default_update(
     }
 }
 
-fn refresh_submodules(project: &ProjectData, name: &str, git: &Repository) -> Result<()> {
+fn refresh_submodules(project: &Project, name: &str, git: &Repository) -> Result<()> {
     // Undeclared nested submodules → recorded commit; declared ones are managed
     // as their own repos, so skip their paths here. A `skip`ped submodule needs no
     // mention: it is not on disk, and `materialised_submodules` only reports what
     // is.
     let declared: BTreeSet<String> = project
-        .repos
-        .iter()
-        .filter(|(n, r)| *n != name && infer_kind(n, r) != Kind::Standalone)
-        .filter_map(|(_, r)| r.path.clone())
+        .repos()
+        .filter(|(n, r)| *n != name && r.kind() != wits_project::Kind::Standalone)
+        .filter_map(|(_, r)| r.decl().path.clone())
         .collect();
     let subs: Vec<String> = git
         .materialised_submodules()
@@ -494,7 +495,7 @@ fn refresh_submodules(project: &ProjectData, name: &str, git: &Repository) -> Re
 /// `hooks.update` override. Best-effort, since the new URL may be unreachable and
 /// a stale tracking namespace is not worth failing an update over — the refs that
 /// remain are merely old, which is the state they were already in.
-fn ensure_remotes(git: &Repository, repo: &RawRepo) -> Result<()> {
+fn ensure_remotes(git: &Repository, repo: &RepoDecl) -> Result<()> {
     for (name, desired) in remotes::desired(repo) {
         if git.reconcile_remote(&name, &desired.url, &desired.push_urls)? {
             if let Err(e) = git.fetch(&["--prune", &name]) {
@@ -508,10 +509,26 @@ fn ensure_remotes(git: &Repository, repo: &RawRepo) -> Result<()> {
     Ok(())
 }
 
-fn run_hook_opt(ctx: &Ctx, cwd: Option<&Path>, hook: Option<&String>, phase: &str) -> Result<()> {
-    match hook {
-        Some(cmd) => run_hook(ctx, cwd, cmd, phase),
-        None => Ok(()),
+fn run_hook(
+    ws: &Workspace,
+    project: &Project,
+    repo: &Repo,
+    phase: HookPhase,
+    cwd: Option<&Path>,
+) -> Result<()> {
+    if let Some(script) = project.render_hook(ws, repo, phase)? {
+        run_script(cwd, &script, hook_phase_name(phase))?;
+    }
+    Ok(())
+}
+
+fn hook_phase_name(phase: HookPhase) -> &'static str {
+    match phase {
+        HookPhase::Clone => "clone",
+        HookPhase::PostClone => "post_clone",
+        HookPhase::PreUpdate => "pre_update",
+        HookPhase::Update => "update",
+        HookPhase::PostUpdate => "post_update",
     }
 }
 
@@ -519,16 +536,10 @@ fn run_hook_opt(ctx: &Ctx, cwd: Option<&Path>, hook: Option<&String>, phase: &st
 /// `None` inherits the process's, which is where a `clone` override runs since
 /// the repo path does not exist yet. `post_clone` and every update-phase hook
 /// run in the repo path itself. A non-zero exit fails fast.
-fn run_hook(ctx: &Ctx, cwd: Option<&Path>, command: &str, phase: &str) -> Result<()> {
-    let rendered = ctx
-        .resolve_str(command)
-        .with_context(|| format!("resolving {phase} hook"))?;
-    // A hook is a shell script, so whatever it resolved to has to become one line
-    // of text; only a whole-expression hook could arrive as anything else.
-    let script = rendered.to_string();
+fn run_script(cwd: Option<&Path>, script: &str, phase: &str) -> Result<()> {
     log::info!("hook {phase}: {script}");
     let mut cmd = wits_core::process::Command::new("sh");
-    cmd.args(["-c".to_string(), script]);
+    cmd.args(["-c".to_string(), script.to_owned()]);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }

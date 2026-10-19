@@ -29,10 +29,8 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
 
 use wits_core::process::Command;
+use wits_project::{resolve_plan, resolve_target, BuildInput, PathInput, Project, Workspace};
 use wits_util::build_system::backend_for;
-use wits_util::project::resolve::{self, PlanInput};
-use wits_util::project::resolve_target;
-use wits_util::project::workspace::{ProjectData, Workspace};
 
 use crate::cmd::build::{target_branch, IdentityArgs};
 
@@ -95,30 +93,39 @@ pub fn run(args: &DevenvArgs) -> Result<()> {
 /// the declared operations on top, and the marker.
 fn compose(
     ws: &Workspace,
-    project: &ProjectData,
+    project: &Project,
     identity: &IdentityArgs,
     caller: &Env,
 ) -> Result<Env> {
     let profile = identity.profile.to_profile();
-    let branch = target_branch(ws, project, &profile, identity.detach)?;
-    // No toolchain injection and no extra args: those shape the build's own
-    // commands, and nothing of them reaches a program run against its output.
-    let plan = resolve::plan(
+    let branch = target_branch(
         ws,
         project,
-        &PlanInput {
-            profile: &profile,
-            branch: branch.as_deref(),
+        &profile,
+        identity.profile.branch.as_deref(),
+        identity.detach,
+    )?;
+    // No toolchain injection and no extra args: those shape the build's own
+    // commands, and nothing of them reaches a program run against its output.
+    let plan = resolve_plan(
+        ws,
+        project,
+        &BuildInput {
+            paths: PathInput {
+                profile: &profile,
+                branch: branch.as_deref(),
+                work_dir: identity.profile.work_dir.as_deref(),
+                build_dir: identity.build_dir.as_deref(),
+                install_dir: identity.install_dir.as_deref(),
+            },
             inject_toolchain: false,
             injector: None,
             extra_config_args: &[],
             extra_build_args: &[],
             extra_install_args: &[],
-            build_dir_override: identity.build_dir.as_deref(),
-            install_dir_override: identity.install_dir.as_deref(),
         },
     )?;
-    let build_dir = plan.build_dir.as_deref().with_context(|| {
+    let build_dir = plan.paths.build_dir.as_deref().with_context(|| {
         format!(
             "project '{}' declares no build_dir, so there is no build to run against",
             project.key()
@@ -141,8 +148,8 @@ fn compose(
 
 /// The environment the declared operations land on: the build system's own
 /// developer environment where it keeps one, else the caller's.
-fn base(project: &ProjectData, build_dir: &Path, caller: &Env) -> Result<Env> {
-    let Some(backend) = project.project.build_system.map(backend_for) else {
+fn base(project: &Project, build_dir: &Path, caller: &Env) -> Result<Env> {
+    let Some(backend) = project.settings().build_system.map(backend_for) else {
         return Ok(caller.clone());
     };
     let Some(runner) = backend.devenv_runner(build_dir) else {

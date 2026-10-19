@@ -37,8 +37,9 @@ use minijinja::value::ValueKind;
 use minijinja::{Error, ErrorKind, Value};
 use thiserror::Error as ThisError;
 
-use super::model::{infer_kind, DevenvEntry, LogicalConfig, RawDevenvTable};
-use super::workspace::{ProjectData, Workspace};
+use crate::decl::DevenvDecl;
+use crate::plan::{DevenvEntry, LogicalConfig};
+use crate::workspace::{Project, Workspace};
 
 /// The names a template can see: values nested through maps, built
 /// programmatically with [`insert_path`] and handed to [`Ctx::new`].
@@ -199,7 +200,7 @@ impl Ctx {
         if !s.contains("{{") && !s.contains("{%") && !s.contains("{#") {
             return Ok(Value::from(s));
         }
-        let env = crate::jinja::shared();
+        let env = wits_core::jinja::shared();
         // Discovering the paths and then rendering are two passes over the same
         // source, so each form compiles once and both passes use that. Jinja has
         // no way to read the names off already-compiled instructions, so the
@@ -467,9 +468,9 @@ pub(crate) fn apply_def_map(
 pub(crate) fn apply_devenv_map(
     ctx: &Ctx,
     logical: &mut LogicalConfig,
-    raw: &RawDevenvTable,
+    raw: &[(String, DevenvDecl)],
 ) -> Result<()> {
-    for (name, entry) in &raw.0 {
+    for (name, entry) in raw {
         let parts = entry
             .values
             .iter()
@@ -510,7 +511,7 @@ pub(crate) fn resolve_replace(ctx: &Ctx, raw: &[String], out: &mut Vec<String>) 
 /// The `system.*` template namespace: the shared host-facts tree from
 /// [`wits_core::system`].
 pub fn system_facts() -> Value {
-    crate::system::facts()
+    wits_core::system::facts()
 }
 
 /// The process environment as an `env.*` map — the base every context layers on.
@@ -528,7 +529,7 @@ fn env_snapshot() -> Value {
 /// contexts built for `update`/`context` never run.
 fn insert_org_namespace(root: &mut Bindings, ws: &Workspace, org: Option<&str>) {
     let Some(org) = org else { return };
-    let Some(org_data) = ws.org_base(org) else {
+    let Some(org_data) = ws.org(org) else {
         return;
     };
     for (k, v) in &org_data.environment {
@@ -539,9 +540,9 @@ fn insert_org_namespace(root: &mut Bindings, ws: &Workspace, org: Option<&str>) 
     }
 }
 
-pub fn repo_value(project: &ProjectData, name: &str) -> Value {
+pub fn repo_value(project: &Project, name: &str) -> Value {
     let repo = &project.repos[name];
-    let kind = infer_kind(name, repo);
+    let kind = repo.kind;
     let abs = project
         .repo_abs_path(name)
         .map(|p| p.display().to_string())
@@ -552,6 +553,7 @@ pub fn repo_value(project: &ProjectData, name: &str) -> Value {
     // a template that reads one while meaning the other fails silently in the
     // worst way, by rendering a plausible wrong URL.
     let remotes: BTreeMap<&str, Value> = repo
+        .decl
         .remotes
         .iter()
         .map(|(name, remote)| {
@@ -572,11 +574,11 @@ pub fn repo_value(project: &ProjectData, name: &str) -> Value {
         ("kind", Value::from(kind.as_str())),
         (
             "main_branch",
-            Value::from(repo.main_branch.clone().unwrap_or_default()),
+            Value::from(repo.decl.main_branch.clone().unwrap_or_default()),
         ),
         (
             "anchor",
-            Value::from(repo.anchor.clone().unwrap_or_default()),
+            Value::from(repo.decl.anchor.clone().unwrap_or_default()),
         ),
         ("remotes", Value::from(remotes)),
     ]))
@@ -586,7 +588,7 @@ pub fn repo_value(project: &ProjectData, name: &str) -> Value {
 /// every `repos.<name>.*`, the `org.*` namespace, `system.*`, and `env.*`. `repo.*` and
 /// any Profile-specific bindings (branch, build_type, toolchain, and per-repo
 /// workdirs) are layered on by the caller.
-fn base_context(ws: &Workspace, project: &ProjectData, focus: &str) -> Bindings {
+fn base_context(ws: &Workspace, project: &Project, focus: &str) -> Bindings {
     let mut root = Bindings::new();
     insert_path(&mut root, "project.name", Value::from(project.name.clone()));
     insert_path(
@@ -612,7 +614,7 @@ fn base_context(ws: &Workspace, project: &ProjectData, focus: &str) -> Bindings 
 /// `system.*`, `env.*`) plus `repo.*` bound to `focus`. The pipeline
 /// then layers branch/build_type/toolchain and the repos' resolved `workdir`s
 /// onto it.
-pub(crate) fn plan_base(ws: &Workspace, project: &ProjectData, focus: &str) -> Ctx {
+pub(crate) fn plan_base(ws: &Workspace, project: &Project, focus: &str) -> Ctx {
     let mut root = base_context(ws, project, focus);
     insert_path(&mut root, "repo", repo_value(project, focus));
     Ctx::new(root)
@@ -622,7 +624,7 @@ pub(crate) fn plan_base(ws: &Workspace, project: &ProjectData, focus: &str) -> C
 /// `worktree_dir`): the shared base plus `repo.*` = `repo_name`. No Profile or
 /// resolved `workdir` is available, so this is safe for `update`/`context`, which
 /// don't build a full plan.
-pub fn context_for_repo(ws: &Workspace, project: &ProjectData, repo_name: &str) -> Bindings {
+pub fn context_for_repo(ws: &Workspace, project: &Project, repo_name: &str) -> Bindings {
     let mut root = base_context(ws, project, project.focus_name(None));
     insert_path(&mut root, "repo", repo_value(project, repo_name));
     root

@@ -4,7 +4,7 @@
 //! and answers machine-readable status, path, or identity queries.
 //! Everything about what a project *is* — the model, the workspace registry,
 //! resolution, and the project-shaped git surface — lives in the read-only core
-//! at [`wits_util::project`]; this module is one of its consumers, alongside the
+//! at [`wits_project`]; this module is one of its consumers, alongside the
 //! separate `wits build` and `wits update` commands. See
 //! `docs/reference/project-design.rst`, "Library shape — core plus actions";
 //! quoted section names below are from the same document.
@@ -26,12 +26,13 @@ use clap::{Args, Subcommand, ValueEnum};
 use anyhow::Context;
 
 use wits_core::git;
+use wits_project::layout;
+use wits_project::{
+    anchor_of, expand_tilde, identity_repo, looks_like_path, resolve_plan, resolve_target,
+    value_to_string, BuildInput, BuildPlan, DevenvOp, Kind, PathInput, Profile, Project, Workspace,
+    DEVENV_SEPARATOR,
+};
 use wits_util::build_system::backend_for;
-use wits_util::project::context::value_to_string;
-use wits_util::project::model::{DevenvOp, Kind, Profile, DEVENV_SEPARATOR};
-use wits_util::project::skip;
-use wits_util::project::workspace::{expand_tilde, looks_like_path, ProjectData, Workspace};
-use wits_util::project::{presets, resolve, resolve_target};
 
 /// `wits project` — the read-only half of the tool: one verb per shape of
 /// question it answers.
@@ -239,10 +240,8 @@ impl ProfileArgs {
             build_type: self.build_type.clone(),
             toolchain: self.toolchain.clone(),
             generator: self.generator.clone(),
-            branch: self.branch.clone(),
             presets: self.presets.clone(),
             focus: self.focus.clone(),
-            work_dir: self.work_dir.clone(),
             specs: self.specs.iter().cloned().collect(),
         }
     }
@@ -292,7 +291,7 @@ pub fn run(args: &ProjectArgs) -> Result<()> {
 /// must be the root of either a working-tree checkout or a bare clone.
 fn exists(ws: &Workspace, args: &ExistsArgs) -> Result<()> {
     let project = ws.project(&args.name)?;
-    let path = resolve::repo_primary_path(ws, project, "main")
+    let path = layout::primary_path(ws, project, project.repo("main").context("repo not found")?)
         .context("cannot resolve path of repos.main")?;
     let repo = git::Repository::new(&path);
     let root = repo
@@ -315,17 +314,20 @@ fn resolve_repo<'a>(
     ws: &'a Workspace,
     target: Option<&str>,
     focus: Option<&str>,
-) -> Result<(&'a ProjectData, String)> {
+) -> Result<(&'a Project, String)> {
     match target {
         None => {
             let cwd = std::env::current_dir()?;
-            ws.repo_for_path(&cwd).context(
-                "not inside any known project; pass a name or run from inside a project's checkout",
-            )
+            ws.repo_for_path(&cwd)
+                .map(|(project, repo)| (project, repo.name().to_owned()))
+                .context(
+                    "not inside any known project; pass a name or run from inside a project's checkout",
+                )
         }
         Some(t) if looks_like_path(t) => {
             let path = expand_tilde(t);
             ws.repo_for_path(&path)
+                .map(|(project, repo)| (project, repo.name().to_owned()))
                 .with_context(|| format!("no project owns the path {}", path.display()))
         }
         // A name resolves to the project's focus repo; `--focus` overrides which
@@ -337,15 +339,15 @@ fn resolve_repo<'a>(
     }
 }
 
-/// Resolve a branch's build [`Plan`](resolve::Plan) for a query, anchored like
+/// Resolve a branch's build [`BuildPlan`] for a query, anchored like
 /// [`resolve_repo`] with the branch defaulting to the anchored repo's current
 /// one. Shared by `info` and `--get`, so a description and a projection out of
 /// it can never disagree.
-fn resolve_plan<'a>(
+fn plan_for_query<'a>(
     ws: &'a Workspace,
     target: Option<&str>,
     profile: &ProfileArgs,
-) -> Result<(&'a ProjectData, resolve::Plan)> {
+) -> Result<(&'a Project, BuildPlan)> {
     let (project, repo) = resolve_repo(ws, target, profile.focus.as_deref())?;
     let branch = branch_or_current(ws, project, &repo, profile.branch.as_deref())?;
     // Carry the *whole* profile (build_type / toolchain / generator / presets),
@@ -354,33 +356,50 @@ fn resolve_plan<'a>(
     // build ever uses.
     let mut resolved = profile.to_profile();
     resolved.focus = Some(repo);
-    resolved.branch = Some(branch.clone());
-    let plan = resolve::plan(
-        ws,
-        project,
-        &resolve::PlanInput::paths_only(&resolved, &branch),
-    )?;
+    let plan = resolve_plan(ws, project, &paths_input(&resolved, Some(&branch)))?;
     Ok((project, plan))
+}
+
+/// A path-only plan input for the read-only queries: no injection, no L3 args.
+fn paths_input<'a>(profile: &'a Profile, branch: Option<&'a str>) -> BuildInput<'a> {
+    BuildInput {
+        paths: PathInput {
+            profile,
+            branch,
+            work_dir: None,
+            build_dir: None,
+            install_dir: None,
+        },
+        inject_toolchain: false,
+        injector: None,
+        extra_config_args: &[],
+        extra_build_args: &[],
+        extra_install_args: &[],
+    }
 }
 
 /// The branch to resolve for: the explicit `--branch`, else the identity repo's
 /// current branch. Shared by the path queries and `hash` so they default the same
 /// way `build` does ("Branch identity") — through the one
-/// [`resolve::current_branch`], so a query and the build it describes can never
+/// [`layout::current_branch`], so a query and the build it describes can never
 /// disagree about which branch is meant.
 fn branch_or_current(
     ws: &Workspace,
-    project: &ProjectData,
+    project: &Project,
     repo: &str,
     explicit: Option<&str>,
 ) -> Result<String> {
     if let Some(branch) = explicit {
         return Ok(branch.to_owned());
     }
-    let identity = resolve::identity_repo(project, repo)
+    let identity = identity_repo(project, repo)
         .context("no own-git repo to take a branch from; pass --branch")?;
-    resolve::current_branch(ws, project, &identity)?
-        .context("could not determine a branch; pass --branch")
+    layout::current_branch(
+        ws,
+        project,
+        project.repo(&identity).context("repo not found")?,
+    )?
+    .context("could not determine a branch; pass --branch")
 }
 
 /// `info --get <path>…`: one resolved value per path, one line each, in the
@@ -403,15 +422,13 @@ fn branch_or_current(
 ///     would keep the *positions* right while leaving the caller unable to tell
 ///     an empty value from an absent one, which is worse than not answering.
 fn get_paths(ws: &Workspace, args: &InfoArgs, profile: &ProfileArgs) -> Result<()> {
-    let (project, plan) = resolve_plan(ws, args.target.as_deref(), profile)?;
+    let (project, plan) = plan_for_query(ws, args.target.as_deref(), profile)?;
     // Resolve every path before printing any: a later failure must not leave a
     // caller holding a partial, positionally-misread answer on stdout.
     let mut values = Vec::with_capacity(args.get.len());
     for path in &args.get {
         let value = plan
-            .ctx
             .get_scalar(path)
-            .map_err(|e| anyhow::anyhow!("{e}"))
             .with_context(|| format!("project '{}': --get {path}", project.key()))?;
         values.push(value);
     }
@@ -432,7 +449,7 @@ fn get_paths(ws: &Workspace, args: &InfoArgs, profile: &ProfileArgs) -> Result<(
 fn names(ws: &Workspace, args: &NamesArgs) -> Result<()> {
     match args.kind {
         NamesKind::Toolchains => {
-            for name in ws.toolchains().keys() {
+            for name in ws.toolchain_names() {
                 println!("{name}");
             }
         }
@@ -459,14 +476,7 @@ fn preset_names(ws: &Workspace, target: Option<&str>) -> Result<Vec<String>> {
     let mut names = BTreeSet::new();
     for project in targets(ws, target)? {
         let focus = project.focus_name(None);
-        names.extend(presets::candidate_preset_names(ws, project, focus));
-        if let Some(org) = &project.org {
-            if let Some(org_presets) = ws.org_presets(org) {
-                for name in org_presets.keys() {
-                    names.insert(format!("{org}/{name}"));
-                }
-            }
-        }
+        names.extend(ws.preset_names(project, focus));
     }
     Ok(names.into_iter().collect())
 }
@@ -476,7 +486,7 @@ fn preset_names(ws: &Workspace, target: Option<&str>) -> Result<Vec<String>> {
 fn repo_names(ws: &Workspace, target: Option<&str>) -> Result<Vec<String>> {
     let mut names = BTreeSet::new();
     for project in targets(ws, target)? {
-        names.extend(project.repos.keys().cloned());
+        names.extend(ws.repo_names(project));
     }
     Ok(names.into_iter().collect())
 }
@@ -485,7 +495,7 @@ fn repo_names(ws: &Workspace, target: Option<&str>) -> Result<Vec<String>> {
 /// project in the registry. A target goes through [`resolve_target`], the one
 /// name/path funnel the other verbs share; absent, a union needs no cwd
 /// context and answers for the whole registry.
-fn targets<'a>(ws: &'a Workspace, target: Option<&str>) -> Result<Vec<&'a ProjectData>> {
+fn targets<'a>(ws: &'a Workspace, target: Option<&str>) -> Result<Vec<&'a Project>> {
     match target {
         None => Ok(ws.projects().collect()),
         Some(target) => resolve_target(ws, Some(target)).map(|p| vec![p]),
@@ -499,13 +509,18 @@ fn targets<'a>(ws: &'a Workspace, target: Option<&str>) -> Result<Vec<&'a Projec
 /// trees of every project that keys its build on that checkout's branch, and a
 /// borrowed component is keyed on by more than one — so a per-project query
 /// silently leaves the borrowers' trees behind. The judgement about *which*
-/// projects qualify is [`resolve::branch_build_dirs`]'s, derived from the
+/// projects qualify is [`wits_project::branch_build_dirs`]'s, derived from the
 /// registry rather than declared in it.
 ///
 /// This stays a query: it prints what a deletion would orphan and removes
 /// nothing, because `project` is the read-only half of the tool ("The read/act
 /// split") and the caller that deletes wants its own confirmation and dry-run
 /// anyway.
+///
+/// It resolves paths only ([`wits_project::resolve_paths`]): org, project, and
+/// preset configuration never reach this query, so a broken preset elsewhere in
+/// the registry no longer fails a branch cleanup. The resolved `build_dir` is
+/// unchanged — paths are resolved before any layer is applied.
 fn branch_build_dirs(ws: &Workspace, args: &TargetArgs, profile: &ProfileArgs) -> Result<()> {
     let (project, repo) = resolve_repo(ws, args.target.as_deref(), profile.focus.as_deref())?;
     let branch = branch_or_current(ws, project, &repo, profile.branch.as_deref())?;
@@ -513,9 +528,14 @@ fn branch_build_dirs(ws: &Workspace, args: &TargetArgs, profile: &ProfileArgs) -
     // may share one git dir and be told apart only by which checkout they place
     // (a bare-backed component and a review checkout of it), so collapsing to the
     // repository path would discard the one thing that distinguishes them.
-    let path = resolve::work_dir(ws, project, &repo, &branch)
-        .with_context(|| format!("cannot resolve the checkout of repo '{repo}'"))?;
-    for found in resolve::branch_build_dirs(ws, &path, &branch) {
+    let path = layout::work_dir(
+        ws,
+        project,
+        project.repo(&repo).context("repo not found")?,
+        &branch,
+    )
+    .with_context(|| format!("cannot resolve the checkout of repo '{repo}'"))?;
+    for found in wits_project::branch_build_dirs(ws, &path, &branch) {
         println!("{}\t{}", found.project, found.path.display());
     }
     Ok(())
@@ -538,7 +558,7 @@ fn branch_build_dirs(ws: &Workspace, args: &TargetArgs, profile: &ProfileArgs) -
 fn hash(ws: &Workspace, args: &HashArgs, profile: &ProfileArgs) -> Result<()> {
     let (project, repo) = resolve_repo(ws, args.target.as_deref(), profile.focus.as_deref())?;
     // Hash the identity repo: a subtree has no own git and borrows its anchor's.
-    let identity = resolve::identity_repo(project, &repo).with_context(|| {
+    let identity = identity_repo(project, &repo).with_context(|| {
         format!(
             "repo '{repo}' of project '{}' has no own git to hash",
             project.key()
@@ -550,13 +570,22 @@ fn hash(ws: &Workspace, args: &HashArgs, profile: &ProfileArgs) -> Result<()> {
     // reported where it is materialised), so it runs in that branch's checkout —
     // which for a bare-backed repo is a worktree, and never the git-dir, where
     // nothing would ever be found.
-    let repository = resolve::repo_primary_path(ws, project, &identity)
-        .with_context(|| format!("cannot resolve path of repo '{identity}'"))?;
+    let repository = layout::primary_path(
+        ws,
+        project,
+        project.repo(&identity).context("repo not found")?,
+    )
+    .with_context(|| format!("cannot resolve path of repo '{identity}'"))?;
     let sha = git::Repository::new(&repository)
         .rev_parse(&branch)
         .with_context(|| format!("branch '{branch}' does not exist in repo '{identity}'"))?;
-    let path = resolve::work_dir(ws, project, &identity, &branch)
-        .with_context(|| format!("cannot resolve the checkout of repo '{identity}'"))?;
+    let path = layout::work_dir(
+        ws,
+        project,
+        project.repo(&identity).context("repo not found")?,
+        &branch,
+    )
+    .with_context(|| format!("cannot resolve the checkout of repo '{identity}'"))?;
     let git = git::Repository::new(&path);
 
     // Resolve `--repos` before the scope check so a bad name errors either way.
@@ -587,7 +616,7 @@ fn hash(ws: &Workspace, args: &HashArgs, profile: &ProfileArgs) -> Result<()> {
 /// then no live commit to stand in for the pin.
 fn live_overrides(
     ws: &Workspace,
-    project: &ProjectData,
+    project: &Project,
     names: &[String],
 ) -> Result<HashMap<PathBuf, String>> {
     let mut map = HashMap::new();
@@ -600,7 +629,7 @@ fn live_overrides(
                 k.as_str()
             ),
         }
-        let path = resolve::repo_primary_path(ws, project, name)
+        let path = layout::primary_path(ws, project, project.repo(name).context("repo not found")?)
             .with_context(|| format!("cannot resolve path of repo '{name}'"))?;
         let head = git::Repository::new(&path)
             .rev_parse("HEAD")
@@ -689,9 +718,9 @@ fn info(ws: &Workspace, args: &InfoArgs, profile: &ProfileArgs) -> Result<()> {
     describe(ws, project, profile)
 }
 
-fn summary_line(project: &ProjectData) -> String {
+fn summary_line(project: &Project) -> String {
     let bs = project
-        .project
+        .settings()
         .build_system
         .map(|b| b.as_str())
         .unwrap_or("-");
@@ -710,40 +739,44 @@ fn summary_line(project: &ProjectData) -> String {
 /// produced it, and only the template hides everything the profile contributes.
 /// Resolution still needs a branch, so that section is what degrades when none
 /// can be discovered — the templates are always printed.
-fn describe(ws: &Workspace, project: &ProjectData, profile: &ProfileArgs) -> Result<()> {
+fn describe(ws: &Workspace, project: &Project, profile: &ProfileArgs) -> Result<()> {
     println!("project: {}", project.key());
-    println!("  source:       {}", project.source.display());
-    if let Some(org) = &project.org {
+    println!("  source:       {}", project.source().display());
+    if let Some(org) = project.org() {
         println!("  org:          {org}");
     }
     println!(
         "  focus:        {}",
         project.focus_name(profile.focus.as_deref())
     );
-    if let Some(bs) = project.project.build_system {
+    if let Some(bs) = project.settings().build_system {
         println!("  build_system: {}", bs.as_str());
     }
-    if let Some(gen) = &project.project.generator {
+    if let Some(gen) = &project.settings().generator {
         println!("  generator:    {gen}");
     }
-    if let Some(tc) = &project.project.toolchain {
+    if let Some(tc) = &project.settings().toolchain {
         println!("  toolchain:    {tc}");
     }
-    if !project.project.default_presets.is_empty() {
+    if !project.settings().default_presets.is_empty() {
         println!(
             "  default_presets: {}",
-            project.project.default_presets.join(" ")
+            project.settings().default_presets.join(" ")
         );
     }
 
     println!();
     println!("repos:");
-    for (name, repo) in &project.repos {
+    for (name, repo) in project.repos() {
         let kind = project.kind_of(name).map(|k| k.as_str()).unwrap_or("?");
         // A path template that fails to resolve is a real config error; surface
         // it inline rather than letting `unwrap_or_default()` render an empty
         // path that then masquerades as a plain "<not cloned>" repo.
-        let path = match resolve::repo_primary_path(ws, project, name) {
+        let path = match layout::primary_path(
+            ws,
+            project,
+            project.repo(name).context("repo not found")?,
+        ) {
             Ok(path) => path,
             Err(e) => {
                 println!("  {name:<12} {kind:<10} <path error: {e}>");
@@ -766,21 +799,29 @@ fn describe(ws: &Workspace, project: &ProjectData, profile: &ProfileArgs) -> Res
         // Where a repo's identity came from, and what its checkout leaves out —
         // both invisible in the path alone, and both change what you are looking
         // at (a borrowed repo is someone else's to update).
-        if let Some(from) = &repo.from {
-            println!("      borrowed from {from}");
+        if let Some(from) = &repo.decl().from {
+            let spec = if from.repo == "main" {
+                from.project.clone()
+            } else {
+                format!("{}:{}", from.project, from.repo)
+            };
+            println!("      borrowed from {spec}");
         }
-        if let Some(anchor) = &repo.anchor {
+        if let Some(anchor) = &repo.decl().anchor {
             println!("      anchor        {anchor}");
         }
-        if let Some(mb) = &repo.main_branch {
+        if let Some(mb) = &repo.decl().main_branch {
             println!("      main_branch   {mb}");
         }
-        if let Some(strategy) = &repo.branch_strategy {
+        // Declared only: the default in-place is what a repo without a
+        // declaration behaves as, and the old report said nothing about it.
+        if repo.decl().strategy != wits_project::BranchStrategy::InPlace {
+            let strategy = repo.decl().strategy.as_str();
             println!("      strategy      {strategy}");
         }
         // Remotes decide where `update` fetches from and where a stack pushes, and
         // a role held by a free name is invisible in the URL alone.
-        for (remote, spec) in &repo.remotes {
+        for (remote, spec) in &repo.decl().remotes {
             let role = spec.role.map(|r| r.as_str()).unwrap_or("");
             let role = if role.is_empty() {
                 String::new()
@@ -792,8 +833,8 @@ fn describe(ws: &Workspace, project: &ProjectData, profile: &ProfileArgs) -> Res
                 println!("        mirror      {mirror}");
             }
         }
-        if !repo.skip.is_empty() {
-            println!("      skip          {}", repo.skip.join(" "));
+        if !repo.decl().skip.is_empty() {
+            println!("      skip          {}", repo.decl().skip.join(" "));
         }
         for wt in git.worktrees() {
             if wt.path != path {
@@ -808,18 +849,26 @@ fn describe(ws: &Workspace, project: &ProjectData, profile: &ProfileArgs) -> Res
     // focus-over-anchor precedence `resolve` applies, so what is printed is the
     // template that would actually be used and not merely the one nearest to hand.
     let focus = project.focus_name(profile.focus.as_deref());
-    let build_repo = resolve::anchor_of(project, focus);
-    let anchor = &project.repos[&build_repo];
-    let focused = &project.repos[focus];
+    let build_repo = anchor_of(project, focus);
+    let anchor = project.repo(&build_repo).context("repo not found")?;
+    let focused = project.repo(focus).context("repo not found")?;
     let templates = [
-        ("source_dir", anchor.source_dir.as_ref()),
+        ("source_dir", anchor.decl().source_dir.as_ref()),
         (
             "build_dir",
-            focused.build_dir.as_ref().or(anchor.build_dir.as_ref()),
+            focused
+                .decl()
+                .build_dir
+                .as_ref()
+                .or(anchor.decl().build_dir.as_ref()),
         ),
         (
             "install_dir",
-            focused.install_dir.as_ref().or(anchor.install_dir.as_ref()),
+            focused
+                .decl()
+                .install_dir
+                .as_ref()
+                .or(anchor.decl().install_dir.as_ref()),
         ),
     ];
     if templates.iter().any(|(_, t)| t.is_some()) {
@@ -841,51 +890,52 @@ fn describe(ws: &Workspace, project: &ProjectData, profile: &ProfileArgs) -> Res
         println!("resolved: <no branch discovered — pass --branch to resolve>");
         return Ok(());
     };
-    let plan = resolve::plan(
+    let plan = resolve_plan(
         ws,
         project,
-        &resolve::PlanInput::paths_only(&profile.to_profile(), &branch),
+        &paths_input(&profile.to_profile(), Some(&branch)),
     )?;
     let identity = plan
+        .paths
         .branch
         .as_ref()
         .context("branch path query resolved as detached")?;
     println!(
         "resolved (branch {}, build_type {}):",
-        identity.raw, plan.build_type
+        identity.raw, plan.paths.build_type
     );
     // focus / build_repo / identity_repo are three roles one repo usually fills
     // at once, which is exactly why they are printed separately: when they differ
     // (a borrowed focus, an anchored subtree) every path below follows a
     // different one of them.
-    println!("  focus:         {}", plan.focus);
-    println!("  build_repo:    {}", plan.build_repo);
+    println!("  focus:         {}", plan.paths.focus);
+    println!("  build_repo:    {}", plan.paths.build_repo);
     println!(
         "  identity_repo: {}",
-        plan.identity_repo.as_deref().unwrap_or("-")
+        plan.paths.identity_repo.as_deref().unwrap_or("-")
     );
-    println!("  strategy:      {}", plan.strategy.as_str());
+    println!("  strategy:      {}", plan.paths.strategy.as_str());
     println!("  branch.slug:   {}", identity.slug);
     if let Some(bs) = plan.build_system {
         println!("  build_system:  {}", bs.as_str());
     }
-    if let Some(gen) = &plan.generator {
+    if let Some(gen) = &plan.paths.generator {
         println!("  generator:     {gen}");
     }
-    if let Some(tc) = &plan.toolchain {
+    if let Some(tc) = &plan.paths.toolchain {
         println!("  toolchain:     {}", tc.name);
     }
     if !plan.presets.is_empty() {
         println!("  presets:       {}", plan.presets.join(" "));
     }
-    println!("  source_dir:    {}", plan.source_dir.display());
-    if let Some(dir) = &plan.build_dir {
+    println!("  source_dir:    {}", plan.paths.source_dir.display());
+    if let Some(dir) = &plan.paths.build_dir {
         println!("  build_dir:     {}", dir.display());
     }
-    if let Some(dir) = &plan.install_dir {
+    if let Some(dir) = &plan.paths.install_dir {
         println!("  install_dir:   {}", dir.display());
     }
-    for (name, dir) in &plan.work_dirs {
+    for (name, dir) in &plan.paths.work_dirs {
         println!("  repos.{name}.workdir: {}", dir.display());
     }
 
@@ -916,12 +966,12 @@ fn describe(ws: &Workspace, project: &ProjectData, profile: &ProfileArgs) -> Res
     // puts in it is a fact of the configured tree, not of the registry.
     let runner = plan
         .build_system
-        .zip(plan.build_dir.as_deref())
+        .zip(plan.paths.build_dir.as_deref())
         .and_then(|(bs, dir)| backend_for(bs).devenv_runner(dir));
     if runner.is_some() || !logical.devenv.is_empty() {
         println!();
         println!("devenv:");
-        match (&runner, &plan.build_dir) {
+        match (&runner, &plan.paths.build_dir) {
             (Some(argv), _) => println!("  base: {}", argv.join(" ")),
             (None, Some(_)) => println!("  base: the caller's environment"),
             // An org's devenv reaches every project joining it, built or not.
@@ -960,16 +1010,14 @@ fn describe(ws: &Workspace, project: &ProjectData, profile: &ProfileArgs) -> Res
 // --- check --------------------------------------------------------------------
 
 fn check(ws: &Workspace, target: Option<&str>) -> Result<()> {
-    let projects: Vec<&ProjectData> = match target {
-        Some(_) => vec![resolve_target(ws, target)?],
-        None => ws.projects().collect(),
+    let issues: Vec<wits_project::Issue> = match target {
+        Some(_) => wits_project::check_one(ws, resolve_target(ws, target)?),
+        None => wits_project::check_all(ws),
     };
-    let mut problems = Vec::new();
-    for project in projects {
-        for issue in check_one(ws, project) {
-            problems.push(format!("[{}] {issue}", project.key()));
-        }
-    }
+    let problems: Vec<String> = issues
+        .iter()
+        .map(|issue| format!("[{}] {}", issue.project, issue.message))
+        .collect();
     if problems.is_empty() {
         println!("ok");
         Ok(())
@@ -979,100 +1027,4 @@ fn check(ws: &Workspace, target: Option<&str>) -> Result<()> {
         }
         bail!("{} configuration problem(s)", problems.len())
     }
-}
-
-fn check_one(ws: &Workspace, project: &ProjectData) -> Vec<String> {
-    let mut issues = Vec::new();
-
-    for (name, repo) in &project.repos {
-        if project.kind_of(name).is_some_and(|k| k.has_own_git()) && repo.main_branch.is_none() {
-            issues.push(format!("repo '{name}' has its own git but no main_branch"));
-        }
-        // A `developed_as` that resolves to nothing is silent everywhere else:
-        // path resolution keeps the structural answer rather than failing, so
-        // that one registry file deployed without the project it names cannot
-        // break every query. Judged here instead, where the whole registry is in
-        // hand and the verdict is the caller's to act on.
-        if let Some(spec) = &repo.developed_as {
-            if ws.project(spec).is_err() {
-                issues.push(format!(
-                    "repo '{name}': developed_as '{spec}' names no known project"
-                ));
-            } else if ws.developed_as(project, name).is_none() {
-                issues.push(format!(
-                    "repo '{name}': developed_as '{spec}' does not borrow this repo"
-                ));
-            }
-        }
-        // A declared `skip` that is not in force is the one config fact whose
-        // truth lives on disk rather than in the file, so it is checked here
-        // rather than validated at load. Only a cloned checkout can answer.
-        // Judged in the repo's own checkout, whatever its shape — the same one
-        // `update` verifies, so a `--check` that passes is a promise `update` will
-        // not then contradict. Which checkout that is belongs to
-        // `resolve::primary_checkout`, not to a strategy test spelled out here.
-        if !repo.skip.is_empty() {
-            if let Some(checkout) = resolve::primary_checkout(ws, project, name)
-                .ok()
-                .flatten()
-                .map(git::Repository::new)
-            {
-                for v in skip::violations(&checkout, &repo.skip) {
-                    issues.push(format!("repo '{name}': {v}"));
-                }
-                if wits_core::log::is_verbose() {
-                    for cmd in skip::remedy(&checkout, &repo.skip) {
-                        log::debug!(
-                            "repo '{name}' fix: (cd {} && {cmd})",
-                            checkout.path().display()
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    let p = &project.project;
-    let has_build_dir = project.repos.values().any(|r| r.build_dir.is_some());
-    if has_build_dir && p.build_system.is_none() {
-        issues.push("build_dir is set but build_system is not".into());
-    }
-    // Whether a declared `build_system` actually has a backend is `wits build`'s
-    // concern (it errors at run time); the core neither knows nor validates the
-    // set of supported build systems ("The backend abstraction — the only
-    // extension axis"). Here we only cross-check the *declared* facts: a
-    // toolchain's own `supports` list against `build_system`.
-    if let Some(bs) = p.build_system {
-        if let Some(tc) = &p.toolchain {
-            if let Some(def) = ws.toolchains().get(tc) {
-                if !def.supports.is_empty() && !def.supports.iter().any(|s| s == bs.as_str()) {
-                    issues.push(format!(
-                        "toolchain '{tc}' does not support '{}'",
-                        bs.as_str()
-                    ));
-                }
-            }
-        }
-    }
-    if let Some(tc) = &p.toolchain {
-        if !ws.toolchains().contains_key(tc) {
-            issues.push(format!("unknown toolchain '{tc}'"));
-        }
-    }
-
-    // A dry resolve catches template errors, preset cycles, unknown presets.
-    // Validation has no backend, so this is a path-only resolve — toolchain
-    // selection runs (and can fail), but there is nothing to inject.
-    let profile = Profile {
-        toolchain: p.toolchain.clone(),
-        ..Default::default()
-    };
-    if let Err(e) = resolve::plan(
-        ws,
-        project,
-        &resolve::PlanInput::paths_only(&profile, "main"),
-    ) {
-        issues.push(format!("resolution: {e:#}"));
-    }
-    issues
 }

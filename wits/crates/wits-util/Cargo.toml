@@ -3,7 +3,7 @@ name = "wits-util"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Mid-migration home of the project subsystem, build-system backends, and crypto"
+description = "Mid-migration home of the build-system backends and crypto"
 
 [lib]
 name = "wits_util"
@@ -11,11 +11,11 @@ path = "src/lib.rs"
 
 [dependencies]
 wits-core.workspace = true
+wits-project.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 log.workspace = true
 minijinja.workspace = true
-serde.workspace = true
 aes-gcm.workspace = true
 chacha20poly1305.workspace = true
 pbkdf2.workspace = true
@@ -25,7 +25,3 @@ sha3.workspace = true
 blake2.workspace = true
 base64.workspace = true
 rand.workspace = true
-toml.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true

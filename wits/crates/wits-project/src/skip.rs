@@ -32,7 +32,7 @@
 //! file look like what I would have written". So your own extra sparse patterns
 //! are legal and invisible here, and reordering or hand-editing them is too.
 
-use crate::git::Repository;
+use wits_core::git::Repository;
 
 /// The sparse-checkout patterns realising a `skip` list.
 ///
