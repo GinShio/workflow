@@ -5,6 +5,11 @@ build_system = "cargo"
 [repos.main]
 path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
 build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+# cargo has no install step; the hook copies the two binaries it built into the
+# runner's own root, a sibling of the suite roots.
+install_dir = "{{@@ testing.suite_dir @@}}/runner"
 main_branch = "main"
 [repos.main.remotes]
 origin = "https://gitlab.freedesktop.org/mesa/deqp-runner.git"
+[repos.main.hooks]
+install = "sh '{{env.HOME}}/.config/wits/project/install/runner.sh'"

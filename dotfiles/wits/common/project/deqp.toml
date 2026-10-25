@@ -8,13 +8,16 @@ default_presets = ["common"]
 [repos.main]
 path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
 build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
-install_dir = "{{build_dir}}"
+# VK-GL-CTS declares no install() rule for deqp-vk, so the install phase is the
+# hook below; the prefix is the suite root it stages into.
+install_dir = "{{@@ testing.suite_dir @@}}/deqp"
 main_branch = "main"
 [repos.main.remotes]
 origin = "https://github.com/KhronosGroup/VK-GL-CTS.git"
 [repos.main.hooks]
 pre_update = "python3 external/fetch_sources.py --force --clean"
 post_update = "python3 external/fetch_sources.py"
+install = "sh '{{env.HOME}}/.config/wits/project/install/deqp.sh'"
 
 [project.presets.common.definitions]
 DEQP_TARGET = "default"

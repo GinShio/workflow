@@ -7,7 +7,10 @@ toolchain = "clang"
 [repos.main]
 path = "{{@@ projects.root_dir @@}}/{{project.org}}/{{project.name}}"
 build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
-install_dir = "{{build_dir}}"
+# Piglit's own install rules produce bin/piglit and lib/piglit; CMake sets the
+# install RPATH from the configure prefix, so the installed tree is
+# self-contained (reconfigure if the prefix moves after the first configure).
+install_dir = "{{@@ testing.suite_dir @@}}/piglit"
 main_branch = "main"
 [repos.main.remotes]
 origin = "https://gitlab.freedesktop.org/mesa/piglit.git"

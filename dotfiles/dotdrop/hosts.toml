@@ -50,3 +50,4 @@ planes = ['user', 'system']
 [hosts.'Khronos3D-russell-openSUSE'.variables]
 ccache_remote_enabled = true
 testing_runner_dir = '/run/user/1000/runner/'
+testing_suite_dir = '/run/user/1000/wits/gputest'
