@@ -164,7 +164,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Commands::SliceEditor { spec, todo } => cmd::stack::slice::edit_todo(spec, todo),
-        Commands::DevenvCapture { file } => cmd::devenv::capture(file),
+        Commands::DevenvCapture { file } => wits_actions::capture(file),
         Commands::Trunk { rev } => print_trunk(*rev),
         Commands::External(args) => dispatch_plugin(args),
     }

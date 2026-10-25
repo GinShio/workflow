@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use wits_core::config::Root;
-use wits_core::remote::Role;
 
 use crate::decl::{BranchStrategy, FileDecl, OrgDecl, RepoDecl, SettingsDecl, ToolchainDecl};
 
@@ -138,7 +137,7 @@ impl Registry {
                     if repo.path.is_none() && repo.from.is_none() {
                         bail!("project '{name}', repo '{repo_name}': needs a 'path' or a 'from'");
                     }
-                    validate_remotes(repo_name, repo)
+                    crate::remotes::validate(repo_name, repo)
                         .with_context(|| format!("project '{name}'"))?;
                     validate_strategy(&name, repo_name, repo)?;
                 }
@@ -234,62 +233,11 @@ impl Registry {
     }
 }
 
-/// Check a repo's declared remotes.
-///
-/// Three rules, each closing a way the name/role overlap could otherwise go
-/// wrong. They are checked here rather than in `--check` because all three are
-/// facts of the file, needing nothing from disk to settle.
-fn validate_remotes(repo_name: &str, repo: &RepoDecl) -> Result<()> {
-    for (name, remote) in &repo.remotes {
-        if remote.url.trim().is_empty() {
-            bail!("repo '{repo_name}', remote '{name}': url is empty");
-        }
-        // A remote named after one role but claiming the other is legal to write
-        // and impossible to read: git and every other tool would take the name at
-        // face value while we took the declaration. Rejecting it costs nothing,
-        // since a remote may always simply be named after the role it holds.
-        if let (Some(declared), Some(by_name)) = (remote.role, role_named(name)) {
-            if declared != by_name {
-                bail!(
-                    "repo '{repo_name}', remote '{name}': named after the '{}' role but declares \
-                     role '{}' — rename the remote or drop the declaration",
-                    by_name.as_str(),
-                    declared.as_str()
-                );
-            }
-        }
-    }
-
-    for role in Role::ALL {
-        let holders: Vec<&str> = repo
-            .remotes
-            .iter()
-            .filter(|(name, remote)| match remote.role {
-                Some(declared) => declared == role,
-                None => name.as_str() == role.as_str(),
-            })
-            .map(|(name, _)| name.as_str())
-            .collect();
-        if holders.len() > 1 {
-            bail!(
-                "repo '{repo_name}': remotes {} all hold the '{}' role, which admits one",
-                holders.join(", "),
-                role.as_str()
-            );
-        }
-    }
-    Ok(())
-}
-
-/// The role a remote's *name* claims, if it is one of the privileged names.
-fn role_named(name: &str) -> Option<Role> {
-    Role::ALL.into_iter().find(|r| r.as_str() == name)
-}
-
 /// Check the fields that define where a bare-backed strategy keeps its working
 /// trees. There is no rendering here: whether `worktree_dir` *resolves* is the
-/// workspace's question.
-fn validate_strategy(project: &str, repo_name: &str, repo: &RepoDecl) -> Result<()> {
+/// workspace's question. Called once for the declarations and again for the
+/// resolved repos after borrow copying, where a travelling strategy has landed.
+pub(crate) fn validate_strategy(project: &str, repo_name: &str, repo: &RepoDecl) -> Result<()> {
     let strategy = repo.strategy;
     if strategy.is_bare_backed() && repo.worktree_dir.is_none() {
         bail!(

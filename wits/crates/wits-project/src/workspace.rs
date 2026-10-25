@@ -243,12 +243,15 @@ impl Workspace {
         Ok(())
     }
 
-    /// The layout half of validation: a `bootstrap_worktree_dir` must render in
-    /// the *owner's* namespace, must not name `branch.*` (it exists before any
-    /// branch-specific worktree), and must not be empty.
+    /// The resolved half of declaration validation: the strategy fields are
+    /// re-checked after borrow copying (the source's fields have landed in the
+    /// borrower), and a `bootstrap_worktree_dir` must render in the *owner's*
+    /// namespace, must not name `branch.*` (it exists before any branch-specific
+    /// worktree), and must not be empty.
     fn validate_layout(&self) -> Result<()> {
         for project in self.projects.values() {
             for (name, repo) in &project.repos {
+                load::validate_strategy(&project.key(), name, &repo.decl)?;
                 let Some(template) = repo.decl.bootstrap_worktree_dir.as_deref() else {
                     continue;
                 };
@@ -934,6 +937,9 @@ mod tests {
             consumer.repo_abs_path("engine").unwrap(),
             PathBuf::from("/src/acme/engine")
         );
+        // The declaration stays honest: the resolved path is stored separately,
+        // never written back into `path`.
+        assert!(borrowed.decl().path.is_none());
         assert_eq!(borrowed.decl().main_branch.as_deref(), Some("stable"));
         assert_eq!(borrowed.decl().strategy.as_str(), "hybrid");
         assert_eq!(

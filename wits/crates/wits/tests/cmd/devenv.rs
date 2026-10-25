@@ -208,6 +208,26 @@ DECLARED = "{{build_dir}}/x"
     );
 }
 
+/// A `set` is dotenv-style: it supplies a default and never overrides a value
+/// the base already carries — neither Meson's own developer environment nor the
+/// caller's own.
+#[test]
+fn a_set_leaves_a_base_value_alone() {
+    let fx = Fixture::new();
+    fx.meson_project("[project.devenv]\nPROBE_SET = \"declared\"\nDECLARED = \"x\"\n");
+
+    let out = fx.ok(
+        &["devenv", "probe", "-b", "main", "--", "sh", "-c", SHOW],
+        &[("DECLARED", "caller")],
+    );
+    assert_eq!(out.stdout.trim(), "from-meson|meson|caller|probe");
+    assert!(
+        !out.stdout.contains("declared"),
+        "a set overrode the base: {}",
+        out.stdout
+    );
+}
+
 /// The dump is the same composition printed instead of run, in the syntax its
 /// reader takes; it names only what the devenv changes.
 #[test]

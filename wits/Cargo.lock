@@ -1337,10 +1337,23 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml",
+ "wits-actions",
  "wits-build",
  "wits-core",
  "wits-project",
  "wits-util",
+]
+
+[[package]]
+name = "wits-actions"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "tempfile",
+ "wits-build",
+ "wits-core",
+ "wits-project",
 ]
 
 [[package]]

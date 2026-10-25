@@ -1453,9 +1453,11 @@ as Meson's own ``environment()`` operations do — so a preset can add one entry
 to a list a project declared rather than having to restate it. Accumulating
 needs two rules a replacing merge never did:
 
-* A ``set`` discards the operations before it on the same variable. They built
-  a value the set overwrites; keeping them would only make the order of later
-  operations depend on dead ones.
+* A ``set`` discards the operations before it on the same variable. Under
+  dotenv semantics a ``set`` is the variable's default stated outright, so it
+  takes the variable over from lower levels; keeping their prepend/append would
+  let a lower level resurface whenever the environment already supplies the
+  variable, which is exactly what the set claimed.
 * A prepend or append identical to one still in force is not added again. A
   preset reached through two ``extends`` paths is applied twice — harmless for
   ``environment``, where the second application rewrites the same values — but

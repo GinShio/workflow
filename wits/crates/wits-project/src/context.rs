@@ -3,7 +3,7 @@
 //!
 //! Every `{{ … }}` a project config can reference resolves against a [`Ctx`]
 //! assembled here, and this is the *single* place that tree is built — the full
-//! pipeline context (via `resolve::plan`), the Profile-free per-repo context
+//! pipeline context (via `resolve_plan`), the Profile-free per-repo context
 //! ([`context_for_repo`], for `update`), and the minimal path context
 //! ([`path_context`], for `repo.path` templates in `workspace`) all share
 //! `system_facts`/`repo_value`/the `env.*` snapshot, so the namespaces can't
@@ -27,7 +27,8 @@
 //! than a stack overflow. Resolving on demand is not only an optimisation — the
 //! context carries the whole process environment, and eagerly running Jinja over
 //! every environment variable would both cost a great deal and choke on the first
-//! value that happens to contain a brace.
+//! value that happens to contain a brace. A variable that is not valid UTF-8
+//! cannot be spelled in a template at all and is left out of the namespace.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -517,10 +518,27 @@ pub fn system_facts() -> Value {
 /// The process environment as an `env.*` map — the base every context layers on.
 fn env_snapshot() -> Value {
     Value::from(
-        std::env::vars()
+        env_bindings(std::env::vars_os())
+            .into_iter()
             .map(|(k, v)| (k, Value::from(v)))
             .collect::<Bindings>(),
     )
+}
+
+/// The spellable half of an environment. A name or value that is not valid
+/// UTF-8 cannot appear in a template, so it is left out rather than lossily
+/// substituted; nothing reads this snapshot to run a program, so such a
+/// variable still reaches it byte-for-byte.
+///
+/// `std::env::vars()` — the obvious choice — *panics* on exactly that input,
+/// which would kill every command on an environment the tool could otherwise
+/// carry.
+fn env_bindings(
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> BTreeMap<String, String> {
+    vars.into_iter()
+        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .collect()
 }
 
 /// Expose an org's shared values under `org.environment.*` / `org.definitions.*`
@@ -735,6 +753,27 @@ mod tests {
 
     fn ctx() -> Ctx {
         Ctx::new(bindings())
+    }
+
+    /// A non-UTF-8 name or value is outside what a template can spell, so it is
+    /// left out; the alternative, `std::env::vars()`, panics the process.
+    #[test]
+    fn a_non_utf8_environment_entry_is_left_out() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let bindings = env_bindings([
+            (OsString::from("GOOD"), OsString::from("1")),
+            (
+                OsString::from("ODD_VALUE"),
+                OsString::from_vec(b"v\xff".to_vec()),
+            ),
+            (
+                OsString::from_vec(b"ODD_NAME\xff".to_vec()),
+                OsString::from("2"),
+            ),
+        ]);
+        assert_eq!(bindings.get("GOOD").map(String::as_str), Some("1"));
+        assert_eq!(bindings.len(), 1);
     }
 
     #[test]

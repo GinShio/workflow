@@ -513,7 +513,8 @@ of a preset at any level.
    * - Entry
      - Meaning
    * - ``NAME = V``
-     - Set ``NAME``. ``V`` is a scalar or a list of scalars.
+     - Supply ``NAME``'s default when the base does not already carry it
+       (dotenv semantics). ``V`` is a scalar or a list of scalars.
    * - ``NAME = { set = V }``
      - The same, in table form.
    * - ``NAME = { prepend = V }``
@@ -525,8 +526,12 @@ of a preset at any level.
        Default ``:``.
 
 A table names exactly one of ``set``/``prepend``/``append``; any other key is a
-load-time error. A prepend or append onto a variable that is absent yields ``V``
-alone, and onto one that is present — even empty — joins them: Meson's
+load-time error. A ``set`` is dotenv-style and never overrides: the base — the
+caller's environment, or the build system's own developer environment — keeps
+any value it already carries, so a project supplies defaults rather than
+replacing what the environment decided. A prepend or append always modifies
+whatever is there. A prepend or append onto a variable that is absent yields
+``V`` alone, and onto one that is present — even empty — joins them: Meson's
 run-mode rule.
 
 **Templates.** Values are templates resolved against the plan's context at the
@@ -551,9 +556,10 @@ replace, with two rules:
 **Composition at run time.** The operations land on a base: the build system's
 own developer environment where it keeps one (meson: ``meson devenv -C
 <build_dir>``, read back through ``wits __devenv-capture``), else the caller's
-environment. ``WITS_DEVENV`` is then set to the project's key (``org/name``,
-or the bare name). Neither the build ``environment`` nor the toolchain's
-variables are part of it.
+environment. A ``set`` fills only a variable that base lacks; ``prepend`` and
+``append`` modify it in place. ``WITS_DEVENV`` is then set to the project's key
+(``org/name``, or the bare name). Neither the build ``environment`` nor the
+toolchain's variables are part of it.
 
 ``--dump[=sh|fish|json]`` prints the difference from the caller's environment
 instead of running a program. ``wits devenv`` needs ``build_dir`` to exist and,

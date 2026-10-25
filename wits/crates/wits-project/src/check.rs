@@ -148,3 +148,85 @@ pub fn check_one(ws: &Workspace, project: &Project) -> Vec<Issue> {
     }
     issues
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ws_with(body: &str) -> (tempfile::TempDir, Workspace) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("p.toml"), body).unwrap();
+        let ws = Workspace::load_from(dir.path()).unwrap();
+        (dir, ws)
+    }
+
+    /// The issue text, one line per issue, so a test can assert on the whole set
+    /// without depending on issue order.
+    fn messages(ws: &Workspace) -> String {
+        check_one(ws, ws.project("p").unwrap())
+            .into_iter()
+            .map(|issue| issue.message)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_toolchain_support_mismatch_is_reported() {
+        let (_d, ws) = ws_with(
+            r#"
+            [project]
+            build_system = "cmake"
+            toolchain = "t"
+
+            [repos.main]
+            path = "/src/p"
+            main_branch = "main"
+
+            [toolchains.t]
+            supports = ["meson"]
+            "#,
+        );
+        let text = messages(&ws);
+        assert!(
+            text.contains("toolchain 't' does not support 'cmake'"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_toolchain_is_reported_by_name() {
+        let (_d, ws) = ws_with(
+            r#"
+            [project]
+            toolchain = "ghost"
+
+            [repos.main]
+            path = "/src/p"
+            main_branch = "main"
+            "#,
+        );
+        let text = messages(&ws);
+        assert!(text.contains("unknown toolchain 'ghost'"), "{text}");
+        // The dry resolve selects the same toolchain, so it fails too rather
+        // than silently planning around the typo.
+        assert!(text.contains("resolution:"), "{text}");
+    }
+
+    #[test]
+    fn a_dry_resolve_reports_a_broken_template() {
+        let (_d, ws) = ws_with(
+            r#"
+            [project]
+            build_system = "cmake"
+
+            [repos.main]
+            path = "/src/p"
+            main_branch = "main"
+            build_dir = "{{missing.path}}/_build"
+            "#,
+        );
+        let text = messages(&ws);
+        assert!(text.contains("resolution:"), "{text}");
+        assert!(text.contains("missing.path"), "{text}");
+    }
+}

@@ -66,18 +66,32 @@ pub fn identity_repo(project: &Project, focus: &str) -> Option<String> {
     None
 }
 
+/// What a caller can suggest when the focus's identity repo has no branch
+/// checked out. A build action owns `--detach`; a read-only query does not, and
+/// naming a flag the command lacks would send its reader to the wrong help.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchAbsence {
+    /// `wits build` / `wits devenv`: `--branch` or `--detach`.
+    Action,
+    /// A read-only query: `--branch` only.
+    Query,
+}
+
 /// The single branch funnel: decide which branch a command resolves for `focus`.
 ///
 /// `focus` is the repo whose identity is wanted — the project's focus for
 /// `build`/`devenv`, or the path-derived repo for `info`/`hash`/
 /// `branch-build-dirs`. Callers must never turn a failed discovery into an
 /// implicit detach: `--detach` is explicit and conflicts with `--branch`.
+/// `absent` picks the hint for a checkout with no branch; it is the caller's
+/// flag surface, not the resolution itself.
 pub fn target_branch(
     ws: &Workspace,
     project: &Project,
     focus: &str,
     explicit_branch: Option<&str>,
     detach: bool,
+    absent: BranchAbsence,
 ) -> Result<Option<String>> {
     if detach && explicit_branch.is_some() {
         bail!("--branch and --detach cannot be used together");
@@ -96,10 +110,41 @@ pub fn target_branch(
         .with_context(|| format!("repo '{name}' not found"))?;
     layout::current_branch(ws, project, repo)?
         .map(Some)
-        .with_context(|| {
-            format!(
+        .with_context(|| match absent {
+            BranchAbsence::Action => format!(
                 "repo '{name}' has no branch checked out; pass --branch to select a branch, \
                  or --detach to use HEAD as-is"
-            )
+            ),
+            BranchAbsence::Query => "could not determine a branch; pass --branch".to_owned(),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The absence hint names only flags the caller actually has: `build` and
+    /// `devenv` own `--detach`, a read-only query does not.
+    #[test]
+    fn the_absence_hint_names_the_callers_own_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("p.toml"),
+            "[project]\n[repos.main]\npath = \"/nonexistent/repo\"\nmain_branch = \"main\"\n",
+        )
+        .unwrap();
+        let ws = Workspace::load_from(dir.path()).unwrap();
+        let project = ws.project("p").unwrap();
+
+        let action =
+            target_branch(&ws, project, "main", None, false, BranchAbsence::Action).unwrap_err();
+        let action = format!("{action:#}");
+        assert!(action.contains("--detach"), "{action}");
+
+        let query =
+            target_branch(&ws, project, "main", None, false, BranchAbsence::Query).unwrap_err();
+        let query = format!("{query:#}");
+        assert!(query.contains("pass --branch"), "{query}");
+        assert!(!query.contains("--detach"), "{query}");
+    }
 }

@@ -34,7 +34,9 @@ pub use decl::{
 pub use hook::HookPhase;
 pub use paths::{branch_build_dirs, resolve_paths, BranchBuildDir, PathInput, ResolvedPaths};
 pub use plan::{resolve_plan, BuildInput, BuildPlan, LogicalConfig, Toolchain, ToolchainInjector};
-pub use profile::{anchor_of, identity_repo, target_branch, BranchIdentity, Profile};
+pub use profile::{
+    anchor_of, identity_repo, target_branch, BranchAbsence, BranchIdentity, Profile,
+};
 pub use remotes::{
     declared_for_checkout, desired, for_checkout, roles_in_force, roles_of, Declared, DesiredRemote,
 };

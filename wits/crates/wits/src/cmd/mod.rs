@@ -8,6 +8,7 @@
 pub mod build;
 pub mod devenv;
 pub mod dotfiles;
+pub mod identity;
 pub mod project;
 pub mod review;
 pub mod stack;

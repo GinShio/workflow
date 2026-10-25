@@ -8,6 +8,7 @@
 //! exists — [`force_run`](Command::force_run) is how a caller marks a query as
 //! safe to execute regardless.
 
+use std::ffi::{OsStr, OsString};
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -73,8 +74,8 @@ pub struct Command {
     program: String,
     argv: Vec<String>,
     cwd: Option<PathBuf>,
-    env: Vec<(String, String)>,
-    env_remove: Vec<String>,
+    env: Vec<(OsString, OsString)>,
+    env_remove: Vec<OsString>,
     force_run: bool,
 }
 
@@ -109,7 +110,15 @@ impl Command {
     /// behaviour through the environment, with no equivalent flag to pass on the
     /// command line, so configuring them at all requires this.
     pub fn env(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
-        self.env.push((key.into(), value.into()));
+        self.env_os(key.into(), value.into())
+    }
+
+    /// [`env`](Self::env) for a key or value that is not valid UTF-8. The child
+    /// receives the exact bytes; the dry-run/verbose line spells them lossily,
+    /// being text.
+    pub fn env_os(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
+        self.env
+            .push((key.as_ref().to_os_string(), value.as_ref().to_os_string()));
         self
     }
 
@@ -118,7 +127,12 @@ impl Command {
     /// context-pinning var the caller's shell exported (e.g. `GIT_DIR`) must be
     /// scrubbed or it would silently override that.
     pub fn env_remove(&mut self, key: impl Into<String>) -> &mut Self {
-        self.env_remove.push(key.into());
+        self.env_remove_os(key.into())
+    }
+
+    /// [`env_remove`](Self::env_remove) for a name that is not valid UTF-8.
+    pub fn env_remove_os(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
+        self.env_remove.push(key.as_ref().to_os_string());
         self
     }
 
@@ -140,10 +154,18 @@ impl Command {
         // verbose or dry-run line is a command you could paste — and so the
         // environment a child actually sees is visible when debugging (some
         // behaviour is only reachable through the environment, with no flag).
+        // Names and values are OS strings; the line is text, so it spells them
+        // lossily.
         let mut parts: Vec<String> = self
             .env
             .iter()
-            .map(|(key, value)| format!("{key}={}", quote(value)))
+            .map(|(key, value)| {
+                format!(
+                    "{}={}",
+                    key.to_string_lossy(),
+                    quote(value.to_string_lossy().as_ref())
+                )
+            })
             .collect();
         parts.extend(self.argv.iter().map(|a| quote(a)));
         let rendered = parts.join(" ");
@@ -299,6 +321,27 @@ impl Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn os_env_reaches_the_child_byte_for_byte_and_renders_lossily() {
+        use std::os::unix::ffi::OsStringExt;
+        let _guard = crate::log::test_flag_guard();
+        let odd = OsString::from_vec(b"v\xff".to_vec());
+        let result = Command::new("sh")
+            .args(["-c", "printf %s \"$K\""])
+            .env_os("K", &odd)
+            .force_run()
+            .exec_raw()
+            .unwrap();
+        assert_eq!(result.stdout, b"v\xff");
+
+        let mut rendered = Command::new("true");
+        rendered.env_os("K", &odd);
+        assert_eq!(
+            rendered.format_cmd(),
+            format!("K={} true", odd.to_string_lossy())
+        );
+    }
 
     #[test]
     fn format_cmd_leads_with_env_and_quotes_spaces() {

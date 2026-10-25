@@ -166,8 +166,10 @@ pub struct SettingsDecl {
 pub struct RepoDecl {
     /// On-disk location (root / standalone) or a subpath relative to
     /// `repos.main` (nested). Absent exactly when [`from`](Self::from) borrows
-    /// the repo from another project, which supplies the path instead; the
-    /// loader fills it in, so everything downstream sees a plain path.
+    /// the repo from another project: the declaration keeps it `None`, and the
+    /// loader resolves the source checkout into the resolved repo instead. Use
+    /// `Project::repo_abs_path` for the resolved location; do not write that
+    /// path back here.
     pub path: Option<String>,
     /// Borrow another project's repo as this one: `[<org>/]<project>[:<repo>]`,
     /// defaulting to that project's `repos.main`. What travels is the repo's

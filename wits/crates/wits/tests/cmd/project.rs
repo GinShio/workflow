@@ -189,6 +189,26 @@ origin = "{}"
         }
     }
 
+    /// Like [`run`], with extra environment for the child. Process-global inputs
+    /// such as `WITS_PROJECT_TOOLCHAIN` are only testable at the process
+    /// boundary; setting them in-process would race every other test.
+    fn run_env(&self, args: &[&str], env: &[(&str, &str)]) -> Out {
+        let output = Command::new(env!("CARGO_BIN_EXE_wits"))
+            .args(args)
+            .current_dir(&self.root)
+            .envs(hermetic_git())
+            .env("WITS_PROJECT_CONFIG", &self.config)
+            .envs(env.iter().copied())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        Out {
+            success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
+    }
+
     fn run(&self, args: &[&str]) -> Out {
         self.run_in(&self.root, args)
     }
@@ -619,6 +639,63 @@ fn info_reports_the_borrow_the_skip_list_and_both_template_and_resolution() {
     for role in ["focus:", "build_repo:", "identity_repo:", "strategy:"] {
         assert!(out.stdout.contains(role), "{role} missing: {}", out.stdout);
     }
+}
+
+/// `--work-dir` is a Profile axis, so it must reach every read query that
+/// resolves paths. A helper that dropped it would make `info` print the
+/// configured checkout while `build` uses the caller's — exactly the kind of
+/// disagreement this report exists to expose.
+#[test]
+fn project_info_honours_work_dir_for_the_description_and_get() {
+    let fx = Fixture::new();
+    let elsewhere = fx.path("review-worktree");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let dir = elsewhere.to_str().unwrap();
+
+    let got = fx.ok(&[
+        "project",
+        "info",
+        "--get",
+        "repo.workdir",
+        "--get",
+        "build_dir",
+        "work",
+        "--branch",
+        "main",
+        "--work-dir",
+        dir,
+    ]);
+    let build_dir = format!("{dir}/_build/main-debug");
+    assert_eq!(
+        got.stdout.lines().collect::<Vec<_>>(),
+        vec![dir, build_dir.as_str()]
+    );
+
+    let described = fx.ok(&[
+        "project",
+        "info",
+        "work",
+        "--branch",
+        "main",
+        "--work-dir",
+        dir,
+    ]);
+    let has = |label: &str, value: &str| {
+        described
+            .stdout
+            .lines()
+            .any(|line| line.contains(label) && line.contains(value))
+    };
+    assert!(
+        has("repos.main.workdir:", dir),
+        "stdout: {}",
+        described.stdout
+    );
+    assert!(
+        has("build_dir:", &build_dir),
+        "stdout: {}",
+        described.stdout
+    );
 }
 
 #[test]
@@ -1466,4 +1543,348 @@ environment = {{ CXXFLAGS = "-std=c++20" }}
     // Hidden plumbing: no help entry, like the other `__` queries.
     let help = fx.ok(&["project", "--help"]);
     assert!(!help.stdout.contains("__names"));
+}
+
+/// A project with no `build_dir` has nothing a build could produce. It says so
+/// and returns success — picking a directory on its own would be a build the
+/// config never named.
+#[test]
+fn a_build_without_a_build_dir_stops_with_a_warning() {
+    let fx = Fixture::new();
+    std::fs::write(
+        fx.config.join("nobuild.toml"),
+        format!(
+            "[project]\nbuild_system = \"cargo\"\n\
+             [repos.main]\npath = \"{}\"\nmain_branch = \"main\"\n",
+            fx.path("src-nowhere").display()
+        ),
+    )
+    .unwrap();
+
+    let out = fx.ok(&["build", "nobuild", "-b", "main"]);
+    assert!(
+        out.stderr.contains("no build_dir configured"),
+        "stderr: {}",
+        out.stderr
+    );
+}
+
+/// A `build_dir` with no backend to realise it is a configuration contradiction,
+/// not a silent no-op.
+#[test]
+fn a_build_dir_without_a_build_system_is_refused() {
+    let fx = Fixture::new();
+    let src = fx.path("src-nosys");
+    std::fs::write(
+        fx.config.join("nosys.toml"),
+        format!(
+            "[project]\n\
+             [repos.main]\npath = \"{}\"\nmain_branch = \"main\"\n\
+             build_dir = \"{}/_build\"\n",
+            src.display(),
+            src.display()
+        ),
+    )
+    .unwrap();
+
+    let out = fx.run(&["build", "nosys", "-b", "main"]);
+    assert!(!out.success);
+    assert!(
+        out.stderr
+            .contains("build_dir is set but build_system is not"),
+        "stderr: {}",
+        out.stderr
+    );
+}
+
+/// `WITS_PROJECT_TOOLCHAIN` is the top selection entry, and an explicit request
+/// is never trusted away: setting it injects that toolchain even into an
+/// already-configured tree, and it outranks the project's field.
+#[test]
+fn an_env_selected_toolchain_is_injected_into_a_configured_dir() {
+    let fx = Fixture::new();
+    let src = Fixture::seed(&fx.root, "src-envtool", &["meson.build"]);
+    std::fs::create_dir_all(src.join("_build/meson-private")).unwrap();
+    std::fs::write(src.join("_build/meson-private/coredata.dat"), "").unwrap();
+    std::fs::write(
+        fx.config.join("envtool.toml"),
+        format!(
+            r#"
+[project]
+build_system = "meson"
+toolchain = "t"
+[repos.main]
+path = "{src}"
+main_branch = "main"
+build_dir = "{src}/_build"
+[toolchains.t]
+cc = "cc-from-project"
+[toolchains.t2]
+cc = "cc-from-env"
+"#,
+            src = src.display()
+        ),
+    )
+    .unwrap();
+
+    // Trusted: the configured tree is left alone, so no `CC` reaches the step.
+    let trusted = fx.ok(&["-n", "build", "envtool", "-b", "main"]);
+    assert!(
+        !trusted.stdout.contains("cc-from-project") && !trusted.stdout.contains("cc-from-env"),
+        "a configured tree without an explicit toolchain was not trusted: {}",
+        trusted.stdout
+    );
+
+    // Explicit through the environment: injection happens, and the env entry
+    // outranks the project field.
+    let injected = fx.run_env(
+        &["-n", "build", "envtool", "-b", "main"],
+        &[("WITS_PROJECT_TOOLCHAIN", "t2")],
+    );
+    assert!(injected.success, "stderr: {}", injected.stderr);
+    assert!(
+        injected.stdout.contains("CC=cc-from-env"),
+        "the env-selected toolchain was not injected: {}",
+        injected.stdout
+    );
+    assert!(
+        !injected.stdout.contains("cc-from-project"),
+        "the project field won over WITS_PROJECT_TOOLCHAIN: {}",
+        injected.stdout
+    );
+}
+
+/// In-place owns one checkout, so building another branch is the classic
+/// stash → switch → build → restore dance: the *switched* tree is what gets
+/// built, and the caller's checkout — dirty or not — is where it was.
+#[test]
+fn an_in_place_build_switches_builds_and_restores_the_checkout() {
+    let fx = Fixture::new();
+
+    let up = fx.path("up-inplace");
+    std::fs::create_dir_all(up.join("src")).unwrap();
+    git(&up, &["init", "-q", "-b", "main", "."]);
+    std::fs::write(
+        up.join("Cargo.toml"),
+        "[package]\nname = \"main-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(up.join("src/main.rs"), "fn main() {}\n").unwrap();
+    git(&up, &["add", "-A"]);
+    git(&up, &["commit", "-q", "-m", "c1"]);
+    // The branch under test compiles to a differently named binary, so a build
+    // that never switched cannot pass by leaving a stale `main-fixture` behind.
+    git(&up, &["switch", "-q", "-c", "feat"]);
+    std::fs::write(
+        up.join("Cargo.toml"),
+        "[package]\nname = \"feat-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    git(&up, &["add", "-A"]);
+    git(&up, &["commit", "-q", "-m", "feat"]);
+    git(&up, &["switch", "-q", "main"]);
+
+    let src = fx.path("src-inplace");
+    std::fs::write(
+        fx.config.join("inplace.toml"),
+        format!(
+            r#"
+[project]
+build_system = "cargo"
+[repos.main]
+path = "{src}"
+main_branch = "main"
+build_dir = "{{{{repos.main.workdir}}}}/target/{{{{branch.slug}}}}"
+[repos.main.remotes]
+origin = "{up}"
+"#,
+            src = src.display(),
+            up = up.display()
+        ),
+    )
+    .unwrap();
+
+    fx.ok(&["update", "inplace"]);
+    git(&src, &["branch", "feat", "origin/feat"]);
+    // A dirty checkout: the auto-stash has to survive the round trip.
+    std::fs::write(src.join("src/main.rs"), "fn main() { /* local */ }\n").unwrap();
+
+    fx.ok(&["build", "inplace", "-b", "feat"]);
+    assert!(
+        src.join("target/feat/debug/feat-fixture").exists(),
+        "the feat branch was not the tree that got built"
+    );
+    assert!(
+        !src.join("target/feat/debug/main-fixture").exists(),
+        "the build ran from main's tree while claiming to build feat"
+    );
+    assert_eq!(
+        git_out(&src, &["symbolic-ref", "--short", "HEAD"]).trim(),
+        "main",
+        "the in-place checkout was not restored to its branch"
+    );
+    assert_eq!(
+        std::fs::read_to_string(src.join("src/main.rs")).unwrap(),
+        "fn main() { /* local */ }\n",
+        "the stashed working tree was not restored"
+    );
+}
+
+/// A hook that fails stops the repo there: the default action must not run
+/// behind a failed `pre_update`, or an override could be contradicted silently.
+#[test]
+fn a_failing_update_hook_stops_the_repo_before_the_default_action() {
+    let fx = Fixture::new();
+    fx.ok(&["update", "work"]);
+    Fixture::declare_work(&fx.root, "[repos.main.hooks]\npre_update = \"exit 7\"");
+
+    // Move the upstream, so an update that ran the default action anyway would
+    // leave a visible new `origin/main` behind.
+    std::fs::write(fx.path("up-work/new.c"), "c").unwrap();
+    git(&fx.path("up-work"), &["add", "-A"]);
+    git(&fx.path("up-work"), &["commit", "-q", "-m", "moved"]);
+    let upstream_head = git_out(&fx.path("up-work"), &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    let out = fx.run(&["update", "work"]);
+    assert!(!out.success, "a failing hook was not fatal");
+    assert!(
+        out.stderr.contains("pre_update hook failed (exit 7)"),
+        "stderr: {}",
+        out.stderr
+    );
+    assert_ne!(
+        git_out(&fx.path("src-work"), &["rev-parse", "origin/main"]).trim(),
+        upstream_head,
+        "the default action ran behind the failed hook"
+    );
+}
+
+/// A declared `hooks.update` replaces the default action *in place*: it runs
+/// between `pre_update` and `post_update`, and the default fetch/merge runs
+/// nowhere behind it.
+#[test]
+fn an_update_hook_override_replaces_the_default_action() {
+    let fx = Fixture::new();
+    fx.ok(&["update", "work"]);
+    Fixture::declare_work(
+        &fx.root,
+        "[repos.main.hooks]\nupdate = \"touch update-override-ran\"\n\
+         post_update = \"test -f update-override-ran && touch post-update-ran\"",
+    );
+
+    // Move the upstream: an update that still fetched would advance the
+    // tracking ref, which is exactly what an override must not need.
+    std::fs::write(fx.path("up-work/new.c"), "c").unwrap();
+    git(&fx.path("up-work"), &["add", "-A"]);
+    git(&fx.path("up-work"), &["commit", "-q", "-m", "moved"]);
+    let upstream_head = git_out(&fx.path("up-work"), &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    fx.ok(&["update", "work"]);
+    let src = fx.path("src-work");
+    assert!(
+        src.join("update-override-ran").exists(),
+        "the update override did not run in the checkout"
+    );
+    assert!(
+        src.join("post-update-ran").exists(),
+        "post_update did not run after the override"
+    );
+    assert_ne!(
+        git_out(&src, &["rev-parse", "origin/main"]).trim(),
+        upstream_head,
+        "the default action ran behind the override"
+    );
+}
+
+/// Declared remotes converge — the fetch URL and the push-URL *set* — and a
+/// remote the config never names is left exactly as it is.
+#[test]
+fn an_update_converges_declared_remotes_and_never_touches_undeclared_ones() {
+    let fx = Fixture::new();
+    fx.ok(&["update", "work"]);
+    let src = fx.path("src-work");
+    let mirror = "https://example.invalid/mirror.git";
+
+    // A mirror gives the push-URL set something to be: with none, git falls back
+    // to the fetch URL and a wrong set is unobservable.
+    std::fs::write(
+        fx.config.join("work.toml"),
+        format!(
+            r#"
+[project]
+[repos.main]
+path = "{src}"
+main_branch = "main"
+build_dir = "{{{{repos.main.workdir}}}}/_build/{{{{branch.slug}}}}-{{{{build_type}}}}"
+[repos.main.remotes]
+origin = {{ url = "{up}", mirrors = ["{mirror}"] }}
+"#,
+            src = src.display(),
+            up = fx.path("up-work").display()
+        ),
+    )
+    .unwrap();
+
+    git(
+        &src,
+        &[
+            "remote",
+            "add",
+            "handmade",
+            "https://example.invalid/handmade.git",
+        ],
+    );
+    // Drift every declared half: the fetch URL, and the push-URL set itself —
+    // two foreign entries, so convergence must replace a set, not just one URL.
+    git(
+        &src,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://example.invalid/wrong.git",
+        ],
+    );
+    git(
+        &src,
+        &[
+            "config",
+            "--add",
+            "remote.origin.pushurl",
+            "https://example.invalid/one.git",
+        ],
+    );
+    git(
+        &src,
+        &[
+            "config",
+            "--add",
+            "remote.origin.pushurl",
+            "https://example.invalid/two.git",
+        ],
+    );
+
+    fx.ok(&["update", "work"]);
+    let want = fx.path("up-work");
+    assert_eq!(
+        git_out(&src, &["remote", "get-url", "origin"]).trim(),
+        want.to_str().unwrap(),
+        "the declared fetch URL did not converge"
+    );
+    assert_eq!(
+        git_out(&src, &["config", "--get-all", "remote.origin.pushurl"])
+            .lines()
+            .collect::<Vec<_>>(),
+        vec![want.to_str().unwrap(), mirror],
+        "the declared push-URL set did not converge"
+    );
+    assert_eq!(
+        git_out(&src, &["remote", "get-url", "handmade"]).trim(),
+        "https://example.invalid/handmade.git",
+        "an undeclared remote was touched"
+    );
 }

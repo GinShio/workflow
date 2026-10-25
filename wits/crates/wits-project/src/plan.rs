@@ -68,14 +68,17 @@ pub struct DevenvEntry {
 }
 
 impl DevenvEntry {
-    /// Apply this operation to `env` with Meson's run-mode semantics: a
-    /// prepend/append onto a variable that is absent yields the value alone,
-    /// while one onto a variable that is present — even empty — joins with the
-    /// separator.
+    /// Apply this operation to `env`. A `set` is dotenv-style: it supplies the
+    /// variable's default and leaves a value the base already carries — the
+    /// caller's own, or one the build system's developer environment composed —
+    /// untouched. A prepend/append onto a variable that is absent yields the
+    /// value alone, while one onto a present variable — even empty — joins with
+    /// the separator: Meson's run-mode rule.
     pub fn apply(&self, env: &mut BTreeMap<std::ffi::OsString, std::ffi::OsString>) {
         let key = std::ffi::OsString::from(&self.name);
         let joined = match (self.op, env.get(&key)) {
-            (DevenvOp::Set, _) | (_, None) => std::ffi::OsString::from(&self.value),
+            (DevenvOp::Set, Some(_)) => return,
+            (DevenvOp::Set, None) | (_, None) => std::ffi::OsString::from(&self.value),
             (DevenvOp::Prepend, Some(current)) => {
                 let mut out = std::ffi::OsString::from(&self.value);
                 out.push(&self.separator);
@@ -95,9 +98,13 @@ impl DevenvEntry {
 
 impl LogicalConfig {
     /// Accumulate a `devenv` operation. A `set` discards the operations on its
-    /// variable that came before it, since it overwrites whatever they built; a
-    /// prepend/append repeating one still in force is not added again, so a
-    /// preset reached twice through `extends` cannot add the same entry twice.
+    /// variable that came before it: under dotenv semantics it states the
+    /// variable's default outright and takes the variable over from lower
+    /// levels. Keeping their prepend/append would let a lower level resurface
+    /// whenever the environment already supplies the variable, which is exactly
+    /// what the set claimed. A prepend/append repeating one still in force is
+    /// not added again, so a preset reached twice through `extends` cannot add
+    /// the same entry twice.
     pub fn add_devenv(&mut self, entry: DevenvEntry) {
         if entry.op == DevenvOp::Set {
             self.devenv.retain(|e| e.name != entry.name);
@@ -310,7 +317,17 @@ mod tests {
     use crate::layout::bootstrap_worktree_dir;
     use crate::paths::branch_build_dirs;
     use minijinja::Value;
+    use std::ffi::OsString;
     use std::path::PathBuf;
+
+    fn devenv_entry(name: &str, op: DevenvOp, value: &str) -> DevenvEntry {
+        DevenvEntry {
+            name: name.into(),
+            op,
+            value: value.into(),
+            separator: ":".into(),
+        }
+    }
 
     /// A path-only input: select but do not inject a toolchain, and apply no
     /// L3 overrides — the shape the read-only consumers use.
@@ -1167,6 +1184,87 @@ anchor = "main"
         assert!(plan.logical.env_entry("VK").is_none());
     }
 
+    /// A `set` is dotenv-style: the base's value wins for a variable it already
+    /// carries, and only an absent one is supplied. prepend/append still modify
+    /// whatever is there.
+    #[test]
+    fn a_devenv_set_supplies_a_default_and_never_overrides() {
+        let os = std::ffi::OsString::from;
+        let mut env: BTreeMap<std::ffi::OsString, std::ffi::OsString> = BTreeMap::new();
+        env.insert(os("X"), os("base"));
+
+        devenv_entry("X", DevenvOp::Set, "declared").apply(&mut env);
+        assert_eq!(
+            env.get(&os("X")),
+            Some(&os("base")),
+            "a set overrode the base"
+        );
+        devenv_entry("X", DevenvOp::Append, "more").apply(&mut env);
+        assert_eq!(env.get(&os("X")), Some(&os("base:more")));
+        devenv_entry("X", DevenvOp::Prepend, "first").apply(&mut env);
+        assert_eq!(env.get(&os("X")), Some(&os("first:base:more")));
+
+        devenv_entry("Y", DevenvOp::Set, "supplied").apply(&mut env);
+        assert_eq!(
+            env.get(&os("Y")),
+            Some(&os("supplied")),
+            "a set on an absent variable did not apply"
+        );
+    }
+
+    /// A `set` takes its variable over from lower levels, and an operation
+    /// identical to one still in force is not added twice — otherwise a preset
+    /// reached through two `extends` paths would append the same ICD twice.
+    #[test]
+    fn a_set_discards_earlier_operations_and_a_repeat_in_force_is_not_added() {
+        let mut cfg = LogicalConfig::default();
+        cfg.add_devenv(devenv_entry("P", DevenvOp::Prepend, "/a"));
+        cfg.add_devenv(devenv_entry("Q", DevenvOp::Set, "q"));
+        // A preset reached twice through `extends` repeats its prepend.
+        cfg.add_devenv(devenv_entry("P", DevenvOp::Prepend, "/a"));
+        assert_eq!(cfg.devenv.len(), 2);
+
+        // A set wipes what came before it, so a later prepend that matches one
+        // the set discarded is in force again rather than a repeat.
+        cfg.add_devenv(devenv_entry("P", DevenvOp::Set, "/base"));
+        cfg.add_devenv(devenv_entry("P", DevenvOp::Prepend, "/a"));
+        let on_p: Vec<_> = cfg.devenv.iter().filter(|e| e.name == "P").collect();
+        assert_eq!(
+            on_p,
+            vec![
+                &devenv_entry("P", DevenvOp::Set, "/base"),
+                &devenv_entry("P", DevenvOp::Prepend, "/a")
+            ]
+        );
+
+        // Last writer wins for a set, however many times the value recurs.
+        cfg.add_devenv(devenv_entry("Q", DevenvOp::Set, "other"));
+        cfg.add_devenv(devenv_entry("Q", DevenvOp::Set, "q"));
+        let on_q: Vec<_> = cfg.devenv.iter().filter(|e| e.name == "Q").collect();
+        assert_eq!(on_q, vec![&devenv_entry("Q", DevenvOp::Set, "q")]);
+    }
+
+    /// Meson's run-mode rules: an absent variable stands alone, a present one —
+    /// even empty — joins with the separator; a set on an absent variable
+    /// supplies it.
+    #[test]
+    fn devenv_operations_apply_with_mesons_run_mode_semantics() {
+        let mut env = BTreeMap::from([
+            (OsString::from("PATH"), OsString::from("/usr/bin")),
+            (OsString::from("EMPTY"), OsString::new()),
+        ]);
+        devenv_entry("PATH", DevenvOp::Prepend, "/b").apply(&mut env);
+        devenv_entry("PATH", DevenvOp::Append, "/z").apply(&mut env);
+        devenv_entry("FRESH", DevenvOp::Append, "/only").apply(&mut env);
+        devenv_entry("EMPTY", DevenvOp::Prepend, "/e").apply(&mut env);
+        devenv_entry("SET", DevenvOp::Set, "v").apply(&mut env);
+        let get = |k: &str| env[&OsString::from(k)].to_str().unwrap().to_owned();
+        assert_eq!(get("PATH"), "/b:/usr/bin:/z");
+        assert_eq!(get("FRESH"), "/only");
+        assert_eq!(get("EMPTY"), "/e:");
+        assert_eq!(get("SET"), "v");
+    }
+
     /// The anchor supplies output defaults, but a focus may name its own output
     /// context while still configuring through that anchor.
     #[test]
@@ -1257,5 +1355,141 @@ anchor = "main"
             self_anchored.paths.install_dir.unwrap(),
             PathBuf::from("/src/tool/_install/tool")
         );
+    }
+
+    /// A toolchain field may name the profile bindings the path stage publishes
+    /// before resolving the toolchain (`build_type`, `generator`, `branch.*`).
+    /// This order is a contract, not an implementation detail.
+    #[test]
+    fn a_toolchain_field_resolves_after_branch_and_build_type_are_bound() {
+        let body = r#"
+            [project]
+            toolchain = "t"
+
+            [repos.main]
+            path = "/src/x"
+            main_branch = "main"
+
+            [toolchains.t]
+            cc = "cc-{{build_type}}"
+            cxx = "cxx-{{branch.slug}}"
+        "#;
+        let (_d, ws) = ws_with(body, "x");
+        let project = ws.project("x").unwrap();
+        let profile = Profile {
+            build_type: Some("release".into()),
+            ..Default::default()
+        };
+        let plan = resolve_plan(&ws, project, &paths_only(&profile, "feature/x")).unwrap();
+        let tc = plan.paths.toolchain.as_ref().unwrap();
+        assert_eq!(tc.cc.as_deref(), Some("cc-release"));
+        assert_eq!(tc.cxx.as_deref(), Some("cxx-feature_x"));
+    }
+
+    /// L3 is the last layer: CLI `extra_*` args follow the project's and then
+    /// the presets', and nothing is re-ordered behind them.
+    #[test]
+    fn cli_extra_args_are_applied_after_project_and_preset_layers() {
+        let body = r#"
+            [project]
+            extra_config_args = ["-Dproject"]
+            extra_build_args = ["project-build"]
+            extra_install_args = ["project-install"]
+
+            [repos.main]
+            path = "/src/x"
+            main_branch = "main"
+
+            [project.presets.p]
+            extra_config_args = ["-Dpreset"]
+            extra_build_args = ["preset-build"]
+            extra_install_args = ["preset-install"]
+        "#;
+        let (_d, ws) = ws_with(body, "x");
+        let project = ws.project("x").unwrap();
+        let profile = Profile {
+            presets: vec!["p".into()],
+            ..Default::default()
+        };
+        let cfg = ["-Dcli".to_owned()];
+        let build = ["cli-build".to_owned()];
+        let install = ["cli-install".to_owned()];
+        let input = BuildInput {
+            paths: PathInput {
+                profile: &profile,
+                branch: Some("main"),
+                work_dir: None,
+                build_dir: None,
+                install_dir: None,
+            },
+            inject_toolchain: false,
+            injector: None,
+            extra_config_args: &cfg,
+            extra_build_args: &build,
+            extra_install_args: &install,
+        };
+        let plan = resolve_plan(&ws, project, &input).unwrap();
+        assert_eq!(
+            plan.logical.extra_config_args,
+            vec!["-Dproject", "-Dpreset", "-Dcli"]
+        );
+        assert_eq!(
+            plan.logical.extra_build_args,
+            vec!["project-build", "preset-build", "cli-build"]
+        );
+        assert_eq!(
+            plan.logical.extra_install_args,
+            vec!["project-install", "preset-install", "cli-install"]
+        );
+    }
+
+    /// The path stage resolves checkouts and output paths; org/project/preset
+    /// config does not exist there. This is what lets `branch-build-dirs`
+    /// survive an unrelated broken preset.
+    #[test]
+    fn resolve_paths_does_not_apply_environment_or_presets() {
+        let body = r#"
+            [project]
+            environment = { WITS_TEST_STAGE_PROJECT = "project" }
+            definitions = { WITS_TEST_STAGE_PROJECT = "project" }
+
+            [repos.main]
+            path = "/src/x"
+            main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/_build/{{branch.slug}}"
+
+            [project.presets.p]
+            environment = { WITS_TEST_STAGE_PRESET = "preset" }
+        "#;
+        let (_d, ws) = ws_with(body, "x");
+        let project = ws.project("x").unwrap();
+        let profile = Profile {
+            presets: vec!["p".into()],
+            ..Default::default()
+        };
+        let paths = crate::paths::resolve_paths(
+            &ws,
+            project,
+            &PathInput {
+                profile: &profile,
+                branch: Some("feat"),
+                work_dir: None,
+                build_dir: None,
+                install_dir: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            paths.build_dir.clone().unwrap(),
+            PathBuf::from("/src/x/_build/feat")
+        );
+        assert!(paths.get_scalar("env.WITS_TEST_STAGE_PROJECT").is_err());
+        assert!(paths.get_scalar("env.WITS_TEST_STAGE_PRESET").is_err());
+        assert!(paths
+            .get_scalar("project.environment.WITS_TEST_STAGE_PROJECT")
+            .is_err());
+        assert!(paths
+            .get_scalar("preset.p.environment.WITS_TEST_STAGE_PRESET")
+            .is_err());
     }
 }

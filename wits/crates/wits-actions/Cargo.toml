@@ -1,0 +1,18 @@
+[package]
+name = "wits-actions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The build, update, and devenv actions over the wits project registry"
+
+[lib]
+name = "wits_actions"
+path = "src/lib.rs"
+
+[dependencies]
+wits-core.workspace = true
+wits-project.workspace = true
+wits-build.workspace = true
+anyhow.workspace = true
+log.workspace = true
+tempfile.workspace = true
