@@ -188,6 +188,11 @@ pub struct RepoDecl {
     pub anchor: Option<String>,
     /// The TOML key is `branch_strategy` (see the struct docs).
     pub strategy: BranchStrategy,
+    /// Whether the file wrote `branch_strategy` at all. [`strategy`](Self::strategy)
+    /// carries the default either way; this distinguishes a repo that *declares*
+    /// `in-place` from one that says nothing, which a report wants to show while
+    /// resolution must not care.
+    pub strategy_declared: bool,
     pub worktree_dir: Option<String>,
     /// The fixed initial checkout created after a bare clone. Required by the
     /// hybrid strategy; optional for worktree, which otherwise renders
@@ -303,6 +308,7 @@ impl TryFrom<RawRepoDecl> for RepoDecl {
             main_branch: raw.main_branch,
             anchor: raw.anchor,
             strategy: raw.branch_strategy.unwrap_or_default(),
+            strategy_declared: raw.branch_strategy.is_some(),
             worktree_dir: raw.worktree_dir,
             bootstrap_worktree_dir: raw.bootstrap_worktree_dir,
             source_dir: raw.source_dir,
@@ -952,9 +958,20 @@ mod tests {
     fn strategy_defaults_to_in_place_and_rejects_unknown_at_parse_time() {
         let repo: RepoDecl = toml::from_str(r#"path = "/src/x""#).unwrap();
         assert_eq!(repo.strategy, BranchStrategy::InPlace);
+        assert!(
+            !repo.strategy_declared,
+            "an omitted key is not a declaration"
+        );
         let repo: RepoDecl =
             toml::from_str("path = \"/src/x\"\nbranch_strategy = \"hybrid\"").unwrap();
         assert_eq!(repo.strategy, BranchStrategy::Hybrid);
+        assert!(repo.strategy_declared);
+        // Spelling the default is still a declaration: a report shows it, and
+        // resolution reads the same value either way.
+        let repo: RepoDecl =
+            toml::from_str("path = \"/src/x\"\nbranch_strategy = \"in-place\"").unwrap();
+        assert_eq!(repo.strategy, BranchStrategy::InPlace);
+        assert!(repo.strategy_declared);
         let err = toml::from_str::<RepoDecl>(
             r#"
             path = "/src/x"

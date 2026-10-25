@@ -606,6 +606,59 @@ anchor = "main"
         }
     }
 
+    /// Output paths are path templates: a whole-expression result that is a
+    /// list or a map must be refused, not flattened into a plausible-looking
+    /// path. `source_dir`, `build_dir`, and `install_dir` each go through the
+    /// same renderer, so pin all three.
+    #[test]
+    fn output_path_templates_must_resolve_to_a_string() {
+        for field in ["source_dir", "build_dir", "install_dir"] {
+            let body = format!(
+                r#"
+                [project]
+                build_system = "cmake"
+
+                [repos.main]
+                path = "/src/hello"
+                main_branch = "main"
+                {field} = "{{{{ ['a','b'] }}}}"
+                "#
+            );
+            let (_d, ws) = ws_with(&body, "hello");
+            let project = ws.project("hello").unwrap();
+            let profile = Profile::default();
+            let err = resolve_plan(&ws, project, &paths_only(&profile, "main"))
+                .map(|_| ())
+                .unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(msg.contains("non-string"), "{field}: {msg}");
+        }
+    }
+
+    /// The same rule for a worktree path: a list-valued `worktree_dir` is not a
+    /// checkout selector, and flattening it would silently produce one.
+    #[test]
+    fn worktree_dir_templates_must_resolve_to_a_string() {
+        let body = r#"
+            [project]
+            build_system = "cmake"
+
+            [repos.main]
+            path = "/src/hello.git"
+            main_branch = "main"
+            branch_strategy = "worktree"
+            worktree_dir = "{{ ['a','b'] }}"
+        "#;
+        let (_d, ws) = ws_with(body, "hello");
+        let project = ws.project("hello").unwrap();
+        let profile = Profile::default();
+        let err = resolve_plan(&ws, project, &paths_only(&profile, "main"))
+            .map(|_| ())
+            .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("non-string"), "{msg}");
+    }
+
     /// A project declaring no `build_dir` leaves the path *unbound*, so naming it
     /// is an unknown-path error rather than an empty string a caller could not
     /// tell apart from a configured empty value.

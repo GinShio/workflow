@@ -225,9 +225,12 @@ impl Workspace {
                 .repos
                 .get_mut(&entry.repo)
                 .with_context(|| format!("repo '{}' disappeared", entry.repo))?;
-            // Travelling fields: the component's git identity.
+            // Travelling fields: the component's git identity. `strategy_declared`
+            // travels with the strategy it qualifies, so a report attributes the
+            // declaration to the project that wrote it.
             repo.decl.main_branch = entry.decl.main_branch;
             repo.decl.strategy = entry.decl.strategy;
+            repo.decl.strategy_declared = entry.decl.strategy_declared;
             repo.decl.worktree_dir = entry.decl.worktree_dir;
             repo.decl.bootstrap_worktree_dir = entry.decl.bootstrap_worktree_dir;
             repo.decl.skip = entry.decl.skip;
@@ -420,12 +423,14 @@ impl Workspace {
         let repo_path = project.repo_abs_path(repo_name).ok()?;
         // Attributing worktrees costs a strategy resolution per worktree, and it
         // can only change the answer where a sibling repo of this project
-        // resolves to the same git dir.
+        // resolves to the same git dir. Compare the git dir, not the declared
+        // path: a linked worktree and its bare host are different paths for one
+        // repository.
         let contested = project.repos.values().any(|other| {
             other.name() != repo_name
                 && project
                     .repo_abs_path(other.name())
-                    .is_ok_and(|p| p == repo_path)
+                    .is_ok_and(|p| same_git_dir(memo, &p, &repo_path))
         });
         let mut roots = vec![repo_path];
         if let Some(repo) = project.repos.get(repo_name) {
@@ -455,7 +460,7 @@ impl Workspace {
                     let Some(repo) = project.repos.get(repo_name) else {
                         continue;
                     };
-                    if !self.repo_places_worktree(project, repo, wt) {
+                    if !layout::worktree_belongs_to(self, project, repo, wt) {
                         continue;
                     }
                 }
@@ -463,34 +468,6 @@ impl Workspace {
             }
         }
         best
-    }
-
-    /// Whether `repo`'s own branch strategy is what put `wt` where it is.
-    ///
-    /// Two repos may share one git repository and still be different checkouts of
-    /// it, each declaring its own `worktree_dir`. Re-resolving the strategy for
-    /// the worktree's own branch says which repo would have placed it there. A
-    /// repo that declares no `worktree_dir` has no sibling to be confused with,
-    /// so it accepts what git reported and pays no resolution.
-    fn repo_places_worktree(
-        &self,
-        project: &Project,
-        repo: &Repo,
-        wt: &wits_core::git::Worktree,
-    ) -> bool {
-        if repo.decl.worktree_dir.is_none() {
-            return true;
-        }
-        // A detached worktree names no branch; the repo's own main branch stands
-        // in, which is enough for a strategy whose path does not vary by branch.
-        let Some(branch) = wt.branch.clone().or_else(|| repo.decl.main_branch.clone()) else {
-            return false;
-        };
-        let Ok(placed) = layout::work_dir(self, project, repo, &branch) else {
-            return false;
-        };
-        let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-        real(&placed) == real(&wt.path)
     }
 
     pub fn toolchain(&self, name: &str) -> Option<&ToolchainDecl> {
@@ -624,6 +601,20 @@ impl Project {
     }
 }
 
+/// Do two repo paths name the same git dir? A linked worktree and its bare host
+/// are different paths for one repository, which is the case sibling repos are
+/// told apart by strategy in.
+fn same_git_dir(memo: &mut WorktreeMemo, a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (memo.common_dir(a), memo.common_dir(b)) {
+        (Some(a), Some(b)) => layout::same_path(&a, &b),
+        // Neither path is a repository (yet): no worktree can exist under either.
+        _ => false,
+    }
+}
+
 /// How deeply `query` sits inside `candidate`, or `None` when it does not.
 fn containment_depth(query: &Path, candidate: &Path) -> Option<usize> {
     let real = std::fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf());
@@ -637,19 +628,33 @@ fn containment_depth(query: &Path, candidate: &Path) -> Option<usize> {
 #[derive(Default)]
 struct WorktreeMemo {
     by_git_dir: std::collections::HashMap<PathBuf, Vec<wits_core::git::Worktree>>,
+    common_dirs: std::collections::HashMap<PathBuf, Option<PathBuf>>,
 }
 
 impl WorktreeMemo {
+    /// The common dir of one path, queried at most once per path query. Sibling
+    /// attribution asks the same question for every repo of a project, so an
+    /// uncached answer would spawn git per sibling per repo.
+    fn common_dir(&mut self, path: &Path) -> Option<PathBuf> {
+        self.common_dirs
+            .entry(path.to_path_buf())
+            .or_insert_with(|| Repository::new(path).git_common_dir())
+            .clone()
+    }
+
     fn live_worktrees(&mut self, root: &Path) -> &[wits_core::git::Worktree] {
-        self.by_git_dir
-            .entry(root.to_path_buf())
-            .or_insert_with(|| {
-                Repository::new(root)
-                    .worktrees()
-                    .into_iter()
-                    .filter(wits_core::git::Worktree::is_live)
-                    .collect()
-            })
+        // The common dir is stable across a bare repository and its linked
+        // worktrees, and across both spellings of a checkout, so one query per
+        // git dir serves every root that reaches it. A path that is not a
+        // repository has no common dir; key it by itself, as before.
+        let key = self.common_dir(root).unwrap_or_else(|| root.to_path_buf());
+        self.by_git_dir.entry(key).or_insert_with(|| {
+            Repository::new(root)
+                .worktrees()
+                .into_iter()
+                .filter(wits_core::git::Worktree::is_live)
+                .collect()
+        })
     }
 }
 

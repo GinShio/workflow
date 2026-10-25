@@ -641,6 +641,36 @@ fn info_reports_the_borrow_the_skip_list_and_both_template_and_resolution() {
     }
 }
 
+/// A target that names a path describes the repo containing that path, not the
+/// project's focus. `wrap` focuses `component`, so running from its `main`
+/// checkout is the discriminating case: the description and `--get` must agree.
+#[test]
+fn project_info_uses_the_path_derived_repo_not_the_project_focus() {
+    let fx = Fixture::new();
+    fx.ok(&["update", "wrap"]);
+    let main = fx.path("src-wrap");
+
+    let described = fx.run_in(&main, &["project", "info"]);
+    assert!(described.success, "stderr: {}", described.stderr);
+    let focus_lines: Vec<&str> = described
+        .stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("focus:"))
+        .collect();
+    assert_eq!(focus_lines.len(), 2, "stdout: {}", described.stdout);
+    for line in focus_lines {
+        assert_eq!(
+            line.split_whitespace().last(),
+            Some("main"),
+            "path target should describe main: {line}"
+        );
+    }
+
+    let got = fx.run_in(&main, &["project", "info", "--get", "project.focus"]);
+    assert!(got.success, "stderr: {}", got.stderr);
+    assert_eq!(got.stdout.trim(), "main");
+}
+
 /// `--work-dir` is a Profile axis, so it must reach every read query that
 /// resolves paths. A helper that dropped it would make `info` print the
 /// configured checkout while `build` uses the caller's — exactly the kind of

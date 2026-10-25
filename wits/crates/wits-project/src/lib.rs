@@ -33,7 +33,9 @@ pub use decl::{
 };
 pub use hook::HookPhase;
 pub use paths::{branch_build_dirs, resolve_paths, BranchBuildDir, PathInput, ResolvedPaths};
-pub use plan::{resolve_plan, BuildInput, BuildPlan, LogicalConfig, Toolchain, ToolchainInjector};
+pub use plan::{
+    resolve_plan, BuildInput, BuildPlan, DevenvEntry, LogicalConfig, Toolchain, ToolchainInjector,
+};
 pub use profile::{
     anchor_of, identity_repo, target_branch, BranchAbsence, BranchIdentity, Profile,
 };

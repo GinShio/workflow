@@ -17,13 +17,13 @@
 //! repo ([`Repo::template_owner`]), never the borrower's: a borrowed component's
 //! `worktree_dir` was written against its own project's names.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
 use minijinja::Value;
 
-use wits_core::git::Repository;
+use wits_core::git::{Repository, Worktree};
 
 use crate::context::{
     context_for_repo, insert_path, path_slug, repo_value, Bindings, Ctx, TemplateError,
@@ -144,6 +144,126 @@ pub fn work_dir(ws: &Workspace, project: &Project, repo: &Repo, branch: &str) ->
     resolve_work_dir(ws, project, repo, &ctx, repo.decl.strategy, branch)
 }
 
+/// Whether a live worktree belongs to `repo` rather than to a sibling repo that
+/// shares its git dir.
+///
+/// Two repos may share one git repository and still be different checkouts of
+/// it: a bare-backed component and a review checkout of the same component each
+/// declare their own placement. `git worktree list` answers for the
+/// *repository*, so it reports both to both, and attributing every worktree to
+/// every repo that points at that git dir makes the two indistinguishable.
+///
+/// A repo with no `worktree_dir` accepts what git reported: it declares no
+/// placement to compare, so its checkout *is* the repository. Otherwise the
+/// declared placements decide — its primary path, its `worktree_dir` rendered for
+/// the worktree's branch, the branch-independent form of that template (the fixed
+/// selector a detached build accepts), and its bootstrap checkout. A hybrid repo
+/// falls back further, to the live inventory its strategy searches by design, but
+/// only for a worktree that holds a branch and that no sibling *places* itself:
+/// an explicit placement outranks the inventory search, which is what keeps two
+/// repos of one project distinguishable.
+///
+/// This is deliberately the same predicate for path lookup and checkout
+/// selection; a sibling worktree must not be selected by one and rejected by the
+/// other.
+pub(crate) fn worktree_belongs_to(
+    ws: &Workspace,
+    project: &Project,
+    repo: &Repo,
+    wt: &Worktree,
+) -> bool {
+    if repo.decl.worktree_dir.is_none() {
+        return true;
+    }
+    if places(ws, project, repo, wt) {
+        return true;
+    }
+    repo.decl.strategy == BranchStrategy::Hybrid
+        && wt.branch.is_some()
+        && !project.repos().any(|(name, sibling)| {
+            name != repo.name()
+                && sibling.decl.worktree_dir.is_some()
+                && places(ws, project, sibling, wt)
+        })
+}
+
+/// Does `repo`'s own declaration place a checkout at `wt`'s path?
+///
+/// Template- and path-based rather than a call to [`work_dir`]: for a hybrid repo
+/// `work_dir` searches the live inventory, which is exactly the question being
+/// asked here, and would recurse back through [`checkout_holding`].
+fn places(ws: &Workspace, project: &Project, repo: &Repo, wt: &Worktree) -> bool {
+    // The repo's own primary path is always its checkout — including a
+    // bare-backed declaration still on disk as a conventional clone during a
+    // strategy migration — and no sibling can claim it.
+    if let Ok(primary) = primary_path(ws, project, repo) {
+        if same_path(&primary, &wt.path) {
+            return true;
+        }
+    }
+    // A detached worktree names no branch; the repo's own main branch stands in,
+    // which is enough for a strategy whose path does not vary by branch.
+    let main_branch = repo.decl.main_branch.as_deref();
+    let branch = wt.branch.as_deref().or(main_branch);
+    if let Some(branch) = branch {
+        if declared_placement(ws, project, repo, Some(branch))
+            .is_some_and(|placed| same_path(&placed, &wt.path))
+        {
+            return true;
+        }
+    }
+    // A branch-independent `worktree_dir` is a fixed checkout selector — the
+    // detached review checkout is the motivating case — so the repo places that
+    // path for a detached worktree too.
+    if declared_placement(ws, project, repo, None)
+        .is_some_and(|placed| same_path(&placed, &wt.path))
+    {
+        return true;
+    }
+    // A worktree repo may declare a bootstrap checkout distinct from its
+    // ordinary main-branch worktree; that fixed checkout is still placed by the
+    // repo's strategy and is the checkout `update` fast-forwards.
+    if branch == main_branch && repo.decl.bootstrap_worktree_dir.is_some() {
+        if let Ok(bootstrap) = bootstrap_worktree_dir(ws, project, repo) {
+            return same_path(&bootstrap, &wt.path);
+        }
+    }
+    false
+}
+
+/// The path one repo's `worktree_dir` template places, or `None` when it declares
+/// none or the template cannot answer against the Profile-free per-repo context.
+///
+/// A fixed selector is defined as a template that resolves without `branch.*`
+/// (the detached rule in `docs/reference/project-reference.rst`), which is
+/// exactly what this context can render; a template needing a Profile binding
+/// (`{{branch.slug}}`, `{{build_type}}`) has no branch-independent placement to
+/// compare and answers `None`.
+fn declared_placement(
+    ws: &Workspace,
+    project: &Project,
+    repo: &Repo,
+    branch: Option<&str>,
+) -> Option<PathBuf> {
+    repo.decl.worktree_dir.as_deref()?;
+    let root = match branch {
+        Some(branch) => branch_root(ws, project, repo, branch),
+        None => context_for_repo(ws, project, repo.name()),
+    };
+    let ctx = Ctx::new(root);
+    resolve_declared_worktree_dir(ws, project, repo, &ctx, branch)
+        .ok()
+        .flatten()
+}
+
+/// Compare two filesystem paths the way a caller means them: symlinks and `.`/
+/// `..` spellings do not create a second checkout. A path that cannot be
+/// canonicalised (e.g. one that does not exist yet) is compared as written.
+pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    real(a) == real(b)
+}
+
 /// The checkout of `repo` that currently has `branch` checked out, whatever
 /// shape the repository is: a conventional clone when that is the branch it sits
 /// on, or the linked worktree holding it in a bare-backed one. `None` when no
@@ -154,10 +274,28 @@ pub fn checkout_holding(
     repo: &Repo,
     branch: &str,
 ) -> Result<Option<PathBuf>> {
-    Ok(repository_worktree_for_branch(
-        &repository_of(ws, project, repo)?,
-        branch,
-    ))
+    let git = repository_of(ws, project, repo)?;
+    let main = git.main_worktree();
+    for (index, wt) in git.worktrees().into_iter().enumerate() {
+        if !wt.is_live() || wt.branch.as_deref() != Some(branch) {
+            continue;
+        }
+        // `git worktree list` reports a submodule's main worktree as its
+        // git-dir, so index 0 still needs the working-tree correction here.
+        let path = if index == 0 {
+            main.clone().unwrap_or_else(|| wt.path.clone())
+        } else {
+            wt.path.clone()
+        };
+        let candidate = Worktree {
+            path: path.clone(),
+            ..wt
+        };
+        if worktree_belongs_to(ws, project, repo, &candidate) {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
 }
 
 /// The checkout `repo`'s working-tree work runs in when no branch selects one:
@@ -177,7 +315,20 @@ pub fn current_checkout(ws: &Workspace, project: &Project, repo: &Repo) -> Resul
         let here = Repository::new(cwd);
         if same_repository(&repository, &here) {
             if let Some(top) = here.toplevel() {
-                return Ok(Some(top));
+                let candidate = Worktree {
+                    path: top.clone(),
+                    branch: here.current_branch(),
+                    ..Default::default()
+                };
+                // A detached checkout has no branch to attribute, but it is
+                // still the caller's identity checkout: returning it lets the
+                // branch query fail honestly instead of borrowing a sibling's
+                // branch. An attached one must be placed by this repo's strategy.
+                if candidate.branch.is_none() || worktree_belongs_to(ws, project, repo, &candidate)
+                {
+                    return Ok(Some(top));
+                }
+                return Ok(None);
             }
         }
     }
@@ -277,7 +428,7 @@ fn resolve_declared_worktree_dir(
     scoped.set("repo", repo_value(owner_project, owner_repo.name()));
     let primary = primary_path(ws, owner_project, owner_repo)?;
     scoped.set("repo.path", Value::from(primary.display().to_string()));
-    let rendered = match scoped.render(tpl) {
+    let rendered = match scoped.render_path(tpl) {
         Ok(path) => path,
         Err(error) if branch.is_none() && missing_branch_binding(&error) => {
             return Ok(None);
@@ -403,10 +554,7 @@ fn repository_of(ws: &Workspace, project: &Project, repo: &Repo) -> Result<Repos
 fn same_repository(a: &Repository, b: &Repository) -> bool {
     a.git_common_dir()
         .zip(b.git_common_dir())
-        .is_some_and(|(a, b)| {
-            let real = |p: PathBuf| std::fs::canonicalize(&p).unwrap_or(p);
-            real(a) == real(b)
-        })
+        .is_some_and(|(a, b)| same_path(&a, &b))
 }
 
 fn repository_worktree_for_branch(git: &Repository, branch: &str) -> Option<PathBuf> {

@@ -827,9 +827,22 @@ impl Repository {
     /// commits are only ever added, so an `update` cannot discard local work, and
     /// a branch that has genuinely diverged says so instead of being silently
     /// reset.
+    ///
+    /// A dry run does not perform the fetch that would create `target`, so an
+    /// unresolvable target is planned against its ref name rather than treated as
+    /// an error: the printed `update-ref` is exactly what the real run executes
+    /// once the fetch has landed. A target that *is* present still gets the
+    /// non-fast-forward check, and a real run always resolves it before writing.
     pub fn fast_forward_branch(&self, branch: &str, target: &str) -> Result<(), GitError> {
         let refname = format!("refs/heads/{branch}");
         let Some(target_oid) = self.rev_parse(target) else {
+            if crate::log::is_dry_run() {
+                return self.capture(
+                    format!("advance {branch} to {target}"),
+                    &["update-ref", &refname, target],
+                    false,
+                );
+            }
             return Err(GitError::Failed {
                 operation: format!("fast-forward {branch}"),
                 message: format!("'{target}' does not name a commit"),
@@ -1174,6 +1187,39 @@ mod tests {
 
         // A commit with no submodules yields nothing (not an error).
         assert!(repo.gitlinks("HEAD~1").is_empty());
+    }
+
+    /// A sibling checkout can leave `update` with no checkout holding the branch,
+    /// so it plans a ref advance. A dry run skips the fetch that would create the
+    /// tracking ref; planning must still succeed, against the ref name, without
+    /// moving anything. A real run keeps the hard error for a target that does not
+    /// exist.
+    #[test]
+    fn a_dry_run_plans_a_fast_forward_whose_target_the_skipped_fetch_would_create() {
+        let _guard = crate::log::test_flag_guard();
+        let dir = init_repo();
+        let repo = Repository::new(dir.path());
+        let before = repo.rev_parse("main").unwrap();
+
+        crate::log::init(false, true);
+        let planned = repo.fast_forward_branch("main", "origin/main");
+        crate::log::init(false, false);
+
+        assert!(
+            planned.is_ok(),
+            "a dry run must not require the fetched ref: {planned:?}"
+        );
+        assert_eq!(
+            repo.rev_parse("main").as_deref(),
+            Some(before.as_str()),
+            "a dry run must not move the branch"
+        );
+
+        let err = repo.fast_forward_branch("main", "origin/main").unwrap_err();
+        assert!(
+            err.to_string().contains("does not name a commit"),
+            "a real run must still refuse an unresolvable target: {err}"
+        );
     }
 
     #[test]

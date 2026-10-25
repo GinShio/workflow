@@ -196,7 +196,7 @@ pub fn resolve_paths(
     let build = &project.repos[&build_repo];
     let focused = &project.repos[&focus];
     let source_dir = match &build.decl.source_dir {
-        Some(tpl) => PathBuf::from(ctx.render(tpl)?),
+        Some(tpl) => PathBuf::from(ctx.render_path(tpl)?),
         None => work_dir.clone(),
     };
     ctx.set("source_dir", Value::from(source_dir.display().to_string()));
@@ -207,7 +207,7 @@ pub fn resolve_paths(
         .or(build.decl.build_dir.as_ref());
     let build_dir = match (input.build_dir, build_template) {
         (Some(dir), _) => Some(dir.to_path_buf()),
-        (None, Some(tpl)) => Some(PathBuf::from(ctx.render(tpl)?)),
+        (None, Some(tpl)) => Some(PathBuf::from(ctx.render_path(tpl)?)),
         (None, None) => None,
     };
     if let Some(dir) = &build_dir {
@@ -220,7 +220,7 @@ pub fn resolve_paths(
         .or(build.decl.install_dir.as_ref());
     let install_dir = match (input.install_dir, install_template) {
         (Some(dir), _) => Some(dir.to_path_buf()),
-        (None, Some(tpl)) => Some(PathBuf::from(ctx.render(tpl)?)),
+        (None, Some(tpl)) => Some(PathBuf::from(ctx.render_path(tpl)?)),
         (None, None) => None,
     };
     if let Some(dir) = &install_dir {

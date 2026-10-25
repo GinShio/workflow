@@ -7,11 +7,11 @@ use clap::Args;
 use wits_build::backend_for;
 use wits_core::git;
 use wits_project::{
-    anchor_of, layout, resolve_plan, resolve_target, value_to_string, DevenvOp, Project, Workspace,
+    anchor_of, layout, resolve_plan, value_to_string, DevenvOp, Project, Workspace,
     DEVENV_SEPARATOR,
 };
 
-use super::common::{branch_or_current, paths_input, plan_for_query};
+use super::common::{branch_or_current, paths_input, plan_for_query, resolve_repo};
 use crate::cmd::identity::ProfileArgs;
 
 #[derive(Debug, Args)]
@@ -39,8 +39,8 @@ pub(super) fn run(ws: &Workspace, args: &InfoArgs, profile: &ProfileArgs) -> Res
     if !args.get.is_empty() {
         return get_paths(ws, args, profile);
     }
-    let project = resolve_target(ws, args.target.as_deref())?;
-    describe(ws, project, profile)
+    let (project, repo) = resolve_repo(ws, args.target.as_deref(), profile.focus.as_deref())?;
+    describe(ws, project, &repo, profile)
 }
 
 /// `info --get <path>…`: one resolved value per path, one line each, in the
@@ -90,17 +90,16 @@ fn get_paths(ws: &Workspace, args: &InfoArgs, profile: &ProfileArgs) -> Result<(
 /// make visible; showing only the resolved form hides the declaration that
 /// produced it, and only the template hides everything the profile contributes.
 /// Resolution still needs a branch, so that section is what degrades when none
-/// can be discovered — the templates are always printed.
-fn describe(ws: &Workspace, project: &Project, profile: &ProfileArgs) -> Result<()> {
+/// can be discovered — the templates are always printed. A path target resolves
+/// to the repo containing it, exactly as `--get` does, so the description and a
+/// projection out of the same plan cannot disagree about which repo is meant.
+fn describe(ws: &Workspace, project: &Project, focus: &str, profile: &ProfileArgs) -> Result<()> {
     println!("project: {}", project.key());
     println!("  source:       {}", project.source().display());
     if let Some(org) = project.org() {
         println!("  org:          {org}");
     }
-    println!(
-        "  focus:        {}",
-        project.focus_name(profile.focus.as_deref())
-    );
+    println!("  focus:        {focus}");
     if let Some(bs) = project.settings().build_system {
         println!("  build_system: {}", bs.as_str());
     }
@@ -165,9 +164,11 @@ fn describe(ws: &Workspace, project: &Project, profile: &ProfileArgs) -> Result<
         if let Some(mb) = &repo.decl().main_branch {
             println!("      main_branch   {mb}");
         }
-        // Declared only: the default in-place is what a repo without a
-        // declaration behaves as, and the old report said nothing about it.
-        if repo.decl().strategy != wits_project::BranchStrategy::InPlace {
+        // Report what the owning project declared, including an explicit
+        // `in-place`: a repo that writes the default is stating an intent, and
+        // leaving the line out would hide it. A repo that declares nothing keeps
+        // the line out, since its behaviour is the default.
+        if repo.decl().strategy_declared {
             let strategy = repo.decl().strategy.as_str();
             println!("      strategy      {strategy}");
         }
@@ -200,7 +201,6 @@ fn describe(ws: &Workspace, project: &Project, profile: &ProfileArgs) -> Result<
     // branch), but what the file says never is. Read with the same
     // focus-over-anchor precedence `resolve` applies, so what is printed is the
     // template that would actually be used and not merely the one nearest to hand.
-    let focus = project.focus_name(profile.focus.as_deref());
     let build_repo = anchor_of(project, focus);
     let anchor = project.repo(&build_repo).context("repo not found")?;
     let focused = project.repo(focus).context("repo not found")?;
@@ -242,14 +242,12 @@ fn describe(ws: &Workspace, project: &Project, profile: &ProfileArgs) -> Result<
         println!("resolved: <no branch discovered — pass --branch to resolve>");
         return Ok(());
     };
+    let mut resolved = profile.to_profile();
+    resolved.focus = Some(focus.to_owned());
     let plan = resolve_plan(
         ws,
         project,
-        &paths_input(
-            &profile.to_profile(),
-            Some(&branch),
-            profile.work_dir.as_deref(),
-        ),
+        &paths_input(&resolved, Some(&branch), profile.work_dir.as_deref()),
     )?;
     let identity = plan
         .paths
