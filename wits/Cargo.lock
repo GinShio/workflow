@@ -1340,8 +1340,8 @@ dependencies = [
  "wits-actions",
  "wits-build",
  "wits-core",
+ "wits-crypto",
  "wits-project",
- "wits-util",
 ]
 
 [[package]]
@@ -1382,6 +1382,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "wits-crypto"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "argon2",
+ "base64",
+ "blake2",
+ "chacha20poly1305",
+ "pbkdf2",
+ "rand",
+ "sha2",
+ "sha3",
+ "thiserror",
+]
+
+[[package]]
 name = "wits-project"
 version = "0.1.0"
 dependencies = [
@@ -1410,23 +1426,6 @@ dependencies = [
  "similar",
  "tempfile",
  "toml",
- "wits-core",
-]
-
-[[package]]
-name = "wits-util"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "argon2",
- "base64",
- "blake2",
- "chacha20poly1305",
- "pbkdf2",
- "rand",
- "sha2",
- "sha3",
- "thiserror",
  "wits-core",
 ]
 

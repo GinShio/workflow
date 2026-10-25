@@ -32,7 +32,7 @@ use clap::Args;
 
 use wits_core::config::Resolver;
 use wits_core::git::Repository;
-use wits_util::crypto::{
+use wits_crypto::crypto::{
     self, CipherAlgorithm, DecryptOptions, HashAlgorithm, KdfAlgorithm, KdfParams, SaltMode,
     SealOptions, Sealed, SALT_SIZE,
 };

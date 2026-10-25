@@ -2,8 +2,9 @@
 //! command tree.
 //!
 //! The collection grows one subcommand at a time. Keeping everything in one
-//! binary (rather than a pile of scripts) buys a shared library ([`wits_util`]),
-//! consistent flags, and a single thing to build and put on `$PATH`. The
+//! binary (rather than a pile of scripts) buys a shared floor ([`wits_core`])
+//! and project/build/action layers, consistent flags, and a single thing to
+//! build and put on `$PATH`. The
 //! built-ins are `transcrypt`, `stack`, `review`, `worktree`, `project`, `build`,
 //! `devenv`, `update`, and `dotfiles`; adding one is a module under `cmd/` and a
 //! match arm below.
@@ -17,7 +18,7 @@
 //! Anything that is *not* a built-in — `wits foo` where `foo` is unknown — is
 //! dispatched git-style to a `wits-foo` executable on `$PATH`. That is the whole
 //! plugin system: a plugin is any executable named `wits-<name>`, in any
-//! language, optionally sharing this crate's [`wits_util`] floor. `wits help`
+//! language, optionally sharing the [`wits_core`] floor. `wits help`
 //! lists the built-ins and the plugins it finds on `$PATH`.
 
 use std::ffi::OsString;

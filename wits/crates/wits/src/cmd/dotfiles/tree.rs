@@ -231,7 +231,7 @@ pub struct Target {
 /// neither.
 fn read_toml<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    if wits_util::crypto::is_encrypted(&bytes) {
+    if wits_crypto::crypto::is_encrypted(&bytes) {
         return Ok(None);
     }
     let text = String::from_utf8(bytes)

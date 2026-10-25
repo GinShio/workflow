@@ -5,7 +5,7 @@ members = [
     "crates/wits-project",
     "crates/wits-build",
     "crates/wits-actions",
-    "crates/wits-util",
+    "crates/wits-crypto",
     "crates/wits",
     "crates/wits-scaffold",
 ]
@@ -41,10 +41,10 @@ base64 = "0.22"
 rand = "0.8"
 toml = "0.8"
 tempfile = "3"
-# The one template engine in the tree. `wits_util::template` wraps it for config
-# resolution (lazy dotted paths over a context whose values are themselves
-# templates) and the scaffold plugin adds its own filters to the same base, so a
-# template reads the same wherever it is written.
+# The one template engine in the tree. `wits_core::jinja` is the language;
+# `wits-project` resolves config against it (lazy dotted paths over a context
+# whose values are themselves templates) and the scaffold plugin adds its own
+# filters to the same base, so a template reads the same wherever it is written.
 minijinja = "2"
 regex = "1"
 # Unified diffs that `git apply` accepts. The edits are pure insertions at known
@@ -57,4 +57,4 @@ wits-core = { path = "crates/wits-core" }
 wits-project = { path = "crates/wits-project" }
 wits-build = { path = "crates/wits-build" }
 wits-actions = { path = "crates/wits-actions" }
-wits-util = { path = "crates/wits-util" }
+wits-crypto = { path = "crates/wits-crypto" }

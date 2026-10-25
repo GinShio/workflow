@@ -1,16 +1,15 @@
 [package]
-name = "wits-util"
+name = "wits-crypto"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Mid-migration home of crypto"
+description = "Authenticated encryption for wits's transcrypt filters and dotfiles overlays"
 
 [lib]
-name = "wits_util"
+name = "wits_crypto"
 path = "src/lib.rs"
 
 [dependencies]
-wits-core.workspace = true
 thiserror.workspace = true
 aes-gcm.workspace = true
 chacha20poly1305.workspace = true
