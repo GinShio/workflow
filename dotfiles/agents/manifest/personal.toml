@@ -4,8 +4,8 @@ codex  = 'openrouter'
 pi     = 'openrouter'
 
 [variables.agents.model.openrouter]
-default     = "z-ai/glm-5.3-flash"
-turing      = "z-ai/glm-5.3-flash"
-wintermute  = "z-ai/glm-5.3-flash"
-neuromancer = "z-ai/glm-5.3-flash"
-subagent    = "z-ai/glm-5.3-flash"
+default     = "deepseek/deepseek-v4.1-flash-1017"
+turing      = "deepseek/deepseek-v4.1-flash-1017"
+wintermute  = "deepseek/deepseek-v4.1-flash-1017"
+neuromancer = "deepseek/deepseek-v4.1-flash-1017"
+subagent    = "deepseek/deepseek-v4.1-flash-1017"
