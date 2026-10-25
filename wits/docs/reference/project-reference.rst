@@ -144,6 +144,11 @@ Each verb's positional is a **name or a path**, mutually exclusive:
 * **omitted**: ``project`` covers every project; ``build``/``update`` operate
   on the project owning the current directory (a hard error if none does).
 
+For ``info``, ``hash``, and ``branch-build-dirs``, a path selects the
+**path-derived repo** (the one containing it) and a name selects the project's
+focus. ``build`` and ``devenv`` always use the project focus. A ``--focus``
+override applies to a name target; a path already names the repo.
+
 Global flags
 ~~~~~~~~~~~~
 
@@ -1275,4 +1280,6 @@ module (``violations``, ``remedy``, ``sparse_patterns``) is the other read-only
 piece.
 
 The core resolves paths but never destroys them; the only side-effecting entry
-points are the actions in ``wits-actions``.
+points are the actions in ``wits-actions``. The crate graph, the module split
+inside ``wits-project``, and the guards that enforce them are in
+:doc:`project-containment`.

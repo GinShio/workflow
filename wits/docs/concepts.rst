@@ -16,8 +16,11 @@ Above the floor sit the layered libraries, each depending only on what is below
 it: ``wits-project`` (the registry, its declarations, and resolution),
 ``wits-build`` (the build-system backends), ``wits-actions`` (build, update,
 devenv), with ``wits-crypto`` as a leaf used by ``transcrypt`` and the dotfiles
-commands. Each is its own crate so a consumer links only what it needs — a
-read-only path query carries the project layer, not the build systems.
+commands. Each is its own crate so the dependency runs one way: a read-only
+path query carries the project layer and the floor, not the build systems.
+``wits-core`` still owns ``forge``, so a project-only consumer transitively
+links the forge's HTTP stack; that accepted cost and the guards that keep the
+project layer from calling it are in :doc:`reference/project-containment`.
 
 This chapter describes the floor: what each piece exists for, and the one
 decision in it that is not obvious — the kind of thing that is invisible in the

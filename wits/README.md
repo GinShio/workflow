@@ -35,7 +35,9 @@ the design notes.
 four libraries layered beneath them — `wits-core` (the OS/git/process floor and
 the git, forge, and worktree subsystems), `wits-project` (the project registry,
 its declarations, and resolution), `wits-build` (the build-system backends), and
-`wits-actions` (build, update, devenv), plus the `wits-crypto` leaf. **Meson**
+`wits-actions` (build, update, devenv), plus the `wits-crypto` leaf. The crate
+graph, the one-way dependency rules, and the guards that enforce them are in
+[Project containment](docs/reference/project-containment.rst). **Meson**
 drives the build and install; **cargo** does the Rust compilation underneath. That split is deliberate: some dependencies
 ship native-code build scripts (notably `ring`, via the forge's HTTPS client)
 that Meson's native Rust support cannot build without hand-porting, so cargo owns

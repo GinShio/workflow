@@ -557,6 +557,13 @@ in:
    project .            # details for that project
    project ~/src/hello  # by path, from anywhere
 
+A path selects the **repo containing it** for ``info``, ``hash``, and
+``branch-build-dirs``; a name selects the project's focus. ``build`` and
+``devenv`` always act on the project focus — a path only selects the project —
+so from a non-focus checkout ``info`` describes the repo you are standing in
+while ``build`` builds the focus. Run ``info`` with the project's name (or
+``--focus`` on a name target) to describe the focus instead.
+
 A token starting with ``.``, ``/``, or ``~`` is treated as a path; anything
 else is a name (``hello`` or ``mesa/lavapipe``). With no argument, ``project``
 lists every project while the other verbs use the current directory.

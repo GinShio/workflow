@@ -59,17 +59,46 @@ is named ``wits-<name>``, and depend on ``wits-core``:
    anyhow.workspace = true
    clap.workspace = true
 
-Add it to the workspace ``members`` in the root ``Cargo.toml``. Now
-``wits_core::{process, git, config, jinja, ...}`` are all available — the same
-subprocess/dry-run discipline, config-tree discovery, and Jinja dialect the core
-commands use. A plugin that renders text takes ``jinja::shared()``, or
+Add it to the workspace ``members`` in the root ``Cargo.toml``. The crate graph
+is one-way; a plugin should pick the lowest layer that answers its question:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
+
+   * - Crate
+     - What it gives a plugin
+   * - ``wits-core``
+     - The floor: ``process`` (dry-run), ``git``, ``config``, ``jinja``,
+       ``log``, ``pager``, ``editor``, ``time``, ``system``; plus the
+       ``forge``, ``remote``, ``trunk``, and ``worktree`` subsystems.
+   * - ``wits-project``
+     - The project registry: declarations, ``Workspace``/``Project``/``Repo``,
+       ``resolve_paths``/``resolve_plan``, ``layout``, ``remotes``, ``skip``,
+       ``check``, and ``Project::render_hook``. The template context stays
+       internal.
+   * - ``wits-build``
+     - The cmake/meson/cargo backends and the ``ToolchainInjector`` seam, for a
+       plugin that emits or plans build steps.
+   * - ``wits-actions``
+     - The ``build``/``update``/``devenv`` actions, for a plugin that drives a
+       project's lifecycle in process rather than by parsing CLI output.
+   * - ``wits-crypto``
+     - The authenticated-encryption packet format and KDFs.
+   * - ``wits``
+     - The CLI binary. A plugin does not depend on it; it is a peer command,
+       not a library.
+
+A plugin that only renders text takes ``jinja::shared()``, or
 ``jinja::environment()`` if it adds filters of its own. A plugin that resolves
-*wits project config* — where a value may itself be a template naming another
-value — depends on ``wits-project`` instead: its ``resolve_plan``/``resolve_paths``
-and ``Project::render_hook`` are the entry points, and the template context
-itself stays internal. Extend the workspace's ``meson.build`` to build and
-install the plugin binary the same way ``wits`` is, so ``meson install`` ships it
-alongside ``wits``.
+*wits project config* depends on ``wits-project``: ``resolve_plan``,
+``resolve_paths``, and ``Project::render_hook`` are the entry points, and the
+template context itself stays internal. Do not add a compatibility shim or make
+a lower layer depend on a higher one; the full rules and the guards are in
+:doc:`reference/project-containment`.
+
+Extend the workspace's ``meson.build`` to build and install the plugin binary
+the same way ``wits`` is, so ``meson install`` ships it alongside ``wits``.
 
 An out-of-tree plugin needs none of this: it only has to be named
 ``wits-<name>`` and be on ``$PATH``.

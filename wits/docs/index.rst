@@ -118,6 +118,7 @@ are written in the ``NAME`` form and also appear in the references as
    plugins
    scaffold
    reference/index
+   reference/project-containment
    reference/project-reference
    reference/project-design
    reference/stack-behavior

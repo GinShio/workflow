@@ -14,6 +14,9 @@ behaviour-for-users lives in :doc:`/commands/index`, precise contracts here.
 
    * - Document
      - What it is
+   * - :doc:`project-containment`
+     - The architecture charter: the crate graph, what each layer may depend
+       on, the project layer's two halves, and the guards that keep them.
    * - :doc:`project-reference`
      - The exhaustive reference for the project system: every configuration
        key, every CLI flag, the template language, and the resolution rules.

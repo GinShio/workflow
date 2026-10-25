@@ -135,7 +135,9 @@ the abstract seam — and the dependency still points one way: ``wits-build`` �
 ``wits-project``, ``wits-actions`` → both, and the ``wits`` binary → all of
 them, never back into a command. ``wits-core`` is the floor all of it stands on
 and names no project, build system, or backend; ``wits-crypto`` is a leaf beside
-it, used only by ``transcrypt`` and ``dotfiles``.
+it, used only by ``transcrypt`` and ``dotfiles``. The full crate graph, the
+module split inside ``wits-project``, and the guards that enforce them are in
+:doc:`project-containment`.
 
 The rule the layout follows: an action with its own top-level verb has no
 business reaching into ``project``'s private internals, only its public API.
@@ -1500,9 +1502,9 @@ The crate API (read-only, consumer-driven)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The core is a read-only library other tools query. It **resolves** paths but
-never destroys them — the only side-effecting entry points are the ``build``
-and ``update`` actions. The surface as it exists (the annotated form lives in
-:doc:`project-reference`):
+never destroys them — the only side-effecting entry points are the actions in
+``wits-actions`` (``build``, ``update``, and ``devenv``). The surface as it
+exists (the annotated form lives in :doc:`project-reference`):
 
 .. code-block:: rust
 
@@ -1524,8 +1526,8 @@ and ``update`` actions. The surface as it exists (the annotated form lives in
 
 The consumers are the ``wits`` commands themselves: ``wits-actions`` drives
 ``resolve_plan``/``resolve_paths`` and the ``project`` CLI drives
-``resolve_target``; git hooks and cleanup scripts lean on
-``layout::work_dir``/``build_dir`` resolution for an arbitrary branch. (``stack``'s base branch is the checkout's **trunk**, by the one rule
+``resolve_target``; git hooks and cleanup scripts lean on ``layout::work_dir``
+and ``resolve_paths`` (for ``build_dir``) for an arbitrary branch. (``stack``'s base branch is the checkout's **trunk**, by the one rule
 this registry, ``worktree`` and the git hooks all share: the owning repo's
 declared ``main_branch``, else the merge target's remote HEAD — see
 :doc:`stack-design`.)
