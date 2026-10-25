@@ -1233,42 +1233,46 @@ written, remaining repos are skipped, and the process exits non-zero.
 Crate API (read-only)
 ---------------------
 
-The real surface, for a consumer written against it — ``wits build``,
-``wits update``, and the ``wits project`` CLI are exactly such consumers:
+The real surface, for a consumer written against it — ``wits-actions``
+(``build``/``update``/``devenv``) and the ``wits project`` CLI are exactly such
+consumers:
 
 .. code-block:: rust
 
-   use wits_util::project::{resolve, resolve_target};
-   use wits_util::project::workspace::Workspace;
+   use wits_project::{resolve_target, HookPhase, Workspace};
 
    let ws = Workspace::load()?;                  // resolves the config root itself
    // Workspace::load_from(&root) reads one root outright.
-   ws.projects();                                // iterate every ProjectData
+   ws.projects();                                // iterate every Project
    ws.project("mesa/lavapipe")?;                 // by bare name or org/name
    ws.project_for_path(&path);                   // which project owns this checkout
    ws.repo_for_path(&path);                      // …and which repo of it
-   ws.toolchains();  ws.org_base(org);           // the shared registries
+   ws.repo_checkout_contains(&p, repo, &path);   // one named repo, borrows included
+   ws.toolchain(name);  ws.org(name);            // the shared registries
 
-   let p: &ProjectData = ...;                    // fields: name, org, source, project, repos
+   let p: &Project = ...;                        // owned: name, org, source, settings, repos
    p.key();  p.focus_name(override);             // org/name; override → project.focus → "main"
-   p.kind_of(name);  p.is_borrowed(name);        // inferred kind; from-borrow?
+   p.repo(name).map(Repo::kind);  p.is_borrowed(name);   // inferred kind; from-borrow?
    p.repo_abs_path(name)?;                       // the rendered, ~-expanded path
+   p.render_hook(&ws, repo, HookPhase::Update)?; // the one public hook entry
 
-   resolve::plan(&ws, p, &PlanInput::paths_only(&profile, branch))?;  // the full Plan
-   resolve::resolve_target(&ws, target)?;        // name | path | cwd → project
-   resolve::work_dir(&ws, p, repo, branch)?;     // a repo's checkout for a branch
-   resolve::current_branch(&ws, p, repo)?;       // via current_checkout (cwd-aware)
-   resolve::checkout_holding(&ws, p, repo, branch)?;
-   resolve::primary_checkout(&ws, p, repo)?;
-   resolve::repo_primary_path(&ws, p, repo)?;  resolve::nesting_root(&ws, p, repo)?;
-   resolve::identity_repo(p, focus);  resolve::anchor_of(p, focus);
+   resolve_plan(&ws, p, &BuildInput { .. })?;    // the full plan (BuildPlan)
+   resolve_paths(&ws, p, &PathInput { .. })?;    // checkout + output paths only
+   layout::work_dir(&ws, p, repo, branch)?;      // a repo's checkout for a branch
+   layout::current_branch(&ws, p, repo)?;        // via current_checkout (cwd-aware)
+   layout::checkout_holding(&ws, p, repo, branch)?;
+   layout::primary_checkout(&ws, p, repo)?;
+   layout::primary_path(&ws, p, repo)?;  layout::nesting_root(&ws, p, main)?;
+   identity_repo(p, focus);  anchor_of(p, focus);  target_branch(..)?;
 
-A ``Plan`` carries the whole resolution — ``focus``, ``build_repo``,
-``identity_repo``, ``strategy``, ``branch``, ``build_type``, ``generator``,
-``build_system``, ``toolchain``, ``work_dir``/``work_dirs``, ``source_dir``,
-``build_dir``/``install_dir``, and the accumulated ``LogicalConfig`` — so a
-caller reads rather than recomputes. The ``skip`` module (``violations``,
-``remedy``, ``sparse_patterns``) is the other read-only piece.
+A ``BuildPlan`` carries the whole resolution — ``paths`` (``focus``,
+``build_repo``, ``identity_repo``, ``strategy``, ``branch``, ``build_type``,
+``generator``, ``toolchain``, ``work_dir``/``work_dirs``, ``source_dir``,
+``build_dir``/``install_dir``), ``build_system``, the applied ``presets``, and
+the accumulated ``LogicalConfig`` — so a caller reads rather than recomputes.
+``get_scalar`` on either stage is the template query entry point. The ``skip``
+module (``violations``, ``remedy``, ``sparse_patterns``) is the other read-only
+piece.
 
 The core resolves paths but never destroys them; the only side-effecting entry
-points are the ``build`` and ``update`` actions.
+points are the actions in ``wits-actions``.

@@ -3,8 +3,10 @@
 Installation
 ============
 
-``wits`` is a Cargo workspace: the ``wits`` binary, the shared ``wits-util``
-library, and any plugin crates. Two build systems work together, by design.
+``wits`` is a Cargo workspace: the ``wits`` binary, the ``wits-scaffold`` plugin,
+and the libraries beneath them (``wits-core``, ``wits-project``, ``wits-build``,
+``wits-actions``, and the ``wits-crypto`` leaf). Two build systems work together,
+by design.
 **Meson** owns the build and install orchestration; **cargo** does the actual
 Rust compilation underneath. That split is not an accident. Some dependencies
 ship native-code build scripts (notably ``ring``, pulled in by the forge's HTTPS

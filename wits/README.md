@@ -31,9 +31,12 @@ the design notes.
 
 ## Build and install
 
-`wits` is a Cargo workspace (the `wits` binary + the shared `wits-util` library,
-plus any plugin crates). **Meson** drives the build and install; **cargo** does
-the Rust compilation underneath. That split is deliberate: some dependencies
+`wits` is a Cargo workspace: the `wits` binary, the `wits-scaffold` plugin, and
+four libraries layered beneath them — `wits-core` (the OS/git/process floor and
+the git, forge, and worktree subsystems), `wits-project` (the project registry,
+its declarations, and resolution), `wits-build` (the build-system backends), and
+`wits-actions` (build, update, devenv), plus the `wits-crypto` leaf. **Meson**
+drives the build and install; **cargo** does the Rust compilation underneath. That split is deliberate: some dependencies
 ship native-code build scripts (notably `ring`, via the forge's HTTPS client)
 that Meson's native Rust support cannot build without hand-porting, so cargo owns
 compilation while Meson owns install/packaging.
@@ -68,7 +71,7 @@ straight from the subcommand list, so a new built-in earns its symlink for free.
 When `foo` is not a built-in, `wits foo` execs a `wits-foo` executable found on
 `$PATH` — the convention git and cargo use. A plugin is therefore any executable
 named `wits-<name>`, in any language; an in-tree Rust plugin can additionally
-depend on `wits-util` to reuse the process/git/config/jinja floor rather than
+depend on `wits-core` to reuse the process/git/config/jinja floor rather than
 reinventing it. `wits help` lists the built-ins plus the plugins it discovers on
 `$PATH`. The full contract is in [Writing a wits plugin](docs/plugins.rst).
 

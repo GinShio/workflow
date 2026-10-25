@@ -7,7 +7,7 @@
 
    **Status: implemented.** This records the agreed shape and the *why*
    behind it; the code lives in ``crates/wits/src/cmd/review/`` and the review
-   half of ``crates/wits-util/src/forge/``. Where a detail evolved during
+   half of ``crates/wits-core/src/forge/``. Where a detail evolved during
    implementation the code is authoritative and this file has been kept in
    step (see the last section for what was deliberately scoped out).
 
@@ -139,10 +139,10 @@ Code organization
 
 ``review`` follows ``stack``'s floor/subsystem/cmd gradient and reuses that
 layer whole. The command's own logic lives under ``crates/wits/src/cmd/review/``;
-the git-hosting concerns it leans on stay in ``wits_util::forge`` and grow
+the git-hosting concerns it leans on stay in ``wits_core::forge`` and grow
 there. Concretely:
 
-* **Reuse unchanged:** ``wits_util::forge::remote`` (URL parsing,
+* **Reuse unchanged:** ``wits_core::forge::remote`` (URL parsing,
   the identities behind the roles), ``forge::detect`` (which platform, which
   token), the
   ``Repository`` git floor, the ``log``/``process`` dry-run machinery, and
@@ -1009,7 +1009,7 @@ Materialization — worktree or in-place
 
 To debug/build/fuzz/test an MR's code, the tool must put it somewhere runnable
 without clobbering your current work. ``checkout`` reuses the unified git
-module's worktree/checkout operations (``wits_util::git::Repository``) and
+module's worktree/checkout operations (``wits_core::git::Repository``) and
 supports both modes, chosen per invocation so neither is forced on the user:
 
 * **Worktree mode (default):** a **single** review worktree, a sibling of the

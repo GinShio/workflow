@@ -576,20 +576,20 @@ Where the logic lives
      - ``crates/wits/src/cmd/stack/anno.rs``
    * - attribute application (labels/assignees/reviewers)
      - ``crates/wits/src/cmd/stack/decorate.rs`` and
-       ``crates/wits-util/src/forge/*`` (``apply_attributes``)
+       ``crates/wits-core/src/forge/*`` (``apply_attributes``)
    * - structure edits (``rm``/``mv``/``edit``), ``remove`` splice
      - ``crates/wits/src/cmd/stack/tree.rs`` and
        ``crates/wits/src/cmd/stack/topology.rs`` (``remove``)
    * - where the forest is stored, placement by history
      - ``crates/wits/src/cmd/stack/store.rs``
    * - forge primitives + normalized MR + detection
-     - ``crates/wits-util/src/forge/``
+     - ``crates/wits-core/src/forge/``
    * - the role vocabulary + which remote holds each
-     - ``crates/wits-util/src/remote.rs``
+     - ``crates/wits-core/src/remote.rs``
    * - resolving roles from a declaration, and routing per checkout
-     - ``crates/wits-util/src/project/remotes.rs``
+     - ``crates/wits-project/src/remotes.rs``
    * - remote URL parsing + the identities behind the roles
-     - ``crates/wits-util/src/forge/remote.rs``
+     - ``crates/wits-core/src/forge/remote.rs``
 
 Invariants
 ----------

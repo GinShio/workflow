@@ -35,12 +35,12 @@ The contract
 There are no required flags, but honouring the shared conventions
 (``-n/--dry-run``, ``-v/--verbose``) makes a plugin feel native.
 
-Sharing the ``wits-util`` floor (in-tree Rust plugins)
+Sharing the ``wits-core`` floor (in-tree Rust plugins)
 ------------------------------------------------------
 
-A plugin written in Rust in this workspace can reuse the same library the
-built-ins use instead of reinventing it. Add a binary crate under ``crates/``
-whose binary is named ``wits-<name>``, and depend on ``wits-util``:
+A plugin written in Rust in this workspace can reuse the same floor the built-ins
+use instead of reinventing it. Add a binary crate under ``crates/`` whose binary
+is named ``wits-<name>``, and depend on ``wits-core``:
 
 .. code-block:: toml
 
@@ -55,18 +55,20 @@ whose binary is named ``wits-<name>``, and depend on ``wits-util``:
    path = "src/main.rs"
 
    [dependencies]
-   wits-util.workspace = true
+   wits-core.workspace = true
    anyhow.workspace = true
    clap.workspace = true
 
 Add it to the workspace ``members`` in the root ``Cargo.toml``. Now
-``wits_util::{process, git, config, jinja, ...}`` are all available — the same
+``wits_core::{process, git, config, jinja, ...}`` are all available — the same
 subprocess/dry-run discipline, config-tree discovery, and Jinja dialect the core
 commands use. A plugin that renders text takes ``jinja::shared()``, or
-``jinja::environment()`` if it adds filters of its own; one that resolves a
-config whose values reference each other wants ``project::context::Ctx``
-instead. Extend the workspace's ``meson.build`` to build and install
-the plugin binary the same way ``wits`` is, so ``meson install`` ships it
+``jinja::environment()`` if it adds filters of its own. A plugin that resolves
+*wits project config* — where a value may itself be a template naming another
+value — depends on ``wits-project`` instead: its ``resolve_plan``/``resolve_paths``
+and ``Project::render_hook`` are the entry points, and the template context
+itself stays internal. Extend the workspace's ``meson.build`` to build and
+install the plugin binary the same way ``wits`` is, so ``meson install`` ships it
 alongside ``wits``.
 
 An out-of-tree plugin needs none of this: it only has to be named

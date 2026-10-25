@@ -7,7 +7,7 @@
 
    **Status: implemented.** This records the agreed shape of the ``stack``
    tool and the *why* behind it; the code lives in
-   ``crates/wits/src/cmd/stack/`` and ``crates/wits-util/src/forge/``. Where a
+   ``crates/wits/src/cmd/stack/`` and ``crates/wits-core/src/forge/``. Where a
    detail has since evolved in code, the code is authoritative — the trait
    sketch below has been kept in sync.
 
@@ -157,14 +157,14 @@ Code organization (brief)
 -------------------------
 
 Not worth a diagram, but the one decision worth recording is the *floor* /
-*subsystem* gradient inside ``wits-util``. The floor holds foundational,
+*subsystem* gradient inside ``wits-core``. The floor holds foundational,
 near-zero-domain primitives — "how do we talk to the OS, to git, to config" —
 and stays minimal on principle: ``process``, ``log``, ``config`` (the
 resolver), and an **expanded ``git``**. Around it sit larger, self-contained
 subsystems a command *composes*: ``forge`` (the git-hosting REST layer, with
-URL parsing as ``forge::remote`` beside the detection it feeds) and — for the
-other commands — the project core, the build systems, and the worktree
-policy. The stack command's own tree logic (``topology``, ``resolution``) and
+URL parsing as ``forge::remote`` beside the detection it feeds), ``remote``
+(the role vocabulary), ``trunk``, and the worktree policy. The project core, the
+build systems, and the actions are separate crates above it. The stack command's own tree logic (``topology``, ``resolution``) and
 its verbs live under ``crates/wits/src/cmd/stack/``. ``forge`` keeps its
 name — it is the precise term for a git hosting platform and dodges the worse
 options (``remote`` collides with git's noun, ``platform``/``provider`` are
@@ -244,7 +244,7 @@ Base branch resolution
 
 The base branch is the checkout's **trunk**, by the one rule ``worktree``, the
 git hooks (through ``wits __trunk``) and this tool all share
-(``wits_util::project::trunk``): the ``main_branch`` the owning repo declares
+(``wits_core::trunk``): the ``main_branch`` the owning repo declares
 in the project registry, for a checkout a project owns; else the **merge
 target's** default branch (its remote HEAD); else the first existing of
 ``main``/``master``/``trunk``. Resolved once per run.
@@ -470,7 +470,7 @@ Transport is **direct REST** over ``ureq`` + ``serde_json`` — no dependency
 on an installed ``gh``/``glab``, and identical behaviour on every host. A
 small private helper inside ``forge`` does "method + path + json → json",
 applying the host's auth header; it does not become a public
-``wits_util::http`` because nothing else needs it yet.
+``wits_core::http`` because nothing else needs it yet.
 
 One client serves the whole process, so connections are reused, and a stalled
 read times out instead of hanging the run. It follows no redirect: ``ureq``

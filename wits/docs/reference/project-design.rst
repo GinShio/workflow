@@ -103,35 +103,39 @@ Library shape — core plus actions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The CLI grouping is *not* the code grouping, and it is *also* not the same as
-the crate-module grouping. ``project``'s read-only **core** (``model``,
-``workspace``, ``resolve``, ``git``) is a self-contained subsystem, so it
-lives under ``util`` as ``wits_util::project``, not inside a command; the
-build systems live beside it as ``wits_util::build_system``. The ``cmd`` layer
-is then thin CLI shells: ``cmd::project`` (describe / ``--check`` / path
-queries), ``cmd::build``, ``cmd::devenv``, and ``cmd::update`` all consume the
-core's public API — ``resolve_target``, ``resolve::plan``, ``git`` — the same
-way an external tool would::
+the crate-module grouping. ``project``'s read-only **core** (``decl``, ``load``,
+``workspace``, ``layout``, ``paths``, ``plan``) is a self-contained subsystem, so
+it lives in its own crate, ``wits-project``, not inside a command; the build
+systems live beside it in ``wits-build``. The ``cmd`` layer is then thin CLI
+shells: ``cmd::project`` (describe / ``--check`` / path queries), ``cmd::build``,
+``cmd::devenv``, and ``cmd::update`` all consume the libraries' public API — the
+same way an external tool would. The mutating actions themselves are not in the
+CLI at all: they are ``wits-actions``'::
 
-                            wits_util::project
-              (read-only core: model / workspace / resolve / git)
-                ▲             ▲             ▲                ▲
-                │             │             │                │ implements
-          cmd::project   cmd::build    cmd::update    wits_util::build_system
-          (info/check,       │                        (cmake/meson/cargo)
-           queries)          └──────────── also uses ─────────┘
+                       wits-project  <── implements ──  wits-build
+        (read-only core: decl / load / workspace /        (cmake/meson/cargo)
+         layout / paths / plan)                                ▲
+                ▲                                              │
+                └──────────────── wits-actions ────────────────┘
+                              (build / update / devenv)
+                                       ▲
+                        cmd::project, cmd::build, cmd::devenv,
+                        cmd::update  (thin CLI shells)
 
-The build systems live in ``wits_util::build_system``, beside the core rather
-than inside any command, because emitting build steps is a purely build-time
-concern the core never touches. The core has exactly one tie to them:
-translating a *selected toolchain* into a backend's native env/definitions at
-L0. That tie is a one-method seam, ``resolve::ToolchainInjector``, **defined
-by the core but implemented by each backend**; ``cmd::build`` resolves the
-chosen backend and hands it to ``resolve::plan`` as the injector, while
-path-only callers (the ``*-dir`` queries, ``info``) inject nothing. So
-``wits_util::project`` exposes no ``Backend``, ``Step``, ``EmitContext``, or
-build-system registry at all — only the abstract seam — and the dependency
-still points one way: ``build_system`` → ``project``, and each ``cmd`` shell →
-the core, never back into a command.
+The build systems live in ``wits-build``, beside the core rather than inside any
+command, because emitting build steps is a purely build-time concern the core
+never touches. The core has exactly one tie to them: translating a *selected
+toolchain* into a backend's native env/definitions at L0. That tie is a
+one-method seam, ``wits_project::ToolchainInjector``, **defined by the core but
+implemented by each backend**; the build action resolves the chosen backend and
+hands it to ``resolve_plan`` as the injector, while path-only callers (the
+``*-dir`` queries, ``info``) inject nothing. So ``wits-project`` exposes no
+``Backend``, ``Step``, ``EmitContext``, or build-system registry at all — only
+the abstract seam — and the dependency still points one way: ``wits-build`` →
+``wits-project``, ``wits-actions`` → both, and the ``wits`` binary → all of
+them, never back into a command. ``wits-core`` is the floor all of it stands on
+and names no project, build system, or backend; ``wits-crypto`` is a leaf beside
+it, used only by ``transcrypt`` and ``dotfiles``.
 
 The rule the layout follows: an action with its own top-level verb has no
 business reaching into ``project``'s private internals, only its public API.
@@ -1049,8 +1053,8 @@ Template engine (Jinja)
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 Config is **TOML only**. The dialect is the tree-wide one from
-``wits_util::jinja`` (MiniJinja in strict mode); the resolver over it is
-``project::context::Ctx``:
+``wits_core::jinja`` (MiniJinja in strict mode); the resolver over it is the
+project crate's internal ``context::Ctx``:
 
 * **``{{ path.to.var }}``** — dotted lookup over the context (tables by
   attribute, arrays by integer index). A whole-string single ``{{ … }}`` is
@@ -1298,19 +1302,19 @@ The backend abstraction — the only extension axis
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 A new build system is a new ``Backend`` impl plus registration. Backends live
-in ``wits_util::build_system``, never in the core; the core and the resolver
-name no concrete backend. The abstraction is split so the core depends only on
+in ``wits-build``, never in the core; the core and the resolver name no concrete
+backend. The abstraction is split so the core depends only on
 the half it needs — the L0 toolchain translation — via the core-owned
 ``ToolchainInjector`` seam:
 
 .. code-block:: rust
 
-   // in wits_util::project::resolve (core): the only backend-facing thing the pipeline sees
+   // in wits-project (core): the only backend-facing thing the pipeline sees
    trait ToolchainInjector {
        fn apply_toolchain(&self, tc: &Toolchain, cfg: &mut LogicalConfig);   // L0
    }
 
-   // in wits_util::build_system: the full build-time abstraction, a ToolchainInjector plus emission
+   // in wits-build: the full build-time abstraction, a ToolchainInjector plus emission
    trait Backend: ToolchainInjector {
        fn name(&self) -> &str;                        // "cmake" | "meson" | "cargo"
        fn steps(&self, ctx: &EmitContext) -> anyhow::Result<Vec<Step>>;
@@ -1508,19 +1512,20 @@ and ``update`` actions. The surface as it exists (the annotated form lives in
    ws.project_for_path(&path);               // reverse lookup: which project owns this checkout?
    ws.repo_for_path(&path);                  // …and which repo of it
 
-   let p: &ProjectData = ...;                // fields: name, org, source, project, repos
+   let p: &Project = ...;                    // owned: name, org, source, settings, repos
    p.focus_name(override);                   // override → project.focus → "main"
-   p.kind_of(name);  p.is_borrowed(name);
-   resolve::resolve_target(&ws, target)?;    // the one name/path/cwd funnel
-   resolve::plan(&ws, p, &PlanInput { .. })?;    // the full Plan
-   resolve::work_dir(&ws, p, repo, branch)?;     // a repo's checkout for a branch
-   resolve::current_branch(&ws, p, repo)?;       // what the path queries default through
-   skip::violations(&git, &repo.skip);           // the `--check` skip verification
+   p.repo("main").map(Repo::kind);  p.is_borrowed(name);
+   resolve_target(&ws, target)?;             // the one name/path/cwd funnel
+   resolve_plan(&ws, p, &BuildInput { .. })?;    // the full plan
+   resolve_paths(&ws, p, &PathInput { .. })?;    // checkout + output paths only
+   layout::work_dir(&ws, p, repo, branch)?;      // a repo's checkout for a branch
+   layout::current_branch(&ws, p, repo)?;        // what the path queries default through
+   skip::violations(&git, &repo.decl().skip);    // the `--check` skip verification
 
-The consumers are the ``wits`` commands themselves: ``build``/``update`` and
-the ``project`` CLI drive ``resolve::plan``/``resolve_target``; git hooks and
-cleanup scripts lean on ``work_dir``/``build_dir`` resolution for an arbitrary
-branch. (``stack``'s base branch is the checkout's **trunk**, by the one rule
+The consumers are the ``wits`` commands themselves: ``wits-actions`` drives
+``resolve_plan``/``resolve_paths`` and the ``project`` CLI drives
+``resolve_target``; git hooks and cleanup scripts lean on
+``layout::work_dir``/``build_dir`` resolution for an arbitrary branch. (``stack``'s base branch is the checkout's **trunk**, by the one rule
 this registry, ``worktree`` and the git hooks all share: the owning repo's
 declared ``main_branch``, else the merge target's remote HEAD — see
 :doc:`stack-design`.)

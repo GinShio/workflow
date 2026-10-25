@@ -3,15 +3,21 @@
 The shared floor
 ================
 
-Every command in ``wits`` stands on the same library, ``wits-util``
-(``crates/wits-util/``). Its modules are flat on purpose — you name
-``wits_util::process`` or ``wits_util::forge`` directly, no grouping layer in
+Every command in ``wits`` stands on the same floor, ``wits-core``
+(``crates/wits-core/``). Its modules are flat on purpose — you name
+``wits_core::process`` or ``wits_core::forge`` directly, no grouping layer in
 between — but there is a gradient. A thin *floor* holds the primitives every
-command leans on: running commands, talking to git, resolving config, doing
-crypto, logging, rendering templates, reading the clock. Around it sit larger,
-self-contained *subsystems* with real domain logic of their own: the project
-registry and resolver, the build systems, the forge layer, the worktree
-machinery.
+command leans on: running commands, talking to git, resolving config, logging,
+rendering templates, reading the clock. Around it sit larger, self-contained
+*subsystems* with real domain logic of their own: the forge layer, remote roles,
+trunk resolution, and the worktree machinery.
+
+Above the floor sit the layered libraries, each depending only on what is below
+it: ``wits-project`` (the registry, its declarations, and resolution),
+``wits-build`` (the build-system backends), ``wits-actions`` (build, update,
+devenv), with ``wits-crypto`` as a leaf used by ``transcrypt`` and the dotfiles
+commands. Each is its own crate so a consumer links only what it needs — a
+read-only path query carries the project layer, not the build systems.
 
 This chapter describes the floor: what each piece exists for, and the one
 decision in it that is not obvious — the kind of thing that is invisible in the
@@ -71,7 +77,7 @@ dry-run — are the module's three private primitives.
 
 The larger git-hosting concerns — parsing remote URLs, detecting a forge,
 talking to its MR API — deliberately do *not* live on this floor. They sit in
-``wits_util::forge`` (remote-URL parsing as ``forge::remote``, beside the forge
+``wits_core::forge`` (remote-URL parsing as ``forge::remote``, beside the forge
 detection it feeds), because they carry real domain logic of their own. The
 forge layer's shape is laid out in :doc:`reference/stack-design` and
 :doc:`reference/review-design`.
@@ -166,7 +172,7 @@ Template — one Jinja dialect, and the config resolver that uses it
 There is exactly one template engine in the tree: Jinja, via ``minijinja``. The
 scaffold plugin generates text and needs loops and conditionals; project config
 mostly needs dotted lookups. Those were once two engines, which meant two
-dialects to learn and two sets of edge cases to know. ``wits_util::jinja`` now
+dialects to learn and two sets of edge cases to know. ``wits_core::jinja`` now
 defines the single dialect — strict undefined behaviour, exact trailing bytes,
 and a handful of shared filters — and the scaffold extends that base with the
 two filters only a Vulkan/SPIR-V catalogue needs.
