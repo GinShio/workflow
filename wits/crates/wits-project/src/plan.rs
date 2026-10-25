@@ -6,6 +6,7 @@
 //! re-asserted or recomputed. Everything here is read-only.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -170,6 +171,19 @@ pub struct BuildInput<'a> {
     pub extra_install_args: &'a [String],
 }
 
+/// The absolute paths an install hook receives.
+///
+/// A hook is a shell command, so a relative prefix would be re-interpreted
+/// against the hook's own cwd (`install_dir`) and land somewhere else. The
+/// action refuses relative output paths rather than guessing a base the
+/// backends do not share.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallHookPaths {
+    pub source_dir: PathBuf,
+    pub build_dir: PathBuf,
+    pub install_dir: Option<PathBuf>,
+}
+
 /// A fully resolved build plan: everything `build` executes and `info` reports.
 pub struct BuildPlan {
     pub paths: ResolvedPaths,
@@ -195,6 +209,53 @@ impl BuildPlan {
             .get_scalar(path)
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
+
+    /// Render a template against the full plan context.
+    ///
+    /// `get_scalar` answers one value; a command string (an install hook, for
+    /// instance) may name several paths and needs the same context without the
+    /// scalar-only restriction. The context is the one every config field is
+    /// resolved against, so `{{build_dir}}`, `{{install_dir}}`, and
+    /// `{{repos.<name>.workdir}}` mean here what they mean in the file.
+    pub fn render(&self, template: &str) -> anyhow::Result<String> {
+        self.ctx
+            .render(template)
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// The absolute paths an install hook may name.
+    ///
+    /// Errors when there is no `build_dir` (there is nothing to install) or
+    /// when any resolved path is relative. A relative value would be resolved
+    /// against the hook's own cwd — `install_dir` — so it would point inside
+    /// itself instead of at the tree the backend built. `~` is not expanded
+    /// for output paths; use an absolute path or a Dotdrop variable.
+    pub fn install_hook_paths(&self) -> anyhow::Result<InstallHookPaths> {
+        let build_dir = self.paths.build_dir.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("install hooks require a build_dir; there is nothing to install")
+        })?;
+        Ok(InstallHookPaths {
+            source_dir: absolute_hook_path(&self.paths.source_dir, "source_dir")?,
+            build_dir: absolute_hook_path(build_dir, "build_dir")?,
+            install_dir: self
+                .paths
+                .install_dir
+                .as_deref()
+                .map(|path| absolute_hook_path(path, "install_dir"))
+                .transpose()?,
+        })
+    }
+}
+
+fn absolute_hook_path(path: &Path, field: &str) -> anyhow::Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    anyhow::bail!(
+        "install hooks require an absolute {field} (got '{}'); use an absolute path such as \
+         the one built from {{{{repos.main.workdir}}}}",
+        path.display()
+    )
 }
 
 /// Resolve one project into a full plan: [`resolve_paths`] then the layers.
@@ -649,6 +710,120 @@ anchor = "main"
                 "{path}"
             );
         }
+    }
+
+    /// A command string is not a scalar query: it may name several paths, and
+    /// it renders against the same context `--get` reads. Pin that an install
+    /// hook can name the resolved build/install dirs without re-deriving them.
+    #[test]
+    fn a_command_template_renders_against_the_plan_context() {
+        let body = r#"
+            [project]
+            build_system = "cmake"
+
+            [repos.main]
+            path = "/src/hello"
+            main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/_build"
+            install_dir = "/run/runner/hello"
+        "#;
+        let (_d, ws) = ws_with(body, "hello");
+        let project = ws.project("hello").unwrap();
+        let plan = resolve_plan(&ws, project, &paths_only(&Profile::default(), "main")).unwrap();
+
+        assert_eq!(
+            plan.render("sh {{repos.main.workdir}}/install.sh {{build_dir}} {{install_dir}}")
+                .unwrap(),
+            "sh /src/hello/install.sh /src/hello/_build /run/runner/hello"
+        );
+    }
+
+    /// A hook runs from one of these paths, so a relative value would be
+    /// resolved against itself rather than the tree the backend built. Pin the
+    /// absolute contract and the missing-build-dir case.
+    #[test]
+    fn install_hook_paths_are_absolute_and_need_a_build_dir() {
+        let absolute = r#"
+            [project]
+            build_system = "cmake"
+
+            [repos.main]
+            path = "/src/hello"
+            main_branch = "main"
+            build_dir = "/src/hello/_build"
+            install_dir = "/run/runner/hello"
+        "#;
+        let (_d, ws) = ws_with(absolute, "hello");
+        let project = ws.project("hello").unwrap();
+        let plan = resolve_plan(&ws, project, &paths_only(&Profile::default(), "main")).unwrap();
+        let paths = plan.install_hook_paths().unwrap();
+        assert_eq!(paths.source_dir, PathBuf::from("/src/hello"));
+        assert_eq!(paths.build_dir, PathBuf::from("/src/hello/_build"));
+        assert_eq!(paths.install_dir, Some(PathBuf::from("/run/runner/hello")));
+
+        let relative = r#"
+            [project]
+            build_system = "cmake"
+
+            [repos.main]
+            path = "/src/hello"
+            main_branch = "main"
+            build_dir = "_build"
+            install_dir = "/run/runner/hello"
+        "#;
+        let (_d, ws) = ws_with(relative, "hello");
+        let project = ws.project("hello").unwrap();
+        let plan = resolve_plan(&ws, project, &paths_only(&Profile::default(), "main")).unwrap();
+        let err = plan.install_hook_paths().unwrap_err().to_string();
+        assert!(err.contains("absolute build_dir"), "{err}");
+
+        let relative_install = r#"
+            [project]
+            build_system = "cmake"
+
+            [repos.main]
+            path = "/src/hello"
+            main_branch = "main"
+            build_dir = "/src/hello/_build"
+            install_dir = "_install"
+        "#;
+        let (_d, ws) = ws_with(relative_install, "hello");
+        let project = ws.project("hello").unwrap();
+        let plan = resolve_plan(&ws, project, &paths_only(&Profile::default(), "main")).unwrap();
+        let err = plan.install_hook_paths().unwrap_err().to_string();
+        assert!(err.contains("absolute install_dir"), "{err}");
+
+        let relative_source = r#"
+            [project]
+            build_system = "cmake"
+
+            [repos.main]
+            path = "/src/hello"
+            main_branch = "main"
+            source_dir = "src"
+            build_dir = "/src/hello/_build"
+            install_dir = "/run/runner/hello"
+        "#;
+        let (_d, ws) = ws_with(relative_source, "hello");
+        let project = ws.project("hello").unwrap();
+        let plan = resolve_plan(&ws, project, &paths_only(&Profile::default(), "main")).unwrap();
+        let err = plan.install_hook_paths().unwrap_err().to_string();
+        assert!(err.contains("absolute source_dir"), "{err}");
+
+        let no_build = r#"
+            [project]
+            build_system = "cmake"
+
+            [repos.main]
+            path = "/src/hello"
+            main_branch = "main"
+            install_dir = "/run/runner/hello"
+        "#;
+        let (_d, ws) = ws_with(no_build, "hello");
+        let project = ws.project("hello").unwrap();
+        let plan = resolve_plan(&ws, project, &paths_only(&Profile::default(), "main")).unwrap();
+        let err = plan.install_hook_paths().unwrap_err().to_string();
+        assert!(err.contains("require a build_dir"), "{err}");
     }
 
     /// Output paths are path templates: a whole-expression result that is a

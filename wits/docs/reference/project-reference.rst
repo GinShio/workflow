@@ -224,7 +224,8 @@ and ``--focus`` only.
        bypassing the branch strategy's ``worktree_dir``/in-place resolution.
        Everything (``build_dir``/``source_dir``/…) still anchors on it. The
        seam for building a checkout materialised elsewhere — a ``review
-       checkout`` worktree.
+       checkout`` worktree. An install hook requires the resulting source dir
+       to be absolute.
      - strategy-resolved
    * - ``--spec <K=V>``
      -
@@ -264,17 +265,27 @@ Build-only flags
      - Delete the build dir and configure fresh.
    * - ``--install``
      -
-     - Add an install step after building.
+     - Run the install phase after building. A declared
+       ``[repos.<name>.hooks] install`` replaces the backend's install step;
+       ``post_install`` then runs after whichever install ran. ``--uninstall``
+       is mutually exclusive. Install hooks require absolute
+       source/build/install paths (see `Hooks`_).
    * - ``--install-dir <DIR>``
      -
      - Override the resolved ``install_dir`` prefix (the backend's
-       install-prefix, e.g. cmake's ``CMAKE_INSTALL_PREFIX``). Affects
-       configure as well as install.
+       install-prefix, e.g. cmake's ``CMAKE_INSTALL_PREFIX``). It shapes
+       configure; cmake's install step also receives it as ``--prefix``, so the
+       files land under the new prefix even when the tree is already
+       configured. Paths baked at configure (RPATH, generated metadata) keep
+       the configured prefix, and Meson reads the prefix only at configure, so
+       reconfigure when those must move. An install hook requires an absolute
+       path.
    * - ``--build-dir <DIR>``
      -
      - Override the resolved ``build_dir``, ignoring the focus/anchor
        template — e.g. to build a ``review checkout`` in an isolated dir. The
-       symmetric partner of ``--install-dir``; verbatim, highest priority.
+       symmetric partner of ``--install-dir``; verbatim, highest priority. An
+       install hook requires an absolute path.
    * - ``--uninstall``
      -
      - Reverse an install (backend-driven). Mutually exclusive with a build.
@@ -1032,10 +1043,12 @@ Hooks
 ``[repos.<name>.hooks]`` — inline ``sh -c`` command strings, templated. A
 hook has to resolve to one string: a whole ``{{ … }}`` that yields a list, a
 map, or a boolean is an error naming the phase, not a script that runs as
-something else. Phases: ``clone`` / ``post_clone`` and ``pre_update`` / ``update`` /
-``post_update``. (The clone phase has no ``pre`` hook — the repo does not
-exist yet.) The bare phase name (``clone``, ``update``) overrides that
-phase's default action; ``pre_``/``post_`` add hooks around it.
+something else. Phases: ``clone`` / ``post_clone`` and ``pre_update`` /
+``update`` / ``post_update``, plus the build's ``install`` / ``post_install``.
+(The clone phase has no ``pre`` hook — the repo does not exist yet — and the
+install phase has no ``pre_install``.) The bare phase name (``clone``,
+``update``, ``install``) overrides that phase's default action; the declared
+``pre_*``/``post_*`` hooks add around it.
 
 **Hook cwd by phase**: a ``clone`` override runs in the **current working
 directory** (the repo's ``path`` does not exist yet, and ``git clone``
@@ -1044,6 +1057,47 @@ for worktree/hybrid, ``post_clone`` and update hooks run in the
 bootstrap/current ``main_branch`` worktree when it exists, otherwise update
 hooks fall back to the bare ``path``. A bare clone override must create its
 configured bootstrap worktree.
+
+``install`` and ``post_install`` are the **build's** install phases, not git
+lifecycle: they run only when ``build --install`` is given, after the build
+steps, and are read from the **focus** repo (``--focus``, else
+``project.focus``/``main``). A hook is always a command string, run with
+``sh -c``; to run a script, name it in the command (``sh /absolute/path``).
+A command that names a file is responsible for it: the shipped configs use
+``$HOME/.config/wits/project/install/``, so a ``WITS_PROJECT_CONFIG`` tree
+needs those scripts too. ``install`` replaces the backend's own install step —
+which is what lets a
+backend with no install step (cargo) be installed by a command — while
+``post_install`` runs after whichever install ran. A ``post_install`` without
+an ``install`` still needs the backend to support install (cargo does not;
+``project check`` reports it).
+
+Unlike the git phases, they render against the **full plan context**, so
+``{{build_dir}}``, ``{{install_dir}}``, ``{{source_dir}}``, ``{{build_type}}``,
+and ``{{branch.*}}`` are in scope. They run with the resolved ``install_dir``
+as cwd (created first; the source dir when none is declared) and receive
+``WITS_PROJECT``, ``WITS_SOURCE_DIR``, ``WITS_BUILD_DIR``,
+``WITS_BUILD_TYPE``, ``WITS_BRANCH`` (the raw branch name; attached builds
+only), and ``WITS_INSTALL_DIR`` (only when one resolved) in the environment.
+The command inherits the caller's environment followed by the build's declared
+``environment`` (org/project/preset/toolchain), so ``$VAR`` and
+``{{env.VAR}}`` agree; ``WITS_*`` is set last and wins.
+
+``source_dir``, ``build_dir``, and ``install_dir`` must be **absolute** when a
+hook is used: the hook's cwd is one of them, so a relative prefix would be
+re-resolved inside itself. A relative ``--build-dir``/``--install-dir``
+override is refused, and a relative ``--work-dir`` is refused when it makes the
+source dir (or a path built from it) relative; ``~`` is not expanded for output
+paths. ``project check`` reports these, plus an install hook with no
+``build_dir``.
+
+A declared ``install`` hook suppresses the backend install step;
+``--extra-install-args`` extend the backend's install command, so they have no
+target when a hook replaces it; the hook's own arguments and the ``WITS_*``
+environment are its inputs. When no ``install`` hook is declared,
+``post_install`` runs after the backend's install step and sees the plan's
+``install_dir``; make sure the backend installed there (a meson prefix change
+needs a reconfigure, as above). ``--uninstall`` does not run either hook.
 
 A non-zero exit fails fast.
 

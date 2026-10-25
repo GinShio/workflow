@@ -1,10 +1,15 @@
-//! Hook rendering: the one place a `[repos.*.hooks]` command is turned into a
-//! concrete shell string.
+//! Git lifecycle hook rendering: the place a `[repos.*.hooks]` clone/update
+//! command is turned into a concrete shell string.
 //!
-//! A hook template resolves against the repo's own namespace
+//! A git hook template resolves against the repo's own namespace
 //! ([`crate::context::context_for_repo`]), which for a borrowed repo is the
 //! **borrower's** project context — the hook runs where the repo is used, even
 //! though its text travelled from the owner.
+//!
+//! The same table also carries the build's `install`/`post_install` phases.
+//! They are deliberately not [`HookPhase`]s: they render against the full
+//! build plan and run from `wits build`, not from the git lifecycle; see
+//! `wits-actions::build`. A future phase must decide which side it belongs to.
 
 use anyhow::{bail, Context, Result};
 
@@ -12,7 +17,8 @@ use crate::context::{self, Ctx};
 use crate::decl::HooksDecl;
 use crate::workspace::{Project, Workspace};
 
-/// The lifecycle phase a hook belongs to.
+/// A **git lifecycle** phase. The build's install phases are not here: they
+/// resolve against the build plan and run from `wits build`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookPhase {
     Clone,

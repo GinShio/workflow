@@ -156,6 +156,14 @@ impl Backend for Cmake {
                 args.push("--config".into());
                 args.push(build_type_cmake(ctx.build_type).to_string());
             }
+            // The prefix is an install-time option too: an already-configured
+            // tree carries the CMAKE_INSTALL_PREFIX from its first configure,
+            // so a later `--install-dir` would otherwise be ignored by exactly
+            // the build it names.
+            if let Some(install) = ctx.install_dir {
+                args.push("--prefix".into());
+                args.push(install.display().to_string());
+            }
             args.extend(ctx.logical.extra_install_args.iter().cloned());
             steps.push(Step::new("Install", "cmake", args, ctx.source_dir));
         }
@@ -207,5 +215,48 @@ mod tests {
         assert!(cfg.definitions.iter().any(|(k, _)| k == "CMAKE_C_COMPILER"));
         // …and deliberately does *not* set CC/CXX/… in the environment.
         assert_eq!(cfg.env_entry("CC"), None);
+    }
+
+    fn install_step(install_dir: Option<&Path>) -> Step {
+        let logical = LogicalConfig::default();
+        let ctx = EmitContext {
+            source_dir: Path::new("/src"),
+            build_dir: Path::new("/build"),
+            install_dir,
+            build_type: "release",
+            generator: Some("Ninja Multi-Config"),
+            target: None,
+            logical: &logical,
+            mode: BuildMode::Auto,
+            install: true,
+        };
+        Cmake
+            .steps(&ctx)
+            .unwrap()
+            .into_iter()
+            .find(|step| step.description == "Install")
+            .expect("install step")
+    }
+
+    /// The resolved prefix must reach the install command itself, not only the
+    /// configure that created the cache; `--install-dir` names an existing tree
+    /// too.
+    #[test]
+    fn install_step_passes_the_resolved_prefix() {
+        let step = install_step(Some(Path::new("/run/runner/piglit")));
+        assert_eq!(step.program, "cmake");
+        let at = step
+            .args
+            .iter()
+            .position(|arg| arg == "--prefix")
+            .expect("--prefix");
+        assert_eq!(step.args[at + 1], "/run/runner/piglit");
+        assert!(step.args.iter().any(|arg| arg == "--config"), "{step:?}");
+    }
+
+    #[test]
+    fn install_step_without_a_prefix_leaves_cmake_to_its_cache() {
+        let step = install_step(None);
+        assert!(!step.args.iter().any(|arg| arg == "--prefix"), "{step:?}");
     }
 }

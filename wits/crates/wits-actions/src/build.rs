@@ -1,5 +1,11 @@
 //! The `wits build` action — resolve a plan, honour the branch strategy, run
-//! the backend's steps.
+//! the backend's steps, and run the install phase.
+//!
+//! The install phase is a declared command, not a backend step: a focus-repo
+//! `install` hook replaces the backend's install step, `post_install` runs
+//! after it, and both render against the plan and run from the install
+//! destination. Every hook is a shell command; a script is simply a command
+//! that names one (`sh /absolute/path/script`).
 //!
 //! Entirely built on `project`'s read-only core
 //! (`docs/reference/project-design.rst`, "Library shape — core plus actions";
@@ -35,8 +41,8 @@ use wits_core::git::{Repository, RestoreGuard};
 use wits_core::process::Command;
 use wits_project::layout;
 use wits_project::{
-    resolve_plan, BranchStrategy, BuildInput, BuildPlan, PathInput, Project, ToolchainInjector,
-    Workspace,
+    resolve_plan, BranchStrategy, BuildInput, BuildPlan, InstallHookPaths, PathInput, Project,
+    ToolchainInjector, Workspace,
 };
 
 use crate::Identity;
@@ -59,6 +65,17 @@ pub struct BuildOptions {
 pub struct BuildRequest {
     pub identity: Identity,
     pub options: BuildOptions,
+}
+
+/// The focus repo's install-phase hooks, already rendered against the plan.
+///
+/// Rendering eagerly, before the build steps, means a broken `{{…}}` fails
+/// before a long compile rather than after it. Nothing is rendered at all
+/// unless `--install` asked for this phase.
+#[derive(Default)]
+struct InstallHooks {
+    install: Option<String>,
+    post_install: Option<String>,
 }
 
 /// Run one build request: plan it, guard the branch it acts on, then run the
@@ -139,6 +156,29 @@ pub fn build(ws: &Workspace, project: &Project, request: &BuildRequest) -> Resul
         }
     };
 
+    // `--install` names the phase, and a declared `install` hook owns it: the
+    // backend is then not asked to install. That is what lets cargo — whose
+    // backend has no install step at all — install through the hook instead of
+    // failing the whole request. With no hook the backend's step runs as before.
+    let install = opts.install && opts.mode != BuildMode::Uninstall;
+    let hooks = if install {
+        install_hooks(project, &plan)?
+    } else {
+        InstallHooks::default()
+    };
+    if hooks.install.is_some() && !opts.extra_install_args.is_empty() {
+        log::warn!(
+            "--extra-install-args are ignored: the declared install hook replaces the backend \
+             install step"
+        );
+    }
+    if hooks.install.is_some() || hooks.post_install.is_some() {
+        // Refuse a relative/absent output path before a long build: the hook
+        // runs with one of these as cwd, so a relative value would resolve
+        // against itself rather than against the tree the backend built.
+        plan.install_hook_paths()?;
+    }
+
     let steps = be.steps(&EmitContext {
         source_dir: &plan.paths.source_dir,
         build_dir: &build_dir,
@@ -148,7 +188,7 @@ pub fn build(ws: &Workspace, project: &Project, request: &BuildRequest) -> Resul
         target: opts.target.as_deref(),
         logical: &plan.logical,
         mode: opts.mode,
-        install: opts.install,
+        install: install && hooks.install.is_none(),
     })?;
 
     for step in &steps {
@@ -163,11 +203,102 @@ pub fn build(ws: &Workspace, project: &Project, request: &BuildRequest) -> Resul
             bail!("{} failed (exit {code})", step.description);
         }
     }
+    // The install hooks run before the guard's restore: a hook may name a script
+    // in the source tree just built, which the restore would switch out.
+    if let Some(script) = &hooks.install {
+        let paths = plan.install_hook_paths()?;
+        run_install_hook(project, &plan, &paths, script, "install")?;
+    }
+    if let Some(script) = &hooks.post_install {
+        let paths = plan.install_hook_paths()?;
+        run_install_hook(project, &plan, &paths, script, "post_install")?;
+    }
+
     if let Some(guard) = guard {
         let checkout = guard.checkout().display().to_string();
         guard
             .finish()
             .with_context(|| format!("the build succeeded, but {checkout} was not restored"))?;
+    }
+    Ok(())
+}
+
+/// The focus repo's install hooks, rendered against the full plan context.
+///
+/// The install belongs to the thing being installed (the focus), not to the
+/// anchor it may source from; a project that focuses a subtree still declares
+/// its own installer.
+fn install_hooks(project: &Project, plan: &BuildPlan) -> Result<InstallHooks> {
+    let repo = project.repo(&plan.paths.focus).with_context(|| {
+        format!(
+            "focus repo '{}' is not defined in project '{}'",
+            plan.paths.focus,
+            project.key()
+        )
+    })?;
+    let hooks = &repo.decl().hooks;
+    Ok(InstallHooks {
+        install: hooks
+            .install
+            .as_deref()
+            .map(|t| plan.render(t))
+            .transpose()?,
+        post_install: hooks
+            .post_install
+            .as_deref()
+            .map(|t| plan.render(t))
+            .transpose()?,
+    })
+}
+
+/// Run one rendered install-phase hook.
+///
+/// cwd is the install destination (the source dir when none is declared), so a
+/// relative path in the command lands there. The paths are absolute by
+/// construction (`install_hook_paths`), and the command inherits the caller's
+/// environment followed by the plan's declared `environment` — the same values
+/// its `{{env.*}}` template resolved — with the plan's paths as `WITS_*` set
+/// last, so a script never has to re-resolve them.
+fn run_install_hook(
+    project: &Project,
+    plan: &BuildPlan,
+    paths: &InstallHookPaths,
+    script: &str,
+    phase: &str,
+) -> Result<()> {
+    let cwd = paths.install_dir.as_deref().unwrap_or(&paths.source_dir);
+    // A dry run must not leave an empty destination behind; the print-only
+    // command is the visible result.
+    if !wits_core::log::is_dry_run() {
+        std::fs::create_dir_all(cwd)
+            .with_context(|| format!("creating install directory {}", cwd.display()))?;
+    }
+
+    log::info!("hook {phase}: {script}");
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c".to_string(), script.to_owned()]);
+    cmd.current_dir(cwd);
+    for (k, v) in &plan.logical.environment {
+        cmd.env(k, v);
+    }
+    cmd.env("WITS_PROJECT", project.key());
+    cmd.env("WITS_SOURCE_DIR", paths.source_dir.display().to_string());
+    cmd.env("WITS_BUILD_DIR", paths.build_dir.display().to_string());
+    cmd.env("WITS_BUILD_TYPE", plan.paths.build_type.clone());
+    match &paths.install_dir {
+        Some(dir) => cmd.env("WITS_INSTALL_DIR", dir.display().to_string()),
+        // A caller's exported value must not stand in for a path this plan did
+        // not resolve; an unset variable is the honest answer.
+        None => cmd.env_remove("WITS_INSTALL_DIR"),
+    };
+    match &plan.paths.branch {
+        Some(branch) => cmd.env("WITS_BRANCH", branch.raw.clone()),
+        None => cmd.env_remove("WITS_BRANCH"),
+    };
+
+    let code = cmd.status()?;
+    if code != 0 {
+        bail!("{phase} hook failed (exit {code})");
     }
     Ok(())
 }
@@ -457,6 +588,47 @@ cc = "cc-from-toolchain"
         };
         let planned = plan(&ws, profile, &BuildOptions::default());
         assert_eq!(planned.logical.env_entry("CC"), Some("cc-from-toolchain"));
+    }
+
+    /// The install hooks belong to the focus repo (the thing being installed),
+    /// and they render against the full plan context, not the per-repo context
+    /// the git hooks use. Pin both at once: only the plan binds `install_dir`.
+    #[test]
+    fn install_hooks_render_against_the_plan_and_belong_to_the_focus() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("app");
+        let install = dir.path().join("runner/app");
+        std::fs::write(
+            dir.path().join("app.toml"),
+            format!(
+                r#"
+[project]
+build_system = "meson"
+
+[repos.main]
+path = "{}"
+main_branch = "main"
+build_dir = "{{{{repos.main.workdir}}}}/_build"
+install_dir = "{}"
+
+[repos.main.hooks]
+install = "sh {{{{install_dir}}}}/install.sh"
+post_install = "sh {{{{install_dir}}}}/fixup.sh"
+"#,
+                src.display(),
+                install.display()
+            ),
+        )
+        .unwrap();
+        let ws = Workspace::load_from(dir.path()).unwrap();
+        let project = ws.project("app").unwrap();
+        let planned = plan(&ws, Profile::default(), &BuildOptions::default());
+
+        let hooks = install_hooks(project, &planned).unwrap();
+        let install_script = format!("sh {}/install.sh", install.display());
+        let fixup_script = format!("sh {}/fixup.sh", install.display());
+        assert_eq!(hooks.install.as_deref(), Some(install_script.as_str()));
+        assert_eq!(hooks.post_install.as_deref(), Some(fixup_script.as_str()));
     }
 
     /// Modes that are not a plain (re)build are never trust-eligible either:

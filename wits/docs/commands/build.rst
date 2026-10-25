@@ -99,17 +99,27 @@ build.
      - Delete the build dir and configure fresh.
    * - ``--install``
      -
-     - Add an install step after building.
+     - Run the install phase after building. A declared
+       ``[repos.<name>.hooks] install`` replaces the backend's install step;
+       ``post_install`` then runs after whichever install ran. ``--uninstall``
+       is mutually exclusive. Install hooks require absolute
+       source/build/install paths.
    * - ``--install-dir <DIR>``
      -
      - Override the resolved ``install_dir`` prefix (the backend's
-       install-prefix, e.g. cmake's ``CMAKE_INSTALL_PREFIX``). Affects
-       configure as well as install.
+       install-prefix, e.g. cmake's ``CMAKE_INSTALL_PREFIX``). It shapes
+       configure; cmake's install step also receives it as ``--prefix``, so the
+       files land under the new prefix even when the tree is already
+       configured. Paths baked at configure (RPATH, generated metadata) keep
+       the configured prefix, and Meson reads the prefix only at configure, so
+       reconfigure when those must move. An install hook requires an absolute
+       path.
    * - ``--build-dir <DIR>``
      -
      - Override the resolved ``build_dir``, ignoring the focus/anchor template
        — e.g. to build a ``review checkout`` in an isolated dir. The symmetric
-       partner of ``--install-dir``; verbatim, highest priority.
+       partner of ``--install-dir``; verbatim, highest priority. An install
+       hook requires an absolute path.
    * - ``--uninstall``
      -
      - Reverse an install (backend-driven). Mutually exclusive with a build.
@@ -163,8 +173,17 @@ modes are mutually exclusive:
        cmake's ``install_manifest.txt``; cargo unsupported) — never a
        recursive delete, because an install prefix may be shared
 
-``--install`` adds an install step to a build; it composes with ``auto`` and
-the compile modes.
+``--install`` runs the install phase after building; it composes with
+``auto`` and the compile modes. A project may take the phase over with the
+focus repo's ``[repos.<name>.hooks] install``: that command replaces the
+backend's install step, and ``post_install`` runs after it. This is how a build
+system with no install step of its own — cargo — is still installed: the hook,
+not the backend, stages the result. A hook is always a command string; to run a
+script, name it in the command. It renders against the build plan (so
+``{{build_dir}}``/``{{install_dir}}`` are in scope), runs with the install
+directory as cwd, and gets the resolved paths in ``WITS_*``; source, build, and
+install paths must be absolute. The full contract is in
+:doc:`/reference/project-reference`.
 
 Backends
 --------

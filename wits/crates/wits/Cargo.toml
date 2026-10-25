@@ -57,3 +57,7 @@ path = "tests/cmd/stack.rs"
 [[test]]
 name = "cmd_devenv"
 path = "tests/cmd/devenv.rs"
+
+[[test]]
+name = "cmd_build"
+path = "tests/cmd/build.rs"

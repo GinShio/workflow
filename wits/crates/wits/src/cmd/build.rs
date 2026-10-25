@@ -32,8 +32,10 @@ pub struct BuildArgs {
     /// Reverse an install (backend-driven).
     #[arg(long)]
     pub uninstall: bool,
-    /// Install after building.
-    #[arg(long)]
+    /// Install after building (a declared `install` hook replaces the backend's
+    /// install step; install hooks require absolute source/build/install
+    /// paths).
+    #[arg(long, conflicts_with = "uninstall")]
     pub install: bool,
     /// Build a specific target.
     #[arg(short = 't', long = "target")]

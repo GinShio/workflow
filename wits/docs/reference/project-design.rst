@@ -433,6 +433,19 @@ The hook contract (settled, and the reason it is simple):
   returns the repo to its original branch, a log line is written, and the
   program exits non-zero. State is never left half-switched.
 
+The build's install phase reuses the same *declared command replaces the
+default* rule without becoming a git lifecycle: the **focus repo's** ``install``
+replaces the backend's install step under ``build --install``, and
+``post_install`` runs after it. A hook is always a command string (``sh -c``);
+a script is named in that command. The differences from git hooks are
+deliberate: they render against the plan context
+(``{{build_dir}}``/``{{install_dir}}``), run with the install directory as cwd,
+require absolute source/build/install paths, and receive the plan's paths in
+``WITS_*`` on top of the caller's and the build's declared environment. A build
+system with no install step (cargo) declares ``install``; the registry still
+does not model the file list, which stays in the command. That is the seam for
+a harness-owned layout, not a new layout model in the registry.
+
 Branch strategy — in-place, worktree, and hybrid
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1377,7 +1390,9 @@ Modes, install, and uninstall
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``BuildMode`` is ``auto | config-only | build-only | reconfig | uninstall``.
-``--install`` adds an install step to a build. ``uninstall`` is its own mode
+``--install`` runs the install phase after the build — the backend's step, or
+a declared ``install`` hook that replaces it (see "Lifecycle and hooks").
+``uninstall`` is its own mode
 because install is **not** a plain ``rm``: an install dir can equal the build
 dir or be a shared prefix like ``$HOME/.local`` mixed with other projects.
 Uninstall is therefore backend-driven — meson ``ninja -C <build> uninstall``,
@@ -1525,11 +1540,13 @@ checkout alone.
 Out of scope
 ~~~~~~~~~~~~
 
-* **Installed layouts.** The registry does not know where a build was
-  installed: the nightly installs mesa with ``--install-dir ~/.local``, a CLI
-  override, while ``mesa.toml`` says ``install_dir = "{{build_dir}}"``. Making
-  the registry that authority is a separate decision; until then the harness
-  that runs installed drivers keeps its own layout.
+* **Installed layouts.** The registry still does not model a file-level
+  installed layout: ``install_dir`` is a prefix. A project that needs a
+  specific layout declares ``install``/``post_install`` hooks, and the command
+  owns the file list; the nightly keeps installing mesa with
+  ``--install-dir ~/.local``, a CLI override, while ``mesa.toml`` says
+  ``install_dir = "{{build_dir}}"``. The hook is the seam for the harness
+  that runs installed drivers, not a new layout authority.
 * **Nested devenvs.** Starting one inside another is not detected. The base is
   the caller's environment, and Mesa *appends* to ``VK_DRIVER_FILES``, so the
   inner one loads both builds' drivers — the caller's environment is honoured,

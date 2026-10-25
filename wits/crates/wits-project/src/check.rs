@@ -7,6 +7,7 @@
 
 use wits_core::git::Repository;
 
+use crate::decl::BuildSystem;
 use crate::layout;
 use crate::paths::PathInput;
 use crate::plan::{resolve_plan, BuildInput};
@@ -41,7 +42,15 @@ pub fn check_one(ws: &Workspace, project: &Project) -> Vec<Issue> {
         });
     };
 
+    let default_focus = project.focus_name(None).to_owned();
     for (name, repo) in project.repos() {
+        let hooks = &repo.decl().hooks;
+        if (hooks.install.is_some() || hooks.post_install.is_some()) && name != default_focus {
+            log::warn!(
+                "repo '{name}' declares an install hook, but only the focus repo \
+                 '{default_focus}' is installed; it runs only with --focus {name}"
+            );
+        }
         if repo.kind().has_own_git() && repo.decl().main_branch.is_none() {
             push(format!("repo '{name}' has its own git but no main_branch"));
         }
@@ -112,6 +121,21 @@ pub fn check_one(ws: &Workspace, project: &Project) -> Vec<Issue> {
             push(format!("unknown toolchain '{tc}'"));
         }
     }
+    // A post-install hook can only add to an install step. cargo has none, so
+    // --install would fail before the hook ran; the install hook is the way to
+    // give it one.
+    if settings.build_system == Some(BuildSystem::Cargo) {
+        if let Some(repo) = project.repo(project.focus_name(None)) {
+            let hooks = &repo.decl().hooks;
+            if hooks.post_install.is_some() && hooks.install.is_none() {
+                push(format!(
+                    "repo '{}': post_install without install: cargo has no install step; \
+                     declare an install hook",
+                    repo.name()
+                ));
+            }
+        }
+    }
 
     // A dry resolve catches template errors, preset cycles, unknown presets.
     // Validation has no backend, so this is a path-only resolve — toolchain
@@ -135,8 +159,34 @@ pub fn check_one(ws: &Workspace, project: &Project) -> Vec<Issue> {
         extra_build_args: &[],
         extra_install_args: &[],
     };
-    if let Err(e) = resolve_plan(ws, project, &input) {
-        push(format!("resolution: {e:#}"));
+    match resolve_plan(ws, project, &input) {
+        Err(e) => push(format!("resolution: {e:#}")),
+        Ok(plan) => {
+            // The install hooks render against the *plan* context, so a broken
+            // `{{...}}` in one is the same class of error as a broken path
+            // template — caught here, where no build has to run first.
+            if let Some(repo) = project.repo(&plan.paths.focus) {
+                let hooks = &repo.decl().hooks;
+                if hooks.install.is_some() || hooks.post_install.is_some() {
+                    // A hook runs from `install_dir` (or the source dir) and
+                    // stages from `build_dir`; a relative path or a missing
+                    // build dir cannot do that. Report it here, before a build.
+                    if let Err(e) = plan.install_hook_paths() {
+                        push(format!("repo '{}': install hook paths: {e:#}", repo.name()));
+                    }
+                }
+                for (phase, template) in [
+                    ("install", hooks.install.as_deref()),
+                    ("post_install", hooks.post_install.as_deref()),
+                ] {
+                    if let Some(template) = template {
+                        if let Err(e) = plan.render(template) {
+                            push(format!("repo '{}': {phase} hook: {e:#}", repo.name()));
+                        }
+                    }
+                }
+            }
+        }
     }
     issues
 }
@@ -244,5 +294,85 @@ mod tests {
             ),
             "{text}"
         );
+    }
+
+    #[test]
+    fn an_install_hook_without_a_build_dir_is_reported() {
+        let (_d, ws) = ws_with(
+            r#"
+            [project]
+            build_system = "cmake"
+
+            [repos.main]
+            path = "/src/p"
+            main_branch = "main"
+            install_dir = "{{repos.main.workdir}}/_install"
+            [repos.main.hooks]
+            install = "echo install"
+            "#,
+        );
+        let text = messages(&ws);
+        assert!(text.contains("require a build_dir"), "{text}");
+    }
+
+    #[test]
+    fn a_relative_install_hook_path_is_reported() {
+        let (_d, ws) = ws_with(
+            r#"
+            [project]
+            build_system = "cmake"
+
+            [repos.main]
+            path = "/src/p"
+            main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/_build"
+            install_dir = "_install"
+            [repos.main.hooks]
+            install = "echo install"
+            "#,
+        );
+        let text = messages(&ws);
+        assert!(text.contains("absolute install_dir"), "{text}");
+    }
+
+    #[test]
+    fn a_cargo_post_install_without_install_is_reported() {
+        let (_d, ws) = ws_with(
+            r#"
+            [project]
+            build_system = "cargo"
+
+            [repos.main]
+            path = "/src/p"
+            main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/_build"
+            install_dir = "{{repos.main.workdir}}/_install"
+            [repos.main.hooks]
+            post_install = "echo fixup"
+            "#,
+        );
+        let text = messages(&ws);
+        assert!(text.contains("post_install without install"), "{text}");
+    }
+
+    #[test]
+    fn a_broken_install_hook_template_is_reported() {
+        let (_d, ws) = ws_with(
+            r#"
+            [project]
+            build_system = "cmake"
+
+            [repos.main]
+            path = "/src/p"
+            main_branch = "main"
+            build_dir = "{{repos.main.workdir}}/_build"
+            install_dir = "{{repos.main.workdir}}/_install"
+            [repos.main.hooks]
+            install = "sh {{missing.path}}"
+            "#,
+        );
+        let text = messages(&ws);
+        assert!(text.contains("install hook:"), "{text}");
+        assert!(text.contains("missing.path"), "{text}");
     }
 }

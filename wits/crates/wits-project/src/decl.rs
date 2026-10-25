@@ -359,11 +359,14 @@ impl<'de> Deserialize<'de> for BorrowRef {
     }
 }
 
-/// A repo's lifecycle hooks: an optional command string per phase. A typed
-/// struct rather than a free `phase -> command` map, so a mistyped phase like
-/// `pre_updat` is a hard parse error (via `deny_unknown_fields`) instead of a
-/// silently-ignored no-op. Each command is a template resolved against the
-/// per-repo context when the phase runs.
+/// A repo's declared hooks: the git lifecycle phases plus the build's install
+/// phases. Every value is a command string; a script is simply named in the
+/// command. A typed struct rather than a free `phase -> command` map, so a
+/// mistyped phase like `pre_updat` is a hard parse error (via
+/// `deny_unknown_fields`) instead of a silently-ignored no-op. Each command is
+/// a template resolved against the context of the phase it runs in: the
+/// per-repo context for the git phases, and the full plan context for the
+/// build's install phases (so they can name `{{build_dir}}`/`{{install_dir}}`).
 #[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct HooksDecl {
@@ -378,6 +381,16 @@ pub struct HooksDecl {
     pub update: Option<String>,
     /// After the update.
     pub post_update: Option<String>,
+    /// Replaces the build system's install step when `wits build --install` is
+    /// given; the backend is then not asked to install. This is what lets a
+    /// backend without an install step (cargo) be installed by a command. Read
+    /// from the focus repo; the plan's source/build/install paths must be
+    /// absolute.
+    pub install: Option<String>,
+    /// After the install step — this hook, or the backend's. Read from the
+    /// focus repo, under the same trigger as [`install`](Self::install), for
+    /// fixups the install leaves.
+    pub post_install: Option<String>,
 }
 
 /// One declared remote.
@@ -961,6 +974,31 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("pre_updat"));
+    }
+
+    #[test]
+    fn install_hooks_are_part_of_the_same_typed_table() {
+        let repo: RepoDecl = toml::from_str(
+            r#"
+            path = "~/src/x"
+            [hooks]
+            install = "sh install.sh"
+            post_install = "sh fixup.sh"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(repo.hooks.install.as_deref(), Some("sh install.sh"));
+        assert_eq!(repo.hooks.post_install.as_deref(), Some("sh fixup.sh"));
+
+        let err = toml::from_str::<RepoDecl>(
+            r#"
+            path = "~/src/x"
+            [hooks]
+            post_instal = "oops"
+            "#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("post_instal"));
     }
 
     #[test]

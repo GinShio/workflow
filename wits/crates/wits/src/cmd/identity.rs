@@ -45,7 +45,8 @@ pub struct ProfileArgs {
     /// Build the base from this checkout verbatim, bypassing the branch
     /// strategy's `worktree_dir`/in-place resolution — e.g. a `wits review
     /// checkout` worktree. Everything else (`build_dir`/`source_dir`/…) still
-    /// anchors on it.
+    /// anchors on it. An install hook requires the resulting source dir to be
+    /// absolute.
     #[arg(long = "work-dir", value_name = "DIR")]
     pub work_dir: Option<PathBuf>,
     /// Register a template variable, exposed as `{{spec.KEY}}` (repeatable;
@@ -95,14 +96,18 @@ pub struct IdentityArgs {
     pub detach: bool,
     /// Override the install prefix, ignoring the resolved focus/anchor
     /// `install_dir` (the backend's install-prefix, e.g. cmake's
-    /// `CMAKE_INSTALL_PREFIX`; `build` passes it to configure as well as install).
+    /// `CMAKE_INSTALL_PREFIX`). It shapes configure, and cmake's install step
+    /// also gets it as `--prefix`, so files move even on a configured tree;
+    /// paths baked at configure (RPATH) keep the configured prefix, and meson reads it
+    /// only at configure, so reconfigure when those matter. An install hook
+    /// requires an absolute path.
     #[arg(long = "install-dir", value_name = "DIR")]
     pub install_dir: Option<PathBuf>,
     /// Override the resolved build directory, ignoring the focus/anchor
     /// `build_dir` template — e.g. for a `review checkout` built in an isolated
     /// dir without touching config. The symmetric partner of `--install-dir`;
     /// highest priority, verbatim ("The CLI override layer and the review
-    /// interaction").
+    /// interaction"). An install hook requires an absolute path.
     #[arg(long = "build-dir", value_name = "DIR")]
     pub build_dir: Option<PathBuf>,
 }
