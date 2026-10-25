@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/wits-core",
     "crates/wits-project",
+    "crates/wits-build",
     "crates/wits-util",
     "crates/wits",
     "crates/wits-scaffold",
@@ -53,4 +54,5 @@ similar = "3"
 roxmltree = "0.21"
 wits-core = { path = "crates/wits-core" }
 wits-project = { path = "crates/wits-project" }
+wits-build = { path = "crates/wits-build" }
 wits-util = { path = "crates/wits-util" }

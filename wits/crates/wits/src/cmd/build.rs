@@ -6,9 +6,9 @@
 //! entirely built on `project`'s read-only core: `project` is the component that
 //! knows what a project *is*; this module only knows how to *build* one.
 //!
-//! The build systems live in [`wits_util::build_system`], beside the
-//! read-only core they build on: they are purely a build-time concern, so
-//! `project` need not expose them ("Library shape — core plus actions"). The
+//! The build systems live in [`wits_build`], beside the read-only core they
+//! build on: they are purely a build-time concern, so `project` need not
+//! expose them ("Library shape — core plus actions"). The
 //! one thing the core resolver still needs — translating a toolchain into
 //! native env/definitions at L0 ("Single source of truth for compilers,
 //! realised by the backend") — it gets through the `ToolchainInjector` seam,
@@ -27,16 +27,16 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use clap::Args;
 
+use wits_build::{backend_for, Backend, BuildMode, EmitContext};
+use wits_core::git::{Repository, RestoreGuard};
 use wits_core::process::Command;
 
 use crate::cmd::project::ProfileArgs;
-use wits_core::git::{Repository, RestoreGuard};
 use wits_project::layout;
 use wits_project::{
     resolve_plan, resolve_target, BranchStrategy, BuildInput, BuildPlan, PathInput, Profile,
     Project, ToolchainInjector, Workspace,
 };
-use wits_util::build_system::{backend_for, Backend, BuildMode, EmitContext};
 
 /// Which build a command means: the resolution profile, the detached-HEAD
 /// selector, and the two output-path overrides. `build` and `devenv` flatten the
@@ -215,7 +215,7 @@ fn execute(
         identity,
         opts,
         branch.as_deref(),
-        backend.as_deref(),
+        backend,
     )?;
 
     let Some(build_dir) = plan.paths.build_dir.clone() else {

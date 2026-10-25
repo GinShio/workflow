@@ -1,14 +1,15 @@
 //! Build systems — the tool's one extension axis.
 //!
-//! These live under `util`, alongside the read-only project core they build on,
-//! not inside a command: a backend is a self-contained subsystem `cmd::build`
-//! *composes*, not part of the CLI itself. Emitting build steps is a purely
-//! build-time concern, so the read-only core never needs to see a backend: the
-//! dependency runs one way, `build_system` → `project`. The single thing the
-//! core *does* need — translating a toolchain into native env/definitions at
-//! L0 — is expressed through the core-owned [`ToolchainInjector`] seam, which
-//! every [`Backend`] also implements; `cmd::build` hands the selected backend
-//! to `resolve::plan` as the injector. The reasoning is in
+//! These live in their own crate, alongside the read-only project core they
+//! build on, not inside a command: a backend is a self-contained subsystem
+//! `cmd::build` *composes*, not part of the CLI itself. Emitting build steps is
+//! a purely build-time concern, so the read-only core never needs to see a
+//! backend: the dependency runs one way, `wits-build` → `wits-project`. The
+//! single thing the core *does* need — translating a toolchain into native
+//! env/definitions at L0 — is expressed through the core-owned
+//! [`ToolchainInjector`] seam, which every [`Backend`] also implements;
+//! `cmd::build` hands the selected backend to `resolve_plan` as the injector.
+//! The reasoning is in
 //! `docs/reference/project-design.rst`, "Library shape — core plus actions".
 //!
 //! A new build system is a new [`Backend`] impl (plus a `ToolchainInjector`
@@ -85,7 +86,7 @@ pub struct EmitContext<'a> {
 }
 
 /// A build system. Also a [`ToolchainInjector`] (its L0 translation half), so a
-/// backend can be handed straight to `resolve::plan` as the injector.
+/// backend can be handed straight to `resolve_plan` as the injector.
 pub trait Backend: ToolchainInjector {
     fn name(&self) -> &str;
 
@@ -108,11 +109,11 @@ pub trait Backend: ToolchainInjector {
 /// The backend for a [`BuildSystem`]. Total: the enum only exists for values
 /// that have a backend, so there is no "unsupported" case to handle here — an
 /// unknown name was already rejected when the project file was parsed.
-pub fn backend_for(bs: BuildSystem) -> Box<dyn Backend> {
+pub fn backend_for(bs: BuildSystem) -> &'static dyn Backend {
     match bs {
-        BuildSystem::Cmake => Box::new(cmake::Cmake),
-        BuildSystem::Meson => Box::new(meson::Meson),
-        BuildSystem::Cargo => Box::new(cargo::Cargo),
+        BuildSystem::Cmake => &cmake::Cmake,
+        BuildSystem::Meson => &meson::Meson,
+        BuildSystem::Cargo => &cargo::Cargo,
     }
 }
 

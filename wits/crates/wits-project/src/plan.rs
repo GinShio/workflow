@@ -341,8 +341,8 @@ mod tests {
     /// A stand-in for a real backend, so the pipeline can be tested without any
     /// build-system dependency: it echoes the toolchain's `cc` into one
     /// definition and one environment variable (the way a backend would) so we
-    /// can assert L0 ran. Real per-backend translation is tested in
-    /// `crate::build_system`.
+    /// can assert L0 ran. Real per-backend translation is tested beside the
+    /// backends themselves, in `wits-build`.
     struct MockInjector;
     impl ToolchainInjector for MockInjector {
         fn apply_toolchain(&self, tc: &Toolchain, cfg: &mut LogicalConfig) {

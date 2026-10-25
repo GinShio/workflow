@@ -28,9 +28,9 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
 
+use wits_build::backend_for;
 use wits_core::process::Command;
 use wits_project::{resolve_plan, resolve_target, BuildInput, PathInput, Project, Workspace};
-use wits_util::build_system::backend_for;
 
 use crate::cmd::build::{target_branch, IdentityArgs};
 

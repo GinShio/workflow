@@ -1,0 +1,16 @@
+[package]
+name = "wits-build"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Build-system backends for wits: toolchain translation and step emission"
+
+[lib]
+name = "wits_build"
+path = "src/lib.rs"
+
+[dependencies]
+wits-project.workspace = true
+anyhow.workspace = true
+log.workspace = true
+minijinja.workspace = true

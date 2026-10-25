@@ -25,6 +25,7 @@ use clap::{Args, Subcommand, ValueEnum};
 
 use anyhow::Context;
 
+use wits_build::backend_for;
 use wits_core::git;
 use wits_project::layout;
 use wits_project::{
@@ -32,7 +33,6 @@ use wits_project::{
     value_to_string, BuildInput, BuildPlan, DevenvOp, Kind, PathInput, Profile, Project, Workspace,
     DEVENV_SEPARATOR,
 };
-use wits_util::build_system::backend_for;
 
 /// `wits project` — the read-only half of the tool: one verb per shape of
 /// question it answers.
