@@ -214,7 +214,9 @@ impl Repository {
         let fields: Vec<&str> = report.split('\0').collect();
         Some(
             fields
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|entry| (entry[0].to_owned(), entry[2].to_owned()))
                 .collect(),
         )

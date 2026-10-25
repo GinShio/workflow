@@ -2,7 +2,9 @@
 
 use anyhow::{Context, Result};
 
-use crate::workspace::{expand_tilde, Project, Workspace};
+use wits_core::path::expand_tilde;
+
+use crate::workspace::{Project, Workspace};
 
 /// Classify a CLI positional as a filesystem path rather than a name: `.`/`..`
 /// or a leading `.`, `/`, or `~`. Everything else is a name.

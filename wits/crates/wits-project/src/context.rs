@@ -716,23 +716,6 @@ pub fn scalar_text(v: &Value) -> Option<String> {
     }
 }
 
-/// A filesystem-safe path component from a branch name: every character outside
-/// `[A-Za-z0-9._-]` → `_`. Distinct from `stack::slice`'s branch-name slug,
-/// which *mints* a new branch name (lowercasing, collapsing to `-`); this only
-/// makes an existing branch safe to drop into a `build_dir`/repo `workdir` path.
-pub fn path_slug(branch: &str) -> String {
-    branch
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

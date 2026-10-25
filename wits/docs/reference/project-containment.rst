@@ -15,7 +15,7 @@ The crate graph
 .. code-block:: text
 
    wits-core
-     process config jinja log pager editor time system
+     process config path jinja log pager editor time system
      git remote forge worktree trunk
          ▲
          ├── wits-crypto        (leaf)
@@ -37,7 +37,7 @@ The crate graph
      - May depend on
      - Must not depend on
    * - ``wits-core``
-     - the OS/git/process floor, ``git``, ``remote``, ``forge``,
+     - the OS/git/process/path floor, ``git``, ``remote``, ``forge``,
        ``worktree``, ``trunk``
      - external crates only
      - any ``wits-*`` crate

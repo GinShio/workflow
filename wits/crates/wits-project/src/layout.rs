@@ -17,19 +17,18 @@
 //! repo ([`Repo::template_owner`]), never the borrower's: a borrowed component's
 //! `worktree_dir` was written against its own project's names.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 
 use minijinja::Value;
 
 use wits_core::git::{Repository, Worktree};
+use wits_core::path::{expand_tilde, same_path, slug};
 
-use crate::context::{
-    context_for_repo, insert_path, path_slug, repo_value, Bindings, Ctx, TemplateError,
-};
+use crate::context::{context_for_repo, insert_path, repo_value, Bindings, Ctx, TemplateError};
 use crate::decl::{BranchStrategy, Kind};
-use crate::workspace::{expand_tilde, Project, Repo, Workspace};
+use crate::workspace::{Project, Repo, Workspace};
 
 /// The on-disk location of every repo's repository, in the sense `path` means it.
 ///
@@ -254,14 +253,6 @@ fn declared_placement(
     resolve_declared_worktree_dir(ws, project, repo, &ctx, branch)
         .ok()
         .flatten()
-}
-
-/// Compare two filesystem paths the way a caller means them: symlinks and `.`/
-/// `..` spellings do not create a second checkout. A path that cannot be
-/// canonicalised (e.g. one that does not exist yet) is compared as written.
-pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
-    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    real(a) == real(b)
 }
 
 /// The checkout of `repo` that currently has `branch` checked out, whatever
@@ -515,7 +506,7 @@ pub(crate) fn owner<'a>(
 fn branch_root(ws: &Workspace, project: &Project, repo: &Repo, branch: &str) -> Bindings {
     let mut root = context_for_repo(ws, project, repo.name());
     insert_path(&mut root, "branch.raw", Value::from(branch));
-    insert_path(&mut root, "branch.slug", Value::from(path_slug(branch)));
+    insert_path(&mut root, "branch.slug", Value::from(slug(branch)));
     root
 }
 

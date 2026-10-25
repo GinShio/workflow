@@ -36,6 +36,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 
 use wits_core::git::{Repository, StatusCounts};
+use wits_core::path::slug;
 use wits_core::time::{age_since, parse_cutoff};
 use wits_core::worktree::{self, Entry, Filter, Inventory};
 use wits_project::remotes;
@@ -261,7 +262,7 @@ fn create(repo: &Repository, args: &CreateArgs) -> Result<()> {
         Some(dir) => {
             std::path::absolute(dir).with_context(|| format!("resolving {}", dir.display()))?
         }
-        None => worktree::default_dir(repo, &worktree::slug(rev)),
+        None => worktree::default_dir(repo, &slug(rev)),
     };
 
     // Idempotent, like the rest of the toolset: a second run reports and returns

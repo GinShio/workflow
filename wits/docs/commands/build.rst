@@ -62,8 +62,8 @@ These change *resolution* — what ``repos.<name>.workdir``, ``build_dir``, and
        otherwise) — how an out-of-band value (an MR number, a variant tag)
        enters resolution without living in the file.
 
-``--work-dir`` and ``--spec`` are profile axes, so they work on the ``project``
-read queries (``build-dir``, …) as well as ``build``.
+``--work-dir`` is a ``PathInput`` axis and ``--spec`` is a ``Profile`` axis; both
+work on the ``project`` read queries (``build-dir``, …) as well as ``build``.
 
 The profile flags together with ``--detach``, ``--build-dir`` and
 ``--install-dir`` below say *which build* is meant. :doc:`devenv` takes exactly

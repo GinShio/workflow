@@ -23,8 +23,9 @@ pub mod update;
 pub use build::{build, BuildOptions, BuildRequest};
 pub use devenv::{capture, compose, run, DevenvRequest, Overlay};
 pub use update::{update, UpdateOptions};
-// `BuildMode`'s source of truth is `wits-build`; the CLI reads it from here so a
-// command that only names a request type does not also link the backends.
+// `BuildMode`'s source of truth is `wits-build`; re-exported so a consumer of
+// the actions can name the mode without adding the backends as a direct
+// dependency.
 pub use wits_build::BuildMode;
 
 /// An environment in OS-string form: a process's own, or the one [`compose`]

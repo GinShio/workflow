@@ -16,6 +16,8 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use minijinja::{Environment, Value};
 
+use wits_core::path::expand_tilde;
+
 use crate::render;
 
 /// Render a target's `root` template and expand a leading `~`.
@@ -31,22 +33,6 @@ pub fn resolve(template: &str, ctx: &Value, env: &Environment<'_>) -> Result<Pat
         bail!("target root '{template}' rendered empty");
     }
     Ok(expand_tilde(trimmed))
-}
-
-/// `~` and `~/…` against `$HOME`. A bare `~user` form is left alone: resolving
-/// another user's home needs the password database, and no catalogue wants it.
-fn expand_tilde(path: &str) -> PathBuf {
-    let Some(rest) = path.strip_prefix('~') else {
-        return PathBuf::from(path);
-    };
-    let Some(home) = std::env::var_os("HOME") else {
-        return PathBuf::from(path);
-    };
-    match rest {
-        "" => PathBuf::from(home),
-        _ if rest.starts_with('/') => PathBuf::from(home).join(rest.trim_start_matches('/')),
-        _ => PathBuf::from(path),
-    }
 }
 
 #[cfg(test)]

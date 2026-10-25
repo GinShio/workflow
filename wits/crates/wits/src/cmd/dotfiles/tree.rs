@@ -21,6 +21,7 @@ use serde::de::DeserializeOwned;
 
 use wits_core::config::Resolver;
 use wits_core::git::Repository;
+use wits_core::path::expand_tilde;
 
 use super::layout::{Config, Resolved, CONFIG_NAME};
 
@@ -248,16 +249,6 @@ pub fn is_contained(path: &str) -> bool {
     !Path::new(path)
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
-}
-
-fn expand_tilde(raw: &str) -> PathBuf {
-    match raw.strip_prefix("~/") {
-        Some(rest) => match std::env::var_os("HOME") {
-            Some(home) => PathBuf::from(home).join(rest),
-            None => PathBuf::from(raw),
-        },
-        None => PathBuf::from(raw),
-    }
 }
 
 #[cfg(test)]

@@ -70,7 +70,7 @@ is one-way; a plugin should pick the lowest layer that answers its question:
      - What it gives a plugin
    * - ``wits-core``
      - The floor: ``process`` (dry-run), ``git``, ``config``, ``jinja``,
-       ``log``, ``pager``, ``editor``, ``time``, ``system``; plus the
+       ``log``, ``pager``, ``editor``, ``time``, ``system``, ``path``; plus the
        ``forge``, ``remote``, ``trunk``, and ``worktree`` subsystems.
    * - ``wits-project``
      - The project registry: declarations, ``Workspace``/``Project``/``Repo``,

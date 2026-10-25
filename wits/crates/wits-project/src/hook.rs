@@ -23,6 +23,18 @@ pub enum HookPhase {
 }
 
 impl HookPhase {
+    /// The phase's spelling in a `[repos.*.hooks]` table, which is also the
+    /// label a hook log line uses.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HookPhase::Clone => "clone",
+            HookPhase::PostClone => "post_clone",
+            HookPhase::PreUpdate => "pre_update",
+            HookPhase::Update => "update",
+            HookPhase::PostUpdate => "post_update",
+        }
+    }
+
     fn command(self, hooks: &HooksDecl) -> Option<&str> {
         match self {
             HookPhase::Clone => hooks.clone.as_deref(),
@@ -133,6 +145,7 @@ mod tests {
             (HookPhase::Update, "update"),
             (HookPhase::PostUpdate, "post_update"),
         ] {
+            assert_eq!(phase.as_str(), suffix);
             assert_eq!(
                 project.render_hook(&ws, repo, phase).unwrap(),
                 Some(format!("engine:main:{suffix}")),

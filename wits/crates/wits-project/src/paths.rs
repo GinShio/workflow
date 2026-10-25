@@ -14,6 +14,8 @@ use anyhow::{bail, Result};
 
 use minijinja::Value;
 
+use wits_core::path::slug;
+
 use crate::context::{self, Ctx};
 use crate::decl::BranchStrategy;
 use crate::layout;
@@ -112,7 +114,7 @@ pub fn resolve_paths(
 
     let branch = input.branch.map(|raw| BranchIdentity {
         raw: raw.to_owned(),
-        slug: context::path_slug(raw),
+        slug: slug(raw),
     });
     let build_type = profile
         .build_type

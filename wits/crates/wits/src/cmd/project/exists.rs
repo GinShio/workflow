@@ -5,9 +5,8 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 
 use wits_core::git;
+use wits_core::path::real;
 use wits_project::{layout, Workspace};
-
-use super::common::canonical;
 
 #[derive(Debug, Args)]
 pub struct ExistsArgs {
@@ -26,7 +25,7 @@ pub(super) fn run(ws: &Workspace, args: &ExistsArgs) -> Result<()> {
     let root = repo
         .toplevel()
         .or_else(|| repo.is_bare().then(|| repo.git_common_dir()).flatten());
-    if root.is_some_and(|root| canonical(&root) == canonical(&path)) {
+    if root.is_some_and(|root| real(&root) == real(&path)) {
         Ok(())
     } else {
         bail!(

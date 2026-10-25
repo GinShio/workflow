@@ -551,19 +551,9 @@ fn run_hook(
     cwd: Option<&Path>,
 ) -> Result<()> {
     if let Some(script) = project.render_hook(ws, repo, phase)? {
-        run_script(cwd, &script, hook_phase_name(phase))?;
+        run_script(cwd, &script, phase.as_str())?;
     }
     Ok(())
-}
-
-fn hook_phase_name(phase: HookPhase) -> &'static str {
-    match phase {
-        HookPhase::Clone => "clone",
-        HookPhase::PostClone => "post_clone",
-        HookPhase::PreUpdate => "pre_update",
-        HookPhase::Update => "update",
-        HookPhase::PostUpdate => "post_update",
-    }
 }
 
 /// Run a templated hook via `sh -c`. `cwd` selects the working directory;

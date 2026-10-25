@@ -45,6 +45,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use crate::git::{self, primary, BranchStatus, Primary, Repository, StatusCounts, Submodule};
+use crate::path::real;
 
 /// A worktree plus the facts that decide whether it can be reclaimed.
 ///
@@ -395,7 +396,7 @@ pub fn anchor(repo: &Repository) -> PathBuf {
 /// Two shapes, because the two repository layouts own their surroundings
 /// differently. A repository with a working tree of its own shares that tree's
 /// parent with everything else in it, so a new worktree stays identifiable by
-/// name: [`sibling_dir`]'s `<parent>/<main-name>.<suffix>`. A bare repository
+/// name: `sibling_dir`'s `<parent>/<main-name>.<suffix>`. A bare repository
 /// that keeps its checkouts in a [directory of their own](checkout_container)
 /// instead holds one per branch, where the suffix alone names one.
 pub fn default_dir(repo: &Repository, suffix: &str) -> PathBuf {
@@ -429,31 +430,13 @@ fn checkout_container(repo: &Repository, checkout: &Path) -> Option<PathBuf> {
 }
 
 /// A worktree location beside another: `<parent>/<name>.<suffix>`.
-pub fn sibling_dir(main_worktree: &Path, suffix: &str) -> PathBuf {
+pub(crate) fn sibling_dir(main_worktree: &Path, suffix: &str) -> PathBuf {
     let parent = main_worktree.parent().unwrap_or(main_worktree);
     let name = main_worktree
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "repo".to_owned());
     parent.join(format!("{name}.{suffix}"))
-}
-
-/// A branch name reduced to one path component, for [`default_dir`]'s suffix.
-///
-/// Maps anything outside `[A-Za-z0-9._-]` to `_`, matching how `project` slugs a
-/// branch for its own path templates, so one branch reads the same across the
-/// toolset.
-pub fn slug(branch: &str) -> String {
-    branch
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 /// Add a worktree at `dir` checked out on `rev`, creating any missing parent
@@ -659,7 +642,6 @@ fn borrows_from(checkout: &Path, store: &Path) -> bool {
     let Ok(alternates) = std::fs::read_to_string(git_dir.join("objects/info/alternates")) else {
         return false;
     };
-    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let objects = real(&store.join("objects"));
     alternates
         .lines()
@@ -854,7 +836,6 @@ pub fn remove(repo: &Repository, dir: &Path, force: bool) -> Result<()> {
 /// Is `path` inside `root` (or `root` itself)? Compared through the filesystem,
 /// so a symlinked parent does not hide the answer.
 fn under(path: &Path, root: &Path) -> bool {
-    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     real(path).starts_with(real(root))
 }
 
@@ -891,6 +872,7 @@ fn detached_status(repo: &Repository, head: &str, trunk: Option<&str>) -> Branch
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::path::slug;
 
     #[test]
     fn sibling_dir_names_a_peer_of_the_main_worktree() {
@@ -901,14 +883,6 @@ mod tests {
             sibling_dir(Path::new("/src/proj"), &slug("feat/x")),
             Path::new("/src/proj.feat_x")
         );
-    }
-
-    #[test]
-    fn slug_keeps_path_safe_characters_and_folds_the_rest() {
-        assert_eq!(slug("main"), "main");
-        assert_eq!(slug("feature/add-thing"), "feature_add-thing");
-        assert_eq!(slug("v1.2.3"), "v1.2.3");
-        assert_eq!(slug("weird name?"), "weird_name_");
     }
 
     /// A plain linked worktree that every predicate would select: merged (zero

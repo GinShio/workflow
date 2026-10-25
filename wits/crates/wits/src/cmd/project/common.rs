@@ -2,14 +2,15 @@
 //! which branch its queries default to, and the plan assembly `info`/`--get`
 //! share. The registry and its resolution are `wits-project`'s; nothing here is.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use clap::Args;
 
+use wits_core::path::expand_tilde;
 use wits_project::{
-    expand_tilde, looks_like_path, resolve_plan, target_branch, BranchAbsence, BuildInput,
-    BuildPlan, PathInput, Profile, Project, Workspace,
+    looks_like_path, resolve_plan, target_branch, BranchAbsence, BuildInput, BuildPlan, PathInput,
+    Profile, Project, Workspace,
 };
 
 use crate::cmd::identity::ProfileArgs;
@@ -121,11 +122,4 @@ pub(super) fn branch_or_current(
         target_branch(ws, project, repo, explicit, false, BranchAbsence::Query)?
             .expect("a non-detached target_branch is an error or a branch"),
     )
-}
-
-/// Best-effort canonical path for keying/looking up overrides: both the map keys
-/// and the walk's on-disk paths pass through this, so `..`/symlink spellings
-/// still compare equal. Falls back to the path as-is when it can't be resolved.
-pub(super) fn canonical(p: &Path) -> PathBuf {
-    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
 }

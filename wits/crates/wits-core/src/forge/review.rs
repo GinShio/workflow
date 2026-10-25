@@ -333,23 +333,6 @@ impl BatchOutcome {
         self.landed.get(key).copied().unwrap_or(false)
     }
 
-    /// A fully-successful outcome: every listed action key, the summary, and the
-    /// verdict (if present) landed, in `notifications` notification(s). Nothing
-    /// left in flight.
-    pub fn all_ok(
-        keys: impl IntoIterator<Item = ActionKey>,
-        has_verdict: bool,
-        notifications: u32,
-    ) -> Self {
-        BatchOutcome {
-            landed: keys.into_iter().map(|k| (k, true)).collect(),
-            summary_ok: true,
-            verdict_ok: has_verdict.then_some(true),
-            notifications,
-            inflight: Vec::new(),
-        }
-    }
-
     /// The outcome of an aborted attempt: *nothing* landed, so the whole draft
     /// stays for retry, and `inflight` records the forge-side ids (if any) this
     /// attempt left unpublished for the next run to clean up.

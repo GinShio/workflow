@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use wits_core::git::Repository;
+use wits_core::path::{expand_tilde, real, same_path};
 
 use crate::context::{self, Ctx};
 use crate::decl::{infer_kind, is_nested, Kind, OrgDecl, RepoDecl, SettingsDecl, ToolchainDecl};
@@ -328,7 +329,7 @@ impl Workspace {
     /// map order. Since a borrow always points at a project that declares that
     /// checkout as its own, skipping borrows leaves exactly one owner.
     pub fn repo_for_path(&self, path: &Path) -> Option<(&Project, &Repo)> {
-        let query = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let query = real(path);
         let (owner, repo) = self.owning_repo_for_path(&query, &mut WorktreeMemo::default())?;
         Some(
             self.developed_as(owner, repo.name())
@@ -384,7 +385,7 @@ impl Workspace {
     /// must not be routed through [`repo_for_path`](Self::repo_for_path), whose
     /// job is to choose one repo among many.
     pub fn repo_checkout_contains(&self, project: &Project, repo_name: &str, path: &Path) -> bool {
-        let query = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let query = real(path);
         self.repo_match_depth(project, repo_name, &query, &mut WorktreeMemo::default())
             .is_some()
     }
@@ -609,7 +610,7 @@ fn same_git_dir(memo: &mut WorktreeMemo, a: &Path, b: &Path) -> bool {
         return true;
     }
     match (memo.common_dir(a), memo.common_dir(b)) {
-        (Some(a), Some(b)) => layout::same_path(&a, &b),
+        (Some(a), Some(b)) => same_path(&a, &b),
         // Neither path is a repository (yet): no worktree can exist under either.
         _ => false,
     }
@@ -617,8 +618,10 @@ fn same_git_dir(memo: &mut WorktreeMemo, a: &Path, b: &Path) -> bool {
 
 /// How deeply `query` sits inside `candidate`, or `None` when it does not.
 fn containment_depth(query: &Path, candidate: &Path) -> Option<usize> {
-    let real = std::fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf());
-    query.starts_with(&real).then(|| real.components().count())
+    let candidate = real(candidate);
+    query
+        .starts_with(&candidate)
+        .then(|| candidate.components().count())
 }
 
 /// Live worktrees per git dir, remembered for the duration of one path query.
@@ -671,16 +674,6 @@ fn render_path_template(
     Ok(Ctx::new(root).render_path(tpl)?)
 }
 
-/// Expand a leading `~/` using `$HOME` (shells usually do this; a quoted path
-/// might reach us intact).
-pub fn expand_tilde(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-    }
-    PathBuf::from(path)
-}
 #[cfg(test)]
 mod tests {
     use super::*;

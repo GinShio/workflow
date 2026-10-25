@@ -7,10 +7,11 @@ Every command in ``wits`` stands on the same floor, ``wits-core``
 (``crates/wits-core/``). Its modules are flat on purpose — you name
 ``wits_core::process`` or ``wits_core::forge`` directly, no grouping layer in
 between — but there is a gradient. A thin *floor* holds the primitives every
-command leans on: running commands, talking to git, resolving config, logging,
-rendering templates, reading the clock. Around it sit larger, self-contained
-*subsystems* with real domain logic of their own: the forge layer, remote roles,
-trunk resolution, and the worktree machinery.
+command leans on: running commands, talking to git, spelling and comparing
+paths, resolving config, logging, rendering templates, reading the clock.
+Around it sit larger, self-contained *subsystems* with real domain logic of
+their own: the forge layer, remote roles, trunk resolution, and the worktree
+machinery.
 
 Above the floor sit the layered libraries, each depending only on what is below
 it: ``wits-project`` (the registry, its declarations, and resolution),
@@ -117,6 +118,24 @@ nothing of secrets, and the setting lookup knows nothing of ``*.toml`` trees.
 They live in one module because they are the same question at two granularities,
 not because they share machinery.
 
+Path — one spelling for the tree
+--------------------------------
+
+Three rules have to agree wherever they appear: a branch's path component, a
+leading tilde, and whether two spellings name one checkout. They live in
+``wits_core::path`` because the worktree policy, the project layer, and the CLI
+all use them; a second copy would drift with nothing to catch it.
+
+``slug`` folds every character outside ``[A-Za-z0-9._-]`` to ``_``, so a
+branch's worktree directory and its ``build_dir`` template name the same tree.
+``expand_tilde`` handles ``~`` and ``~/…`` against ``$HOME`` and deliberately
+leaves ``~user`` alone — that needs the password database, which no path wits
+resolves wants. ``real`` resolves a path through the filesystem and
+``same_path`` compares two through it; both fall back to the literal spelling
+when the path does not exist yet — the fallback is the contract, because a
+worktree about to be created or a build directory not yet made still has to
+compare equal to itself.
+
 Crypto — authenticated encryption shaped by git filters
 -------------------------------------------------------
 
@@ -186,7 +205,7 @@ values — a ``build_dir`` built from ``{{repos.main.workdir}}`` and
 ``{{build_type}}``, an environment entry computed from another — and Jinja
 renders a *finished* context, so something has to bridge the two. That bridge
 is a project-config policy, not a property of the language, so it lives with
-the config it serves, as ``project::context::Ctx``.
+the config it serves, as the project crate's internal ``context::Ctx``.
 
 ``Ctx`` resolves **by dotted path, on demand**: asked for a template, it
 discovers which paths that template reads, resolves each of them recursively,

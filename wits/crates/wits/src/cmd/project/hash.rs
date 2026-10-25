@@ -8,9 +8,10 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
 
 use wits_core::git;
+use wits_core::path::real;
 use wits_project::{identity_repo, layout, Kind, Project, Workspace};
 
-use super::common::{branch_or_current, canonical, resolve_repo};
+use super::common::{branch_or_current, resolve_repo};
 use crate::cmd::identity::ProfileArgs;
 
 /// `hash`: a target (like every query) plus how far to descend into submodules.
@@ -157,7 +158,7 @@ fn live_overrides(
         let head = git::Repository::new(&path)
             .rev_parse("HEAD")
             .with_context(|| format!("repo '{name}' has no HEAD to read (is it checked out?)"))?;
-        map.insert(canonical(&path), head);
+        map.insert(real(&path), head);
     }
     Ok(map)
 }
@@ -201,7 +202,7 @@ fn walk_submodules(
             format!("{prefix}/{sub_path}")
         };
         // A named component shows the commit its checkout is on, not the pin.
-        let effective = overrides.get(&canonical(&work)).cloned().unwrap_or(sub_sha);
+        let effective = overrides.get(&real(&work)).cloned().unwrap_or(sub_sha);
         println!("{effective}\t{rel}");
         walk_submodules(
             &git::Repository::new(work),

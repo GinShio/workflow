@@ -112,15 +112,14 @@ shells: ``cmd::project`` (describe / ``--check`` / path queries), ``cmd::build``
 same way an external tool would. The mutating actions themselves are not in the
 CLI at all: they are ``wits-actions``'::
 
-                       wits-project  <── implements ──  wits-build
-        (read-only core: decl / load / workspace /        (cmake/meson/cargo)
-         layout / paths / plan)                                ▲
-                ▲                                              │
-                └──────────────── wits-actions ────────────────┘
-                              (build / update / devenv)
-                                       ▲
-                        cmd::project, cmd::build, cmd::devenv,
-                        cmd::update  (thin CLI shells)
+   cmd::project, cmd::build, cmd::devenv, cmd::update   (thin CLI shells)
+                              ▲
+                        wits-actions   (build / update / devenv)
+                         ▲          ▲
+                         │          │
+              wits-build ─────────▶ wits-project   (read-only core:
+              (cmake/meson/cargo)   decl / load / workspace /
+                                    layout / paths / plan)
 
 The build systems live in ``wits-build``, beside the core rather than inside any
 command, because emitting build steps is a purely build-time concern the core
@@ -144,7 +143,7 @@ business reaching into ``project``'s private internals, only its public API.
 ``build`` and ``update`` moved out for exactly that reason, and it is why
 ``wits worktree`` — which took over the one mutating action ``project`` used
 to nest — shares nothing with ``project`` but a path and the remote-role lookup
-(``project::remotes::for_checkout``) every command makes.
+(``wits_project::remotes::for_checkout``) every command makes.
 
 Out of scope
 ~~~~~~~~~~~~
@@ -187,8 +186,9 @@ Core concepts
        ``repos.main`` is always required), names which one is the ``focus``,
        plus build configuration.
    * - **Profile**
-     - The axes that affect *resolution*: ``build_type``, ``toolchain``,
-       ``generator``, ``branch``, and the active ``presets``.
+     - The reusable axes that affect *resolution*: ``build_type``, ``toolchain``,
+       ``generator``, ``focus``, the active ``presets``, and CLI ``--spec``
+       values. The branch and output-path overrides are ``PathInput`` axes.
    * - **Preset**
      - A reusable, named, inheritable bundle of build config across three
        levels (org → project → repo).
@@ -851,7 +851,7 @@ The pipeline
 
    Selection (always) — produces names + paths, no build side effects
      1. resolve config-root → load Workspace → locate the Project (by name/org, or by path)
-     2. resolve the Profile axes: build_type / toolchain(name) / generator / branch / presets
+     2. resolve the profile and path axes: build_type / toolchain(name) / generator / branch / presets
      3. resolve path templates that need only names: repo workdir, build_dir, install_dir
 
    Accumulation (single-directional; each layer resolved as it merges)
@@ -866,7 +866,9 @@ The pipeline
      = final { environment, definitions, extra_config_args, extra_build_args, extra_install_args }
 
    Emit (backend)
-     backend.steps(mode)            → ordered [Step{ argv, cwd, env }]; definition→argv spelling is private
+     backend.steps(mode)            → ordered [Step{ description, program, args, cwd }];
+                                      definition→argv spelling is private
+                                      (env is applied by the executor from LogicalConfig)
 
 Because the order is strictly one-directional — each layer resolves against
 the context accumulated so far, and a later layer overwrites keys in place
@@ -1124,43 +1126,60 @@ never a synonym for a fixed repo; cross-references always use ``repos.<name>``.
 There is no bare ``{{branch}}`` — a template must pick ``.raw`` or ``.slug``,
 so there is never ambiguity between the raw name and its sanitised form.
 
-Profile vs BuildOptions
-~~~~~~~~~~~~~~~~~~~~~~~
+Profile, PathInput, Identity, and BuildOptions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The reusable profile axes are separated from flags that exist only while a
-build action executes. Most ``BuildOptions`` affect command steps; its two
-path overrides are fed into planning only to replace the corresponding
-configured template:
+Four types carry the flags, split by the question they answer rather than by
+which command happens to use them:
 
 .. code-block:: rust
 
-   pub struct Profile {          // affects identity / build_dir / repo workdir resolution
+   pub struct Profile {          // wits-project: reusable resolution axes
        build_type: Option<String>,   // None → "debug" (hardcoded; no config default)
        toolchain:  Option<String>,   // None → selection chain
        generator:  Option<String>,
-       branch:     Option<String>,   // None → the focus repo's current branch
        presets:    Vec<String>,
        focus:      Option<String>,   // --focus override
-       work_dir:   Option<PathBuf>,  // --work-dir: use this checkout verbatim
        specs:      Map<String,String>,  // --spec K=V → the spec.* namespace
    }
 
-   pub struct BuildOptions {     // build-only action and direct path overrides
+   pub struct PathInput<'a> {    // wits-project: one path-stage invocation
+       profile:     &'a Profile,
+       branch:      Option<&'a str>,    // None = an explicit detached HEAD
+       work_dir:    Option<&'a Path>,   // --work-dir: use this checkout verbatim
+       build_dir:   Option<&'a Path>,   // --build-dir: output-path override
+       install_dir: Option<&'a Path>,   // --install-dir: output-path override
+   }
+
+   pub struct Identity {         // wits-actions: which build an action acts on
+       profile:     Profile,
+       branch:      Option<String>,
+       work_dir:    Option<PathBuf>,
+       build_dir:   Option<PathBuf>,
+       install_dir: Option<PathBuf>,
+   }
+
+   pub struct BuildOptions {     // wits-actions: what the build does
        mode:    BuildMode,           // auto | config-only | build-only | reconfig | uninstall
        install: bool,
-       install_dir: Option<PathBuf>, // --install-dir: override the resolved prefix
-       build_dir:   Option<PathBuf>, // --build-dir: override the resolved build dir
        target:  Option<String>,
        extra_config_args:  Vec<String>,
        extra_build_args:   Vec<String>,
        extra_install_args: Vec<String>,
    }
 
+The branch and work-dir axes are on ``PathInput``, not ``Profile``, because the
+path stage is the only consumer. The two output-path overrides are
+``PathInput`` fields too; ``Identity`` carries the action-level copy the CLI
+resolves before an action runs. ``BuildInput`` wraps a ``PathInput`` with the
+toolchain-injection seam and the L3 extra arguments, so ``resolve_plan`` sees
+one struct.
+
 ``info --branch X``, a hook resolving a dir for a deleted branch, and ``build``
-all share the same ``Profile`` to resolve configured paths; ``BuildOptions``
-appears only when a build actually executes. Its path overrides enter the
-plan input before template rendering, so ``--build-dir`` can intentionally
-bypass a configured ``{{branch.slug}}`` during a detached build.
+all resolve through the same ``Profile`` + ``PathInput``; ``BuildOptions``
+appears only when a build actually executes. The path overrides enter the plan
+input before template rendering, so ``--build-dir`` can intentionally bypass a
+configured ``{{branch.slug}}`` during a detached build.
 
 The CLI override layer and the ``review`` interaction
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1169,15 +1188,16 @@ Three command-line overrides sit **above** the config's declared paths, at
 the highest priority, and exist so a checkout materialised *outside* the
 project's own strategy can be built through the project machinery:
 
-* **``--work-dir <DIR>``** (a ``Profile`` axis) uses that directory verbatim
+* **``--work-dir <DIR>``** (a ``PathInput`` axis) uses that directory verbatim
   as the build repo's ``repos.<name>.workdir``, skipping the
   ``worktree_dir``/in-place resolution. Because named templates anchor on
   that repo's ``workdir``, ``build_dir``/``source_dir``/``install_dir``
   follow the override with no other change. ``build`` also reads it as "the
   caller owns the checkout": it neither requires the strategy's worktree to
   exist nor runs the in-place branch dance.
-* **``--build-dir`` / ``--install-dir``** (``BuildOptions``) override the two
-  resolved output paths directly, ignoring their templates.
+* **``--build-dir`` / ``--install-dir``** (``PathInput`` fields; an action's
+  ``Identity`` carries the CLI values) override the two resolved output paths
+  directly, ignoring their templates.
 * **``--spec K=V``** (a ``Profile`` axis) registers ``spec.*`` template
   variables. A project that opts in by writing ``{{spec.mr}}`` *requires* the
   caller to supply it — a hard error otherwise — so an out-of-band identity
@@ -1475,7 +1495,8 @@ It never switches, and it shares ``build``'s identity
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 A program must run against the tree ``build`` makes from the same flags, so
-the two commands flatten one argument group — the ``Profile`` flags,
+the two commands flatten one argument group — the resolution flags (``-b``,
+``-B``, ``-T``, ``-G``, ``-p``, ``--focus``, ``--work-dir``, ``--spec``),
 ``--detach``, ``--build-dir``, ``--install-dir`` — and select the branch through
 one function. What ``devenv`` does *not* share is the in-place branch dance: a
 switch would have to hold for as long as the program runs, a shell included, so
@@ -1526,8 +1547,9 @@ exists (the annotated form lives in :doc:`project-reference`):
 
 The consumers are the ``wits`` commands themselves: ``wits-actions`` drives
 ``resolve_plan``/``resolve_paths`` and the ``project`` CLI drives
-``resolve_target``; git hooks and cleanup scripts lean on ``layout::work_dir``
-and ``resolve_paths`` (for ``build_dir``) for an arbitrary branch. (``stack``'s base branch is the checkout's **trunk**, by the one rule
+``resolve_target``. Git hooks and cleanup scripts are shell, so they reach the
+same resolution through the CLI — ``project info --get build_dir`` and
+``project branch-build-dirs`` — rather than through a Rust call. (``stack``'s base branch is the checkout's **trunk**, by the one rule
 this registry, ``worktree`` and the git hooks all share: the owning repo's
 declared ``main_branch``, else the merge target's remote HEAD — see
 :doc:`stack-design`.)
@@ -1553,8 +1575,9 @@ CLI contract
   fields, valid build system, preset/inheritance cycles, template
   resolvability, toolchain references exist). No name checks everything (CI
   use). Its own verb: validating is not a mode of describing.
-* **``build <name>``** — resolves a full ``Profile``, runs the pipeline and
-  the backend emit, honouring the focus repo's branch strategy.
+* **``build <name>``** — resolves a full ``BuildPlan`` from a ``Profile`` and
+  ``PathInput``, runs the pipeline and the backend emit, honouring the focus
+  repo's branch strategy.
 * **``update [<name>]``** — the lifecycle over all of the project's repos; no
   name updates every project. ``--with-borrowed`` includes repos whose owner
   is another project, which are otherwise left to it.

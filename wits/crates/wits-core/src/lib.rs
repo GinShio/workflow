@@ -7,10 +7,11 @@
 //! system, or a backend.
 //!
 //! The modules are flat on purpose. There is still a rough gradient — `config`,
-//! `editor`, `git`, `jinja`, `log`, `pager`, `process`, `time` are the thin
-//! floor; `forge`, `remote`, `trunk`, `worktree` are subsystems with real domain
-//! logic — but they sit side by side so a consumer names `wits_core::process` or
-//! `wits_core::forge` directly, without a grouping layer in between.
+//! `editor`, `git`, `jinja`, `log`, `pager`, `path`, `process`, `time` are the
+//! thin floor; `forge`, `remote`, `trunk`, `worktree` are subsystems with real
+//! domain logic — but they sit side by side so a consumer names
+//! `wits_core::process` or `wits_core::forge` directly, without a grouping layer
+//! in between.
 //!
 //! The gradient is a real line, not a label. `jinja` is on the floor because it
 //! defines a language and decides nothing; resolving a *config* against it —
@@ -37,6 +38,7 @@ pub mod git;
 pub mod jinja;
 pub mod log;
 pub mod pager;
+pub mod path;
 pub mod process;
 pub mod remote;
 pub mod system;

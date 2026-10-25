@@ -44,14 +44,4 @@ pub use remotes::{
 };
 pub use target::{looks_like_path, resolve_target};
 pub use wits_core::remote::{RemoteRoles, Role};
-pub use workspace::{expand_tilde, Project, Repo, Workspace};
-
-/// Load the registry from the resolved config root.
-pub fn load() -> anyhow::Result<Workspace> {
-    Workspace::load()
-}
-
-/// Like [`load`], but `Ok(None)` when there is no config tree at all.
-pub fn load_optional() -> anyhow::Result<Option<Workspace>> {
-    Workspace::load_optional()
-}
+pub use workspace::{Project, Repo, Workspace};

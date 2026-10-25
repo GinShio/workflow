@@ -807,8 +807,6 @@ fn dry_run_changes_nothing_and_says_would() {
     assert!(create.stderr.contains("would create"), "{}", create.stderr);
 }
 
-/// The applet list meson installs symlinks for must match the binary's own idea
-/// of its built-ins, which is the cross-check `wits __applets` exists for.
 /// "One bare clone, a worktree per branch" is a normal worktree setup, so a bare
 /// repository must work — and the repository itself must stay immune.
 #[test]
@@ -1016,6 +1014,8 @@ fn a_directory_that_is_not_a_repository_is_refused() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("not a git repository"));
 }
 
+/// `wits __applets` is the runtime cross-check for the applet list Meson mirrors
+/// in its install symlinks; this exercises it for `worktree`.
 #[test]
 fn worktree_is_a_registered_builtin() {
     let fx = Fixture::new(&[]);

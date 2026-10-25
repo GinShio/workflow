@@ -158,8 +158,9 @@ layer and described in :doc:`/installation`.
 Profile flags (affect resolution — ``build`` & ``project``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-These set the ``Profile`` axes and therefore change how paths
-(``repos.<name>.workdir``, ``build_dir``, ``install_dir``) resolve.
+These set the resolution axes (``Profile`` and ``PathInput``) and therefore
+change how paths (``repos.<name>.workdir``, ``build_dir``, ``install_dir``)
+resolve.
 
 .. list-table::
    :header-rows: 1
@@ -209,8 +210,9 @@ These set the ``Profile`` axes and therefore change how paths
        enters resolution without living in the file.
      - —
 
-``--work-dir`` and ``--spec`` are ``Profile`` axes, so they work on the
-``project`` read queries (``build-dir``, …) as well as ``build``.
+``--work-dir`` is a ``PathInput`` axis and ``--spec`` is a ``Profile`` axis;
+both work on the ``project`` read queries (``build-dir``, …) as well as
+``build``.
 
 Build-only flags
 ~~~~~~~~~~~~~~~~
