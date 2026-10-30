@@ -654,7 +654,7 @@ remote identity so it can hold many repos:
    feed.mine   = { reviewer = "@me", state = "open+draft" }
    feed.vulkan = { labels = ["vulkan"], state = "open+draft" }
 
-Two deliberate points:
+Three deliberate points:
 
 * **Config (``XDG_CONFIG``) and state (``XDG_STATE``) live in different
   trees** — the correct XDG split, and it keeps a backup of one from dragging
@@ -664,6 +664,12 @@ Two deliberate points:
   the *batch/subscription* layer. "A repo without config isn't supported"
   means "has no feeds", not "can't be reviewed". Personal review preferences
   are therefore never committed into someone else's repo.
+* **Read strictly.** An unknown key, a misspelled value, or a repo key no
+  checkout can produce fails the load and names the file, as the project
+  registry does. A lenient read does not fail on a typo — it runs a different
+  feed: a dropped ``label`` for ``labels`` widens the feed to every open MR.
+  Only feed fetches read the file, so the degradation above still holds when
+  it is broken.
 
 Feeds — an RSS-shaped subscription, filtered server-side
 --------------------------------------------------------

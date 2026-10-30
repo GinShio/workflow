@@ -9,11 +9,17 @@
 //!
 //! A repo with no section simply has no feeds — but a token alone still lets you
 //! review a single MR by number, the same graceful degradation `stack` has.
+//!
+//! The file is read strictly: every key and value means what
+//! `docs/commands/review.rst` says it does, or loading fails and names the file.
+//! Read leniently, a typo is not an error but a different feed — a misspelled
+//! facet is dropped, and the feed widens to every open MR.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use wits_core::forge::RemoteInfo;
@@ -27,22 +33,25 @@ const DEFAULT_LIMIT: usize = 30;
 
 /// The whole config file: repos, each holding named feeds.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ConfigFile {
     #[serde(default)]
-    repo: HashMap<String, RepoSection>,
+    repo: BTreeMap<String, RepoSection>,
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RepoSection {
     #[serde(default)]
-    feed: HashMap<String, FeedDef>,
+    feed: BTreeMap<String, FeedDef>,
 }
 
 /// One feed's faceted filter as written in TOML.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FeedDef {
-    /// `"open+draft"` (default), `"open"`, or `"draft"`.
-    state: Option<String>,
+    #[serde(default)]
+    state: FeedState,
     #[serde(default)]
     labels: Vec<String>,
     #[serde(default, rename = "exclude-labels")]
@@ -51,10 +60,41 @@ struct FeedDef {
     assignee: Option<String>,
     reviewer: Option<String>,
     search: Option<String>,
-    limit: Option<usize>,
+    limit: Option<NonZeroUsize>,
     /// How much of each matched MR's stack to complete (`none`/`auto`/`all`).
     /// A per-feed default the `--stack` flag overrides; unset means `auto`.
     stack: Option<StackMode>,
+}
+
+/// Which lifecycle states a feed pulls, in the three spellings the guide lists.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+enum FeedState {
+    #[default]
+    #[serde(rename = "open+draft")]
+    OpenAndDraft,
+    #[serde(rename = "open")]
+    Open,
+    #[serde(rename = "draft")]
+    Draft,
+}
+
+impl FeedState {
+    fn states(self) -> FeedStates {
+        match self {
+            FeedState::OpenAndDraft => FeedStates {
+                open: true,
+                draft: true,
+            },
+            FeedState::Open => FeedStates {
+                open: true,
+                draft: false,
+            },
+            FeedState::Draft => FeedStates {
+                open: false,
+                draft: true,
+            },
+        }
+    }
 }
 
 impl FeedDef {
@@ -63,15 +103,41 @@ impl FeedDef {
     /// hand-written clone of `FeedDef`.
     fn to_query(&self) -> FeedQuery {
         FeedQuery {
-            states: parse_states(self.state.as_deref()),
+            states: self.state.states(),
             labels: self.labels.clone(),
             exclude_labels: self.exclude_labels.clone(),
             author: self.author.clone(),
             assignee: self.assignee.clone(),
             reviewer: self.reviewer.clone(),
             search: self.search.clone(),
-            limit: self.limit.unwrap_or(DEFAULT_LIMIT),
+            limit: self.limit.map_or(DEFAULT_LIMIT, NonZeroUsize::get),
         }
+    }
+
+    /// The value rule the field types cannot carry: a facet the feed names must
+    /// name something, since an empty one would reach the forge as a filter on
+    /// nothing.
+    fn check(&self) -> Result<()> {
+        let facets = [
+            ("author", &self.author),
+            ("assignee", &self.assignee),
+            ("reviewer", &self.reviewer),
+            ("search", &self.search),
+        ];
+        for (key, value) in facets {
+            if value.as_deref().is_some_and(|v| v.trim().is_empty()) {
+                bail!("`{key}` is empty");
+            }
+        }
+        for (key, labels) in [
+            ("labels", &self.labels),
+            ("exclude-labels", &self.exclude_labels),
+        ] {
+            if labels.iter().any(|label| label.trim().is_empty()) {
+                bail!("`{key}` holds an empty label");
+            }
+        }
+        Ok(())
     }
 }
 
@@ -100,6 +166,40 @@ fn config_path() -> Option<PathBuf> {
     })
 }
 
+/// Parse and check a config file's text. Serde refuses unknown keys and
+/// misspelled values; what remains is the rule on repo keys and
+/// [`FeedDef::check`].
+fn parse(text: &str) -> Result<ConfigFile> {
+    let file: ConfigFile = toml::from_str(text)?;
+    for (key, section) in &file.repo {
+        check_repo_key(key)?;
+        for (name, feed) in &section.feed {
+            feed.check()
+                .with_context(|| format!("[repo.\"{key}\"] feed '{name}'"))?;
+        }
+    }
+    Ok(file)
+}
+
+/// Refuse a key that can never equal a [`repo_key`]: remote parsing yields
+/// whole `/`-separated segments (a GitLab subgroup adding more) and strips a
+/// `.git` suffix, so a key outside that shape names no checkout and would
+/// otherwise sit in the file unmatched.
+fn check_repo_key(key: &str) -> Result<()> {
+    let segments: Vec<&str> = key.split('/').collect();
+    let well_formed = segments.len() >= 3
+        && segments.iter().all(|segment| !segment.is_empty())
+        && !key.chars().any(char::is_whitespace)
+        && !key.ends_with(".git");
+    if !well_formed {
+        bail!(
+            "[repo.\"{key}\"] is not a repository; write it as host/owner/repo, \
+             as in [repo.\"github.com/mesa/mesa\"]"
+        );
+    }
+    Ok(())
+}
+
 impl Config {
     /// Load the config, or an empty one when the file is absent (feeds are then
     /// simply unavailable — not an error).
@@ -116,8 +216,7 @@ impl Config {
         }
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
-        let file: ConfigFile =
-            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        let file = parse(&text).with_context(|| format!("parsing {}", path.display()))?;
         Ok(Config { file })
     }
 
@@ -133,38 +232,13 @@ impl Config {
         self.file.repo.get(key)?.feed.get(name)?.stack
     }
 
-    /// The names of every feed configured for a repo, for listing/help.
+    /// The names of every feed configured for a repo, sorted.
     pub fn feed_names(&self, key: &str) -> Vec<String> {
-        let mut names: Vec<String> = self
-            .file
+        self.file
             .repo
             .get(key)
             .map(|s| s.feed.keys().cloned().collect())
-            .unwrap_or_default();
-        names.sort();
-        names
-    }
-}
-
-/// Parse a `state` string into the two flags. Anything unrecognized (or absent)
-/// falls back to the default open+draft rather than silently selecting nothing.
-fn parse_states(s: Option<&str>) -> FeedStates {
-    let Some(s) = s else {
-        return FeedStates::default();
-    };
-    let mut open = false;
-    let mut draft = false;
-    for part in s.split(['+', ',', ' ']).filter(|p| !p.is_empty()) {
-        match part.trim().to_lowercase().as_str() {
-            "open" => open = true,
-            "draft" => draft = true,
-            _ => {}
-        }
-    }
-    if !open && !draft {
-        FeedStates::default()
-    } else {
-        FeedStates { open, draft }
+            .unwrap_or_default()
     }
 }
 
@@ -172,44 +246,121 @@ fn parse_states(s: Option<&str>) -> FeedStates {
 mod tests {
     use super::*;
 
+    fn loaded(text: &str) -> Config {
+        Config {
+            file: parse(text).unwrap(),
+        }
+    }
+
+    fn refusal(text: &str) -> String {
+        format!("{:#}", parse(text).unwrap_err())
+    }
+
     #[test]
-    fn parses_state_forms() {
+    fn state_takes_exactly_the_three_documented_spellings() {
+        let cfg = loaded(
+            r#"
+            [repo."github.com/o/r"]
+            feed.both  = { state = "open+draft" }
+            feed.open  = { state = "open" }
+            feed.draft = { state = "draft" }
+            feed.unset = { reviewer = "@me" }
+        "#,
+        );
+        let states = |name: &str| cfg.feed("github.com/o/r", name).unwrap().states;
         assert_eq!(
-            parse_states(Some("open+draft")),
+            states("both"),
             FeedStates {
                 open: true,
                 draft: true
             }
         );
         assert_eq!(
-            parse_states(Some("open")),
+            states("open"),
             FeedStates {
                 open: true,
                 draft: false
             }
         );
         assert_eq!(
-            parse_states(Some("draft")),
+            states("draft"),
             FeedStates {
                 open: false,
                 draft: true
             }
         );
-        // Unknown or empty falls back to the default rather than selecting nothing.
-        assert_eq!(parse_states(Some("bogus")), FeedStates::default());
-        assert_eq!(parse_states(None), FeedStates::default());
+        assert_eq!(states("unset"), FeedStates::default());
+
+        // Anything else used to fall back to open+draft in silence.
+        for bad in ["opne", "draft+open", "Open", "open,draft", ""] {
+            let err = refusal(&format!(
+                "[repo.\"github.com/o/r\"]\nfeed.x = {{ state = \"{bad}\" }}"
+            ));
+            assert!(err.contains("open+draft"), "{bad:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_key_is_refused_at_every_level() {
+        // A misspelled facet: read leniently, the feed would match every open MR.
+        let err = refusal("[repo.\"github.com/o/r\"]\nfeed.x = { label = [\"XDL\"] }");
+        assert!(err.contains("label"), "{err}");
+        let err = refusal("[repo.\"github.com/o/r\"]\nfeeds.x = { labels = [\"XDL\"] }");
+        assert!(err.contains("feeds"), "{err}");
+        let err = refusal("[repos.\"github.com/o/r\"]\nfeed.x = { labels = [\"XDL\"] }");
+        assert!(err.contains("repos"), "{err}");
+    }
+
+    #[test]
+    fn a_zero_limit_is_refused() {
+        let err = refusal("[repo.\"github.com/o/r\"]\nfeed.x = { limit = 0 }");
+        assert!(err.contains("nonzero"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_facet_is_refused() {
+        for (feed, key) in [
+            (r#"{ author = "" }"#, "author"),
+            (r#"{ reviewer = "  " }"#, "reviewer"),
+            (r#"{ search = "" }"#, "search"),
+            (r#"{ labels = ["XDL", ""] }"#, "labels"),
+            (r#"{ exclude-labels = [" "] }"#, "exclude-labels"),
+        ] {
+            let err = refusal(&format!("[repo.\"github.com/o/r\"]\nfeed.x = {feed}"));
+            assert!(
+                err.contains(key) && err.contains("feed 'x'"),
+                "{feed}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repo_key_that_cannot_name_a_repository_is_refused() {
+        for bad in [
+            "https://github.com/o/r",
+            "github.com/o/r.git",
+            "github.com/r",
+            "github.com//r",
+            "github.com/o/r ",
+        ] {
+            let err = refusal(&format!(
+                "[repo.\"{bad}\"]\nfeed.x = {{ reviewer = \"@me\" }}"
+            ));
+            assert!(err.contains("host/owner/repo"), "{bad:?}: {err}");
+        }
+        // A GitLab subgroup is more segments, not a malformed key.
+        loaded("[repo.\"gitlab.com/group/sub/proj\"]\nfeed.x = { reviewer = \"@me\" }");
     }
 
     #[test]
     fn resolves_a_named_feed_from_a_repo_section() {
-        let toml = r#"
+        let cfg = loaded(
+            r#"
             [repo."github.com/mesa/mesa"]
             feed.mine = { reviewer = "@me", state = "open" }
             feed.vk = { labels = ["vulkan", "spirv"], exclude-labels = ["wip"], limit = 10 }
-        "#;
-        let cfg = Config {
-            file: toml::from_str(toml).unwrap(),
-        };
+        "#,
+        );
         let key = "github.com/mesa/mesa";
 
         let mine = cfg.feed(key, "mine").unwrap();
@@ -235,15 +386,14 @@ mod tests {
 
     #[test]
     fn feed_stack_mode_is_optional_and_parses() {
-        let toml = r#"
+        let cfg = loaded(
+            r#"
             [repo."github.com/o/r"]
             feed.plain = { reviewer = "@me" }
             feed.whole = { reviewer = "@me", stack = "all" }
             feed.flat  = { reviewer = "@me", stack = "none" }
-        "#;
-        let cfg = Config {
-            file: toml::from_str(toml).unwrap(),
-        };
+        "#,
+        );
         let key = "github.com/o/r";
         // Unset means "no opinion" — the caller falls back to the default.
         assert_eq!(cfg.feed_stack(key, "plain"), None);

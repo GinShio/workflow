@@ -955,9 +955,9 @@ The file is a single global TOML, found at ``$WITS_REVIEW_CONFIG``, else
    * - Key
      - Meaning
    * - ``state`` *(string, default ``"open+draft"``)*
-     - Which lifecycle states to pull: ``"open+draft"``, ``"open"``, or
-       ``"draft"``. Merged and closed MRs are never fetched — a review inbox is
-       about live work.
+     - Which lifecycle states to pull: exactly one of ``"open+draft"``,
+       ``"open"``, or ``"draft"``. Merged and closed MRs are never fetched — a
+       review inbox is about live work.
    * - ``labels`` *(list, default ``[]``)*
      - Only MRs carrying **any** of these labels. GitHub matches them in one
        search; GitLab, whose list filter takes only all-of, is asked once per
@@ -976,7 +976,7 @@ The file is a single global TOML, found at ``$WITS_REVIEW_CONFIG``, else
    * - ``search`` *(string)*
      - A raw platform search string, passed straight through for the full-text
        case the faceted keys cannot express.
-   * - ``limit`` *(integer, default ``30``)*
+   * - ``limit`` *(integer, at least ``1``, default ``30``)*
      - A cap on how many MRs the feed pulls, most-recently-updated first, so a
        large repo cannot flood the inbox.
    * - ``stack`` *(string, default ``"auto"``)*
@@ -986,6 +986,21 @@ The file is a single global TOML, found at ``$WITS_REVIEW_CONFIG``, else
 
 Different keys are combined with **AND**: a feed pulls only MRs matching all of
 them. ``@me`` works in ``author``/``assignee``/``reviewer``.
+
+The file is read **strictly**, because read leniently a typo is not an error
+but a different feed: a misspelled ``label`` for ``labels`` would be dropped,
+and the feed would pull every open MR. So each of these fails the load, with a
+message naming the file:
+
+* a key the tables above do not list, at any level;
+* a ``state`` outside its three spellings, or a ``limit`` of ``0``;
+* an empty ``author``, ``assignee``, ``reviewer``, or ``search``, or an empty
+  label;
+* a repo key that is not ``host/owner/repo`` — a URL, or one ending in
+  ``.git``, can never match a checkout.
+
+Only feed fetches read the file, so ``fetch <mr>`` works whatever state it is
+in.
 
 Store location (state, distinct from config)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1120,6 +1135,9 @@ Troubleshooting
        ``review.toml``.
    * - ``no feeds configured for …``
      - Bare ``fetch`` needs at least one feed; add one, or name an MR.
+   * - ``parsing …/review.toml``
+     - The file breaks one of the rules under *Feeds* above; the location
+       beneath the message points at the key.
    * - ``working tree has uncommitted changes`` (checkout)
      - In-place checkout moves HEAD; commit/stash first, or use a worktree.
    * - ``some actions did not submit``

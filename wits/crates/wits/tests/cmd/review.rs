@@ -210,6 +210,19 @@ impl Fixture {
         self.mr_dir(id).join("local.json").exists()
     }
 
+    /// Write the feed file a test runs against, returning its path for
+    /// `WITS_REVIEW_CONFIG`.
+    fn write_config(&self, text: &str) -> String {
+        let path = self.store.with_file_name("review.toml");
+        std::fs::write(&path, text).unwrap();
+        path.to_str().unwrap().to_owned()
+    }
+
+    /// [`run`](Self::run) against the feed file at `config`.
+    fn run_configured(&self, args: &[&str], config: &str) -> Out {
+        self.run_full(args, None, Some("x"), &[("WITS_REVIEW_CONFIG", config)])
+    }
+
     fn run(&self, args: &[&str]) -> Out {
         self.run_with(args, None)
     }
@@ -246,11 +259,13 @@ impl Fixture {
         env: &[(&str, &str)],
     ) -> Out {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_wits"));
+        // A test that reads feeds names its own file; none reads the developer's.
         cmd.args(args)
             .current_dir(&self.repo)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env("WITS_REVIEW_DIR", &self.store)
+            .env_remove("WITS_REVIEW_CONFIG")
             .envs(env.iter().copied());
         match token {
             Some(token) => cmd.env("GITHUB_TOKEN", token),
@@ -542,6 +557,25 @@ fn submit_never_takes_the_token_kept_for_another_owner() {
         out.stderr.contains("no API token for github.com/me/proj")
             && out.stderr.contains("wits.forge.github.com/me.token"),
         "stderr: {}",
+        out.stderr
+    );
+}
+
+/// Read leniently, the misspelled facet would be dropped and the feed would
+/// pull every open MR instead.
+#[test]
+fn a_misspelled_facet_fails_the_load_instead_of_widening_the_feed() {
+    let fx = Fixture::new();
+    let config = fx.write_config(
+        r#"[repo."github.com/me/proj"]
+           feed.vk = { label = ["vulkan"] }"#,
+    );
+
+    let out = fx.run_configured(&["review", "fetch", "--feed", "vk"], &config);
+    assert!(!out.success, "stdout: {}", out.stdout);
+    assert!(
+        out.stderr.contains(&config) && out.stderr.contains("unknown field `label`"),
+        "{}",
         out.stderr
     );
 }
