@@ -1,12 +1,12 @@
 # wits — dynamic value completion: the parts the generator cannot know.
 #
 # The static skeleton (subcommands, flags, enum values) is generated from the
-# clap tree into ~/.config/fish/completions/wits.fish by `wits __completions
-# fish`; the regenerate recipe is pinned beside the installs in
-# dotfiles/wits/manifest.toml. This file holds only values queried from the
-# world: it changes when a data source moves, not when a flag does. Sourcing
-# at startup only registers completions and defines functions; every query
-# runs at TAB time.
+# clap tree by `wits __completions fish`, which `meson install` runs to
+# install it as <datadir>/fish/vendor_completions.d/wits.fish
+# (wits/meson.build), so it is refreshed whenever wits is. This file holds
+# only values queried from the world: it changes when a data source moves,
+# not when a flag does. Sourcing at startup only registers completions and
+# defines functions; every query runs at TAB time.
 #
 # Every built-in is also an applet (`wits-review`, …): the same command tree
 # under another argv[0], which main.rs splices back into the umbrella parse.
