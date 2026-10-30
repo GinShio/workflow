@@ -46,7 +46,7 @@ compilation while Meson owns install/packaging.
 ```sh
 meson setup build              # configure (needs meson >= 0.61, cargo, ninja)
 meson compile -C build         # runs `cargo build --release` under the hood
-meson install -C build         # installs wits + wits-<sub> symlinks into <prefix>/bin
+meson install -C build         # installs wits, its wits-<sub> symlinks, and shell completions
 ```
 
 Pass `--prefix ~/.local` to `meson setup` to install under your home; Meson

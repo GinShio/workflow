@@ -90,7 +90,11 @@ What ``meson install`` produces
   * the ``wits`` binary;
   * one ``wits-<name>`` **applet symlink** per built-in subcommand, pointing at
     ``wits``;
-  * the ``wits-scaffold`` plugin binary.
+  * the ``wits-scaffold`` plugin binary;
+  * the shell completion scripts, ``<datadir>/fish/vendor_completions.d/wits.fish``
+    and ``<datadir>/bash-completion/completions/wits.bash``. They are generated
+    by the binary just built, so reinstalling is what brings them in step with
+    a changed command tree.
 
 The applet list in ``meson.build`` is explicit on purpose — Meson deliberately
 has no source-tree globbing, and the authoritative set of built-ins is the
