@@ -42,6 +42,6 @@ pub use profile::{
 pub use remotes::{
     declared_for_checkout, desired, for_checkout, roles_in_force, roles_of, Declared, DesiredRemote,
 };
-pub use target::{looks_like_path, resolve_target};
+pub use target::{looks_like_path, resolve_target, Target};
 pub use wits_core::remote::{RemoteRoles, Role};
 pub use workspace::{Project, Repo, Workspace};

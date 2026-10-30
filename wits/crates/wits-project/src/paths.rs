@@ -40,6 +40,11 @@ pub struct PathInput<'a> {
     /// Verbatim CLI output-path overrides.
     pub build_dir: Option<&'a Path>,
     pub install_dir: Option<&'a Path>,
+    /// Where the caller stands — the target path, or the directory a command
+    /// runs in. A detached build takes each repo's checkout here, when it is
+    /// that repo's own, before its primary checkout; `None` goes straight to
+    /// the primary. Nothing else reads it, and nothing reads the process cwd.
+    pub here: Option<&'a Path>,
 }
 
 /// Everything the path stage resolves.
@@ -172,7 +177,7 @@ pub fn resolve_paths(
         let dir = match (input.work_dir, repo.name() == build_repo, input.branch) {
             (Some(dir), true, _) => dir.to_path_buf(),
             (_, _, Some(branch)) => layout::work_dir(ws, project, repo.name(), branch)?,
-            (_, _, None) => layout::detached_work_dir(ws, project, repo)?,
+            (_, _, None) => layout::detached_work_dir(ws, project, repo, input.here)?,
         };
         ctx.set(
             &format!("repos.{}.workdir", repo.name()),
@@ -325,6 +330,7 @@ fn build_dir_for(
         work_dir: None,
         build_dir: None,
         install_dir: None,
+        here: None,
     };
     resolve_paths(ws, project, &input).ok()?.build_dir
 }

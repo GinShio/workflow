@@ -264,6 +264,7 @@ fn make_plan(
                     work_dir: identity.work_dir.as_deref(),
                     build_dir: identity.build_dir.as_deref(),
                     install_dir: identity.install_dir.as_deref(),
+                    here: identity.here.as_deref(),
                 },
                 inject_toolchain,
                 injector: be.map(|b| b as &dyn ToolchainInjector),
@@ -387,6 +388,7 @@ cc = "cc-from-toolchain"
             work_dir: None,
             build_dir: None,
             install_dir: None,
+            here: None,
         }
     }
 

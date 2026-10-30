@@ -96,9 +96,9 @@ Now:
 
 .. code-block:: sh
 
-   update  hello      # clone if missing, otherwise refresh git
-   build   hello      # configure + build with clang, debug by default
-   project hello      # what is it, where does it build, what branch is it on
+   update  hello          # clone if missing, otherwise refresh git
+   build   hello          # configure + build with clang, debug by default
+   project info hello     # what is it, where does it build, what branch is it on
 
 ``build`` translates the toolchain into cmake's native flags for you — you
 never write ``CMAKE_C_COMPILER`` yourself.
@@ -553,20 +553,33 @@ in:
 .. code-block:: sh
 
    cd ~/src/mesa/src/gallium/frontends/lavapipe
-   build                # builds the project owning this directory
-   project .            # details for that project
-   project ~/src/hello  # by path, from anywhere
+   build                      # builds the project owning this directory
+   project info               # describes exactly that build
+   project info ~/src/hello   # by path, from anywhere
 
-A path selects the **repo containing it** for ``info``, ``hash``, and
-``branch-build-dirs``; a name selects the project's focus. ``build`` and
-``devenv`` always act on the project focus — a path only selects the project —
-so from a non-focus checkout ``info`` describes the repo you are standing in
-while ``build`` builds the focus. Run ``info`` with the project's name (or
-``--focus`` on a name target) to describe the focus instead.
+A path selects the project and the place the branch is read from; which repo a
+verb acts on depends on what it is about:
+
+* **A build** — ``info`` (and ``--get``), ``build``, ``devenv`` — acts on the
+  project's focus, wherever the path points. Standing in any checkout of a
+  project, ``project info`` describes the build ``build`` makes there.
+* **One checkout** — ``hash``, ``branch-build-dirs`` — acts on the repo whose
+  checkout holds the path; for a name, the project's focus.
+
+``--focus <repo>`` names another repo for any of them, with a name or a path,
+and an unknown repo is an error before anything is printed. Without
+``--branch``, the branch is the one checked out at the path you gave (or where
+you stand) in the chosen repo, else the one in its primary checkout.
 
 A token starting with ``.``, ``/``, or ``~`` is treated as a path; anything
-else is a name (``hello`` or ``mesa/lavapipe``). With no argument, ``project``
-lists every project while the other verbs use the current directory.
+else is a name (``hello`` or ``mesa/lavapipe``). With no argument the verbs use
+the current directory — except ``check``, which then validates every project.
+
+The profile flags (``-b``, ``-B``, ``-T``, ``-G``, ``-p``, ``--focus``,
+``--work-dir``, ``--spec``) belong to the verbs that resolve a build — ``info``
+here, and ``build``/``devenv`` — and are written after the verb.
+``hash`` and ``branch-build-dirs`` take ``--branch`` and ``--focus`` only;
+``list``, ``check``, and ``exists`` take none.
 
 A checkout that several projects share resolves to the project that **owns** it —
 the one declaring it as its own repo, rather than any that only ``from``-borrow

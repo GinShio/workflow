@@ -111,6 +111,8 @@ What a consumer asks
      - Entry point
    * - Which project owns this path?
      - ``Workspace::project_for_path`` / ``repo_for_path``
+   * - What does a command's positional name, and which repo does it act on?
+     - ``resolve_target`` → ``Target::build_focus`` / ``Target::checkout_focus``
    * - Where is a repo's repository, and where is a checkout?
      - ``Project::repo_abs_path``, ``layout::primary_path``,
        ``layout::work_dir``, ``layout::checkout_holding``,
@@ -135,8 +137,10 @@ The action boundary
 ``wits-actions`` owns the mutating verbs; the CLI only parses arguments and
 formats output. An ``Identity`` is resolved before an action runs, so an
 in-process orchestrator can reuse ``build``/``update``/``devenv`` without a
-command line and without the action reading the process cwd to learn which
-branch it acts on.
+command line. Neither the actions nor the project layer read the process cwd:
+where the caller stands arrives as ``Identity::here`` / ``PathInput::here``,
+and only the CLI's target funnel (``resolve_target``) turns "no positional"
+into the current directory.
 
 ``wits-build`` is the only extension axis. ``wits-project`` names no backend,
 ``Step``, ``EmitContext``, or build-system registry: it knows the one-method

@@ -1545,16 +1545,17 @@ exists (the annotated form lives in :doc:`project-reference`):
    let p: &Project = ...;                    // owned: name, org, source, settings, repos
    p.focus_name(override);                   // override → project.focus → "main"
    p.repo("main").map(Repo::kind);  p.is_borrowed(name);
-   resolve_target(&ws, target)?;             // the one name/path/cwd funnel
+   let t = resolve_target(&ws, target)?;     // the one name/path/cwd funnel: a Target
+   t.build_focus(focus)?;  t.checkout_focus(focus)?;  // which repo a verb acts on
    resolve_plan(&ws, p, &BuildInput { .. })?;    // the full plan
    resolve_paths(&ws, p, &PathInput { .. })?;    // checkout + output paths only
    layout::work_dir(&ws, p, "main", branch)?;    // a repo's checkout for a branch (by name)
-   layout::current_branch(&ws, p, "main")?;      // what the path queries default through
+   layout::current_branch(&ws, p, "main", &t.here)?;  // what a query defaults to
    skip::violations(&git, &repo.decl().skip);    // the `--check` skip verification
 
 The consumers are the ``wits`` commands themselves: ``wits-actions`` drives
-``resolve_plan``/``resolve_paths`` and the ``project`` CLI drives
-``resolve_target``. Git hooks and cleanup scripts are shell, so they reach the
+``resolve_plan``/``resolve_paths``, and every CLI verb resolves its positional
+through ``resolve_target``. Git hooks and cleanup scripts are shell, so they reach the
 same resolution through the CLI — ``project info --get build_dir`` and
 ``project branch-build-dirs`` — rather than through a Rust call. (``stack``'s base branch is the checkout's **trunk**, by the one rule
 this registry, ``worktree`` and the git hooks all share: the owning repo's
@@ -1567,11 +1568,12 @@ CLI contract
 * **``project list``** — a summary line per project. Its own verb so that
   ``info``'s omitted positional can mean "the project owning this directory",
   the way ``build``/``update``'s does, instead of "all of them".
-* **``project info [<name>]``** — the description: the project, its repos and
-  their git state, the declared path *templates*, and the resolution of those
-  templates for one branch (with the presets that applied and the config they
-  produced). Both template and resolution, because a mismatch between them is
-  what the report is for. Pure read.
+* **``project info [<name|path>]``** — the description: the project, its repos
+  and their git state, the declared path *templates*, and the resolution of
+  those templates for one branch (with the presets that applied and the config
+  they produced) — the build ``build`` makes from the same target and flags.
+  Both template and resolution, because a mismatch between them is what the
+  report is for. Pure read.
 * **``project info --get <path>…``** — the same resolve, projected to one value
   per dotted context path, one line each, repeatable. This is the answer to the
   scriptable-output question below: the machine-readable form is a *projection
@@ -1585,9 +1587,9 @@ CLI contract
 * **``build <name>``** — resolves a full ``BuildPlan`` from a ``Profile`` and
   ``PathInput``, runs the pipeline and the backend emit, honouring the focus
   repo's branch strategy.
-* **``update [<name>]``** — the lifecycle over all of the project's repos; no
-  name updates every project. ``--with-borrowed`` includes repos whose owner
-  is another project, which are otherwise left to it.
+* **``update [<name|path>]``** — the lifecycle over all of the project's repos.
+  ``--with-borrowed`` includes repos whose owner is another project, which are
+  otherwise left to it.
 
 Every verb's positional is a **name or a path**, mutually exclusive. A token
 that is ``.``/``..`` or begins with ``.``, ``/``, or ``~`` is a **path** — it
@@ -1595,10 +1597,18 @@ may point *inside* a checkout, and the owning project is found by
 deepest-prefix match (``project_for_path``); anything else is a **name**, bare
 or fully-qualified ``org/name``. A bare name ambiguous across orgs is a hard
 error asking for qualification; there is no ``--org`` filter. When the
-positional is omitted, ``project`` covers every project while
-``build``/``update`` operate on the project owning the current directory (a
-hard error if none does). (Shells expand ``~`` and leave ``./`` literal, so
-in practice the classifier keys on a leading ``.`` or ``/``.)
+positional is omitted, every verb uses the current directory — except
+``check``, which then validates every project. (Shells expand ``~`` and leave
+``./`` literal, so in practice the classifier keys on a leading ``.`` or
+``/``.)
+
+A path selects the project, never quietly the focus. Verbs about a build
+(``info``, ``build``, ``devenv``) act on the project's focus from anywhere, so
+what ``info`` reports is what ``build`` does; verbs about one checkout
+(``hash``, ``branch-build-dirs``) act on the repo whose checkout holds the
+path, because that checkout is their subject. ``--focus`` overrides either, for
+every target form, and the branch is read where the target points. The rule
+is :doc:`project-reference`'s "Positionals, full".
 
 Configuration topology
 ----------------------

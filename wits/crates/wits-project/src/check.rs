@@ -136,6 +136,7 @@ pub fn check_one(ws: &Workspace, project: &Project) -> Vec<Issue> {
             work_dir: None,
             build_dir: None,
             install_dir: None,
+            here: None,
         },
         inject_toolchain: false,
         injector: None,

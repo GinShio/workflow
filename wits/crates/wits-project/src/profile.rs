@@ -7,6 +7,7 @@
 //! fields, because that is the stage that consumes them.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 
@@ -79,12 +80,14 @@ pub enum BranchAbsence {
 
 /// The single branch funnel: decide which branch a command resolves for `focus`.
 ///
-/// `focus` is the repo whose identity is wanted — the project's focus for
-/// `build`/`devenv`, or the path-derived repo for `info`/`hash`/
-/// `branch-build-dirs`. Callers must never turn a failed discovery into an
-/// implicit detach: `--detach` is explicit and conflicts with `--branch`.
-/// `absent` picks the hint for a checkout with no branch; it is the caller's
-/// flag surface, not the resolution itself.
+/// `focus` is the repo whose identity is wanted — [`crate::Target::build_focus`]
+/// for `info`/`build`/`devenv`, [`crate::Target::checkout_focus`] for `hash`/
+/// `branch-build-dirs`. Without an explicit branch it is read from that repo's
+/// identity checkout at `here` (the target path, or where the command runs),
+/// else from its primary checkout. Callers must never turn a failed discovery
+/// into an implicit detach: `--detach` is explicit and conflicts with
+/// `--branch`. `absent` picks the hint for a checkout with no branch; it is the
+/// caller's flag surface, not the resolution itself.
 pub fn target_branch(
     ws: &Workspace,
     project: &Project,
@@ -92,6 +95,7 @@ pub fn target_branch(
     explicit_branch: Option<&str>,
     detach: bool,
     absent: BranchAbsence,
+    here: &Path,
 ) -> Result<Option<String>> {
     if detach && explicit_branch.is_some() {
         bail!("--branch and --detach cannot be used together");
@@ -104,7 +108,7 @@ pub fn target_branch(
     }
     let name = identity_repo(project, focus)
         .context("no own-git repo to take a branch from; pass --branch")?;
-    layout::current_branch(ws, project, &name)?
+    layout::current_branch(ws, project, &name, here)?
         .map(Some)
         .with_context(|| match absent {
             BranchAbsence::Action => format!(
@@ -132,13 +136,29 @@ mod tests {
         let ws = Workspace::load_from(dir.path()).unwrap();
         let project = ws.project("p").unwrap();
 
-        let action =
-            target_branch(&ws, project, "main", None, false, BranchAbsence::Action).unwrap_err();
+        let action = target_branch(
+            &ws,
+            project,
+            "main",
+            None,
+            false,
+            BranchAbsence::Action,
+            dir.path(),
+        )
+        .unwrap_err();
         let action = format!("{action:#}");
         assert!(action.contains("--detach"), "{action}");
 
-        let query =
-            target_branch(&ws, project, "main", None, false, BranchAbsence::Query).unwrap_err();
+        let query = target_branch(
+            &ws,
+            project,
+            "main",
+            None,
+            false,
+            BranchAbsence::Query,
+            dir.path(),
+        )
+        .unwrap_err();
         let query = format!("{query:#}");
         assert!(query.contains("pass --branch"), "{query}");
         assert!(!query.contains("--detach"), "{query}");

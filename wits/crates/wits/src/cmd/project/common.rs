@@ -1,125 +1,81 @@
-//! CLI-only resolution shared by the `project` verbs: which repo a target names,
-//! which branch its queries default to, and the plan assembly `info`/`--get`
-//! share. The registry and its resolution are `wits-project`'s; nothing here is.
+//! CLI plumbing the `project` verbs share: the `--branch`/`--focus` pair a
+//! query about one checkout takes, the branch a query defaults to, and the plan
+//! `info` describes and `--get` projects from. Which project and which repo a
+//! positional names is `wits-project`'s [`Target`].
 
-use std::path::Path;
-
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Args;
 
-use wits_core::path::expand_tilde;
 use wits_project::{
-    looks_like_path, resolve_plan, target_branch, BranchAbsence, BuildInput, BuildPlan, PathInput,
-    Profile, Project, Workspace,
+    resolve_plan, target_branch, BranchAbsence, BuildInput, BuildPlan, PathInput, Target, Workspace,
 };
 
 use crate::cmd::identity::ProfileArgs;
 
-/// A target anchored by name or path (default: the current dir). The branch and
-/// the rest of the resolution profile arrive via the global [`ProfileArgs`] on
-/// the parent, so every query shares one shape.
-#[derive(Debug, Args)]
-pub struct TargetArgs {
-    /// Project name, or a path inside a checkout (default: the current dir).
-    #[arg(value_name = "NAME|PATH")]
-    pub target: Option<String>,
+/// The two axes a query about one checkout takes — `hash`, `branch-build-dirs`.
+/// The rest of the profile shapes a build, which these queries do not resolve.
+#[derive(Debug, Args, Default)]
+pub struct CheckoutArgs {
+    /// Branch to answer for. Default: the one checked out where the target
+    /// points.
+    #[arg(short = 'b', long)]
+    pub branch: Option<String>,
+    /// The repo to ask about. Default: the repo whose checkout holds the path,
+    /// or the project's focus for a name.
+    #[arg(long)]
+    pub focus: Option<String>,
 }
 
-/// Resolve a target to `(project, anchor-repo)`: a path (or the current dir)
-/// resolves to the *containing* repo, a name to the project's focus repo.
-pub(super) fn resolve_repo<'a>(
-    ws: &'a Workspace,
-    target: Option<&str>,
-    focus: Option<&str>,
-) -> Result<(&'a Project, String)> {
-    match target {
-        None => {
-            let cwd = std::env::current_dir()?;
-            ws.repo_for_path(&cwd)
-                .map(|(project, repo)| (project, repo.name().to_owned()))
-                .context(
-                    "not inside any known project; pass a name or run from inside a project's checkout",
-                )
-        }
-        Some(t) if looks_like_path(t) => {
-            let path = expand_tilde(t);
-            ws.repo_for_path(&path)
-                .map(|(project, repo)| (project, repo.name().to_owned()))
-                .with_context(|| format!("no project owns the path {}", path.display()))
-        }
-        // A name resolves to the project's focus repo; `--focus` overrides which
-        // repo that is (a path already names the repo, so the override is moot).
-        Some(name) => {
-            let project = ws.project(name)?;
-            Ok((project, project.focus_name(focus).to_owned()))
-        }
-    }
-}
-
-/// Resolve a branch's build [`BuildPlan`] for a query, anchored like
-/// [`resolve_repo`] with the branch defaulting to the anchored repo's current
-/// one. Shared by `info` and `--get`, so a description and a projection out of
-/// it can never disagree.
-pub(super) fn plan_for_query<'a>(
-    ws: &'a Workspace,
-    target: Option<&str>,
-    profile: &ProfileArgs,
-) -> Result<(&'a Project, BuildPlan)> {
-    let (project, repo) = resolve_repo(ws, target, profile.focus.as_deref())?;
-    let branch = branch_or_current(ws, project, &repo, profile.branch.as_deref())?;
-    // Carry the *whole* profile (build_type / toolchain / generator / presets),
-    // not just focus+branch: a `build_dir`/`install_dir` template may embed any
-    // of them ("Context variables"), so dropping them would print a dir that no
-    // build ever uses.
-    let mut resolved = profile.to_profile();
-    resolved.focus = Some(repo);
-    let plan = resolve_plan(
-        ws,
-        project,
-        &paths_input(&resolved, Some(&branch), profile.work_dir.as_deref()),
-    )?;
-    Ok((project, plan))
-}
-
-/// A path-only plan input for the read-only queries: no injection, no L3 args.
-///
-/// `--work-dir` is an axis of [`PathInput`], not [`Profile`], so the CLI has to
-/// pass it here explicitly; a helper that dropped it would silently make every
-/// read query ignore the override.
-pub(super) fn paths_input<'a>(
-    profile: &'a Profile,
-    branch: Option<&'a str>,
-    work_dir: Option<&'a Path>,
-) -> BuildInput<'a> {
-    BuildInput {
-        paths: PathInput {
-            profile,
-            branch,
-            work_dir,
-            build_dir: None,
-            install_dir: None,
-        },
-        inject_toolchain: false,
-        injector: None,
-        extra_config_args: &[],
-        extra_build_args: &[],
-        extra_install_args: &[],
-    }
-}
-
-/// The branch to resolve for: the explicit `--branch`, else the identity repo's
-/// current branch. Shared by the path queries and `hash` so they default the same
-/// way `build` does ("Branch identity") — through the one
-/// [`target_branch`](wits_project::target_branch) funnel, so a query and the
-/// build it describes can never disagree about which branch is meant.
-pub(super) fn branch_or_current(
+/// The branch a query resolves for `repo`: `--branch`, else the one checked
+/// out where the target points — through the [`target_branch`] funnel `build`
+/// uses, so a query and the build it describes agree.
+pub(super) fn query_branch(
     ws: &Workspace,
-    project: &Project,
+    target: &Target,
     repo: &str,
     explicit: Option<&str>,
 ) -> Result<String> {
-    Ok(
-        target_branch(ws, project, repo, explicit, false, BranchAbsence::Query)?
-            .expect("a non-detached target_branch is an error or a branch"),
+    Ok(target_branch(
+        ws,
+        target.project,
+        repo,
+        explicit,
+        false,
+        BranchAbsence::Query,
+        &target.here,
+    )?
+    .expect("a non-detached target_branch is an error or a branch"))
+}
+
+/// The plan `info` describes and `--get` projects from: the build `wits build`
+/// makes from the same target and flags, for `focus` and `branch`, without
+/// toolchain injection or extra arguments. One helper serves both, so a
+/// description and a projection out of it cannot disagree.
+pub(super) fn query_plan(
+    ws: &Workspace,
+    target: &Target,
+    focus: &str,
+    branch: &str,
+    profile: &ProfileArgs,
+) -> Result<BuildPlan> {
+    let resolved = profile.to_profile(focus);
+    resolve_plan(
+        ws,
+        target.project,
+        &BuildInput {
+            paths: PathInput {
+                profile: &resolved,
+                branch: Some(branch),
+                work_dir: profile.work_dir.as_deref(),
+                build_dir: None,
+                install_dir: None,
+                here: Some(&target.here),
+            },
+            inject_toolchain: false,
+            injector: None,
+            extra_config_args: &[],
+            extra_build_args: &[],
+            extra_install_args: &[],
+        },
     )
 }

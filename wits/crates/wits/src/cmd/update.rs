@@ -24,7 +24,7 @@ pub struct UpdateArgs {
 
 pub fn run(args: &UpdateArgs) -> Result<()> {
     let ws = Workspace::load()?;
-    let project = resolve_target(&ws, args.target.as_deref())?;
+    let project = resolve_target(&ws, args.target.as_deref())?.project;
     wits_actions::update(
         &ws,
         project,

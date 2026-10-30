@@ -9,19 +9,19 @@ use clap::{Args, ValueEnum};
 
 use wits_core::git;
 use wits_core::path::real;
-use wits_project::{identity_repo, layout, Kind, Project, Workspace};
+use wits_project::{identity_repo, layout, resolve_target, Kind, Project, Workspace};
 
-use super::common::{branch_or_current, resolve_repo};
-use crate::cmd::identity::ProfileArgs;
+use super::common::{query_branch, CheckoutArgs};
 
-/// `hash`: a target (like every query) plus how far to descend into submodules.
-/// The branch and focus arrive via the global [`ProfileArgs`]; `--submodules` is
-/// `hash`-only, so it stays local rather than polluting every subcommand.
+/// `hash`: a target (like every query), the checkout's `--branch`/`--focus`,
+/// and how far to descend into submodules.
 #[derive(Debug, Args)]
 pub struct HashArgs {
     /// Project name, or a path inside a checkout (default: the current dir).
     #[arg(value_name = "NAME|PATH")]
     pub target: Option<String>,
+    #[command(flatten)]
+    pub at: CheckoutArgs,
     /// How far to descend into submodules, reading each level's pinned commit
     /// from the tree (never a checkout or branch switch).
     #[arg(long, default_value = "none")]
@@ -79,8 +79,10 @@ impl SubmoduleScope {
 /// component you are actively working on sits at a different commit in your
 /// checkout — the one a build uses. Naming it in `--repos` prints (and recurses
 /// from) that live commit instead of the stale pin.
-pub(super) fn run(ws: &Workspace, args: &HashArgs, profile: &ProfileArgs) -> Result<()> {
-    let (project, repo) = resolve_repo(ws, args.target.as_deref(), profile.focus.as_deref())?;
+pub(super) fn run(ws: &Workspace, args: &HashArgs) -> Result<()> {
+    let target = resolve_target(ws, args.target.as_deref())?;
+    let project = target.project;
+    let repo = target.checkout_focus(args.at.focus.as_deref())?;
     // Hash the identity repo: a subtree has no own git and borrows its anchor's.
     let identity = identity_repo(project, &repo).with_context(|| {
         format!(
@@ -88,7 +90,7 @@ pub(super) fn run(ws: &Workspace, args: &HashArgs, profile: &ProfileArgs) -> Res
             project.key()
         )
     })?;
-    let branch = branch_or_current(ws, project, &repo, profile.branch.as_deref())?;
+    let branch = query_branch(ws, &target, &repo, args.at.branch.as_deref())?;
     // The sha comes off a *ref*, so the repository answers it for any `--branch`
     // without a checkout. The walk below reads working trees (a gitlink is only
     // reported where it is materialised), so it runs in that branch's checkout —

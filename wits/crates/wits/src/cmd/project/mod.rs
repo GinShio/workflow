@@ -1,8 +1,8 @@
 //! `wits project` — the CLI shell over the read-only project core, one verb per
 //! file.
 //!
-//! Describes projects (the default), validates their configuration (`--check`),
-//! and answers machine-readable status, path, or identity queries.
+//! Describes projects (`info`), validates their configuration (`check`), and
+//! answers machine-readable status, path, or identity queries.
 //! Everything about what a project *is* — the model, the workspace registry,
 //! resolution, and the project-shaped git surface — lives in the read-only core
 //! at [`wits_project`]; this module is one of its consumers, alongside the
@@ -17,17 +17,16 @@
 //! worktrees meet at a path — see `build`'s `--work-dir` — and at the remote
 //! roles `wits worktree` asks the registry for, like every other command.
 //!
-//! The verbs live in their own modules. [`common`] holds the resolution they
-//! share — which repo a target names, which branch a query defaults to, and the
-//! plan assembly `info`/`--get` use — and every other file answers one shape of
-//! question.
+//! The verbs live in their own modules. Every verb resolves its positional
+//! through `wits_project::resolve_target`; [`common`] holds what the queries
+//! share beyond that — the `--branch`/`--focus` pair of a checkout query, the
+//! branch a query defaults to, and the plan `info`/`--get` use — and every other
+//! file answers one shape of question.
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use wits_project::Workspace;
-
-use crate::cmd::identity::ProfileArgs;
 
 mod branch_build_dirs;
 mod check;
@@ -44,15 +43,6 @@ mod names;
 pub struct ProjectArgs {
     #[command(subcommand)]
     pub command: ProjectSub,
-    /// The profile axes (branch / build-type / toolchain / …) that shape
-    /// resolution. Declared once here as **global** flags, so every `project`
-    /// subcommand accepts them uniformly — the way `-v`/`-n` are inherited from
-    /// the process layer ("CLI surface") — and so a machine-readable path query
-    /// resolves the *same* dir a build would (the one shared `Profile`, "Profile
-    /// vs BuildOptions"). Being global, they may be written on either side of
-    /// the subcommand.
-    #[command(flatten)]
-    pub profile: ProfileArgs,
 }
 
 /// The verbs, and why each is its own rather than a key of `info --get`.
@@ -72,12 +62,12 @@ pub enum ProjectSub {
     /// Describe one project in full — or, with `--get`, print one resolved value.
     Info(info::InfoArgs),
     /// Validate configuration legality (no target: every project, for CI).
-    Check(common::TargetArgs),
+    Check(check::CheckArgs),
     /// Exit successfully when a named project's main repository is cloned.
     Exists(exists::ExistsArgs),
     /// Print every existing build directory that a branch of one checkout
     /// identifies, across all projects — what a branch deletion orphans.
-    BranchBuildDirs(common::TargetArgs),
+    BranchBuildDirs(branch_build_dirs::BranchBuildDirsArgs),
     /// Print a repo's commit hash for a branch, optionally with its submodules'
     /// pinned hashes — read from the tree, so no checkout or branch switch.
     Hash(hash::HashArgs),
@@ -92,17 +82,13 @@ pub enum ProjectSub {
 
 pub fn run(args: &ProjectArgs) -> Result<()> {
     let ws = Workspace::load()?;
-    // The profile axes live on the parent as global flags, so they are read here
-    // once and handed to whichever subcommand ran — the value lands on the parent
-    // regardless of which side of the subcommand it was written on.
-    let profile = &args.profile;
     match &args.command {
         ProjectSub::List => list::run(&ws),
-        ProjectSub::Info(a) => info::run(&ws, a, profile),
-        ProjectSub::Check(a) => check::run(&ws, a.target.as_deref()),
+        ProjectSub::Info(a) => info::run(&ws, a),
+        ProjectSub::Check(a) => check::run(&ws, a),
         ProjectSub::Exists(a) => exists::run(&ws, a),
-        ProjectSub::BranchBuildDirs(a) => branch_build_dirs::run(&ws, a, profile),
-        ProjectSub::Hash(a) => hash::run(&ws, a, profile),
+        ProjectSub::BranchBuildDirs(a) => branch_build_dirs::run(&ws, a),
+        ProjectSub::Hash(a) => hash::run(&ws, a),
         ProjectSub::Names(a) => names::run(&ws, a),
     }
 }

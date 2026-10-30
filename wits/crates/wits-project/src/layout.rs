@@ -17,7 +17,7 @@
 //! repo ([`Repo::template_owner`]), never the borrower's: a borrowed component's
 //! `worktree_dir` was written against its own project's names.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
@@ -362,27 +362,34 @@ pub fn primary_checkout(ws: &Workspace, project: &Project, repo: &str) -> Result
 }
 
 /// The checkout of `repo` that carries its branch identity **right now**, with
-/// no branch supplied to resolve against.
-pub fn current_checkout(ws: &Workspace, project: &Project, repo: &str) -> Result<Option<PathBuf>> {
+/// no branch supplied to resolve against: the checkout `here` stands in, when
+/// it is this repo's own, else the repo's primary checkout.
+///
+/// `here` is the caller's to name — the target path, or the directory a
+/// command runs in — so the answer never depends on a process-wide cwd.
+pub fn current_checkout(
+    ws: &Workspace,
+    project: &Project,
+    repo: &str,
+    here: &Path,
+) -> Result<Option<PathBuf>> {
     let repo = find(project, repo)?;
     let repository = repository_of(ws, project, repo)?;
-    if let Ok(cwd) = std::env::current_dir() {
-        let here = Repository::new(cwd);
-        if same_repository(&repository, &here) {
-            if let Some(top) = here.toplevel() {
-                let candidate = Worktree {
-                    path: top.clone(),
-                    branch: here.current_branch(),
-                    ..Default::default()
-                };
-                // The caller's checkout answers when it is this repo's own,
-                // attached or detached — a detached one makes the branch query
-                // fail honestly instead of borrowing a branch. Standing in a
-                // sibling's checkout is standing outside this repo, which falls
-                // through to its primary checkout.
-                if worktree_belongs_to(ws, repo, &candidate, &repository.worktrees()) {
-                    return Ok(Some(top));
-                }
+    let standing = Repository::new(here);
+    if same_repository(&repository, &standing) {
+        if let Some(top) = standing.toplevel() {
+            let candidate = Worktree {
+                path: top.clone(),
+                branch: standing.current_branch(),
+                ..Default::default()
+            };
+            // The checkout here answers when it is this repo's own, attached or
+            // detached — a detached one makes the branch query fail honestly
+            // instead of borrowing a branch. Standing in a sibling's checkout is
+            // standing outside this repo, which falls through to its primary
+            // checkout.
+            if worktree_belongs_to(ws, repo, &candidate, &repository.worktrees()) {
+                return Ok(Some(top));
             }
         }
     }
@@ -391,8 +398,14 @@ pub fn current_checkout(ws: &Workspace, project: &Project, repo: &str) -> Result
 
 /// The branch `repo` is on, read from [`current_checkout`]. `None` on a detached
 /// HEAD, or when the repo has no checkout to read.
-pub fn current_branch(ws: &Workspace, project: &Project, repo: &str) -> Result<Option<String>> {
-    Ok(current_checkout(ws, project, repo)?.and_then(|dir| Repository::new(dir).current_branch()))
+pub fn current_branch(
+    ws: &Workspace,
+    project: &Project,
+    repo: &str,
+    here: &Path,
+) -> Result<Option<String>> {
+    Ok(current_checkout(ws, project, repo, here)?
+        .and_then(|dir| Repository::new(dir).current_branch()))
 }
 
 /// The checkout a branch-keyed `worktree_dir` would place for `branch`,
@@ -429,13 +442,22 @@ fn resolve_work_dir(
 /// A branch-independent `worktree_dir` is an explicit checkout selection (the
 /// fixed `review` worktree is the motivating case), so it wins over whichever
 /// checkout happens to contain the caller. A branch-keyed template cannot answer
-/// without inventing an identity and falls through to the live checkout:
-/// caller's checkout when it belongs to this repo, otherwise the primary.
-pub(crate) fn detached_work_dir(ws: &Workspace, project: &Project, repo: &Repo) -> Result<PathBuf> {
+/// without inventing an identity and falls through to the live checkout: the
+/// one `here` stands in when it belongs to this repo, otherwise the primary.
+pub(crate) fn detached_work_dir(
+    ws: &Workspace,
+    project: &Project,
+    repo: &Repo,
+    here: Option<&Path>,
+) -> Result<PathBuf> {
     if let Some(path) = resolve_declared_worktree_dir(ws, repo, None)? {
         return Ok(path);
     }
-    if let Some(path) = current_checkout(ws, project, repo.name())? {
+    let live = match here {
+        Some(here) => current_checkout(ws, project, repo.name(), here)?,
+        None => primary_checkout(ws, project, repo.name())?,
+    };
+    if let Some(path) = live {
         return Ok(path);
     }
     if repo.decl.strategy == BranchStrategy::InPlace {

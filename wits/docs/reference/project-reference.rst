@@ -20,11 +20,20 @@ CLI
 
 ::
 
-   project <verb> [<name|path>] [--focus <repo>] [profile flags]
-   build   [<name|path>] [--focus <repo>] [profile flags] [--detach] [build options]
-   devenv  [<name|path>] [--focus <repo>] [profile flags] [--detach]
+   project list
+   project info   [<name|path>] [--get <path>]… [profile flags]
+   project check  [<name|path>]
+   project exists <name>
+   project hash   [<name|path>] [--branch B] [--focus R] [--submodules S] [--repos R]
+   project branch-build-dirs [<name|path>] [--branch B] [--focus R]
+   build   [<name|path>] [profile flags] [--detach] [build options]
+   devenv  [<name|path>] [profile flags] [--detach]
            [--build-dir D] [--install-dir D] [--dump[=sh|fish|json]] [-- <cmd>…]
    update  [<name|path>] [--with-borrowed]
+
+The profile flags (`Profile flags`_) are written after the verb, and only the
+verbs that resolve a build take them; ``hash`` and ``branch-build-dirs`` take
+``--branch`` and ``--focus`` alone.
 
 ``project`` has one verb per *shape* of question, and nothing else:
 
@@ -54,7 +63,8 @@ CLI
 
 Worktrees are not ``project``'s: :doc:`/commands/worktree` creates and
 reclaims them for any repository. The two meet only at a path — ``project
-work-dir`` resolves/discovers one, ``build --work-dir`` accepts any.
+info --get repo.workdir`` resolves/discovers one, ``build --work-dir`` accepts
+any.
 
 Machine-readable queries for scripts and git hooks::
 
@@ -84,8 +94,9 @@ separate CLI key vocabulary: ``{{build_dir}}`` in a ``[repos.*]`` table and
    project info --get repo.workdir --get repo.main_branch hello -b feature-x
    project info --get toolchain.linker --get build_type --get project.focus hello
 
-The resolution is the same plan ``build`` would use, so every profile flag
-applies. The branch defaults to the anchored repo's current one.
+The resolution is the plan ``build`` would use from the same target and flags,
+so every profile flag applies. The branch defaults to the one checked out where
+the target points (see `Positionals, full`_).
 
 .. list-table::
    :header-rows: 1
@@ -135,19 +146,30 @@ Each verb's positional is a **name or a path**, mutually exclusive:
 
 * **path** if the token is ``.``/``..`` or begins with ``.``, ``/``, or ``~``.
   It may point *inside* a checkout; the owning project is found by
-  deepest-prefix match (``project_for_path``). Shells expand ``~`` and leave
-  ``./`` literal, so in practice the classifier keys on a leading ``.`` or
-  ``/``.
+  deepest-prefix match (``project_for_path``, then the owner's
+  ``developed_as``). Shells expand ``~`` and leave ``./`` literal, so in
+  practice the classifier keys on a leading ``.`` or ``/``.
 * **name** otherwise — a bare name or a fully-qualified ``org/name``. A bare
   name ambiguous across organisations is a hard error asking you to qualify
   it. There is no ``--org`` flag.
-* **omitted**: ``project`` covers every project; ``build``/``update`` operate
-  on the project owning the current directory (a hard error if none does).
+* **omitted**: the current directory, as a path — a hard error if no project
+  owns it. ``check`` is the exception: with no positional it validates every
+  project.
 
-For ``info``, ``hash``, and ``branch-build-dirs``, a path selects the
-**path-derived repo** (the one containing it) and a name selects the project's
-focus. ``build`` and ``devenv`` always use the project focus. A ``--focus``
-override applies to a name target; a path already names the repo.
+Every verb resolves its positional through one funnel (``resolve_target``),
+and which repo it then acts on follows from what the verb is about:
+
+* **A build** — ``info`` and ``--get``, ``build``, ``devenv`` — acts on the
+  project's focus wherever a path points, so a description and the build it
+  describes agree from any checkout of the project.
+* **One checkout** — ``hash``, ``branch-build-dirs`` — acts on the repo whose
+  checkout holds the path; for a name, on the project's focus.
+
+``--focus <repo>`` replaces either default, for a name or a path alike, and an
+unknown repo is an error before anything is printed. Without ``--branch`` the
+branch is read from the chosen repo's identity checkout at the path given —
+the current directory for a name or an omitted positional — and from its
+primary checkout when the path is not in one of that repo's own checkouts.
 
 Global flags
 ~~~~~~~~~~~~
@@ -155,12 +177,14 @@ Global flags
 ``-v/--verbose`` and ``-n/--dry-run`` are inherited from the ``wits`` process
 layer and described in :doc:`/installation`.
 
-Profile flags (affect resolution — ``build`` & ``project``)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Profile flags
+~~~~~~~~~~~~~
 
 These set the resolution axes (``Profile`` and ``PathInput``) and therefore
 change how paths (``repos.<name>.workdir``, ``build_dir``, ``install_dir``)
-resolve.
+resolve. ``build``, ``devenv``, and ``project info`` take all of them, after
+the verb; ``project hash`` and ``project branch-build-dirs`` take ``--branch``
+and ``--focus`` only.
 
 .. list-table::
    :header-rows: 1
@@ -173,7 +197,7 @@ resolve.
    * - ``--branch <X>``
      - ``-b``
      - Target branch (the build identity).
-     - focus repo's current branch
+     - the branch checked out where the target points
    * - ``--build-type <T>``
      - ``-B``
      - Build type (``debug``, ``release``, ``debugoptimized``, …).
@@ -192,8 +216,8 @@ resolve.
      - —
    * - ``--focus <repo>``
      -
-     - Override which repo is the build focus.
-     - ``project.focus``
+     - The repo to act on, for a name or a path target alike.
+     - ``project.focus`` (``hash``/``branch-build-dirs``: the path's repo)
    * - ``--work-dir <DIR>``
      -
      - Use this checkout verbatim as the selected repo's ``workdir``,
@@ -211,8 +235,8 @@ resolve.
      - —
 
 ``--work-dir`` is a ``PathInput`` axis and ``--spec`` is a ``Profile`` axis;
-both work on the ``project`` read queries (``build-dir``, …) as well as
-``build``.
+both work on ``project info`` (and ``--get``) as well as ``build`` and
+``devenv``.
 
 Build-only flags
 ~~~~~~~~~~~~~~~~
@@ -1296,6 +1320,8 @@ consumers:
    ws.project_for_path(&path);                   // which project owns this checkout
    ws.repo_for_path(&path);                      // …and which repo of it
    ws.repo_checkout_contains(&p, repo, &path);   // one named repo, borrows included
+   let t = resolve_target(&ws, Some("."))?;      // a CLI positional: project, checkout repo, here
+   t.build_focus(None)?;  t.checkout_focus(None)?;   // the repo a build / a checkout query acts on
    ws.toolchain(name);  ws.org(name);            // the shared registries
 
    let p: &Project = ...;                        // owned: name, org, source, settings, repos
@@ -1309,7 +1335,7 @@ consumers:
    resolve_plan(&ws, p, &BuildInput { .. })?;    // the full plan (BuildPlan)
    resolve_paths(&ws, p, &PathInput { .. })?;    // checkout + output paths only
    layout::work_dir(&ws, p, "main", branch)?;    // a repo's checkout for a branch
-   layout::current_branch(&ws, p, "main")?;      // via current_checkout (cwd-aware)
+   layout::current_branch(&ws, p, "main", here)?;  // via current_checkout at `here`
    layout::checkout_holding(&ws, p, "main", branch)?;  // the repo's own checkout of it
    layout::branch_checkout(&ws, p, "main", branch)?;   // whichever checkout has it
    layout::primary_checkout(&ws, p, "main")?;

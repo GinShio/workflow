@@ -7,11 +7,11 @@ use clap::Args;
 use wits_build::backend_for;
 use wits_core::git;
 use wits_project::{
-    anchor_of, layout, resolve_plan, value_to_string, DevenvOp, Project, Workspace,
+    anchor_of, layout, resolve_target, value_to_string, DevenvOp, Target, Workspace,
     DEVENV_SEPARATOR,
 };
 
-use super::common::{branch_or_current, paths_input, plan_for_query, resolve_repo};
+use super::common::{query_branch, query_plan};
 use crate::cmd::identity::ProfileArgs;
 
 #[derive(Debug, Args)]
@@ -33,14 +33,22 @@ pub struct InfoArgs {
     /// Use the description for those.
     #[arg(long = "get", value_name = "PATH")]
     pub get: Vec<String>,
+    #[command(flatten)]
+    pub profile: ProfileArgs,
 }
 
-pub(super) fn run(ws: &Workspace, args: &InfoArgs, profile: &ProfileArgs) -> Result<()> {
+/// `info` describes, and `--get` projects from, the build `wits build` makes
+/// from the same target and flags: a path picks the project and where the
+/// branch is read, and the focus is the project's own unless `--focus` names
+/// another. A path never quietly narrows the focus to the repo holding it, so
+/// what `info` reports from a checkout is what `build` does there.
+pub(super) fn run(ws: &Workspace, args: &InfoArgs) -> Result<()> {
+    let target = resolve_target(ws, args.target.as_deref())?;
+    let focus = target.build_focus(args.profile.focus.as_deref())?;
     if !args.get.is_empty() {
-        return get_paths(ws, args, profile);
+        return get_paths(ws, &target, &focus, args);
     }
-    let (project, repo) = resolve_repo(ws, args.target.as_deref(), profile.focus.as_deref())?;
-    describe(ws, project, &repo, profile)
+    describe(ws, &target, &focus, &args.profile)
 }
 
 /// `info --get <path>…`: one resolved value per path, one line each, in the
@@ -62,15 +70,16 @@ pub(super) fn run(ws: &Workspace, args: &InfoArgs, profile: &ProfileArgs) -> Res
 ///   - one failing path fails the whole invocation. Printing a blank line for it
 ///     would keep the *positions* right while leaving the caller unable to tell
 ///     an empty value from an absent one, which is worse than not answering.
-fn get_paths(ws: &Workspace, args: &InfoArgs, profile: &ProfileArgs) -> Result<()> {
-    let (project, plan) = plan_for_query(ws, args.target.as_deref(), profile)?;
+fn get_paths(ws: &Workspace, target: &Target, focus: &str, args: &InfoArgs) -> Result<()> {
+    let branch = query_branch(ws, target, focus, args.profile.branch.as_deref())?;
+    let plan = query_plan(ws, target, focus, &branch, &args.profile)?;
     // Resolve every path before printing any: a later failure must not leave a
     // caller holding a partial, positionally-misread answer on stdout.
     let mut values = Vec::with_capacity(args.get.len());
     for path in &args.get {
         let value = plan
             .get_scalar(path)
-            .with_context(|| format!("project '{}': --get {path}", project.key()))?;
+            .with_context(|| format!("project '{}': --get {path}", target.project.key()))?;
         values.push(value);
     }
     for value in values {
@@ -90,10 +99,11 @@ fn get_paths(ws: &Workspace, args: &InfoArgs, profile: &ProfileArgs) -> Result<(
 /// make visible; showing only the resolved form hides the declaration that
 /// produced it, and only the template hides everything the profile contributes.
 /// Resolution still needs a branch, so that section is what degrades when none
-/// can be discovered — the templates are always printed. A path target resolves
-/// to the repo containing it, exactly as `--get` does, so the description and a
-/// projection out of the same plan cannot disagree about which repo is meant.
-fn describe(ws: &Workspace, project: &Project, focus: &str, profile: &ProfileArgs) -> Result<()> {
+/// can be discovered — the templates are always printed. It resolves through
+/// the same plan `--get` projects from, so the two cannot disagree about which
+/// build is meant.
+fn describe(ws: &Workspace, target: &Target, focus: &str, profile: &ProfileArgs) -> Result<()> {
+    let project = target.project;
     println!("project: {}", project.key());
     println!("  source:       {}", project.source().display());
     if let Some(org) = project.org() {
@@ -232,19 +242,13 @@ fn describe(ws: &Workspace, project: &Project, focus: &str, profile: &ProfileArg
     // Resolution needs a branch, so this is the section that degrades: an
     // unresolvable branch says so rather than silently dropping the section,
     // since "no resolved paths" and "this project has none" are different facts.
-    let branch = branch_or_current(ws, project, focus, profile.branch.as_deref()).ok();
+    let branch = query_branch(ws, target, focus, profile.branch.as_deref()).ok();
     println!();
     let Some(branch) = branch else {
         println!("resolved: <no branch discovered — pass --branch to resolve>");
         return Ok(());
     };
-    let mut resolved = profile.to_profile();
-    resolved.focus = Some(focus.to_owned());
-    let plan = resolve_plan(
-        ws,
-        project,
-        &paths_input(&resolved, Some(&branch), profile.work_dir.as_deref()),
-    )?;
+    let plan = query_plan(ws, target, focus, &branch, profile)?;
     let identity = plan
         .paths
         .branch

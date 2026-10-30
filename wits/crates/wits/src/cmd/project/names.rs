@@ -97,6 +97,6 @@ fn repo_names(ws: &Workspace, target: Option<&str>) -> Result<Vec<String>> {
 fn targets<'a>(ws: &'a Workspace, target: Option<&str>) -> Result<Vec<&'a Project>> {
     match target {
         None => Ok(ws.projects().collect()),
-        Some(target) => resolve_target(ws, Some(target)).map(|p| vec![p]),
+        Some(target) => resolve_target(ws, Some(target)).map(|t| vec![t.project]),
     }
 }

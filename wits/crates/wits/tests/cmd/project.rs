@@ -641,34 +641,169 @@ fn info_reports_the_borrow_the_skip_list_and_both_template_and_resolution() {
     }
 }
 
-/// A target that names a path describes the repo containing that path, not the
-/// project's focus. `wrap` focuses `component`, so running from its `main`
-/// checkout is the discriminating case: the description and `--get` must agree.
+/// `info` describes the build `wits build` makes from the same place: a path
+/// picks the project, and the focus stays the project's own unless `--focus`
+/// names another. `wrap` focuses `component`, so standing in wrap's `main`
+/// checkout is the discriminating case.
 #[test]
-fn project_info_uses_the_path_derived_repo_not_the_project_focus() {
+fn project_info_describes_what_build_builds_from_the_same_place() {
     let fx = Fixture::new();
+    fx.ok(&["update", "work"]);
     fx.ok(&["update", "wrap"]);
     let main = fx.path("src-wrap");
+    let focus_of = |out: &Out| -> Vec<String> {
+        out.stdout
+            .lines()
+            .filter(|line| line.trim_start().starts_with("focus:"))
+            .map(|line| line.split_whitespace().last().unwrap().to_owned())
+            .collect()
+    };
 
     let described = fx.run_in(&main, &["project", "info"]);
     assert!(described.success, "stderr: {}", described.stderr);
-    let focus_lines: Vec<&str> = described
-        .stdout
-        .lines()
-        .filter(|line| line.trim_start().starts_with("focus:"))
-        .collect();
-    assert_eq!(focus_lines.len(), 2, "stdout: {}", described.stdout);
-    for line in focus_lines {
-        assert_eq!(
-            line.split_whitespace().last(),
-            Some("main"),
-            "path target should describe main: {line}"
+    assert_eq!(
+        focus_of(&described),
+        ["component", "component"],
+        "stdout: {}",
+        described.stdout
+    );
+    let got = fx.run_in(&main, &["project", "info", "--get", "project.focus"]);
+    assert_eq!(got.stdout.trim(), "component", "stderr: {}", got.stderr);
+
+    // `--focus` names another repo for a path and for the current directory.
+    let refocused = fx.run_in(&main, &["project", "info", ".", "--focus", "main"]);
+    assert!(refocused.success, "stderr: {}", refocused.stderr);
+    assert_eq!(
+        focus_of(&refocused),
+        ["main", "main"],
+        "stdout: {}",
+        refocused.stdout
+    );
+    let got = fx.run_in(
+        &main,
+        &[
+            "project",
+            "info",
+            "--get",
+            "project.focus",
+            "--focus",
+            "main",
+        ],
+    );
+    assert_eq!(got.stdout.trim(), "main", "stderr: {}", got.stderr);
+
+    // An unknown focus is refused before anything is printed.
+    let bad = fx.run_in(&main, &["project", "info", "--focus", "nope"]);
+    assert!(!bad.success);
+    assert_eq!(bad.stdout, "");
+    assert!(
+        bad.stderr
+            .contains("project 'wrap' has no repo 'nope' (--focus)"),
+        "stderr: {}",
+        bad.stderr
+    );
+}
+
+/// Each verb takes the flags it reads, after the verb: a query that resolves no
+/// build has no `--build-type` to ignore, and `list` has no `--branch`.
+#[test]
+fn the_profile_flags_belong_to_the_verbs_that_read_them() {
+    let fx = Fixture::new();
+    fx.ok(&["update", "work"]);
+    for args in [
+        &["project", "list", "--branch", "main"][..],
+        &["project", "check", "--focus", "main"],
+        &["project", "exists", "work", "-B", "release"],
+        &["project", "hash", "work", "-B", "release"],
+        &["project", "branch-build-dirs", "work", "-T", "clang"],
+        &["project", "-b", "main", "info", "work"],
+    ] {
+        let out = fx.run(args);
+        assert!(
+            !out.success,
+            "`wits {}` accepted a flag it ignores",
+            args.join(" ")
         );
     }
+    fx.ok(&["project", "info", "work", "-b", "main", "-B", "release"]);
+    fx.ok(&["project", "hash", "work", "-b", "main", "--focus", "main"]);
+    fx.ok(&["project", "branch-build-dirs", "work", "-b", "main"]);
+}
 
-    let got = fx.run_in(&main, &["project", "info", "--get", "project.focus"]);
-    assert!(got.success, "stderr: {}", got.stderr);
-    assert_eq!(got.stdout.trim(), "main");
+/// `hash` answers for the repo a checkout query names: by path, the repo whose
+/// checkout holds it; by name, the project's focus — a subtree's or a borrow's
+/// own git included — unless `--focus` names another.
+#[test]
+fn hash_names_the_commit_of_the_repo_the_target_names() {
+    let fx = Fixture::new();
+    fx.ok(&["update", "work"]);
+    fx.ok(&["update", "wrap"]);
+    let head = |rel: &str| {
+        git_out(&fx.path(rel), &["rev-parse", "HEAD"])
+            .trim()
+            .to_owned()
+    };
+    let hash = |args: &[&str]| fx.ok(args).stdout.trim().to_owned();
+
+    // wrap focuses the component it borrows, so its default answer is work's.
+    assert_eq!(hash(&["project", "hash", "wrap"]), head("src-work"));
+    assert_eq!(
+        hash(&["project", "hash", "wrap", "--focus", "main"]),
+        head("src-wrap")
+    );
+    let by_path = fx.path("src-wrap");
+    assert_eq!(
+        hash(&["project", "hash", by_path.to_str().unwrap()]),
+        head("src-wrap")
+    );
+
+    // Only a submodule has a pinned gitlink a live HEAD could override.
+    let borrowed = fx.run(&[
+        "project",
+        "hash",
+        "wrap",
+        "--submodules",
+        "direct",
+        "--repos",
+        "component",
+    ]);
+    assert!(!borrowed.success);
+    assert!(
+        borrowed.stderr.contains("has no pinned gitlink"),
+        "stderr: {}",
+        borrowed.stderr
+    );
+}
+
+/// A path target's branch is the one checked out at that path, wherever the
+/// command runs: a script asking about one worktree from another directory gets
+/// that worktree's answer.
+#[test]
+fn a_path_target_reads_the_branch_checked_out_at_that_path() {
+    let fx = Fixture::new();
+    fx.ok(&["update", "work"]);
+    let feature = fx.path("src-work.feat");
+    git(
+        &fx.path("src-work"),
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat",
+            feature.to_str().unwrap(),
+        ],
+    );
+    git(&feature, &["commit", "-q", "--allow-empty", "-m", "feat"]);
+    let at = feature.to_str().unwrap();
+
+    let got = fx.ok(&["project", "info", "--get", "branch.raw", at]);
+    assert_eq!(got.stdout.trim(), "feat");
+    let hashed = fx.ok(&["project", "hash", at]);
+    assert_eq!(
+        hashed.stdout.trim(),
+        git_out(&feature, &["rev-parse", "HEAD"]).trim()
+    );
 }
 
 /// `--work-dir` is a Profile axis, so it must reach every read query that

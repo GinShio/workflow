@@ -56,15 +56,15 @@ pub struct BuildArgs {
 /// `wits build` — its own top-level command, over the shared `project` core.
 pub fn run(args: &BuildArgs) -> Result<()> {
     let ws = Workspace::load()?;
-    let project = resolve_target(&ws, args.target.as_deref())?;
+    let target = resolve_target(&ws, args.target.as_deref())?;
     // Validate the flag-only layer before resolving the identity: a malformed
     // `-X` is the caller's mistake and names itself without touching git.
     let options = build_options(args)?;
     let request = BuildRequest {
-        identity: args.identity.to_identity(&ws, project)?,
+        identity: args.identity.to_identity(&ws, &target)?,
         options,
     };
-    build(&ws, project, &request)
+    build(&ws, target.project, &request)
 }
 
 fn build_options(a: &BuildArgs) -> Result<BuildOptions> {

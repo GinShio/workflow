@@ -7,10 +7,9 @@
 //! and the read-only `wits-project` core.
 //!
 //! An [`Identity`] is resolved by the caller (`target_branch`) before an action
-//! runs, so branch selection is not repeated inside the action. A detached
-//! build's checkout selection still falls back to the caller's cwd unless
-//! `work_dir` is supplied; that is the detached design, not a second branch
-//! policy.
+//! runs, so branch selection is not repeated inside the action, and no action
+//! reads the process cwd: where the caller stands arrives as
+//! [`Identity::here`], which a detached build takes its checkout from.
 
 use std::path::PathBuf;
 
@@ -33,11 +32,15 @@ pub use wits_build::BuildMode;
 pub type Env = std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>;
 
 /// A build identity resolved before an action runs: the profile axes, the branch
-/// (`None` = an explicit detached HEAD), and the output-path overrides.
+/// (`None` = an explicit detached HEAD), the output-path overrides, and where
+/// the caller stands.
 pub struct Identity {
     pub profile: Profile,
     pub branch: Option<String>,
     pub work_dir: Option<PathBuf>,
     pub build_dir: Option<PathBuf>,
     pub install_dir: Option<PathBuf>,
+    /// The target path, or the directory the command runs in: a detached build
+    /// takes each repo's checkout here before its primary checkout.
+    pub here: Option<PathBuf>,
 }

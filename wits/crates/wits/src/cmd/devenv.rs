@@ -52,13 +52,13 @@ pub enum DumpFormat {
 
 pub fn run(args: &DevenvArgs) -> Result<()> {
     let ws = Workspace::load()?;
-    let project = resolve_target(&ws, args.target.as_deref())?;
+    let target = resolve_target(&ws, args.target.as_deref())?;
     let caller: Env = std::env::vars_os().collect();
     let request = DevenvRequest {
-        identity: args.identity.to_identity(&ws, project)?,
+        identity: args.identity.to_identity(&ws, &target)?,
         capture_program: std::env::current_exe().context("locating the running wits binary")?,
     };
-    let overlay = compose(&ws, project, &request, &caller)?;
+    let overlay = compose(&ws, target.project, &request, &caller)?;
     match args.dump {
         Some(format) => {
             print!("{}", Delta::from_overlay(&overlay)?.render(format)?);
