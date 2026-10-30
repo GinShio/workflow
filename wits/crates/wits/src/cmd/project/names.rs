@@ -85,7 +85,7 @@ fn preset_names(ws: &Workspace, target: Option<&str>) -> Result<Vec<String>> {
 fn repo_names(ws: &Workspace, target: Option<&str>) -> Result<Vec<String>> {
     let mut names = BTreeSet::new();
     for project in targets(ws, target)? {
-        names.extend(ws.repo_names(project));
+        names.extend(project.repos().map(|(name, _)| name.to_owned()));
     }
     Ok(names.into_iter().collect())
 }

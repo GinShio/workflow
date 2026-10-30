@@ -104,11 +104,7 @@ pub fn target_branch(
     }
     let name = identity_repo(project, focus)
         .context("no own-git repo to take a branch from; pass --branch")?;
-    let repo = project
-        .repos
-        .get(&name)
-        .with_context(|| format!("repo '{name}' not found"))?;
-    layout::current_branch(ws, project, repo)?
+    layout::current_branch(ws, project, &name)?
         .map(Some)
         .with_context(|| match absent {
             BranchAbsence::Action => format!(

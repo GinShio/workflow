@@ -134,7 +134,7 @@ pub fn resolve_paths(
     // Once a full plan is available, nested repos under a bare-backed main must
     // instead point into main's bootstrap checkout.
     for repo in project.repos.values() {
-        let primary = layout::primary_path(ws, project, repo)?;
+        let primary = layout::primary_path(ws, project, repo.name())?;
         ctx.set(
             &format!("repos.{}.path", repo.name()),
             Value::from(primary.display().to_string()),
@@ -171,7 +171,7 @@ pub fn resolve_paths(
     for repo in project.repos.values() {
         let dir = match (input.work_dir, repo.name() == build_repo, input.branch) {
             (Some(dir), true, _) => dir.to_path_buf(),
-            (_, _, Some(branch)) => layout::work_dir(ws, project, repo, branch)?,
+            (_, _, Some(branch)) => layout::work_dir(ws, project, repo.name(), branch)?,
             (_, _, None) => layout::detached_work_dir(ws, project, repo)?,
         };
         ctx.set(

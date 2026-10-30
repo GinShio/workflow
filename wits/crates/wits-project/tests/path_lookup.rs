@@ -172,14 +172,12 @@ fn attribution_follows_declarations_not_repo_names() {
 
         let project = fx.ws.project("p").unwrap();
         assert_eq!(
-            layout::checkout_holding(&fx.ws, project, project.repo("main").unwrap(), "moved")
-                .unwrap(),
+            layout::checkout_holding(&fx.ws, project, "main", "moved").unwrap(),
             Some(fx.elsewhere.clone()),
             "an unplaced worktree is the bare-backed repo's checkout"
         );
         assert_eq!(
-            layout::checkout_holding(&fx.ws, project, project.repo(sibling).unwrap(), "moved")
-                .unwrap(),
+            layout::checkout_holding(&fx.ws, project, sibling, "moved").unwrap(),
             None,
             "an in-place repo's checkout is its own path"
         );
@@ -202,8 +200,7 @@ fn a_linked_worktree_is_attributed_to_its_own_sibling_repo() {
 fn checkout_selection_does_not_borrow_a_siblings_worktree() {
     let fx = fixture();
     let project = fx.ws.project("p").unwrap();
-    let main = project.repo("main").unwrap();
-    let review = project.repo("review").unwrap();
+    let (main, review) = ("main", "review");
 
     // `review` holds `review-branch`, but `main`'s own strategy places that
     // branch at `p.wt/review-branch`, not at the review worktree.
@@ -308,8 +305,7 @@ worktree_dir = "{review}"
     .unwrap();
     let ws = Workspace::load_from(&config).unwrap();
     let project = ws.project("p").unwrap();
-    let main = project.repo("main").unwrap();
-    let review = project.repo("review").unwrap();
+    let (main, review) = ("main", "review");
 
     let (found, repo) = ws
         .repo_for_path(&review_worktree.join("file"))
@@ -415,10 +411,7 @@ anchor = "main"
     let ws = Workspace::load_from(&config).unwrap();
     let llpc = ws.project("llpc").unwrap();
     let ogl = ws.project("ogl").unwrap();
-    let owned = llpc.repo("main").unwrap();
-    let borrowed = ogl.repo("compiler").unwrap();
-
-    for (project, repo) in [(llpc, owned), (ogl, borrowed)] {
+    for (project, repo) in [(llpc, "main"), (ogl, "compiler")] {
         assert_eq!(
             layout::checkout_holding(&ws, project, repo, "topic").unwrap(),
             None,
@@ -457,7 +450,7 @@ fn nested_repos_live_in_mains_own_checkout() {
     std::fs::write(&file, body).unwrap();
     let ws = Workspace::load_from(&config).unwrap();
     let project = ws.project("llpc").unwrap();
-    let main = project.repo("main").unwrap();
+    let main = "main";
 
     assert_eq!(
         layout::checkout_holding(&ws, project, main, "main").unwrap(),
@@ -468,7 +461,7 @@ fn nested_repos_live_in_mains_own_checkout() {
         trees.join("main")
     );
     assert_eq!(
-        layout::primary_path(&ws, project, project.repo("sub").unwrap()).unwrap(),
+        layout::primary_path(&ws, project, "sub").unwrap(),
         trees.join("main/sub")
     );
 }
@@ -504,7 +497,7 @@ worktree_dir = "{}/p.wt/{{{{branch.slug}}}}"
     let ws = Workspace::load_from(&config).unwrap();
     let project = ws.project("p").unwrap();
     assert_eq!(
-        layout::checkout_holding(&ws, project, project.repo("main").unwrap(), "main").unwrap(),
+        layout::checkout_holding(&ws, project, "main", "main").unwrap(),
         Some(repo)
     );
 }

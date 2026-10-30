@@ -10,7 +10,7 @@ use anyhow::{bail, Result};
 
 use crate::context::{self, Ctx};
 use crate::decl::HooksDecl;
-use crate::workspace::{Project, Repo, Workspace};
+use crate::workspace::{Project, Workspace};
 
 /// The lifecycle phase a hook belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,32 +47,22 @@ impl HookPhase {
 }
 
 impl Project {
-    /// The rendered command for one phase, or `None` when the phase declares no
-    /// hook (the built-in lifecycle then applies).
-    ///
-    /// `repo` must be the one owned by this project; a reference from another
-    /// project is rejected rather than rendering against a same-named repo or
-    /// panicking in the context builder.
+    /// The rendered command for one phase of this project's repo `repo`, or
+    /// `None` when the phase declares no hook (the built-in lifecycle then
+    /// applies).
     pub fn render_hook(
         &self,
         ws: &Workspace,
-        repo: &Repo,
+        repo: &str,
         phase: HookPhase,
     ) -> Result<Option<String>> {
-        if !self
-            .repo(repo.name())
-            .is_some_and(|own| std::ptr::eq(own, repo))
-        {
-            bail!(
-                "repo '{}' does not belong to project '{}'",
-                repo.name(),
-                self.key()
-            );
-        }
-        let Some(template) = phase.command(&repo.decl.hooks) else {
+        let Some(declared) = self.repo(repo) else {
+            bail!("project '{}' has no repo '{repo}'", self.key());
+        };
+        let Some(template) = phase.command(&declared.decl.hooks) else {
             return Ok(None);
         };
-        let ctx = Ctx::new(context::context_for_repo(ws, self, repo.name()));
+        let ctx = Ctx::new(context::context_for_repo(ws, self, repo));
         Ok(Some(ctx.render(template)?))
     }
 }
@@ -137,7 +127,6 @@ mod tests {
     fn every_phase_renders_its_own_hook() {
         let (_d, ws) = fixture();
         let project = ws.project("engine").unwrap();
-        let repo = project.repo("main").unwrap();
         for (phase, suffix) in [
             (HookPhase::Clone, "clone"),
             (HookPhase::PostClone, "post_clone"),
@@ -147,7 +136,7 @@ mod tests {
         ] {
             assert_eq!(phase.as_str(), suffix);
             assert_eq!(
-                project.render_hook(&ws, repo, phase).unwrap(),
+                project.render_hook(&ws, "main", phase).unwrap(),
                 Some(format!("engine:main:{suffix}")),
                 "{phase:?}"
             );
@@ -158,10 +147,9 @@ mod tests {
     fn a_borrowed_hook_renders_in_the_borrowers_namespace() {
         let (_d, ws) = fixture();
         let project = ws.project("viewer").unwrap();
-        let repo = project.repo("engine").unwrap();
         assert_eq!(
             project
-                .render_hook(&ws, repo, HookPhase::PostClone)
+                .render_hook(&ws, "engine", HookPhase::PostClone)
                 .unwrap(),
             Some("viewer:engine:post_clone".to_owned())
         );
@@ -171,23 +159,21 @@ mod tests {
     fn an_unknown_path_in_a_hook_is_an_error() {
         let (_d, ws) = fixture();
         let project = ws.project("bad").unwrap();
-        let repo = project.repo("main").unwrap();
         let err = project
-            .render_hook(&ws, repo, HookPhase::PreUpdate)
+            .render_hook(&ws, "main", HookPhase::PreUpdate)
             .unwrap_err()
             .to_string();
         assert!(err.contains("missing.path"), "{err}");
     }
 
     #[test]
-    fn a_repo_from_another_project_is_refused() {
+    fn a_repo_the_project_does_not_declare_is_refused() {
         let (_d, ws) = fixture();
         let viewer = ws.project("viewer").unwrap();
-        let foreign = ws.project("engine").unwrap().repo("main").unwrap();
         let err = viewer
-            .render_hook(&ws, foreign, HookPhase::PreUpdate)
+            .render_hook(&ws, "nope", HookPhase::PreUpdate)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("does not belong"), "{err}");
+        assert!(err.contains("has no repo 'nope'"), "{err}");
     }
 }

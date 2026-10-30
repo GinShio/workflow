@@ -123,11 +123,7 @@ fn describe(ws: &Workspace, project: &Project, focus: &str, profile: &ProfileArg
         // A path template that fails to resolve is a real config error; surface
         // it inline rather than letting `unwrap_or_default()` render an empty
         // path that then masquerades as a plain "<not cloned>" repo.
-        let path = match layout::primary_path(
-            ws,
-            project,
-            project.repo(name).context("repo not found")?,
-        ) {
+        let path = match layout::primary_path(ws, project, name) {
             Ok(path) => path,
             Err(e) => {
                 println!("  {name:<12} {kind:<10} <path error: {e}>");

@@ -1543,8 +1543,8 @@ exists (the annotated form lives in :doc:`project-reference`):
    resolve_target(&ws, target)?;             // the one name/path/cwd funnel
    resolve_plan(&ws, p, &BuildInput { .. })?;    // the full plan
    resolve_paths(&ws, p, &PathInput { .. })?;    // checkout + output paths only
-   layout::work_dir(&ws, p, repo, branch)?;      // a repo's checkout for a branch
-   layout::current_branch(&ws, p, repo)?;        // what the path queries default through
+   layout::work_dir(&ws, p, "main", branch)?;    // a repo's checkout for a branch (by name)
+   layout::current_branch(&ws, p, "main")?;      // what the path queries default through
    skip::violations(&git, &repo.decl().skip);    // the `--check` skip verification
 
 The consumers are the ``wits`` commands themselves: ``wits-actions`` drives

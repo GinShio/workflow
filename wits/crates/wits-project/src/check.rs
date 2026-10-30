@@ -74,7 +74,7 @@ pub fn check_one(ws: &Workspace, project: &Project) -> Vec<Issue> {
         // truth lives on disk rather than in the file. Only a cloned checkout can
         // answer, and it is the same one `update` verifies.
         if !repo.decl().skip.is_empty() {
-            if let Some(checkout) = layout::primary_checkout(ws, project, repo)
+            if let Some(checkout) = layout::primary_checkout(ws, project, repo.name())
                 .ok()
                 .flatten()
                 .map(Repository::new)

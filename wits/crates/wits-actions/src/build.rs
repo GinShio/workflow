@@ -206,10 +206,7 @@ fn require_hybrid_worktree(
     plan: &BuildPlan,
     branch: &str,
 ) -> Result<()> {
-    let build = project
-        .repo(&plan.paths.build_repo)
-        .context("build repo not found")?;
-    let found = layout::checkout_holding(ws, project, build, branch)?;
+    let found = layout::checkout_holding(ws, project, &plan.paths.build_repo, branch)?;
     let Some(actual) = found else {
         bail!(
             "branch '{}' is not checked out in any worktree of repo '{}' — create it with \

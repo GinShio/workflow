@@ -19,8 +19,8 @@ pub struct ExistsArgs {
 /// must be the root of either a working-tree checkout or a bare clone.
 pub(super) fn run(ws: &Workspace, args: &ExistsArgs) -> Result<()> {
     let project = ws.project(&args.name)?;
-    let path = layout::primary_path(ws, project, project.repo("main").context("repo not found")?)
-        .context("cannot resolve path of repos.main")?;
+    let path =
+        layout::primary_path(ws, project, "main").context("cannot resolve path of repos.main")?;
     let repo = git::Repository::new(&path);
     let root = repo
         .toplevel()

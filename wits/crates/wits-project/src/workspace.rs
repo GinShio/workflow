@@ -206,7 +206,7 @@ impl Workspace {
                         source_project.key()
                     );
                 }
-                let path = layout::primary_path(self, source_project, source)?;
+                let path = layout::primary_path(self, source_project, source.name())?;
                 pending.push(Pending {
                     borrower: key.clone(),
                     repo: repo_name.clone(),
@@ -423,7 +423,7 @@ impl Workspace {
     ) -> Option<usize> {
         let repo = project.repos.get(repo_name)?;
         let mut roots = vec![project.repo_abs_path(repo_name).ok()?];
-        if let Ok(primary) = layout::primary_path(self, project, repo) {
+        if let Ok(primary) = layout::primary_path(self, project, repo_name) {
             if !roots.contains(&primary) {
                 roots.push(primary);
             }
@@ -445,7 +445,7 @@ impl Workspace {
                 let Some(depth) = containment_depth(query, &wt.path) else {
                     continue;
                 };
-                if layout::worktree_belongs_to(self, project, repo, wt, inventory) {
+                if layout::worktree_belongs_to(self, repo, wt, inventory) {
                     deepen(depth);
                 }
             }
@@ -485,10 +485,6 @@ impl Workspace {
             }
         }
         names.into_iter().collect()
-    }
-
-    pub fn repo_names(&self, project: &Project) -> Vec<String> {
-        project.repos.keys().cloned().collect()
     }
 
     fn available(&self) -> String {

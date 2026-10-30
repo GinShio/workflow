@@ -29,7 +29,7 @@ use wits_core::worktree;
 use wits_project::layout;
 use wits_project::remotes;
 use wits_project::skip;
-use wits_project::{HookPhase, Project, Repo, RepoDecl, Workspace};
+use wits_project::{HookPhase, Project, RepoDecl, Workspace};
 
 /// How far an update reaches: a repo borrowed from another project is left to
 /// its owner unless this asks otherwise.
@@ -58,11 +58,7 @@ pub fn update(ws: &Workspace, project: &Project, options: &UpdateOptions) -> Res
         // rather than failed. Asked of the very root `repo_primary_path` nests under,
         // so the guard and the path it guards cannot disagree.
         if repo.kind() == wits_project::Kind::Submodule {
-            let root = layout::nesting_root(
-                ws,
-                project,
-                project.repo("main").context("repo 'main' not found")?,
-            )?;
+            let root = layout::nesting_root(ws, project, "main")?;
             if !root.exists() {
                 log::debug!(
                     "repo '{name}': main has no checkout at {}; nested lifecycle skipped",
@@ -71,9 +67,8 @@ pub fn update(ws: &Workspace, project: &Project, options: &UpdateOptions) -> Res
                 continue;
             }
         }
-        let path =
-            layout::primary_path(ws, project, project.repo(&name).context("repo not found")?)
-                .with_context(|| format!("cannot resolve path of repo '{name}'"))?;
+        let path = layout::primary_path(ws, project, &name)
+            .with_context(|| format!("cannot resolve path of repo '{name}'"))?;
         let git = Repository::new(path);
         if !git.exists() {
             clone_repo(ws, project, &name, &git).with_context(|| {
@@ -179,14 +174,14 @@ fn clone_repo(ws: &Workspace, project: &Project, name: &str, git: &Repository) -
     // the branch strategy: in-place creates a conventional checkout, while
     // worktree/hybrid create a bare common repository and an explicit bootstrap
     // checkout for main.
-    match project.render_hook(ws, repo, HookPhase::Clone)? {
+    match project.render_hook(ws, name, HookPhase::Clone)? {
         Some(action) => run_script(None, &action, "clone")?,
         None if strategy.is_bare_backed() => clone_bare_repo(ws, project, name, git)?,
         None => clone_in_place_repo(repo.decl(), git)?,
     }
 
     let checkout = if strategy.is_bare_backed() {
-        let dir = layout::bootstrap_worktree_dir(ws, project, repo)?;
+        let dir = layout::bootstrap_worktree_dir(ws, project, name)?;
         if !wits_core::log::is_dry_run() && !dir.exists() {
             bail!(
                 "repo '{name}': bare clone has no bootstrap worktree at {}",
@@ -206,7 +201,7 @@ fn clone_repo(ws: &Workspace, project: &Project, name: &str, git: &Repository) -
     run_hook(
         ws,
         project,
-        repo,
+        name,
         HookPhase::PostClone,
         Some(checkout.path()),
     )?;
@@ -274,7 +269,7 @@ fn clone_bare_repo(ws: &Workspace, project: &Project, name: &str, git: &Reposito
         .main_branch
         .as_deref()
         .context("bare-backed repo has no main_branch")?;
-    let bootstrap = layout::bootstrap_worktree_dir(ws, project, repo)?;
+    let bootstrap = layout::bootstrap_worktree_dir(ws, project, name)?;
 
     // A tracking bare host rather than `git clone --bare`: the remote's branches
     // belong in `refs/remotes/<remote>/*`, and `refs/heads` belongs to the
@@ -327,7 +322,7 @@ fn update_repo(ws: &Workspace, project: &Project, name: &str, git: &Repository) 
         .decl()
         .main_branch
         .as_deref()
-        .map(|branch| layout::branch_checkout(ws, project, repo, branch))
+        .map(|branch| layout::branch_checkout(ws, project, name, branch))
         .transpose()?
         .flatten()
         .map(Repository::new);
@@ -343,7 +338,7 @@ fn update_repo(ws: &Workspace, project: &Project, name: &str, git: &Repository) 
     // unverified — while `skip` is a property of the repo and of nothing else.
     let workdir = match holding.clone() {
         Some(checkout) => Some(checkout),
-        None => layout::primary_checkout(ws, project, repo)?.map(Repository::new),
+        None => layout::primary_checkout(ws, project, name)?.map(Repository::new),
     };
 
     // Before anything else: a checkout that contradicts its declared `skip` is a
@@ -363,9 +358,9 @@ fn update_repo(ws: &Workspace, project: &Project, name: &str, git: &Repository) 
         .map(Repository::path)
         .unwrap_or_else(|| git.path());
 
-    run_hook(ws, project, repo, HookPhase::PreUpdate, Some(hook_cwd))?;
+    run_hook(ws, project, name, HookPhase::PreUpdate, Some(hook_cwd))?;
 
-    if let Some(action) = project.render_hook(ws, repo, HookPhase::Update)? {
+    if let Some(action) = project.render_hook(ws, name, HookPhase::Update)? {
         run_script(Some(hook_cwd), &action, "update")?;
     } else {
         default_update(
@@ -379,7 +374,7 @@ fn update_repo(ws: &Workspace, project: &Project, name: &str, git: &Repository) 
         )?;
     }
 
-    run_hook(ws, project, repo, HookPhase::PostUpdate, Some(hook_cwd))?;
+    run_hook(ws, project, name, HookPhase::PostUpdate, Some(hook_cwd))?;
     Ok(())
 }
 
@@ -468,13 +463,12 @@ fn refresh_submodules(
 ) -> Result<()> {
     let mut declared = BTreeSet::new();
     if name == "main" {
-        let main = project.repo("main").context("repo 'main' not found")?;
-        let root = layout::nesting_root(ws, project, main)?;
+        let root = layout::nesting_root(ws, project, "main")?;
         for (repo_name, repo) in project.repos() {
             if repo_name == "main" || repo.kind() == wits_project::Kind::Standalone {
                 continue;
             }
-            let path = layout::primary_path(ws, project, repo).with_context(|| {
+            let path = layout::primary_path(ws, project, repo_name).with_context(|| {
                 format!("cannot resolve path of declared nested repo '{repo_name}'")
             })?;
             if let Ok(relative) = path.strip_prefix(&root) {
@@ -550,7 +544,7 @@ fn ensure_remotes(git: &Repository, repo: &RepoDecl) -> Result<()> {
 fn run_hook(
     ws: &Workspace,
     project: &Project,
-    repo: &Repo,
+    repo: &str,
     phase: HookPhase,
     cwd: Option<&Path>,
 ) -> Result<()> {

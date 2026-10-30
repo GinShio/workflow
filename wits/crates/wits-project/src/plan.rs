@@ -795,19 +795,19 @@ anchor = "main"
         let (_d, ws) = ws_with(body, "hello");
         let project = ws.project("hello").unwrap();
         assert_eq!(
-            bootstrap_worktree_dir(&ws, project, project.repo("main").unwrap()).unwrap(),
+            bootstrap_worktree_dir(&ws, project, "main").unwrap(),
             PathBuf::from("/src/main.git.primary")
         );
         assert_eq!(
-            bootstrap_worktree_dir(&ws, project, project.repo("other").unwrap()).unwrap(),
+            bootstrap_worktree_dir(&ws, project, "other").unwrap(),
             PathBuf::from("/src/other.git.wt/stable_x")
         );
         assert_eq!(
-            bootstrap_worktree_dir(&ws, project, project.repo("relative").unwrap()).unwrap(),
+            bootstrap_worktree_dir(&ws, project, "relative").unwrap(),
             PathBuf::from("/work/relative/main")
         );
         assert_eq!(
-            bootstrap_worktree_dir(&ws, project, project.repo("anchored").unwrap()).unwrap(),
+            bootstrap_worktree_dir(&ws, project, "anchored").unwrap(),
             PathBuf::from("/src/worktrees/main")
         );
     }

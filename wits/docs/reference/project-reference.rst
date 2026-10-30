@@ -1299,15 +1299,18 @@ consumers:
    p.key();  p.focus_name(override);             // org/name; override → project.focus → "main"
    p.repo(name).map(Repo::kind);  p.is_borrowed(name);   // inferred kind; from-borrow?
    p.repo_abs_path(name)?;                       // the rendered, ~-expanded path
-   p.render_hook(&ws, repo, HookPhase::Update)?; // the one public hook entry
+   p.render_hook(&ws, "main", HookPhase::Update)?; // the one public hook entry
 
+   // Every layout function and render_hook takes the repo by name, looked up
+   // in the project it is given.
    resolve_plan(&ws, p, &BuildInput { .. })?;    // the full plan (BuildPlan)
    resolve_paths(&ws, p, &PathInput { .. })?;    // checkout + output paths only
-   layout::work_dir(&ws, p, repo, branch)?;      // a repo's checkout for a branch
-   layout::current_branch(&ws, p, repo)?;        // via current_checkout (cwd-aware)
-   layout::checkout_holding(&ws, p, repo, branch)?;
-   layout::primary_checkout(&ws, p, repo)?;
-   layout::primary_path(&ws, p, repo)?;  layout::nesting_root(&ws, p, main)?;
+   layout::work_dir(&ws, p, "main", branch)?;    // a repo's checkout for a branch
+   layout::current_branch(&ws, p, "main")?;      // via current_checkout (cwd-aware)
+   layout::checkout_holding(&ws, p, "main", branch)?;  // the repo's own checkout of it
+   layout::branch_checkout(&ws, p, "main", branch)?;   // whichever checkout has it
+   layout::primary_checkout(&ws, p, "main")?;
+   layout::primary_path(&ws, p, "main")?;  layout::nesting_root(&ws, p, "main")?;
    identity_repo(p, focus);  anchor_of(p, focus);  target_branch(..)?;
 
 A ``BuildPlan`` carries the whole resolution — ``paths`` (``focus``,

@@ -94,22 +94,13 @@ pub(super) fn run(ws: &Workspace, args: &HashArgs, profile: &ProfileArgs) -> Res
     // reported where it is materialised), so it runs in that branch's checkout —
     // which for a bare-backed repo is a worktree, and never the git-dir, where
     // nothing would ever be found.
-    let repository = layout::primary_path(
-        ws,
-        project,
-        project.repo(&identity).context("repo not found")?,
-    )
-    .with_context(|| format!("cannot resolve path of repo '{identity}'"))?;
+    let repository = layout::primary_path(ws, project, &identity)
+        .with_context(|| format!("cannot resolve path of repo '{identity}'"))?;
     let sha = git::Repository::new(&repository)
         .rev_parse(&branch)
         .with_context(|| format!("branch '{branch}' does not exist in repo '{identity}'"))?;
-    let path = layout::work_dir(
-        ws,
-        project,
-        project.repo(&identity).context("repo not found")?,
-        &branch,
-    )
-    .with_context(|| format!("cannot resolve the checkout of repo '{identity}'"))?;
+    let path = layout::work_dir(ws, project, &identity, &branch)
+        .with_context(|| format!("cannot resolve the checkout of repo '{identity}'"))?;
     let git = git::Repository::new(&path);
 
     // Resolve `--repos` before the scope check so a bad name errors either way.
@@ -153,7 +144,7 @@ fn live_overrides(
                 k.as_str()
             ),
         }
-        let path = layout::primary_path(ws, project, project.repo(name).context("repo not found")?)
+        let path = layout::primary_path(ws, project, name)
             .with_context(|| format!("cannot resolve path of repo '{name}'"))?;
         let head = git::Repository::new(&path)
             .rev_parse("HEAD")

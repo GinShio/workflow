@@ -34,13 +34,8 @@ pub(super) fn run(ws: &Workspace, args: &TargetArgs, profile: &ProfileArgs) -> R
     // may share one git dir and be told apart only by which checkout they place
     // (a bare-backed component and a review checkout of it), so collapsing to the
     // repository path would discard the one thing that distinguishes them.
-    let path = layout::work_dir(
-        ws,
-        project,
-        project.repo(&repo).context("repo not found")?,
-        &branch,
-    )
-    .with_context(|| format!("cannot resolve the checkout of repo '{repo}'"))?;
+    let path = layout::work_dir(ws, project, &repo, &branch)
+        .with_context(|| format!("cannot resolve the checkout of repo '{repo}'"))?;
     for found in wits_project::branch_build_dirs(ws, &path, &branch) {
         println!("{}\t{}", found.project, found.path.display());
     }
