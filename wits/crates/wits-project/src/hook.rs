@@ -6,7 +6,7 @@
 //! **borrower's** project context — the hook runs where the repo is used, even
 //! though its text travelled from the owner.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 use crate::context::{self, Ctx};
 use crate::decl::HooksDecl;
@@ -63,7 +63,12 @@ impl Project {
             return Ok(None);
         };
         let ctx = Ctx::new(context::context_for_repo(ws, self, repo));
-        Ok(Some(ctx.render(template)?))
+        // A script is one string, as a path is: a map would flatten to `sh -c ""`
+        // and a boolean to the `true` or `false` command, both of which "run".
+        let script = ctx
+            .render_path(template)
+            .with_context(|| format!("resolving {} hook", phase.as_str()))?;
+        Ok(Some(script))
     }
 }
 
@@ -161,9 +166,39 @@ mod tests {
         let project = ws.project("bad").unwrap();
         let err = project
             .render_hook(&ws, "main", HookPhase::PreUpdate)
-            .unwrap_err()
-            .to_string();
+            .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("resolving pre_update hook"), "{err}");
         assert!(err.contains("missing.path"), "{err}");
+    }
+
+    /// A hook is run as one shell script, so a whole expression that resolves to
+    /// anything but a string is refused instead of running as some other
+    /// command.
+    #[test]
+    fn a_hook_must_resolve_to_one_string() {
+        for hook in [
+            "{{ {'make': 1} }}",
+            "{{ ['make', 'install'] }}",
+            "{{ true }}",
+        ] {
+            let (_d, ws) = ws_with(&[(
+                "p.toml",
+                &format!(
+                    "[project]\n[repos.main]\npath = \"/src/p\"\nmain_branch = \"main\"\n\
+                     [repos.main.hooks]\npost_update = \"{hook}\"\n"
+                ),
+            )]);
+            let project = ws.project("p").unwrap();
+            let err = project
+                .render_hook(&ws, "main", HookPhase::PostUpdate)
+                .unwrap_err();
+            let err = format!("{err:#}");
+            assert!(
+                err.contains("resolving post_update hook") && err.contains("non-string"),
+                "{hook}: {err}"
+            );
+        }
     }
 
     #[test]

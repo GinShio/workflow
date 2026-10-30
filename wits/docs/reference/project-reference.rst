@@ -1028,8 +1028,10 @@ falling back.
 Hooks
 ^^^^^
 
-``[repos.<name>.hooks]`` — inline ``sh -c`` command strings, templated.
-Phases: ``clone`` / ``post_clone`` and ``pre_update`` / ``update`` /
+``[repos.<name>.hooks]`` — inline ``sh -c`` command strings, templated. A
+hook has to resolve to one string: a whole ``{{ … }}`` that yields a list, a
+map, or a boolean is an error naming the phase, not a script that runs as
+something else. Phases: ``clone`` / ``post_clone`` and ``pre_update`` / ``update`` /
 ``post_update``. (The clone phase has no ``pre`` hook — the repo does not
 exist yet.) The bare phase name (``clone``, ``update``) overrides that
 phase's default action; ``pre_``/``post_`` add hooks around it.
