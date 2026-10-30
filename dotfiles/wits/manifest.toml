@@ -13,6 +13,13 @@ capabilities = ['develop']
 planes = ['user']
 
 [[install]]
+id = 'wits-review'
+dst = '~/.config/wits/review.toml'
+path = 'review.toml'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
 id = 'wits-tmpfiles'
 dst = '~/.config/user-tmpfiles.d/'
 path = 'tmpfiles.d/'
