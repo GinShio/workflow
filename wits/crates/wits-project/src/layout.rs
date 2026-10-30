@@ -58,8 +58,10 @@ pub fn primary_path(ws: &Workspace, project: &Project, repo: &Repo) -> Result<Pa
 /// The checkout that a repo's **nested** repos live inside.
 ///
 /// A conventional clone is its own answer. A bare-backed repo's is a *worktree*
-/// — the one holding `main_branch`, else its bootstrap — because a git-dir has
-/// no tree for anything to be nested in.
+/// — its own checkout holding `main_branch`, else its bootstrap — because a
+/// git-dir has no tree for anything to be nested in. "Its own" is
+/// [`checkout_holding`]'s answer, so a `main_branch` checkout a sibling repo
+/// places is not where this repo's nested repos are looked for.
 pub fn nesting_root(ws: &Workspace, project: &Project, main: &Repo) -> Result<PathBuf> {
     let path = project.repo_abs_path(main.name())?;
     if !main.decl.strategy.is_bare_backed() {
@@ -74,12 +76,11 @@ pub fn nesting_root(ws: &Workspace, project: &Project, main: &Repo) -> Result<Pa
     if git.git_dir().is_none() || !git.is_bare() {
         return Ok(path);
     }
-    match main
-        .decl
-        .main_branch
-        .as_deref()
-        .and_then(|branch| repository_worktree_for_branch(&git, branch))
-    {
+    let holding = match main.decl.main_branch.as_deref() {
+        Some(branch) => checkout_holding(ws, project, main, branch)?,
+        None => None,
+    };
+    match holding {
         Some(worktree) => Ok(worktree),
         None => bootstrap_worktree_dir(ws, project, main),
     }
@@ -143,24 +144,32 @@ pub fn work_dir(ws: &Workspace, project: &Project, repo: &Repo, branch: &str) ->
     resolve_work_dir(ws, project, repo, &ctx, repo.decl.strategy, branch)
 }
 
-/// Whether a live worktree belongs to `repo` rather than to a sibling repo that
-/// shares its git dir.
+/// Whether a live worktree of `repo`'s repository is `repo`'s own checkout.
 ///
-/// Two repos may share one git repository and still be different checkouts of
-/// it: a bare-backed component and a review checkout of the same component each
-/// declare their own placement. `git worktree list` answers for the
-/// *repository*, so it reports both to both, and attributing every worktree to
-/// every repo that points at that git dir makes the two indistinguishable.
+/// One repository can back several declared repos — a bare-backed component
+/// and a review checkout of it, each with its own placement (amdllpc's `main`
+/// and `review`). `git worktree list` reports every checkout to all of them, so
+/// a worktree is attributed by declaration:
 ///
-/// A repo with no `worktree_dir` accepts what git reported: it declares no
-/// placement to compare, so its checkout *is* the repository. Otherwise the
-/// declared placements decide — its primary path, its `worktree_dir` rendered for
-/// the worktree's branch, the branch-independent form of that template (the fixed
-/// selector a detached build accepts), and its bootstrap checkout. A hybrid repo
-/// falls back further, to the live inventory its strategy searches by design, but
-/// only for a worktree that holds a branch and that no sibling *places* itself:
-/// an explicit placement outranks the inventory search, which is what keeps two
-/// repos of one project distinguishable.
+/// 1. a repo owns what its declaration places — its primary path, its
+///    `worktree_dir` for the worktree's branch, the branch-independent form of
+///    that template, and its bootstrap checkout;
+/// 2. a worktree a sibling's declaration places is the sibling's;
+/// 3. any other worktree is a bare-backed repo's: its checkouts live wherever
+///    git put them (moved, created off the template, or a detached review),
+///    while an in-place repo's one checkout is its own path.
+///
+/// A repo whose repository no sibling shares owns every worktree of it. The
+/// question is asked in the frame of the project that owns the repo: a borrow
+/// carries copies of the owner's declarations, and only the owner sees every
+/// repo declared over its repository, so the answer cannot depend on which
+/// borrower asks. Two bare-backed repos over one repository have no rule to
+/// tell their unplaced worktrees apart; both claim them and the caller's tie
+/// break decides — declaring a placement is what disambiguates.
+///
+/// `inventory` is the repository's whole `git worktree list`, bare entry
+/// included: it is how a sibling declared at one of its worktrees is
+/// recognised as sharing the repository without asking git again.
 ///
 /// This is deliberately the same predicate for path lookup and checkout
 /// selection; a sibling worktree must not be selected by one and rejected by the
@@ -170,20 +179,52 @@ pub(crate) fn worktree_belongs_to(
     project: &Project,
     repo: &Repo,
     wt: &Worktree,
+    inventory: &[Worktree],
 ) -> bool {
-    if repo.decl.worktree_dir.is_none() {
-        return true;
-    }
+    let Ok((project, repo)) = owner(ws, project, repo) else {
+        return false;
+    };
     if places(ws, project, repo, wt) {
         return true;
     }
-    repo.decl.strategy == BranchStrategy::Hybrid
-        && wt.branch.is_some()
-        && !project.repos().any(|(name, sibling)| {
-            name != repo.name()
-                && sibling.decl.worktree_dir.is_some()
-                && places(ws, project, sibling, wt)
+    let siblings = siblings_sharing(ws, project, repo, inventory);
+    if siblings.is_empty() {
+        return true;
+    }
+    if siblings
+        .iter()
+        .any(|sibling| places(ws, project, sibling, wt))
+    {
+        return false;
+    }
+    repo.decl.strategy.is_bare_backed()
+}
+
+/// The other repos of `project` declared over `repo`'s repository: standalone
+/// repos whose path is that repository, or one of its worktrees.
+///
+/// Nested repos never qualify: a submodule has a repository of its own, and a
+/// subtree's checkout is a directory inside one, never a worktree root. Leaving
+/// them out is also what keeps this from recursing through [`nesting_root`].
+fn siblings_sharing<'a>(
+    ws: &Workspace,
+    project: &'a Project,
+    repo: &Repo,
+    inventory: &[Worktree],
+) -> Vec<&'a Repo> {
+    let Ok(own) = primary_path(ws, project, repo) else {
+        return Vec::new();
+    };
+    project
+        .repos
+        .values()
+        .filter(|other| other.name() != repo.name() && other.kind() == Kind::Standalone)
+        .filter(|other| {
+            primary_path(ws, project, other).is_ok_and(|path| {
+                same_path(&path, &own) || inventory.iter().any(|wt| same_path(&wt.path, &path))
+            })
         })
+        .collect()
 }
 
 /// Does `repo`'s own declaration place a checkout at `wt`'s path?
@@ -267,7 +308,8 @@ pub fn checkout_holding(
 ) -> Result<Option<PathBuf>> {
     let git = repository_of(ws, project, repo)?;
     let main = git.main_worktree();
-    for (index, wt) in git.worktrees().into_iter().enumerate() {
+    let inventory = git.worktrees();
+    for (index, wt) in inventory.iter().enumerate() {
         if !wt.is_live() || wt.branch.as_deref() != Some(branch) {
             continue;
         }
@@ -280,9 +322,9 @@ pub fn checkout_holding(
         };
         let candidate = Worktree {
             path: path.clone(),
-            ..wt
+            ..wt.clone()
         };
-        if worktree_belongs_to(ws, project, repo, &candidate) {
+        if worktree_belongs_to(ws, project, repo, &candidate, &inventory) {
             return Ok(Some(path));
         }
     }
@@ -331,15 +373,14 @@ pub fn current_checkout(ws: &Workspace, project: &Project, repo: &Repo) -> Resul
                     branch: here.current_branch(),
                     ..Default::default()
                 };
-                // A detached checkout has no branch to attribute, but it is
-                // still the caller's identity checkout: returning it lets the
-                // branch query fail honestly instead of borrowing a sibling's
-                // branch. An attached one must be placed by this repo's strategy.
-                if candidate.branch.is_none() || worktree_belongs_to(ws, project, repo, &candidate)
-                {
+                // The caller's checkout answers when it is this repo's own,
+                // attached or detached — a detached one makes the branch query
+                // fail honestly instead of borrowing a branch. Standing in a
+                // sibling's checkout is standing outside this repo, which falls
+                // through to its primary checkout.
+                if worktree_belongs_to(ws, project, repo, &candidate, &repository.worktrees()) {
                     return Ok(Some(top));
                 }
-                return Ok(None);
             }
         }
     }

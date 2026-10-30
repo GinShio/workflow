@@ -1,9 +1,10 @@
 //! Path lookup and checkout selection when sibling repos share one git dir.
 //!
 //! A bare host and a linked worktree are different paths for the same
-//! repository. Path lookup attributes such a worktree by re-resolving the
-//! repo's strategy (project-design, "Path lookup"), and checkout selection must
-//! answer the same question the same way.
+//! repository. Path lookup attributes such a worktree by the declared
+//! placements of the repos over that repository (project-reference, "Several
+//! repos over one repository"), and checkout selection must answer the same
+//! question the same way.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -38,11 +39,20 @@ struct Fixture {
     _root: tempfile::TempDir,
     bootstrap: PathBuf,
     main_worktree: PathBuf,
+    /// A worktree of `main`'s repository on branch `moved`, off the
+    /// `worktree_dir` template: placed by no declaration.
+    elsewhere: PathBuf,
     review_worktree: PathBuf,
     ws: Workspace,
 }
 
 fn fixture() -> Fixture {
+    fixture_with("review")
+}
+
+/// `sibling` names the repo declared at the review worktree, so a test can show
+/// the answer does not hang on which name sorts first.
+fn fixture_with(sibling: &str) -> Fixture {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
     std::fs::create_dir(&source).unwrap();
@@ -93,6 +103,19 @@ fn fixture() -> Fixture {
             "review-branch",
         ],
     );
+    git(&bare, &["branch", "moved", "main"]);
+    let elsewhere = root.path().join("elsewhere/moved");
+    std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
+    git(
+        &bare,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            elsewhere.to_str().unwrap(),
+            "moved",
+        ],
+    );
 
     let config = root.path().join("config");
     std::fs::create_dir(&config).unwrap();
@@ -107,7 +130,7 @@ main_branch = "main"
 branch_strategy = "worktree"
 worktree_dir = "{root}/p.wt/{{{{branch.slug}}}}"
 bootstrap_worktree_dir = "{root}/p.bootstrap"
-[repos.review]
+[repos.{sibling}]
 path = "{review}"
 main_branch = "review-branch"
 "#,
@@ -123,8 +146,43 @@ main_branch = "review-branch"
         _root: root,
         bootstrap,
         main_worktree,
+        elsewhere,
         review_worktree,
         ws,
+    }
+}
+
+/// Every worktree of the shared repository goes to the repo whose declaration
+/// places it, and an unplaced one to the bare-backed repo — whatever the
+/// sibling is called. A sibling declared at one checkout claims only that
+/// checkout; claiming the rest made the answer hang on name order.
+#[test]
+fn attribution_follows_declarations_not_repo_names() {
+    for sibling in ["review", "aaa-review"] {
+        let fx = fixture_with(sibling);
+        let owner = |path: &Path| {
+            let (project, repo) = fx.ws.repo_for_path(path).unwrap();
+            (project.name().to_owned(), repo.name().to_owned())
+        };
+        let p = |repo: &str| ("p".to_owned(), repo.to_owned());
+        assert_eq!(owner(&fx.review_worktree.join("src")), p(sibling));
+        for main_checkout in [&fx.main_worktree, &fx.bootstrap, &fx.elsewhere] {
+            assert_eq!(owner(&main_checkout.join("src")), p("main"), "{sibling}");
+        }
+
+        let project = fx.ws.project("p").unwrap();
+        assert_eq!(
+            layout::checkout_holding(&fx.ws, project, project.repo("main").unwrap(), "moved")
+                .unwrap(),
+            Some(fx.elsewhere.clone()),
+            "an unplaced worktree is the bare-backed repo's checkout"
+        );
+        assert_eq!(
+            layout::checkout_holding(&fx.ws, project, project.repo(sibling).unwrap(), "moved")
+                .unwrap(),
+            None,
+            "an in-place repo's checkout is its own path"
+        );
     }
 }
 
@@ -271,6 +329,148 @@ worktree_dir = "{review}"
     assert!(layout::checkout_holding(&ws, project, review, "dev")
         .unwrap()
         .is_none());
+}
+
+/// amdllpc's shape: a hybrid `main` with a fixed `worktree_dir` and a bootstrap
+/// at `trees/main`, and an in-place `review` over the same bare host whose fixed
+/// checkout is `trees/review`. The caller arranges the worktrees.
+fn shared_host(root: &Path) -> (PathBuf, PathBuf) {
+    let source = root.join("source");
+    std::fs::create_dir(&source).unwrap();
+    git(&source, &["init", "-q", "-b", "main", "."]);
+    std::fs::write(source.join("file"), "x").unwrap();
+    git(&source, &["add", "file"]);
+    git(&source, &["commit", "-q", "-m", "c1"]);
+    let bare = root.join("llpc.git");
+    git(
+        root,
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            source.to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ],
+    );
+    let config = root.join("config");
+    std::fs::create_dir(&config).unwrap();
+    std::fs::write(
+        config.join("llpc.toml"),
+        format!(
+            r#"
+[project]
+[repos.main]
+path = "{bare}"
+main_branch = "main"
+branch_strategy = "hybrid"
+worktree_dir = "{trees}/work"
+bootstrap_worktree_dir = "main"
+[repos.review]
+path = "{bare}"
+main_branch = "main"
+branch_strategy = "in-place"
+worktree_dir = "{trees}/review"
+"#,
+            bare = bare.display(),
+            trees = root.join("trees").display(),
+        ),
+    )
+    .unwrap();
+    (bare, config)
+}
+
+/// A borrower sees the owner's repos only as copies, so attribution is asked in
+/// the owner's frame: a branch checked out in the checkout the owner's `review`
+/// places is not `main`'s, whether the owner or a borrower of `main` asks.
+#[test]
+fn owner_and_borrower_attribute_a_siblings_checkout_alike() {
+    let root = tempfile::tempdir().unwrap();
+    let (bare, config) = shared_host(root.path());
+    let trees = root.path().join("trees");
+    git(&bare, &["branch", "topic", "main"]);
+    for (dir, branch) in [("main", "main"), ("review", "topic")] {
+        let at = trees.join(dir);
+        git(
+            &bare,
+            &["worktree", "add", "-q", at.to_str().unwrap(), branch],
+        );
+    }
+    std::fs::write(
+        config.join("ogl.toml"),
+        format!(
+            r#"
+[project]
+focus = "compiler"
+[repos.main]
+path = "{}"
+main_branch = "main"
+[repos.compiler]
+from = "llpc"
+anchor = "main"
+"#,
+            root.path().join("ogl").display()
+        ),
+    )
+    .unwrap();
+    let ws = Workspace::load_from(&config).unwrap();
+    let llpc = ws.project("llpc").unwrap();
+    let ogl = ws.project("ogl").unwrap();
+    let owned = llpc.repo("main").unwrap();
+    let borrowed = ogl.repo("compiler").unwrap();
+
+    for (project, repo) in [(llpc, owned), (ogl, borrowed)] {
+        assert_eq!(
+            layout::checkout_holding(&ws, project, repo, "topic").unwrap(),
+            None,
+            "{}",
+            project.name()
+        );
+        assert_eq!(
+            layout::work_dir(&ws, project, repo, "topic").unwrap(),
+            trees.join("work"),
+            "{}",
+            project.name()
+        );
+    }
+}
+
+/// Nested repos live in `main`'s own `main_branch` checkout. When that branch is
+/// checked out in the checkout a sibling places, `main` has none of its own, so
+/// the bootstrap is where nested repos are looked for — the same answer
+/// `checkout_holding` gives, which a nested repo's path is derived from.
+#[test]
+fn nested_repos_live_in_mains_own_checkout() {
+    let root = tempfile::tempdir().unwrap();
+    let (bare, config) = shared_host(root.path());
+    let trees = root.path().join("trees");
+    git(&bare, &["branch", "parked", "main"]);
+    for (dir, branch) in [("main", "parked"), ("review", "main")] {
+        let at = trees.join(dir);
+        git(
+            &bare,
+            &["worktree", "add", "-q", at.to_str().unwrap(), branch],
+        );
+    }
+    let file = config.join("llpc.toml");
+    let mut body = std::fs::read_to_string(&file).unwrap();
+    body.push_str("[repos.sub]\npath = \"sub\"\nmain_branch = \"main\"\nanchor = \"main\"\n");
+    std::fs::write(&file, body).unwrap();
+    let ws = Workspace::load_from(&config).unwrap();
+    let project = ws.project("llpc").unwrap();
+    let main = project.repo("main").unwrap();
+
+    assert_eq!(
+        layout::checkout_holding(&ws, project, main, "main").unwrap(),
+        None
+    );
+    assert_eq!(
+        layout::nesting_root(&ws, project, main).unwrap(),
+        trees.join("main")
+    );
+    assert_eq!(
+        layout::primary_path(&ws, project, project.repo("sub").unwrap()).unwrap(),
+        trees.join("main/sub")
+    );
 }
 
 #[test]

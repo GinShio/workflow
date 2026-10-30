@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use wits_core::git::Repository;
-use wits_core::path::{expand_tilde, real, same_path};
+use wits_core::path::{expand_tilde, real};
 
 use crate::context::{self, Ctx};
 use crate::decl::{infer_kind, is_nested, Kind, OrgDecl, RepoDecl, SettingsDecl, ToolchainDecl};
@@ -413,7 +413,7 @@ impl Workspace {
     }
 
     /// How deeply `query` sits inside any checkout of `repo`: its declared path,
-    /// its primary path, and every live worktree of either.
+    /// its primary path, and every live worktree of either that is its own.
     fn repo_match_depth(
         &self,
         project: &Project,
@@ -421,24 +421,11 @@ impl Workspace {
         query: &Path,
         memo: &mut WorktreeMemo,
     ) -> Option<usize> {
-        let repo_path = project.repo_abs_path(repo_name).ok()?;
-        // Attributing worktrees costs a strategy resolution per worktree, and it
-        // can only change the answer where a sibling repo of this project
-        // resolves to the same git dir. Compare the git dir, not the declared
-        // path: a linked worktree and its bare host are different paths for one
-        // repository.
-        let contested = project.repos.values().any(|other| {
-            other.name() != repo_name
-                && project
-                    .repo_abs_path(other.name())
-                    .is_ok_and(|p| same_git_dir(memo, &p, &repo_path))
-        });
-        let mut roots = vec![repo_path];
-        if let Some(repo) = project.repos.get(repo_name) {
-            if let Ok(primary) = layout::primary_path(self, project, repo) {
-                if !roots.contains(&primary) {
-                    roots.push(primary);
-                }
+        let repo = project.repos.get(repo_name)?;
+        let mut roots = vec![project.repo_abs_path(repo_name).ok()?];
+        if let Ok(primary) = layout::primary_path(self, project, repo) {
+            if !roots.contains(&primary) {
+                roots.push(primary);
             }
         }
         let mut best: Option<usize> = None;
@@ -451,21 +438,16 @@ impl Workspace {
             if let Some(depth) = containment_depth(query, &root) {
                 deepen(depth);
             }
-            for wt in memo.live_worktrees(&root) {
-                // Containment before attribution: attribution costs a strategy
-                // resolution, and most worktrees have nothing to do with the path.
+            let inventory = memo.worktrees(&root);
+            for wt in inventory.iter().filter(|wt| wt.is_live()) {
+                // Containment before attribution: attribution renders sibling
+                // placements, and most worktrees have nothing to do with the path.
                 let Some(depth) = containment_depth(query, &wt.path) else {
                     continue;
                 };
-                if contested {
-                    let Some(repo) = project.repos.get(repo_name) else {
-                        continue;
-                    };
-                    if !layout::worktree_belongs_to(self, project, repo, wt) {
-                        continue;
-                    }
+                if layout::worktree_belongs_to(self, project, repo, wt, inventory) {
+                    deepen(depth);
                 }
-                deepen(depth);
             }
         }
         best
@@ -602,20 +584,6 @@ impl Project {
     }
 }
 
-/// Do two repo paths name the same git dir? A linked worktree and its bare host
-/// are different paths for one repository, which is the case sibling repos are
-/// told apart by strategy in.
-fn same_git_dir(memo: &mut WorktreeMemo, a: &Path, b: &Path) -> bool {
-    if a == b {
-        return true;
-    }
-    match (memo.common_dir(a), memo.common_dir(b)) {
-        (Some(a), Some(b)) => same_path(&a, &b),
-        // Neither path is a repository (yet): no worktree can exist under either.
-        _ => false,
-    }
-}
-
 /// How deeply `query` sits inside `candidate`, or `None` when it does not.
 fn containment_depth(query: &Path, candidate: &Path) -> Option<usize> {
     let candidate = real(candidate);
@@ -624,40 +592,29 @@ fn containment_depth(query: &Path, candidate: &Path) -> Option<usize> {
         .then(|| candidate.components().count())
 }
 
-/// Live worktrees per git dir, remembered for the duration of one path query.
+/// Worktree inventories per repository root, remembered for the duration of one
+/// path query.
+///
+/// Keyed by the root as written rather than by its git dir: finding the git dir
+/// is itself a git invocation per root, which costs more than the duplicate
+/// listing it would save — a project's repos rarely reach one repository
+/// through different roots.
 ///
 /// Deliberately **not** stored on [`Workspace`]: a command that creates a
 /// worktree and then asks a path question must see the new one.
 #[derive(Default)]
 struct WorktreeMemo {
-    by_git_dir: std::collections::HashMap<PathBuf, Vec<wits_core::git::Worktree>>,
-    common_dirs: std::collections::HashMap<PathBuf, Option<PathBuf>>,
+    by_root: std::collections::HashMap<PathBuf, Vec<wits_core::git::Worktree>>,
 }
 
 impl WorktreeMemo {
-    /// The common dir of one path, queried at most once per path query. Sibling
-    /// attribution asks the same question for every repo of a project, so an
-    /// uncached answer would spawn git per sibling per repo.
-    fn common_dir(&mut self, path: &Path) -> Option<PathBuf> {
-        self.common_dirs
-            .entry(path.to_path_buf())
-            .or_insert_with(|| Repository::new(path).git_common_dir())
-            .clone()
-    }
-
-    fn live_worktrees(&mut self, root: &Path) -> &[wits_core::git::Worktree] {
-        // The common dir is stable across a bare repository and its linked
-        // worktrees, and across both spellings of a checkout, so one query per
-        // git dir serves every root that reaches it. A path that is not a
-        // repository has no common dir; key it by itself, as before.
-        let key = self.common_dir(root).unwrap_or_else(|| root.to_path_buf());
-        self.by_git_dir.entry(key).or_insert_with(|| {
-            Repository::new(root)
-                .worktrees()
-                .into_iter()
-                .filter(wits_core::git::Worktree::is_live)
-                .collect()
-        })
+    /// The whole `git worktree list` of the repository at `root`, bare and
+    /// prunable entries included — attribution reads them to recognise a
+    /// sibling declared over the same repository.
+    fn worktrees(&mut self, root: &Path) -> &[wits_core::git::Worktree] {
+        self.by_root
+            .entry(root.to_path_buf())
+            .or_insert_with(|| Repository::new(root).worktrees())
     }
 }
 

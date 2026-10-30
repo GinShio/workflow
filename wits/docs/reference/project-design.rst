@@ -378,8 +378,10 @@ Where it fires today it gets the right answer only because the remote-less repo
 reconcile created a remote literally named ``origin``. Rename such a project's
 remotes to free names and the shared checkout has no privileged name left to
 read. The real missing concept is "two declared repos resolving to one git
-repository" — which nothing models, and which is also why ``update`` today does
-the git half of its work twice for such a pair. Recorded as open, not solved.
+repository". Only checkout attribution models it (which checkout each repo
+builds from — :doc:`project-reference`, "Several repos over one repository");
+remote roles do not, and it is also why ``update`` today does the git half of
+its work twice for such a pair. Recorded as open, not solved.
 
 Because the roles are resolved rather than stored, they are resolved **once per
 invocation** and passed down. Two answers that could differ between one verb's

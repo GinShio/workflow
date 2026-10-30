@@ -1027,15 +1027,44 @@ repo is a git-dir with no working tree at all.
   ``worktree_dir`` for the target branch. It must already exist; ``build``
   never creates it. ``wits worktree create <branch> "$(project info --get repo.workdir … --
   branch <branch>)"`` makes one.
-* **hybrid**: if Git reports a live worktree currently attached to the target
-  branch, its actual path wins regardless of location. Otherwise resolution
-  returns ``worktree_dir`` as the suggested path; ``build`` then fails with
-  the creation command rather than creating it.
+* **hybrid**: if Git reports a live worktree of the repo's own currently
+  attached to the target branch, its actual path wins regardless of location
+  (a worktree another repo over the same repository places is that repo's —
+  see `Several repos over one repository`_). Otherwise resolution returns
+  ``worktree_dir`` as the suggested path; ``build`` then fails with the
+  creation command rather than creating it.
 
 For ``build --detach``, these branch rules are replaced by the
 fixed-selector rule: a ``worktree_dir`` that resolves without ``branch.*``
 wins regardless of strategy; otherwise the caller's checkout or the repo's
 primary checkout wins.
+
+Several repos over one repository
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Two repos may declare the same repository — amdllpc's bare-backed ``main``
+and its in-place ``review``, each with a fixed ``worktree_dir`` — and
+``git worktree list`` reports every checkout of it to both. Path lookup and
+checkout selection attribute each checkout by declaration:
+
+#. A repo owns the checkouts its declaration places: its ``path``, its
+   ``worktree_dir`` for the checkout's branch, the branch-independent form of
+   that template, and its bootstrap checkout.
+#. A checkout another repo's declaration places is that repo's.
+#. Any other checkout — moved, created off the template, a detached review —
+   belongs to a bare-backed repo, whose checkouts live wherever git put them.
+   An in-place repo's one checkout is its own path.
+
+A repo no other repo shares a repository with owns every checkout of it. For
+a borrowed repo the question is answered in the owning project, which sees
+every repo declared over the repository, so a borrower and the owner agree.
+Two bare-backed repos over one repository cannot tell their unplaced checkouts
+apart; declare a placement where that matters.
+
+Attribution chooses which checkout a repo *builds from*. Moving a branch is a
+different question: ``update`` advances ``main_branch`` through whichever
+checkout has it checked out, since git allows one, and never moves the ref
+underneath it.
 
 Branch identity
 ~~~~~~~~~~~~~~~

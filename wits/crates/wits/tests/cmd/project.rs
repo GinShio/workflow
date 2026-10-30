@@ -971,6 +971,111 @@ worktree_dir = "{trees}/review"
     assert_eq!(git_out(&review, &["status", "--porcelain"]), "");
 }
 
+/// Standing in a checkout is standing in the repo it belongs to. From the
+/// checkout a sibling repo places, `main`'s branch is read from `main`'s own
+/// checkout; from a worktree of a lone bare-backed repo, even one off the
+/// template, that worktree's branch is the answer.
+#[test]
+fn a_query_reads_the_branch_of_the_checkout_the_repo_owns() {
+    let fx = Fixture::new();
+    let upstream = Fixture::seed(&fx.root, "up-host", &["top.c"]);
+    let bare = fx.path("host.git");
+    git(
+        &fx.root,
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            upstream.to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ],
+    );
+    git(&bare, &["branch", "topic", "main"]);
+    let trees = fx.path("host");
+    for (dir, branch) in [("main", "main"), ("review", "topic")] {
+        let at = trees.join(dir);
+        git(
+            &bare,
+            &["worktree", "add", "-q", at.to_str().unwrap(), branch],
+        );
+    }
+    std::fs::write(
+        fx.config.join("host.toml"),
+        format!(
+            r#"
+[project]
+[repos.main]
+path = "{bare}"
+main_branch = "main"
+branch_strategy = "hybrid"
+worktree_dir = "{trees}/work"
+bootstrap_worktree_dir = "main"
+[repos.review]
+path = "{bare}"
+main_branch = "main"
+branch_strategy = "in-place"
+worktree_dir = "{trees}/review"
+"#,
+            bare = bare.display(),
+            trees = trees.display(),
+        ),
+    )
+    .unwrap();
+    let out = fx.run_in(
+        &trees.join("review"),
+        &["project", "info", "--get", "repos.main.workdir", "host"],
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout.trim(), trees.join("main").display().to_string());
+
+    let lone = fx.path("lone.git");
+    git(
+        &fx.root,
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            upstream.to_str().unwrap(),
+            lone.to_str().unwrap(),
+        ],
+    );
+    git(&lone, &["branch", "feature", "main"]);
+    let elsewhere = fx.path("elsewhere/feature");
+    std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
+    git(
+        &lone,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            elsewhere.to_str().unwrap(),
+            "feature",
+        ],
+    );
+    std::fs::write(
+        fx.config.join("lone.toml"),
+        format!(
+            r#"
+[project]
+[repos.main]
+path = "{lone}"
+main_branch = "main"
+branch_strategy = "worktree"
+worktree_dir = "{root}/lone.wt/{{{{branch.slug}}}}"
+"#,
+            lone = lone.display(),
+            root = fx.root.display(),
+        ),
+    )
+    .unwrap();
+    let out = fx.run_in(
+        &elsewhere,
+        &["project", "info", "--get", "branch.raw", "lone"],
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout.trim(), "feature");
+}
+
 /// A worktree moved off the `worktree_dir` template still holds its branch, so
 /// it is still the checkout `update` advances main through.
 #[test]
