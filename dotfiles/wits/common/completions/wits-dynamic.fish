@@ -276,3 +276,21 @@ complete -c wits \
     -n '__wits_ctx transcrypt; and __fish_seen_subcommand_from clean smudge textconv' -F
 complete -c wits -n '__wits_ctx dotfiles' -l config -r -F
 complete -c wits -n '__wits_ctx dotfiles' -l root -r -a '(__fish_complete_directories)'
+
+# The git aliases that run an applet (dotfiles/git/common/config.d/alias.conf).
+# fish's git completion follows an alias only to the git command it names, so
+# a `!` alias gets nothing; each of these hands the rest of its line to the
+# verb's own completion instead, as fish's completions/git.fish hands `git foo`
+# to an installed `git-foo`. The condition and the global-option spec are that
+# file's, which fish loads before it evaluates any `git` rule.
+function __wits_git_alias --argument-names verb --description 'complete a git alias as the wits verb it runs'
+    set -l tokens (commandline -xpc)
+    set -l args
+    if argparse -s (__fish_git_global_optspecs) -- $tokens[2..]
+        set args (string escape -- $argv[2..])
+    end
+    complete -C "wits $verb $args "(commandline -ct)
+end
+for verb in review stack transcrypt
+    complete -c git -f -n "__fish_git_using_command $verb" -a "(__wits_git_alias $verb)"
+end
