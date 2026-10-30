@@ -179,7 +179,12 @@ pub(crate) fn resolve_preset_into(
         &format!("preset.{name}.definitions"),
         &preset.definitions,
     )?;
-    apply_devenv_map(ctx, logical, &preset.devenv)?;
+    apply_devenv_map(
+        ctx,
+        logical,
+        &format!("preset.{name}.devenv"),
+        &preset.devenv,
+    )?;
     // Preset lists replace what earlier layers set (they are the nearest-level
     // contribution for this preset); different presets still accumulate in order.
     resolve_replace(

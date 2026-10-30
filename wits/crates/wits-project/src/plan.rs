@@ -235,7 +235,7 @@ pub fn resolve_plan(
                 "org.definitions",
                 &org_data.definitions,
             )?;
-            context::apply_devenv_map(&ctx, &mut logical, &org_data.devenv)?;
+            context::apply_devenv_map(&ctx, &mut logical, "org.devenv", &org_data.devenv)?;
         }
     }
 
@@ -252,7 +252,12 @@ pub fn resolve_plan(
         "project.definitions",
         &project.settings.definitions,
     )?;
-    context::apply_devenv_map(&ctx, &mut logical, &project.settings.devenv)?;
+    context::apply_devenv_map(
+        &ctx,
+        &mut logical,
+        "project.devenv",
+        &project.settings.devenv,
+    )?;
     context::resolve_args(
         &ctx,
         &project.settings.extra_config_args,

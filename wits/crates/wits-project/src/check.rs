@@ -221,4 +221,28 @@ mod tests {
         assert!(text.contains("resolution:"), "{text}");
         assert!(text.contains("missing.path"), "{text}");
     }
+
+    /// A value that is one bare unknown name is a broken template too, not an
+    /// empty variable for the build to run with.
+    #[test]
+    fn a_dry_resolve_reports_a_bare_unknown_name() {
+        let (_d, ws) = ws_with(
+            r#"
+            [project]
+            environment = { VK_ICD_FILENAMES = "{{icd_json}}" }
+
+            [repos.main]
+            path = "/src/p"
+            main_branch = "main"
+            "#,
+        );
+        let text = messages(&ws);
+        assert!(
+            text.contains(
+                "resolution: resolving project.environment.VK_ICD_FILENAMES: \
+                 cannot resolve path 'icd_json'"
+            ),
+            "{text}"
+        );
+    }
 }

@@ -33,7 +33,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use minijinja::value::ValueKind;
 use minijinja::{Error, ErrorKind, Value};
 use thiserror::Error as ThisError;
@@ -215,9 +215,16 @@ impl Ctx {
                     .compile_expression(source)
                     .map_err(|error| parse_error(error, s))?;
                 let (context, missing) = self.bind(expression.undeclared_variables(true), stack)?;
-                expression
+                let value = expression
                     .eval(context)
-                    .map_err(|error| render_error(error, s, &missing))
+                    .map_err(|error| render_error(error, s, &missing))?;
+                // Strict mode fails a template that *prints* an undefined value,
+                // but evaluating an expression hands it back instead: `{{ nope }}`
+                // alone would otherwise render as "". Refuse it as printing would.
+                if value.is_undefined() {
+                    return Err(render_error(ErrorKind::UndefinedError.into(), s, &missing));
+                }
+                Ok(value)
             }
             None => {
                 let template = env
@@ -431,7 +438,12 @@ pub(crate) fn apply_env_map(
     // interleaving would discard the resolutions of the entries still to come.
     let resolved: Vec<(String, String)> = raw
         .keys()
-        .map(|k| Ok((k.clone(), value_to_string(&ctx.get(&format!("env.{k}"))?))))
+        .map(|k| {
+            let value = ctx
+                .get(&format!("env.{k}"))
+                .with_context(|| format!("resolving {ns}.{k}"))?;
+            Ok((k.clone(), value_to_string(&value)))
+        })
         .collect::<Result<_>>()?;
     for (k, v) in resolved {
         logical.set_env(&k, v.clone());
@@ -453,7 +465,9 @@ pub(crate) fn apply_def_map(
         ctx.set(&format!("{ns}.{k}"), from_toml(v));
     }
     for k in raw.keys() {
-        let value = ctx.get(&format!("{ns}.{k}"))?;
+        let value = ctx
+            .get(&format!("{ns}.{k}"))
+            .with_context(|| format!("resolving {ns}.{k}"))?;
         logical.set_definition(k, value);
     }
     Ok(())
@@ -469,6 +483,7 @@ pub(crate) fn apply_def_map(
 pub(crate) fn apply_devenv_map(
     ctx: &Ctx,
     logical: &mut LogicalConfig,
+    ns: &str,
     raw: &[(String, DevenvDecl)],
 ) -> Result<()> {
     for (name, entry) in raw {
@@ -476,7 +491,8 @@ pub(crate) fn apply_devenv_map(
             .values
             .iter()
             .map(|part| ctx.render_value(&from_toml(part)))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()
+            .with_context(|| format!("resolving {ns}.{name}"))?;
         logical.add_devenv(DevenvEntry {
             name: name.clone(),
             op: entry.op,
@@ -489,7 +505,10 @@ pub(crate) fn apply_devenv_map(
 
 pub(crate) fn resolve_args(ctx: &Ctx, raw: &[String], out: &mut Vec<String>) -> Result<()> {
     for arg in raw {
-        out.push(ctx.render(arg)?);
+        out.push(
+            ctx.render(arg)
+                .with_context(|| format!("resolving argument {arg:?}"))?,
+        );
     }
     Ok(())
 }
@@ -499,7 +518,9 @@ pub(crate) fn resolve_args(ctx: &Ctx, raw: &[String], out: &mut Vec<String>) -> 
 /// accumulate in order.
 pub(crate) fn resolve_replace(ctx: &Ctx, raw: &[String], out: &mut Vec<String>) -> Result<()> {
     for arg in raw {
-        let rendered = ctx.render(arg)?;
+        let rendered = ctx
+            .render(arg)
+            .with_context(|| format!("resolving argument {arg:?}"))?;
         if !out.contains(&rendered) {
             out.push(rendered);
         }
@@ -817,6 +838,32 @@ mod tests {
             ctx().resolve_str("{{nope.missing}}"),
             Err(TemplateError::UnknownPath("nope.missing".into()))
         );
+    }
+
+    /// A template that is one bare unknown name is evaluated, not printed, so
+    /// strict mode alone lets it through as an empty value. It must fail like
+    /// the same name embedded in text, and a default still answers for it.
+    #[test]
+    fn a_bare_unknown_name_is_a_hard_error_on_its_own_too() {
+        let ctx = ctx();
+        for template in ["{{nope}}", "{{ nope }}", "x{{ nope }}"] {
+            assert_eq!(
+                ctx.render(template),
+                Err(TemplateError::UnknownPath("nope".into())),
+                "{template}"
+            );
+        }
+        let mut root = bindings();
+        insert_path(&mut root, "env.A", Value::from("{{nope}}"));
+        assert_eq!(
+            Ctx::new(root).render("{{ env.A }}"),
+            Err(TemplateError::UnknownPath("nope".into()))
+        );
+        assert_eq!(ctx.render("{{ nope | default('d') }}").unwrap(), "d");
+        assert!(matches!(
+            ctx.render("{{ 'a' if false }}"),
+            Err(TemplateError::Render(_))
+        ));
     }
 
     /// The detached-worktree fallback in `resolve` keys on the exact path, so a

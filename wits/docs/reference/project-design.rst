@@ -1070,7 +1070,9 @@ project crate's internal ``context::Ctx``:
 * **``{{ path.to.var }}``** — dotted lookup over the context (tables by
   attribute, arrays by integer index). A whole-string single ``{{ … }}`` is
   evaluated as an expression and keeps its **type** (a list or int survives);
-  anything else renders to a string. Resolution is lazy and recursive with
+  anything else renders to a string. Either way an undefined result fails: a
+  value that is only an unknown name is the same error as that name printed
+  inside text. Resolution is lazy and recursive with
   memoisation and cycle detection, so one ``environment`` entry referencing
   another simply resolves on demand — no separate dependency-map or
   topological-sort pass is needed.
