@@ -125,9 +125,11 @@ Each repo may declare inline ``sh -c`` hook strings for any phase. The phases:
   ``update`` override replaces the default action wholesale; ``pre_``/``post_``
   add hooks around it. Update hooks run in the checkout being refreshed, or in
   a bare repo's main worktree when one exists, falling back to the bare path.
+  A hook may switch branches while it runs; once the repo's hooks are done,
+  the checkout is switched back to the branch it was on, and if that fails,
+  so does the update.
 
 The same fail-fast discipline applies everywhere: a hook or action exiting
 non-zero stops the whole operation, the RAII guard returns the repo to its
-original branch (and pops any stash it made), a log line records the failure,
-remaining repos are skipped, and the process exits non-zero. State is never
-left half-switched.
+original branch, a log line records the failure, remaining repos are skipped,
+and the process exits non-zero. State is never left half-switched.

@@ -362,9 +362,9 @@ fn update_repo(ws: &Workspace, project: &Project, name: &str, git: &Repository) 
 
     ensure_remotes(git, repo.decl())?;
 
-    // Fail-fast with guaranteed restoration: if a hook or override switches the
-    // branch, the guard returns us to where we started on any exit.
-    let _guard = workdir.as_ref().map(RestoreGuard::capture);
+    // `update` never leaves a checkout on another branch, so whatever a hook or
+    // override switches it to is switched back, on success as on failure.
+    let guard = workdir.as_ref().map(RestoreGuard::capture);
     let hook_cwd = workdir
         .as_ref()
         .map(Repository::path)
@@ -387,6 +387,12 @@ fn update_repo(ws: &Workspace, project: &Project, name: &str, git: &Repository) 
     }
 
     run_hook(ws, project, name, HookPhase::PostUpdate, Some(hook_cwd))?;
+    if let Some(guard) = guard {
+        let checkout = guard.checkout().display().to_string();
+        guard.finish().with_context(|| {
+            format!("the update succeeded, but {checkout} was not switched back")
+        })?;
+    }
     Ok(())
 }
 

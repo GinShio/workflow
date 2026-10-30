@@ -422,14 +422,16 @@ The hook contract (settled, and the reason it is simple):
 * **cwd during update is the checkout being refreshed**. An in-place feature
   checkout remains untouched; a bare-backed repo uses the linked worktree
   holding ``main_branch``. No default action switches branches.
-* **Overriding the ``action`` hands the user full control.** We run their
-  string verbatim in the appropriate cwd — including any branch switching
-  they choose to do — and do not switch back for them. This is the mechanism
-  applied to lifecycles: the smart no-switch behaviour is the *default
-  action's*, not a wrapper we impose on overrides.
-* **Any hook exiting non-zero fails fast**: the operation stops, the RAII
-  restore guard returns the repo to its original branch, a log line is
-  written, and the program exits non-zero. State is never left half-switched.
+* **Overriding the ``action`` hands the user the work, not the checkout.** We
+  run their string verbatim in the appropriate cwd, and it may switch
+  branches while it works; once the repo's hooks are done, the RAII restore
+  guard returns the checkout to the branch it found. So ``update`` never
+  leaves a checkout on another branch, whichever of the default action or an
+  override did the work: the no-switch guarantee is ``update``'s, not only
+  the default action's. A switch back that fails fails the update.
+* **Any hook exiting non-zero fails fast**: the operation stops, the guard
+  returns the repo to its original branch, a log line is written, and the
+  program exits non-zero. State is never left half-switched.
 
 Branch strategy — in-place, worktree, and hybrid
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1326,8 +1328,8 @@ runs first and fails.
 
 **Failure is fail-fast with guaranteed restoration.** A hook or action exiting
 non-zero stops the operation immediately, the RAII guard returns the repo to
-its original branch (and pops any stash), a log line is written, remaining
-repos are skipped, and the program exits non-zero.
+its original branch, a log line is written, remaining repos are skipped, and
+the program exits non-zero.
 
 ``build``, backends, and build contexts
 ---------------------------------------

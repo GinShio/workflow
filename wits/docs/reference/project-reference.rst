@@ -1317,8 +1317,10 @@ one best-effort and without ``--prune`` — then:
   on clone or worktree creation).
 
 Failure is fail-fast: a non-zero hook/action stops the operation, an RAII
-guard restores the original branch (and pops any stash), a log line is
-written, remaining repos are skipped, and the process exits non-zero.
+guard restores the original branch, a log line is written, remaining repos
+are skipped, and the process exits non-zero. The guard restores on success
+too, so a hook or override that switches branches leaves the checkout on the
+branch it found; a switch back that fails fails the update.
 
 Crate API (read-only)
 ---------------------

@@ -2270,6 +2270,54 @@ fn a_failing_update_hook_stops_the_repo_before_the_default_action() {
     );
 }
 
+/// `update` never leaves a checkout on another branch: an override may switch
+/// as it likes while it runs, and the checkout is back on its branch after.
+#[test]
+fn an_update_override_that_switches_branch_is_switched_back() {
+    let fx = Fixture::new();
+    fx.ok(&["update", "work"]);
+    let src = fx.path("src-work");
+    git(&src, &["branch", "other"]);
+    Fixture::declare_work(
+        &fx.root,
+        "[repos.main.hooks]\nupdate = \"git switch -q other\"",
+    );
+
+    fx.ok(&["update", "work"]);
+    assert_eq!(
+        git_out(&src, &["symbolic-ref", "--short", "HEAD"]).trim(),
+        "main",
+        "the override's branch switch was left in place"
+    );
+}
+
+/// A switch back that fails after the update succeeded fails the update,
+/// rather than reporting success with the checkout on another branch.
+#[test]
+fn an_update_whose_checkout_cannot_be_switched_back_fails() {
+    let fx = Fixture::new();
+    fx.ok(&["update", "work"]);
+    let src = fx.path("src-work");
+    // `other` lacks the file main tracks, so the untracked copy the override
+    // leaves on `other` blocks the switch back.
+    git(&src, &["branch", "other"]);
+    std::fs::write(src.join("blocker"), "tracked on main\n").unwrap();
+    git(&src, &["add", "blocker"]);
+    git(&src, &["commit", "-q", "-m", "blocker"]);
+    Fixture::declare_work(
+        &fx.root,
+        "[repos.main.hooks]\nupdate = \"git switch -q other && echo untracked > blocker\"",
+    );
+
+    let out = fx.run(&["update", "work"]);
+    assert!(!out.success, "a failed switch back was reported as success");
+    assert!(
+        out.stderr.contains("the update succeeded, but"),
+        "stderr: {}",
+        out.stderr
+    );
+}
+
 /// A declared `hooks.update` replaces the default action *in place*: it runs
 /// between `pre_update` and `post_update`, and the default fetch/merge runs
 /// nowhere behind it.
