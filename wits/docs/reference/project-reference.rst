@@ -343,6 +343,8 @@ Configuration topology
   ``$HOME/.wits/project``.
 * The root is scanned recursively for ``*.toml`` at load time. A file's
   top-level sections decide what it contributes; a file may mix sections.
+  ``[repos.*]`` tables belong to the ``[project]`` of their file, so repos in
+  a file with no ``[project]`` fail the load instead of being dropped.
 * A file with ``[project]`` (and a required ``[repos.main]``) **is one
   project**. The same ``(org, name)`` in two files is a hard error.
 * ``[toolchains.*]`` and ``[org]`` + ``[org.presets.*]`` are additive
@@ -850,12 +852,17 @@ one that does not borrow the repo declaring it — silent in path resolution by
 design, so this is where it is reported. No ``<name>`` checks every project.
 
 Malformed structure is rejected earlier, when the registry loads, so
-``--check`` never sees it: a file with no ``[repos.main]``, a repo with
-neither ``path`` nor ``from``, a ``from`` naming an unknown project or repo,
-a borrowed repo that is itself borrowed, and a travelling field (or
-``developed_as``) declared alongside ``from`` all fail the load outright. So do a worktree/hybrid repo
-without ``worktree_dir``, a hybrid repo without ``bootstrap_worktree_dir``,
-and a bootstrap template that references ``branch.*`` or resolves to nothing.
+``--check`` never sees it. These all fail the load outright: a project file
+with no ``[repos.main]``, or whose ``[repos.main]`` is a borrow;
+``[repos.*]`` tables in a file with no ``[project]``; a repo with neither
+``path`` nor ``from``; a ``from`` naming an unknown project or repo, or a
+repo that is itself borrowed; a ``from`` whose source path does not render;
+and a travelling field (or ``developed_as``) declared alongside ``from``. So
+do a worktree/hybrid repo without ``worktree_dir``, a hybrid repo without
+``bootstrap_worktree_dir``, and a bootstrap template that references
+``branch.*`` or resolves to nothing. A borrow is checked once the whole tree
+is read, but its failure names the file and entry that wrote the ``from``,
+as a failure inside one file names that file.
 
 Whether the declared ``build_system`` actually has a backend is **not**
 checked here — that is reported by ``wits build`` at run time, since the
@@ -1162,6 +1169,9 @@ the anchor defaults exactly like any other focus.
 * A borrowed repo's inferred kind is always ``standalone`` — from this
   project's side it is an external checkout with its own git.
 * **A borrow may not itself be borrowed** (hard error).
+* **``[repos.main]`` may not be a borrow** (hard error). A project's nested
+  repos resolve under ``main``'s path, so its root has to be a checkout the
+  project owns.
 * **A borrow never owns a path.** ``project_for_path`` / ``repo_for_path``
   ignore borrowed entries, so a checkout shared by several projects resolves
   to the one that declares it as its own — unless that owner redirects it with

@@ -80,13 +80,21 @@ impl Repo {
     pub fn is_borrowed(&self) -> bool {
         self.decl.from.is_some()
     }
+
+    /// Is this a borrow of the repo `repo` of the project keyed `project`? A
+    /// borrow's template owner is the repo it names, resolved once at load, so
+    /// this holds however the `from` spells the project.
+    fn borrows(&self, project: &str, repo: &str) -> bool {
+        self.is_borrowed()
+            && self.template_owner.project == project
+            && self.template_owner.repo == repo
+    }
 }
 
 /// The whole registry, resolved.
 pub struct Workspace {
     pub(crate) projects: BTreeMap<String, Project>,
-    /// Bare name → the keys that carry it, for ambiguity detection.
-    by_name: BTreeMap<String, Vec<String>>,
+    names: load::Names,
     pub(crate) orgs: BTreeMap<String, OrgDecl>,
     pub(crate) toolchains: BTreeMap<String, ToolchainDecl>,
 }
@@ -114,7 +122,6 @@ impl Workspace {
 
     fn from_registry(registry: load::Registry) -> Result<Self> {
         let mut projects = BTreeMap::new();
-        let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (key, decl) in registry.projects {
             let repos = decl
                 .repos
@@ -137,10 +144,6 @@ impl Workspace {
                     )
                 })
                 .collect();
-            by_name
-                .entry(decl.name.clone())
-                .or_default()
-                .push(key.clone());
             projects.insert(
                 key,
                 Project {
@@ -155,77 +158,49 @@ impl Workspace {
 
         let mut ws = Workspace {
             projects,
-            by_name,
+            names: registry.names,
             orgs: registry.orgs,
             toolchains: registry.toolchains,
         };
-        ws.resolve_borrows()?;
+        ws.resolve_borrows(&registry.borrows)?;
         ws.validate_layout()?;
         Ok(ws)
     }
 
-    /// Fill in every `from` borrow from the project that owns the repo.
+    /// Fill in every borrow the loader checked from the repo it names: the
+    /// travelling fields, the source's primary path, and the namespace its
+    /// templates render in.
     ///
     /// Two passes over one immutable snapshot: gather, then apply — so a borrow
-    /// can never observe another borrow's resolution, which is what makes "a
-    /// borrow may not be borrowed" enforceable rather than order-dependent.
-    /// (The loader has already rejected a borrow of a borrow; the second pass
-    /// would refuse one anyway.)
-    fn resolve_borrows(&mut self) -> Result<()> {
-        struct Pending {
-            borrower: String,
-            repo: String,
+    /// never observes another borrow's resolution. The loader has rejected a
+    /// borrow of a borrow, so every source read here is its project's own repo.
+    fn resolve_borrows(&mut self, borrows: &[load::Borrow]) -> Result<()> {
+        struct Pending<'b> {
+            borrow: &'b load::Borrow,
             path: PathBuf,
             owner: RepoKey,
             decl: RepoDecl,
         }
 
-        let mut pending = Vec::new();
-        for (key, project) in &self.projects {
-            for (repo_name, repo) in &project.repos {
-                let Some(reference) = &repo.decl.from else {
-                    continue;
-                };
-                let source_project = self.project(&reference.project).with_context(|| {
-                    format!(
-                        "project '{key}', repo '{repo_name}': from '{}'",
-                        reference.project
-                    )
-                })?;
-                let source = source_project.repos.get(&reference.repo).with_context(|| {
-                    format!(
-                        "project '{}' has no repo '{}'",
-                        source_project.key(),
-                        reference.repo
-                    )
-                })?;
-                if source.is_borrowed() {
-                    bail!(
-                        "repo '{}' of '{}' is itself borrowed; a borrow may not be borrowed",
-                        reference.repo,
-                        source_project.key()
-                    );
-                }
-                let path = layout::primary_path(self, source_project, source.name())?;
-                pending.push(Pending {
-                    borrower: key.clone(),
-                    repo: repo_name.clone(),
-                    path,
-                    owner: source.template_owner.clone(),
-                    decl: source.decl.clone(),
-                });
-            }
+        let mut pending = Vec::with_capacity(borrows.len());
+        for borrow in borrows {
+            let source_project = &self.projects[&borrow.source_project];
+            let source = &source_project.repos[&borrow.source_repo];
+            let path = borrow.blame(layout::primary_path(self, source_project, source.name()))?;
+            pending.push(Pending {
+                borrow,
+                path,
+                owner: source.template_owner.clone(),
+                decl: source.decl.clone(),
+            });
         }
 
         for entry in pending {
-            let project = self
+            let repo = self
                 .projects
-                .get_mut(&entry.borrower)
-                .with_context(|| format!("project '{}' disappeared", entry.borrower))?;
-            let repo = project
-                .repos
-                .get_mut(&entry.repo)
-                .with_context(|| format!("repo '{}' disappeared", entry.repo))?;
+                .get_mut(&entry.borrow.project)
+                .and_then(|project| project.repos.get_mut(&entry.borrow.repo))
+                .expect("a checked borrow names a declared repo");
             // Travelling fields: the component's git identity. `strategy_declared`
             // travels with the strategy it qualifies, so a report attributes the
             // declaration to the project that wrote it.
@@ -299,20 +274,7 @@ impl Workspace {
 
     /// Resolve a name reference (`name` or `org/name`) to a project.
     pub fn project(&self, reference: &str) -> Result<&Project> {
-        if let Some(p) = self.projects.get(reference) {
-            return Ok(p);
-        }
-        if reference.contains('/') {
-            bail!("no project '{reference}'{}", self.available());
-        }
-        match self.by_name.get(reference).map(Vec::as_slice) {
-            Some([only]) => Ok(&self.projects[only]),
-            Some(many) if many.len() > 1 => bail!(
-                "project '{reference}' is ambiguous across orgs ({}); qualify it as org/name",
-                many.join(", ")
-            ),
-            _ => bail!("no project '{reference}'{}", self.available()),
-        }
+        self.names.lookup(&self.projects, reference)
     }
 
     /// The project that owns `path` — the one whose repo checkout is the deepest
@@ -360,23 +322,9 @@ impl Workspace {
         project
             .repos
             .iter()
-            .filter(|(_, repo)| self.borrows(repo, &owner_key, repo_name))
+            .filter(|(_, repo)| repo.borrows(&owner_key, repo_name))
             .max_by_key(|(name, _)| *name == focus)
             .map(|(_, repo)| (project, repo))
-    }
-
-    /// Does `repo` borrow the repo `repo_name` of the project keyed `owner_key`?
-    ///
-    /// The `from` reference is resolved through [`project`](Self::project) before
-    /// comparing, so a borrow is recognised whichever way it spells the project.
-    fn borrows(&self, repo: &Repo, owner_key: &str, repo_name: &str) -> bool {
-        let Some(reference) = &repo.decl.from else {
-            return false;
-        };
-        reference.repo == repo_name
-            && self
-                .project(&reference.project)
-                .is_ok_and(|source| source.key() == owner_key)
     }
 
     /// Whether any checkout of `project`'s `repo_name` contains `path`.
@@ -485,17 +433,6 @@ impl Workspace {
             }
         }
         names.into_iter().collect()
-    }
-
-    fn available(&self) -> String {
-        if self.projects.is_empty() {
-            ". No projects are configured.".to_string()
-        } else {
-            format!(
-                ". Available: {}",
-                self.projects.keys().cloned().collect::<Vec<_>>().join(", ")
-            )
-        }
     }
 }
 
@@ -1179,6 +1116,45 @@ mod tests {
             let err = load_err(dir.path());
             assert!(err.contains(needle), "for {bad}: unexpected error: {err}");
         }
+    }
+
+    /// Where a borrow's source lives is only known once its path renders, which
+    /// is the workspace's half of resolving it; a source that cannot render
+    /// still fails in the frame of the file that wrote the `from`.
+    #[test]
+    fn a_borrow_whose_source_path_does_not_render_names_its_borrower() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "work.toml",
+            r#"
+            [project]
+            [repos.main]
+            path = "/src/work"
+            main_branch = "main"
+            [repos.x]
+            path = "{{project.nope}}"
+            "#,
+        );
+        write(
+            dir.path(),
+            "wrap.toml",
+            r#"
+            [project]
+            [repos.main]
+            path = "/src/wrap"
+            main_branch = "main"
+            [repos.w]
+            from = "work:x"
+            "#,
+        );
+        let err = load_err(dir.path());
+        let blamed = format!(
+            "loading {}: project 'wrap', repo 'w': from 'work:x': resolving path template for \
+             repo 'x'",
+            dir.path().join("wrap.toml").display()
+        );
+        assert!(err.starts_with(&blamed), "unexpected error: {err}");
     }
 
     #[test]

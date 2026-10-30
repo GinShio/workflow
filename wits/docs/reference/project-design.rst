@@ -633,7 +633,7 @@ here ever builds a second project):
   already have before splitting it out, and therefore the one a migration
   passes through.
 
-Two consequences follow, and both are rules rather than heuristics:
+Three consequences follow, and all are rules rather than heuristics:
 
 * **Path ownership.** One checkout claimed by N projects would tie at equal
   depth in ``project_for_path``, decided by nothing better than map order — a
@@ -671,6 +671,11 @@ Two consequences follow, and both are rules rather than heuristics:
   namespace; same-org borrowing is the case that motivated this, and a
   cross-org reference simply fails loudly the way any unresolvable template
   does.)
+* **Root ownership.** The same rule, applied to the project itself:
+  ``[repos.main]`` may not be a borrow. A project's nested repos resolve under
+  ``main``'s path, and a root another project owns would put them inside a
+  tree that project updates and refreshes, while this one, owning nothing at
+  its root, could not be found from it.
 
 ``skip`` — the paths a checkout never materialises
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -22,7 +22,9 @@ use anyhow::{bail, Context, Result};
 
 use wits_core::config::Root;
 
-use crate::decl::{BranchStrategy, FileDecl, OrgDecl, RepoDecl, SettingsDecl, ToolchainDecl};
+use crate::decl::{
+    BorrowRef, BranchStrategy, FileDecl, OrgDecl, RepoDecl, SettingsDecl, ToolchainDecl,
+};
 
 /// Where the registry keeps its config tree: `$WITS_PROJECT_CONFIG`, then
 /// `$XDG_CONFIG_HOME/wits/project`, then `$HOME/.wits/project`.
@@ -51,16 +53,93 @@ impl ProjectDecl {
     }
 }
 
+/// Project keys by bare name: the one rule that turns a project reference — a
+/// bare name or `org/name`, as a CLI positional spells it — into a project. The
+/// declarations and the resolved workspace share it, so a `from`, a
+/// `developed_as`, and a command line cannot resolve one name differently.
+#[derive(Default)]
+pub(crate) struct Names(BTreeMap<String, Vec<String>>);
+
+impl Names {
+    fn add(&mut self, name: &str, key: &str) {
+        self.0
+            .entry(name.to_owned())
+            .or_default()
+            .push(key.to_owned());
+    }
+
+    /// The project `reference` names among `projects`, which are keyed by
+    /// canonical key. A bare name that several orgs carry is ambiguous, never
+    /// settled by order.
+    pub(crate) fn lookup<'p, P>(
+        &self,
+        projects: &'p BTreeMap<String, P>,
+        reference: &str,
+    ) -> Result<&'p P> {
+        if let Some(project) = projects.get(reference) {
+            return Ok(project);
+        }
+        let keys = if reference.contains('/') {
+            None
+        } else {
+            self.0.get(reference).map(Vec::as_slice)
+        };
+        match keys {
+            Some([only]) => Ok(&projects[only]),
+            Some(many) if many.len() > 1 => bail!(
+                "project '{reference}' is ambiguous across orgs ({}); qualify it as org/name",
+                many.join(", ")
+            ),
+            _ if projects.is_empty() => {
+                bail!("no project '{reference}'. No projects are configured.")
+            }
+            _ => bail!(
+                "no project '{reference}'. Available: {}",
+                projects.keys().cloned().collect::<Vec<_>>().join(", ")
+            ),
+        }
+    }
+}
+
+/// A `from` the loader has checked, with the repo it names resolved — the
+/// source project by canonical key, so nothing downstream reads the reference
+/// again.
+pub(crate) struct Borrow {
+    /// The borrowing project's canonical key, and its entry.
+    pub(crate) project: String,
+    pub(crate) repo: String,
+    /// The borrowed repo: its project's canonical key, and its name there.
+    pub(crate) source_project: String,
+    pub(crate) source_repo: String,
+    /// The file that declares the borrow, and the `from` as written there.
+    file: PathBuf,
+    from: String,
+}
+
+impl Borrow {
+    /// `result`, failing in the frame of the file and entry that wrote this
+    /// `from`, as a failure inside one file is reported.
+    pub(crate) fn blame<T>(&self, result: Result<T>) -> Result<T> {
+        blame(&self.file, &self.project, &self.repo, &self.from, result)
+    }
+}
+
+fn blame<T>(file: &Path, project: &str, repo: &str, from: &str, result: Result<T>) -> Result<T> {
+    result
+        .with_context(|| format!("project '{project}', repo '{repo}': from '{from}'"))
+        .with_context(|| format!("loading {}", file.display()))
+}
+
 /// The declarations, parsed and validated: every project, org, and toolchain the
-/// registry declares.
+/// registry declares, and every borrow between them.
 #[derive(Default)]
 pub(crate) struct Registry {
     /// Keyed by canonical key (`org/name`, or bare `name`).
     pub(crate) projects: BTreeMap<String, ProjectDecl>,
-    /// Bare name → the keys that carry it, for ambiguity detection.
-    by_name: BTreeMap<String, Vec<String>>,
+    pub(crate) names: Names,
     pub(crate) orgs: BTreeMap<String, OrgDecl>,
     pub(crate) toolchains: BTreeMap<String, ToolchainDecl>,
+    pub(crate) borrows: Vec<Borrow>,
 }
 
 impl Registry {
@@ -95,7 +174,7 @@ impl Registry {
                 .ingest(file)
                 .with_context(|| format!("loading {}", file.display()))?;
         }
-        registry.validate_borrows()?;
+        registry.borrows = registry.check_borrows()?;
         Ok(registry)
     }
 
@@ -152,7 +231,7 @@ impl Registry {
                 if self.projects.contains_key(&key) {
                     bail!("project '{key}' is defined in more than one file");
                 }
-                self.by_name.entry(name).or_default().push(key.clone());
+                self.names.add(&name, &key);
                 self.projects.insert(key, project);
             }
             None => {
@@ -171,65 +250,61 @@ impl Registry {
         Ok(())
     }
 
-    /// The cross-file half of declaration validation: every borrow's source
-    /// project and repo exists, and is not itself borrowed.
-    fn validate_borrows(&self) -> Result<()> {
+    /// The cross-file half of declaration validation: every borrow names a
+    /// project and a repo that exist, and a repo that is its project's own. A
+    /// failure is reported in the borrower's file, like a failure inside it.
+    fn check_borrows(&self) -> Result<Vec<Borrow>> {
+        let mut borrows = Vec::new();
         for (key, project) in &self.projects {
             for (repo_name, repo) in &project.repos {
                 let Some(reference) = &repo.from else {
                     continue;
                 };
-                let context = format!(
-                    "project '{key}', repo '{repo_name}': from '{}:{}'",
-                    reference.project, reference.repo
-                );
-                let source_project = self.project(&reference.project).with_context(|| context)?;
-                let source = source_project.repos.get(&reference.repo).with_context(|| {
-                    format!(
-                        "project '{}' has no repo '{}'",
-                        source_project.key(),
-                        reference.repo
-                    )
-                })?;
-                if source.from.is_some() {
-                    bail!(
-                        "repo '{}' of '{}' is itself borrowed; a borrow may not be borrowed",
-                        reference.repo,
-                        source_project.key()
-                    );
-                }
+                let from = format!("{}:{}", reference.project, reference.repo);
+                let source = blame(
+                    &project.source,
+                    key,
+                    repo_name,
+                    &from,
+                    self.borrow_source(reference),
+                )?;
+                borrows.push(Borrow {
+                    project: key.clone(),
+                    repo: repo_name.clone(),
+                    source_project: source,
+                    source_repo: reference.repo.clone(),
+                    file: project.source.clone(),
+                    from,
+                });
             }
         }
-        Ok(())
+        Ok(borrows)
     }
 
-    /// Resolve a name reference (`name` or `org/name`) to a project.
-    pub(crate) fn project(&self, reference: &str) -> Result<&ProjectDecl> {
-        if let Some(p) = self.projects.get(reference) {
-            return Ok(p);
-        }
-        if reference.contains('/') {
-            bail!("no project '{reference}'{}", self.available());
-        }
-        match self.by_name.get(reference).map(Vec::as_slice) {
-            Some([only]) => Ok(&self.projects[only]),
-            Some(many) if many.len() > 1 => bail!(
-                "project '{reference}' is ambiguous across orgs ({}); qualify it as org/name",
-                many.join(", ")
-            ),
-            _ => bail!("no project '{reference}'{}", self.available()),
-        }
-    }
-
-    fn available(&self) -> String {
-        if self.projects.is_empty() {
-            ". No projects are configured.".to_string()
-        } else {
+    /// The canonical key of the project `reference` names, once the repo it
+    /// names is known to exist there and to be that project's own.
+    fn borrow_source(&self, reference: &BorrowRef) -> Result<String> {
+        let source = self.project(&reference.project)?;
+        let repo = source.repos.get(&reference.repo).with_context(|| {
             format!(
-                ". Available: {}",
-                self.projects.keys().cloned().collect::<Vec<_>>().join(", ")
+                "project '{}' has no repo '{}'",
+                source.key(),
+                reference.repo
             )
+        })?;
+        if repo.from.is_some() {
+            bail!(
+                "repo '{}' of '{}' is itself borrowed; a borrow may not be borrowed",
+                reference.repo,
+                source.key()
+            );
         }
+        Ok(source.key())
+    }
+
+    /// Resolve a project reference (`name` or `org/name`).
+    pub(crate) fn project(&self, reference: &str) -> Result<&ProjectDecl> {
+        self.names.lookup(&self.projects, reference)
     }
 }
 
@@ -584,8 +659,16 @@ mod tests {
             err.contains("may not be borrowed"),
             "unexpected error: {err}"
         );
+        let blamed = format!(
+            "loading {}: project 'top', repo 'w': from 'mid:w'",
+            dir.path().join("top.toml").display()
+        );
+        assert!(err.starts_with(&blamed), "unexpected error: {err}");
     }
 
+    /// A borrow is checked once the whole tree is read, but it fails in the
+    /// borrower's file like any failure inside it: every way of naming a
+    /// missing source says which file and entry wrote the `from`.
     #[test]
     fn borrow_of_an_unknown_project_or_repo_is_rejected() {
         let base = r#"
@@ -594,9 +677,13 @@ mod tests {
             path = "/src/work"
             main_branch = "main"
             "#;
-        for (bad, needle) in [
-            ("from = \"ghost\"", "no project"),
-            ("from = \"work:nope\"", "no repo"),
+        for (bad, from, needle) in [
+            ("from = \"ghost\"", "ghost:main", "no project 'ghost'"),
+            (
+                "from = \"work:nope\"",
+                "work:nope",
+                "project 'work' has no repo 'nope'",
+            ),
         ] {
             let dir = tempfile::tempdir().unwrap();
             write(dir.path(), "work.toml", base);
@@ -615,7 +702,14 @@ mod tests {
                 ),
             );
             let err = load_err(dir.path());
-            assert!(err.contains(needle), "for {bad}: unexpected error: {err}");
+            let blamed = format!(
+                "loading {}: project 'wrap', repo 'w': from '{from}': {needle}",
+                dir.path().join("wrap.toml").display()
+            );
+            assert!(
+                err.starts_with(&blamed),
+                "for {bad}: unexpected error: {err}"
+            );
         }
     }
 
