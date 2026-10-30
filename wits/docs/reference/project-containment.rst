@@ -84,9 +84,10 @@ split, not Cargo:
   ``Workspace::load`` may read git while resolving a borrow's checkout and
   validating layout.
 * ``context``, ``presets``, and ``toolchain`` are resolution policy. ``Ctx`` is
-  internal: consumers get ``BuildPlan::get_scalar``,
-  ``ResolvedPaths::get_scalar``, and ``Project::render_hook``, never a context
-  handle.
+  internal: consumers get ``BuildPlan::get_scalar`` and
+  ``Project::render_hook``, never a context handle. The path stage answers in
+  typed ``ResolvedPaths`` fields, so a template query has one answer — the full
+  plan's.
 
 The two stages are types, not a flag:
 

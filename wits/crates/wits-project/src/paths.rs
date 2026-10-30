@@ -84,16 +84,6 @@ impl ResolvedPaths {
     pub fn work_dir_of(&self, repo: &str) -> Option<&Path> {
         self.work_dirs.get(repo).map(PathBuf::as_path)
     }
-
-    /// One resolved scalar from the path-stage context.
-    ///
-    /// Scalars only: a table or list is an error, and booleans spell `true`/
-    /// `false` as TOML does. One failure fails the whole query.
-    pub fn get_scalar(&self, path: &str) -> anyhow::Result<String> {
-        self.ctx
-            .get_scalar(path)
-            .map_err(|e| anyhow::anyhow!("{e}"))
-    }
 }
 
 /// Resolve the paths of one project for one branch.

@@ -1596,13 +1596,13 @@ anchor = "main"
             paths.build_dir.clone().unwrap(),
             PathBuf::from("/src/x/_build/feat")
         );
-        assert!(paths.get_scalar("env.WITS_TEST_STAGE_PROJECT").is_err());
-        assert!(paths.get_scalar("env.WITS_TEST_STAGE_PRESET").is_err());
-        assert!(paths
-            .get_scalar("project.environment.WITS_TEST_STAGE_PROJECT")
-            .is_err());
-        assert!(paths
-            .get_scalar("preset.p.environment.WITS_TEST_STAGE_PRESET")
-            .is_err());
+        for path in [
+            "env.WITS_TEST_STAGE_PROJECT",
+            "env.WITS_TEST_STAGE_PRESET",
+            "project.environment.WITS_TEST_STAGE_PROJECT",
+            "preset.p.environment.WITS_TEST_STAGE_PRESET",
+        ] {
+            assert!(paths.ctx.get_scalar(path).is_err(), "{path} is bound");
+        }
     }
 }

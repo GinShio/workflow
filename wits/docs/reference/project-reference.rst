@@ -1357,7 +1357,8 @@ A ``BuildPlan`` carries the whole resolution — ``paths`` (``focus``,
 ``generator``, ``toolchain``, ``work_dir``/``work_dirs``, ``source_dir``,
 ``build_dir``/``install_dir``), ``build_system``, the applied ``presets``, and
 the accumulated ``LogicalConfig`` — so a caller reads rather than recomputes.
-``get_scalar`` on either stage is the template query entry point. The ``skip``
+``BuildPlan::get_scalar`` is the template query entry point; ``ResolvedPaths``
+answers only in its typed fields, so a query has one answer. The ``skip``
 module (``violations``, ``remedy``, ``sparse_patterns``) is the other read-only
 piece.
 

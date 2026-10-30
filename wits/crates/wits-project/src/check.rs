@@ -14,15 +14,12 @@ use crate::profile::Profile;
 use crate::skip;
 use crate::workspace::{Project, Workspace};
 
-/// One problem found by [`check_one`]. `repo` names the repo when the problem is
-/// repo-scoped; `message` is the human-readable detail, with the repo already
-/// prefixed where it reads naturally.
+/// One problem found by [`check_one`]. `message` is the human-readable detail,
+/// naming the repo when the problem is repo-scoped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Issue {
     /// The owning project's canonical key.
     pub project: String,
-    /// The repo the issue names, if any.
-    pub repo: Option<String>,
     pub message: String,
 }
 
@@ -37,20 +34,16 @@ pub fn check_all(ws: &Workspace) -> Vec<Issue> {
 pub fn check_one(ws: &Workspace, project: &Project) -> Vec<Issue> {
     let mut issues = Vec::new();
     let key = project.key();
-    let mut push = |repo: Option<&str>, message: String| {
+    let mut push = |message: String| {
         issues.push(Issue {
             project: key.clone(),
-            repo: repo.map(str::to_owned),
             message,
         });
     };
 
     for (name, repo) in project.repos() {
         if repo.kind().has_own_git() && repo.decl().main_branch.is_none() {
-            push(
-                Some(name),
-                format!("repo '{name}' has its own git but no main_branch"),
-            );
+            push(format!("repo '{name}' has its own git but no main_branch"));
         }
         // A `developed_as` that resolves to nothing is silent everywhere else:
         // path resolution keeps the structural answer rather than failing, so
@@ -59,15 +52,13 @@ pub fn check_one(ws: &Workspace, project: &Project) -> Vec<Issue> {
         // hand and the verdict is the caller's to act on.
         if let Some(spec) = &repo.decl().developed_as {
             if ws.project(spec).is_err() {
-                push(
-                    Some(name),
-                    format!("repo '{name}': developed_as '{spec}' names no known project"),
-                );
+                push(format!(
+                    "repo '{name}': developed_as '{spec}' names no known project"
+                ));
             } else if ws.developed_as(project, name).is_none() {
-                push(
-                    Some(name),
-                    format!("repo '{name}': developed_as '{spec}' does not borrow this repo"),
-                );
+                push(format!(
+                    "repo '{name}': developed_as '{spec}' does not borrow this repo"
+                ));
             }
         }
         // A declared `skip` that is not in force is the one config fact whose
@@ -80,7 +71,7 @@ pub fn check_one(ws: &Workspace, project: &Project) -> Vec<Issue> {
                 .map(Repository::new)
             {
                 for v in skip::violations(&checkout, &repo.decl().skip) {
-                    push(Some(name), format!("repo '{name}': {v}"));
+                    push(format!("repo '{name}': {v}"));
                 }
                 if wits_core::log::is_verbose() {
                     for cmd in skip::remedy(&checkout, &repo.decl().skip) {
@@ -99,7 +90,7 @@ pub fn check_one(ws: &Workspace, project: &Project) -> Vec<Issue> {
         .repos()
         .any(|(_, repo)| repo.decl().build_dir.is_some());
     if has_build_dir && settings.build_system.is_none() {
-        push(None, "build_dir is set but build_system is not".into());
+        push("build_dir is set but build_system is not".into());
     }
     // Whether a declared `build_system` actually has a backend is `wits build`'s
     // concern; here we only cross-check the *declared* facts: a toolchain's own
@@ -108,17 +99,17 @@ pub fn check_one(ws: &Workspace, project: &Project) -> Vec<Issue> {
         if let Some(tc) = &settings.toolchain {
             if let Some(def) = ws.toolchain(tc) {
                 if !def.supports.is_empty() && !def.supports.iter().any(|s| s == bs.as_str()) {
-                    push(
-                        None,
-                        format!("toolchain '{tc}' does not support '{}'", bs.as_str()),
-                    );
+                    push(format!(
+                        "toolchain '{tc}' does not support '{}'",
+                        bs.as_str()
+                    ));
                 }
             }
         }
     }
     if let Some(tc) = &settings.toolchain {
         if ws.toolchain(tc).is_none() {
-            push(None, format!("unknown toolchain '{tc}'"));
+            push(format!("unknown toolchain '{tc}'"));
         }
     }
 
@@ -145,7 +136,7 @@ pub fn check_one(ws: &Workspace, project: &Project) -> Vec<Issue> {
         extra_install_args: &[],
     };
     if let Err(e) = resolve_plan(ws, project, &input) {
-        push(None, format!("resolution: {e:#}"));
+        push(format!("resolution: {e:#}"));
     }
     issues
 }
