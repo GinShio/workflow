@@ -659,6 +659,25 @@ fn an_unknown_feed_lists_the_configured_ones_and_their_file() {
     }
 }
 
+#[test]
+fn feeds_prints_this_repositorys_feed_names_for_completion() {
+    let fx = Fixture::new();
+    let config = fx.write_config(
+        r#"
+        [repo."github.com/me/proj"]
+        feed.vk = { labels = ["vulkan"] }
+        feed.mine = { reviewer = "@me" }
+
+        [repo."github.com/me/other"]
+        feed.theirs = { reviewer = "@me" }
+        "#,
+    );
+
+    let out = fx.run_configured(&["review", "__feeds"], &config);
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "mine\nvk\n");
+}
+
 /// The regression: `prune` carried no dry-run guard at all, so `-n` destroyed the
 /// very thing it was meant to preview — `local.json` included, the one file in the
 /// store that no refetch can rebuild.

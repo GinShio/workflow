@@ -24,6 +24,7 @@ use serde::Deserialize;
 
 use wits_core::forge::RemoteInfo;
 use wits_core::forge::{FeedQuery, FeedStates};
+use wits_core::git::Repository;
 
 use super::StackMode;
 
@@ -154,6 +155,20 @@ pub struct Config {
 /// The repo key a section is filed under.
 pub fn repo_key(info: &RemoteInfo) -> String {
     format!("{}/{}/{}", info.host, info.owner, info.repo)
+}
+
+/// `__feeds`: the feed names `fetch --feed` accepts in this checkout's
+/// repository, sorted, one per line. The consumer is fish completion, which
+/// reads this instead of keeping its own copy of the file lookup and a parser
+/// of the file — so the contract is the output shape alone: nothing else on
+/// stdout.
+pub fn run_names(repo: &Repository) -> Result<()> {
+    let ctx = super::local(repo)?;
+    let cfg = Config::load()?;
+    for name in cfg.feed_names(&repo_key(&ctx.target)) {
+        println!("{name}");
+    }
+    Ok(())
 }
 
 /// Where the file is when `WITS_REVIEW_CONFIG` does not name one: XDG's config

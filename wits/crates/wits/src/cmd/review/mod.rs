@@ -62,6 +62,11 @@ pub enum ReviewAction {
     Checkout(CheckoutArgs),
     /// Drop the store for terminal (merged/closed) or dormant MRs.
     Prune(PruneArgs),
+    /// Print the feed names `fetch --feed` accepts in this repository, one per
+    /// line. Hidden: shell completion asks this rather than reading the config
+    /// file itself.
+    #[command(name = "__feeds", hide = true)]
+    Feeds,
 }
 
 /// How much of an MR's stack a fetch pulls in. The same three modes govern both
@@ -273,6 +278,7 @@ pub fn run(args: &ReviewArgs) -> Result<()> {
         ReviewAction::Submit(a) => submit::run(&repo, a),
         ReviewAction::Checkout(a) => checkout::run(&repo, a),
         ReviewAction::Prune(a) => prune::run(&repo, a),
+        ReviewAction::Feeds => config::run_names(&repo),
     }
 }
 
