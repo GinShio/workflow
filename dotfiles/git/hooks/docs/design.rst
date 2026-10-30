@@ -274,10 +274,14 @@ index records only a file's executable bit, a checkout materialises the rest
 of a mode from the umask, so a transcrypt secret lands ``0644`` no matter what
 its author intended — and the filter itself cannot fix it, because
 clean/smudge see a byte stream, never the file. The hook re-asserts ``0600`` at
-the moment the tree changes. The chmod is invisible to ``git status`` because
-``600`` vs ``644`` differ only in bits the index drops, so the enforcement does
-not dirty the tree. The one batched ``check-attr`` pass over the index is how
-the whole cost stays to a single subprocess.
+the moment the tree changes. The mode is invisible to ``git status`` because
+``600`` vs ``644`` differ only in bits the index drops, but the chmod is not:
+it moves the file's ctime, which the index records, and git settles a stale
+entry by re-running the clean filter — for an encrypting filter, a key
+derivation per file. So the hook changes only a mode that is wrong, and a
+secret whose mode is already right keeps its index entry. One batched
+``check-attr`` pass over the index finds the candidates, instead of one
+``check-attr`` per file.
 
 POSIX ``sh``, deliberately
 --------------------------

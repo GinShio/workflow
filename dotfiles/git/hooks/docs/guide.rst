@@ -486,8 +486,13 @@ executable bit of a file's mode, so a checkout materialises the rest from your
 umask: a transcrypt secret lands ``0644`` no matter what its author intended,
 and the filter itself cannot fix it, because clean/smudge see a byte stream,
 never the file. This script re-asserts the mode at the moment the tree changes.
-Because ``600`` vs ``644`` differ only in bits the index drops, ``git status``
-stays quiet — the chmod never dirties your tree. The same script also runs on
+The mode itself never shows in ``git status`` — ``600`` vs ``644`` differ only
+in bits the index drops — but a chmod moves the file's ctime, which the index
+does record, and git answers that by running the clean filter again: a key
+derivation per secret, and a secret whose packet the filter does not hand back
+unchanged then reads as modified. So the script changes only a file that is not
+``0600`` already, and an amend, a rebase, or a checkout that leaves a secret
+alone leaves its index entry alone too. The same script also runs on
 ``post-merge`` and ``post-rewrite`` (those entries are symlinks to it), since a
 merge or rebase can surface freshly smudged secrets.
 

@@ -5,10 +5,16 @@
 # checkout is materialised from the umask, so a transcrypt secret lands at 0644
 # no matter what its author intended, and the filter itself cannot fix it --
 # clean/smudge see a byte stream, not the file. So the mode is re-asserted here,
-# at the moment the working tree changes (checkout, merge, rebase). chmod is
-# invisible to git status (600 vs 644 differ only in bits the index drops), so
-# the tree stays clean. Idempotent and cheap: one `check-attr` pass, no rule
-# beyond "is the filter encrypting?".
+# at the moment the working tree changes (checkout, merge, rebase).
+#
+# The mode is invisible to git status (600 vs 644 differ only in bits the index
+# drops), but a chmod is not: it moves the file's ctime, which the index does
+# record (core.trustctime), and git settles the stale entry by running the
+# clean filter again. For wits transcrypt that costs a key derivation per file,
+# and a file whose index packet clean does not hand back then reads as
+# modified (see "Salt modes" in wits/docs/commands/transcrypt.rst). So a file
+# that is 0600 already is left alone. One `check-attr` pass, no rule beyond
+# "is the filter encrypting?".
 #
 # Shared by post-checkout, post-merge and post-rewrite; the other two .d
 # entries are symlinks to this one.
@@ -21,7 +27,9 @@
 # One batched scan over the whole index instead of a per-file `git check-attr`.
 git ls-files | crypt_filtered |
 while IFS= read -r _path || [ -n "$_path" ]; do
-    chmod 0600 "$_path" 2>/dev/null ||
+    # `./` keeps a path that starts with `-` or `!` from parsing as an option.
+    [ -z "$(find "./$_path" -prune -perm 0600 2>/dev/null)" ] || continue
+    chmod 0600 "./$_path" 2>/dev/null ||
         log_debug "encrypted-modes: chmod failed for $_path"
 done
 
