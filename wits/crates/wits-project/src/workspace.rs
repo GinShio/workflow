@@ -4,9 +4,12 @@
 //! A [`Project`] owns its repos as [`Repo`] values: the parsed [`RepoDecl`]
 //! (with a borrow's travelling fields filled from its source), the inferred
 //! [`Kind`], the resolved `borrowed_path` when it borrows, and the
-//! [`RepoKey`] whose namespace its path templates render in. Nothing here
-//! renders a template except [`Project::repo_abs_path`], and nothing queries git
-//! except the reverse path lookups, which read the live worktree inventory.
+//! [`RepoKey`] whose namespace its path templates render in. Outside loading,
+//! nothing here renders a template except [`Project::repo_abs_path`], and
+//! nothing queries git except the reverse path lookups, which read the live
+//! worktree inventory. Loading also locates each borrow's source checkout and
+//! renders each `bootstrap_worktree_dir` to check it, either of which may read
+//! git for a bare-backed repo.
 //!
 //! The declaration loader ([`crate::load`]) has already validated names, remote
 //! roles, strategy fields, and borrow shapes; this module resolves the one thing

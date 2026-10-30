@@ -60,8 +60,8 @@ pub fn roles_of(repo: &RepoDecl) -> RemoteRoles {
 /// Check a repo's declared remotes, as the loader does for every repo it ingests.
 ///
 /// Three rules, each closing a way the name/role overlap could otherwise go wrong.
-/// They are checked here rather than in `--check` because all three are facts of
-/// the file, needing nothing from disk to settle.
+/// They are checked here rather than in `project check` because all three are
+/// facts of the file, needing nothing from disk to settle.
 pub fn validate(repo_name: &str, repo: &RepoDecl) -> Result<()> {
     for (name, remote) in &repo.remotes {
         if remote.url.trim().is_empty() {

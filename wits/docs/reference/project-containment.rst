@@ -18,14 +18,15 @@ The crate graph
      process config path jinja log pager editor time system
      git remote forge worktree trunk
          ▲
-         ├── wits-crypto        (leaf)
-         └── wits-project
-                 ▲
-             wits-build
-                 ▲
-             wits-actions
-                 ▲
-             wits (bin)         (core, project, build, actions, crypto)
+     wits-project
+         ▲
+     wits-build
+         ▲
+     wits-actions
+         ▲
+     wits (bin)                 (core, project, build, actions, crypto)
+
+   wits-crypto                  (leaf: no wits-* crate)
    wits-scaffold (bin)          (core)
 
 .. list-table::

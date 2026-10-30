@@ -342,8 +342,8 @@ bootstrap checkout, so Git copies the mask.
 ``update`` and ``project check`` only *verify*, in that repo's own checkout
 — the in-place clone itself, or for a bare-backed repo the worktree holding
 ``main_branch``, falling back to whichever checkout stands in for its missing
-main worktree. Both look at the same checkout, so a ``--check`` that passes is
-a promise ``update`` will not then contradict. Neither *applies* the mask:
+main worktree. Both look at the same checkout, so a ``project check`` that
+passes is a promise ``update`` will not then contradict. Neither *applies* the mask:
 doing that to a tree wits did not build means deleting content, which is yours
 to do:
 

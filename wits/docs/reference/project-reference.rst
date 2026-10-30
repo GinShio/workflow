@@ -628,7 +628,7 @@ Canonical fields (translated to each backend)
    * - ``c_flags``, ``cxx_flags``, ``link_flags``
      - Flag lists.
    * - ``supports``
-     - Optional list of build systems, used only by ``info --check``.
+     - Optional list of build systems, used only by ``project check``.
 
 Each canonical field is translated into a backend-native form; for meson and
 cargo it is *also* exported as its universal environment variable (``CC``,
@@ -838,8 +838,8 @@ backend-driven — meson ``ninja -C <build> uninstall``, cmake via
 ``install_manifest.txt``, cargo unsupported — never a recursive delete,
 because an install prefix may be shared.
 
-``info --check`` validation
----------------------------
+``project check`` validation
+----------------------------
 
 Reports (does not fix): a repo with its own git but no ``main_branch``;
 ``build_dir`` set while ``build_system`` is not; the project's ``toolchain``
@@ -852,7 +852,7 @@ one that does not borrow the repo declaring it — silent in path resolution by
 design, so this is where it is reported. No ``<name>`` checks every project.
 
 Malformed structure is rejected earlier, when the registry loads, so
-``--check`` never sees it. These all fail the load outright: a project file
+``check`` never sees it. These all fail the load outright: a project file
 with no ``[repos.main]``, or whose ``[repos.main]`` is a borrow;
 ``[repos.*]`` tables in a file with no ``[project]``; a repo with neither
 ``path`` nor ``from``; a ``from`` naming an unknown project or repo, or a

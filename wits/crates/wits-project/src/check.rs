@@ -1,8 +1,8 @@
 //! Cross-checking a project's declarations against each other and the registry.
 //!
-//! These are the checks that need the whole registry or the disk: `--check` is
-//! where a `developed_as` typo, a `skip` list that is not in force, or a dry
-//! resolve failure is reported. File-local facts (unknown keys, remote roles,
+//! These are the checks that need the whole registry or the disk: `project
+//! check` is where a `developed_as` typo, a `skip` list that is not in force,
+//! or a dry resolve failure is reported. File-local facts (unknown keys, remote roles,
 //! strategy fields) are already rejected by the loader.
 
 use wits_core::git::Repository;

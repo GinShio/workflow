@@ -107,7 +107,7 @@ the crate-module grouping. ``project``'s read-only **core** (``decl``, ``load``,
 ``workspace``, ``layout``, ``paths``, ``plan``) is a self-contained subsystem, so
 it lives in its own crate, ``wits-project``, not inside a command; the build
 systems live beside it in ``wits-build``. The ``cmd`` layer is then thin CLI
-shells: ``cmd::project`` (describe / ``--check`` / path queries), ``cmd::build``,
+shells: ``cmd::project`` (describe, validate, path queries), ``cmd::build``,
 ``cmd::devenv``, and ``cmd::update`` all consume the libraries' public API — the
 same way an external tool would. The mutating actions themselves are not in the
 CLI at all: they are ``wits-actions``'::
@@ -510,14 +510,15 @@ goes unnoticed until a bare-backed repo is added — and then ``git switch``,
 ``git merge`` and ``git submodule`` all refuse outright, because a git-dir is
 not a working tree.
 
-``resolve`` therefore owns the answer, and callers never re-derive it:
+``layout`` therefore owns the answer, and callers never re-derive it:
 ``work_dir`` (a repo's checkout for a branch), ``checkout_holding`` (the
 checkout a branch is in, if any), ``primary_checkout`` (a repo's checkout
 when no branch selects one), ``current_checkout``/``current_branch`` (the
-same, letting the caller's cwd pick when it stands inside one of the repo's
-own worktrees), and ``nesting_root`` (the checkout nested repos live inside).
-A ``Plan`` additionally carries every repo's resolved ``workdir`` typed, so a
-build reads rather than recomputes.
+same, letting the place the caller names — ``here`` — pick when it is inside
+one of the repo's own worktrees), and ``nesting_root`` (the checkout a repo's
+nested repos live inside). ``ResolvedPaths``, and so every ``BuildPlan``,
+additionally carries every repo's resolved ``workdir`` typed (``work_dirs``),
+so a build reads rather than recomputes.
 
 Two consequences worth spelling out. **A repo's own path templates render in
 the namespace of the project that owns the repo**, not the one consuming it:
@@ -572,8 +573,7 @@ entry point. Other repos hang off it.
   (relative to ``repos.main``) is a ``submodule`` when it declares its own
   ``main_branch`` and a ``subtree`` when it does not. ``standalone``/
   ``submodule`` have their own git; a ``subtree`` shares its anchor's.
-  ``repos.main`` is always standalone. ``info --check`` validates the
-  inference against actual git state.
+  ``repos.main`` is always standalone.
 * **``path``** — for ``repos.main`` and standalone siblings, the on-disk
   repository location / clone destination (the bare common dir for
   worktree/hybrid); for nested repos, a subpath relative to main's
@@ -1367,7 +1367,7 @@ meson's ``coredata.dat``, none for cargo) — none of which the core ever sees.
 
 Whether a declared ``build_system`` actually *has* a backend is reported by
 ``wits build`` at run time, not by ``wits project check``: the core does
-not know the set of supported build systems, so ``--check`` validates only
+not know the set of supported build systems, so ``check`` validates only
 declared-fact consistency (e.g. a toolchain's ``supports`` list vs the
 ``build_system``).
 
@@ -1561,7 +1561,7 @@ exists (the annotated form lives in :doc:`project-reference`):
    resolve_paths(&ws, p, &PathInput { .. })?;    // checkout + output paths only
    layout::work_dir(&ws, p, "main", branch)?;    // a repo's checkout for a branch (by name)
    layout::current_branch(&ws, p, "main", &t.here)?;  // what a query defaults to
-   skip::violations(&git, &repo.decl().skip);    // the `--check` skip verification
+   skip::violations(&git, &repo.decl().skip);    // the `project check` skip verification
 
 The consumers are the ``wits`` commands themselves: ``wits-actions`` drives
 ``resolve_plan``/``resolve_paths``, and every CLI verb resolves its positional

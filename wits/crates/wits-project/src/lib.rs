@@ -3,8 +3,10 @@
 //!
 //! The declaration model stays deliberately close to the file on disk: templated
 //! fields (`repos.*.build_dir`, an `[environment]` map, …) are kept as raw
-//! strings and `toml::Value`s, and loading does no path rendering and no git
-//! queries. Turning declarations into concrete paths and command lines is the
+//! strings and `toml::Value`s, and parsing them does no path rendering and no
+//! git queries. [`Workspace::load`] goes only as far as locating each borrow's
+//! source checkout and checking each bootstrap path, which may render a path and
+//! read git. Turning declarations into concrete paths and command lines is the
 //! resolution stage's job: [`resolve_paths`] for a checkout question, and
 //! [`resolve_plan`] for a build.
 
