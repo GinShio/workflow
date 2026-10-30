@@ -327,14 +327,15 @@ const MERGED: &str = r##"{
   "snapshots": [], "fetched_at": 1700000000, "commits": [], "files": []
 }"##;
 
-/// A store entry a feed refresh would leave: metadata only, no review point.
+/// A store entry a feed refresh would leave: metadata only, no review point —
+/// and a sync time, which a feed stamps like any other fetch.
 const FEED_ONLY: &str = r##"{
   "schema": 1,
   "mr": { "id": "8", "display": "#8", "state": "open", "draft": false,
           "title": "Never fully fetched", "author": "bob", "base": "main",
           "source": "wip", "updated_at": "2026-07-01T00:00:00Z", "labels": [],
           "web_url": "https://github.com/me/proj/pull/8" },
-  "snapshots": [], "fetched_at": 0, "commits": [], "files": []
+  "snapshots": [], "fetched_at": 1700000000, "commits": [], "files": []
 }"##;
 
 const TWO_SNAPSHOTS: &str = r##"{
@@ -1305,6 +1306,26 @@ fn details_prints_the_metadata_and_the_snapshot_history() {
     assert!(inbox.success, "stderr: {}", inbox.stderr);
     assert!(inbox.stdout.contains("feature -> main"), "{}", inbox.stdout);
     assert!(inbox.stdout.contains("2 snapshot(s)"), "{}", inbox.stdout);
+}
+
+/// Whether an MR was ever fully fetched is its snapshots: a feed refresh stamps
+/// `fetched_at` too, so that field cannot tell.
+#[test]
+fn a_feed_only_row_reads_as_not_fetched_whatever_its_sync_time() {
+    let fx = Fixture::new();
+    fx.seed_info("8", FEED_ONLY);
+
+    let inbox = fx.run(&["review", "show", "--details"]);
+    assert!(inbox.success, "stderr: {}", inbox.stderr);
+    assert!(inbox.stdout.contains("not fetched"), "{}", inbox.stdout);
+
+    let detail = fx.run(&["review", "show", "8", "--details"]);
+    assert!(detail.success, "stderr: {}", detail.stderr);
+    assert!(
+        detail.stdout.contains("never (feed entry only"),
+        "{}",
+        detail.stdout
+    );
 }
 
 #[test]

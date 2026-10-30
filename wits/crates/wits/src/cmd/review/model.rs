@@ -249,10 +249,11 @@ pub struct Info {
     /// the current one.
     #[serde(default)]
     pub snapshots: Vec<Snapshot>,
-    /// Unix time (seconds) of the last `fetch` that synced this MR — updated on
-    /// *every* fetch, even when the head hasn't moved, so `prune`'s dormancy
-    /// reflects real staleness rather than when a snapshot first appeared. `0`
-    /// means never fully fetched (a feed-only entry).
+    /// Unix time (seconds) of the last `fetch` that synced this MR, at any
+    /// depth — a feed's light refresh counts — and even when the head hasn't
+    /// moved, so `prune`'s dormancy reflects real staleness rather than when a
+    /// snapshot first appeared. Whether a full fetch ever happened is
+    /// [`snapshots`](Self::snapshots), never this.
     #[serde(default)]
     pub fetched_at: i64,
     pub commits: Vec<StoredCommit>,

@@ -107,8 +107,9 @@ Top-level fields
        the MR was last synced is tracked once on the MR, not per snapshot.)
    * - ``fetched_at``
      - int
-     - Unix seconds of the last ``fetch`` that synced this MR; ``0`` for a
-       feed-only entry.
+     - Unix seconds of the last ``fetch`` that synced this MR, a feed's light
+       refresh included. Whether it was ever fully fetched is ``snapshots``,
+       not this.
    * - ``reviewed``
      - object
      - *Optional.* Where your last submitted review stood: ``{ head_sha, at }``,
@@ -329,7 +330,8 @@ top level, plus a ``review`` block.
        fetched.
    * - ``review.fetched_at``
      - int
-     - Unix seconds of the last sync; ``0`` for a feed-only row.
+     - Unix seconds of the last sync, a feed's light refresh included; a
+       feed-only row is told by ``review.snapshots``.
 
 Items are sorted by ``updated_at``, newest first.
 

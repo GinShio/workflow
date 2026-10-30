@@ -79,8 +79,9 @@ is not meant to be hand-edited (edits are overwritten on the next fetch).
        Every snapshot's objects are pinned.
    * - ``fetched_at``
      - Unix seconds of the **last** ``fetch`` that synced this MR — updated on
-       every fetch (even for an unchanged head), so dormancy tracks real
-       staleness. ``0`` for a feed-only entry (never fully fetched).
+       every fetch, a feed's light refresh included and even for an unchanged
+       head, so dormancy tracks real staleness. Whether the MR was ever fully
+       fetched is ``snapshots``, not this.
    * - ``commits``
      - Commits in the current snapshot's ``fork..head``, derived **locally**
        from the fetched objects.

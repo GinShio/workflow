@@ -858,7 +858,8 @@ Housekeeping: ``prune``
 (``refs/wits/review/*``) of terminal MRs — and their **review worktree** if it
 sits at the default sibling path — letting git collect the objects.
 ``--older-than`` also catches dormant MRs, given a **day count** or an
-**ISO-8601 date**. It is idempotent and a no-op when nothing is stale.
+**ISO-8601 date**: any MR no fetch has synced since, a feed's light refresh
+counting as a sync. It is idempotent and a no-op when nothing is stale.
 
 Naming an MR prunes **just that one, whatever its state** — the way to reclaim
 a review worktree and store for an MR you are finished reviewing before it

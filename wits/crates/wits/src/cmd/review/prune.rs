@@ -35,9 +35,7 @@ pub fn run(repo: &Repository, args: &PruneArgs) -> Result<()> {
     let mut pruned: Vec<String> = Vec::new();
     for info in ctx.store.list_infos() {
         let terminal = matches!(info.mr.state, MrState::Merged | MrState::Closed);
-        // Dormant iff we have a real last-sync time (a full fetch, `fetched_at`
-        // > 0) that predates the cutoff. A feed-only entry (`0`) is never dormant.
-        let stale = cutoff.is_some_and(|before| info.fetched_at > 0 && info.fetched_at < before);
+        let stale = cutoff.is_some_and(|before| info.fetched_at < before);
         if !terminal && !stale {
             continue;
         }

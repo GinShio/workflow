@@ -458,13 +458,14 @@ fn inbox_details_line(item: &InboxItem) -> String {
         parts.push(item.mr.labels.join(","));
     }
     parts.push(format!("updated {}", iso_day(&item.mr.updated_at)));
-    parts.push(match item.review.fetched_at {
-        0 => "not fetched".to_owned(),
-        at => format!(
+    parts.push(if item.review.snapshots == 0 {
+        "not fetched".to_owned()
+    } else {
+        format!(
             "fetched {} · {} snapshot(s)",
-            age_since(at),
+            age_since(item.review.fetched_at),
             item.review.snapshots
-        ),
+        )
     });
     parts.join(" · ")
 }
@@ -493,9 +494,10 @@ fn print_detail_metadata(view: &DetailView) {
     field("updated", &view.mr.updated_at);
     field(
         "fetched",
-        &match view.fetched_at {
-            0 => "never (feed entry only — `wits review fetch` for full detail)".to_owned(),
-            at => age_since(at),
+        &if view.snapshots.is_empty() {
+            "never (feed entry only — `wits review fetch` for full detail)".to_owned()
+        } else {
+            age_since(view.fetched_at)
         },
     );
     if let Some(reviewed) = &view.reviewed {
