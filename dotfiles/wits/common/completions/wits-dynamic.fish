@@ -10,27 +10,27 @@
 #
 # Every built-in is also an applet (`wits-review`, …): the same command tree
 # under another argv[0], which main.rs splices back into the umbrella parse.
-# Each rule below is therefore registered for both spellings, and its
-# condition asks which *verb* is in play rather than which tokens were seen —
-# the verb is the one fact both forms agree on.
+# Each applet wraps its umbrella spelling, and fish completes a wrapped
+# command against the line rewritten to the wrapper's (`wits-review fetch` is
+# completed as `wits review fetch`, every condition seeing the rewrite), so
+# the generated skeleton and the rules below, all written for `wits`, serve
+# both forms.
 #
 # Registry-sourced names (toolchains, presets, repos) come from `wits project
 # __names`, the hidden query the tool ships for exactly this: completion asks
 # the registry instead of keeping a TOML parser and a copy of the config
 # ladder, the same bargain `__trunk` made for the git hooks.
 
-# Which wits verb is in play. The applet form carries it in argv[0]
-# (`wits-review` → review); the umbrella form spells it as the first word
-# after the program that is not a flag — `-v`/`-n` are the only root-global
-# flags, and neither takes a value, so nothing can precede the verb but them.
-function __wits_verb --description 'the wits verb in play, umbrella or applet form'
-    set -l first (path basename (commandline -opc)[1])
-    # `wits-*` requires the dash, so the bare umbrella program falls through
-    # to the token scan below. (fish's string-match glob has no usable `?`.)
-    if string match -q 'wits-*' -- $first
-        string replace -r '^wits-' '' -- $first
-        return 0
-    end
+# The built-ins, as `wits __applets` lists them and wits/meson.build installs
+# their applets.
+for verb in build devenv dotfiles project review stack transcrypt update worktree
+    complete -c wits-$verb -w "wits $verb"
+end
+
+# Which wits verb is in play: the first word after the program that is not a
+# flag — `-v`/`-n` are the only root-global flags, and neither takes a value,
+# so nothing can precede the verb but them.
+function __wits_verb --description 'the wits verb in play'
     for tok in (commandline -opc)[2..]
         if string match -q -- '-*' $tok
             continue
@@ -82,11 +82,10 @@ function __wits_projects
         printf '%s\t%s\n' (string split -m 1 -f 2 / -- $orgname) $orgname
     end
 end
-complete -c wits -c wits-build -c wits-devenv -c wits-update \
-    -f -n '__wits_ctx build devenv update' -a '(__wits_projects)'
+complete -c wits -f -n '__wits_ctx build devenv update' -a '(__wits_projects)'
 # Scoped past the verbs: `wits project <TAB>` must offer the verbs, not the
 # projects the verbs consume.
-complete -c wits -c wits-project \
+complete -c wits \
     -f -n '__wits_ctx project; and __fish_seen_subcommand_from list info check exists branch-build-dirs hash' -a '(__wits_projects)'
 
 # `project info --get` paths: a dotted lookup into the template context
@@ -117,7 +116,7 @@ function __wits_project_get_paths
         end
     end
 end
-complete -c wits -c wits-project \
+complete -c wits \
     -f -n '__wits_ctx project; and __fish_seen_subcommand_from info' -l get -r -a '(__wits_project_get_paths)'
 
 # Toolchains, presets, repos: one hidden query, three lists. With a target on
@@ -161,18 +160,14 @@ function __wits_takes_branch --description 'true where --branch and --focus are 
     __wits_ctx project; and __fish_seen_subcommand_from hash branch-build-dirs
 end
 
-complete -c wits -c wits-project -c wits-build -c wits-devenv \
-    -f -n __wits_takes_profile -l toolchain -s T -r -a '(__wits_toolchains)'
-complete -c wits -c wits-project -c wits-build -c wits-devenv \
-    -f -n __wits_takes_profile -l preset -s p -r -a '(__wits_presets)'
+complete -c wits -f -n __wits_takes_profile -l toolchain -s T -r -a '(__wits_toolchains)'
+complete -c wits -f -n __wits_takes_profile -l preset -s p -r -a '(__wits_presets)'
 # `--focus` names a repo of the target, so it takes the same registry list the
 # `repos.<name>.*` paths above do.
-complete -c wits -c wits-project -c wits-build -c wits-devenv \
-    -f -n __wits_takes_branch -l focus -r -a '(__wits_repos)'
+complete -c wits -f -n __wits_takes_branch -l focus -r -a '(__wits_repos)'
 # Build types are meson-aligned, lowercase
 # (wits/docs/reference/project-reference.rst).
-complete -c wits -c wits-project -c wits-build -c wits-devenv \
-    -f -n __wits_takes_profile -l build-type -s B -r -a 'plain debug debugoptimized release minsize'
+complete -c wits -f -n __wits_takes_profile -l build-type -s B -r -a 'plain debug debugoptimized release minsize'
 
 # Branches: local branches of the current repo. Self-contained — fish 4.x
 # removed the old __fish_git_branches helper, and depending on which of its
@@ -186,14 +181,13 @@ end
 # The branch-positional stack verbs. `slice` takes no positional — its branch
 # is the `--base` flag, which gets its own value rule; `tree` takes branches
 # as positionals in both `rm` and `mv` (`edit` takes a file).
-complete -c wits -c wits-stack \
+complete -c wits \
     -f -n '__wits_ctx stack; and __fish_seen_subcommand_from status push submit anno publish decorate' -a '(__wits_git_branches)'
-complete -c wits -c wits-stack \
+complete -c wits \
     -f -n '__wits_ctx stack; and __fish_seen_subcommand_from slice' -l base -r -a '(__wits_git_branches)'
-complete -c wits -c wits-stack \
+complete -c wits \
     -f -n '__wits_ctx stack; and __fish_seen_subcommand_from tree; and __fish_seen_subcommand_from rm mv' -a '(__wits_git_branches)'
-complete -c wits -c wits-project -c wits-build -c wits-devenv \
-    -f -n __wits_takes_branch -l branch -s b -r -a '(__wits_git_branches)'
+complete -c wits -f -n __wits_takes_branch -l branch -s b -r -a '(__wits_git_branches)'
 
 # Worktrees: `create`/`switch` take a REV that must be a local branch
 # (--detach widens it to any revision; not worth a conditional), and
@@ -202,24 +196,20 @@ function __wits_worktree_dirs
     git worktree list --porcelain 2>/dev/null \
         | string match 'worktree *' | string replace 'worktree ' '' | path basename
 end
-complete -c wits -c wits-worktree \
+complete -c wits \
     -f -n '__wits_ctx worktree; and __fish_seen_subcommand_from create switch' -a '(__wits_git_branches)'
-complete -c wits -c wits-worktree \
+complete -c wits \
     -f -n '__wits_ctx worktree; and __fish_seen_subcommand_from info prune' -a '(__wits_git_branches)'
-complete -c wits -c wits-worktree \
+complete -c wits \
     -f -n '__wits_ctx worktree; and __fish_seen_subcommand_from info prune' -a '(__wits_worktree_dirs)'
 # switch's TARGET (which worktree to move) and create's DIR sit one token
 # past REV; the count is an approximation that over-offers when global flags
 # precede the position — cosmetic, and the alternative is fragile token
-# arithmetic over option values. The applet form has one fewer leading token.
+# arithmetic over option values.
 complete -c wits \
     -f -n '__wits_ctx worktree; and __fish_seen_subcommand_from switch; and test (count (commandline -opc)) -ge 4' -a '(__wits_worktree_dirs)'
-complete -c wits-worktree \
-    -f -n '__fish_seen_subcommand_from switch; and test (count (commandline -opc)) -ge 3' -a '(__wits_worktree_dirs)'
 complete -c wits \
     -f -n '__wits_ctx worktree; and __fish_seen_subcommand_from create; and test (count (commandline -opc)) -ge 4' -a '(__fish_complete_directories)'
-complete -c wits-worktree \
-    -f -n '__fish_seen_subcommand_from create; and test (count (commandline -opc)) -ge 3' -a '(__fish_complete_directories)'
 
 # MR numbers: read straight from the review store, whose layout —
 # <base>/<host>/<owner…possibly nested>/<repo>/<id>/info.json — is pinned by
@@ -244,7 +234,7 @@ function __wits_review_mrs
         printf '%s\t%s\n' (path basename "$mrd") (string replace "$base/" '' -- (path dirname "$mrd"))
     end
 end
-complete -c wits -c wits-review \
+complete -c wits \
     -f -n '__wits_ctx review; and __fish_seen_subcommand_from fetch show diff draft edit submit checkout prune' -a '(__wits_review_mrs)'
 
 # Feeds: one global TOML file (wits/docs/commands/review.rst) declares one
@@ -270,16 +260,14 @@ function __wits_review_feeds
     end <$cfg
 end
 # --feed exists only on `review fetch`.
-complete -c wits -c wits-review \
+complete -c wits \
     -f -n '__wits_ctx review; and __fish_seen_subcommand_from fetch' -l feed -r -a '(__wits_review_feeds)'
 
 # File arguments: the clap tree carries no ValueHint for these, so the
 # generated script offers nothing for them. transcrypt's filter verbs read a
 # file; dotfiles' --config/--root (global within the dotfiles tree) name the
 # layout declaration and a repository root.
-complete -c wits -c wits-transcrypt \
+complete -c wits \
     -n '__wits_ctx transcrypt; and __fish_seen_subcommand_from clean smudge textconv' -F
-complete -c wits -c wits-dotfiles \
-    -n '__wits_ctx dotfiles' -l config -r -F
-complete -c wits -c wits-dotfiles \
-    -n '__wits_ctx dotfiles' -l root -r -a '(__fish_complete_directories)'
+complete -c wits -n '__wits_ctx dotfiles' -l config -r -F
+complete -c wits -n '__wits_ctx dotfiles' -l root -r -a '(__fish_complete_directories)'
