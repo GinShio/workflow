@@ -150,18 +150,30 @@ fn apply_skip(git: &Repository, name: &str, repo: &RepoDecl) -> Result<()> {
     verify_skip(git, name, repo)
 }
 
-/// `repos.main` first (nested repos are cloned through it), then the rest.
+/// `repos.main` first, then the rest with every repo before the ones nested in
+/// it: a nested repo lives in the checkout of the repo holding it, so that
+/// checkout has to be there first. A parent's path is a prefix of its child's,
+/// so fewer path components sort first; a path that does not render sorts last,
+/// where updating that repo reports why.
 fn repo_order(project: &Project) -> Vec<String> {
-    let mut order = Vec::new();
-    if project.repo("main").is_some() {
-        order.push("main".to_owned());
-    }
-    for (name, _) in project.repos() {
-        if name != "main" {
-            order.push(name.to_owned());
-        }
-    }
-    order
+    let depth = |name: &str| {
+        project
+            .repo_abs_path(name)
+            .map_or(usize::MAX, |path| path.components().count())
+    };
+    let mut rest: Vec<&str> = project
+        .repos()
+        .map(|(name, _)| name)
+        .filter(|name| *name != "main")
+        .collect();
+    rest.sort_by_key(|name| depth(name));
+    project
+        .repo("main")
+        .map(|_| "main")
+        .into_iter()
+        .chain(rest)
+        .map(str::to_owned)
+        .collect()
 }
 
 fn clone_repo(ws: &Workspace, project: &Project, name: &str, git: &Repository) -> Result<()> {
@@ -447,34 +459,32 @@ fn default_update(
     }
 }
 
-/// Follow the pins of the submodules that no project repo manages, leaving the
-/// declared nested repos to their own lifecycle.
+/// Follow the pins of the submodules that no declared repo manages, leaving
+/// every declared repo below this checkout — a nested repo, or a borrowed
+/// checkout that sits there — to its own lifecycle.
 ///
-/// The declaration is a template (`repos.*.path`), and nested repos are placed
-/// under `repos.main`; identify them by their **resolved path relative to main's
-/// checkout**, not by the raw string. That also makes the answer independent of
-/// which worktree of main is being refreshed. Only main owns nested repos, so a
-/// non-main checkout has none to exclude.
+/// The declaration is a template (`repos.*.path`), so a declared repo is
+/// identified by its **resolved path relative to the refreshed repo's nesting
+/// root**, not by the raw string. That also makes the answer independent of
+/// which worktree of the repo is being refreshed: they share one submodule
+/// layout.
 fn refresh_submodules(
     ws: &Workspace,
     project: &Project,
     name: &str,
     git: &Repository,
 ) -> Result<()> {
+    let root = layout::nesting_root(ws, project, name)?;
     let mut declared = BTreeSet::new();
-    if name == "main" {
-        let root = layout::nesting_root(ws, project, "main")?;
-        for (repo_name, repo) in project.repos() {
-            if repo_name == "main" || repo.kind() == wits_project::Kind::Standalone {
-                continue;
-            }
-            let path = layout::primary_path(ws, project, repo_name).with_context(|| {
-                format!("cannot resolve path of declared nested repo '{repo_name}'")
-            })?;
-            if let Ok(relative) = path.strip_prefix(&root) {
-                if let Some(relative) = normalize_relative(relative) {
-                    declared.insert(relative);
-                }
+    for (repo_name, _) in project.repos() {
+        if repo_name == name {
+            continue;
+        }
+        let path = layout::primary_path(ws, project, repo_name)
+            .with_context(|| format!("cannot resolve path of declared repo '{repo_name}'"))?;
+        if let Ok(relative) = path.strip_prefix(&root) {
+            if let Some(relative) = normalize_relative(relative) {
+                declared.insert(relative);
             }
         }
     }
@@ -493,7 +503,7 @@ fn refresh_submodules(
 /// Collapse `.` and `..` lexically, so a templated `"./sub"`/`"x/../sub"` names
 /// the same submodule path git reports. This is not filesystem resolution; the
 /// paths are already relative to the same checkout. `None` when `..` escapes
-/// that root, in which case the path is not a nested repo under `repos.main`.
+/// that root, in which case the path is not below the refreshed checkout.
 fn normalize_relative(path: &Path) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -672,5 +682,133 @@ anchor = "main"
             pinned,
             "the undeclared submodule must follow its recorded pin"
         );
+    }
+
+    /// Two commits, `c1` then `c2`, in a fresh repo at `dir`.
+    fn two_commits(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        git(dir, &["init", "-q", "-b", "main", "."]);
+        std::fs::write(dir.join("file"), "one").unwrap();
+        git(dir, &["add", "file"]);
+        git(dir, &["commit", "-q", "-m", "c1"]);
+        std::fs::write(dir.join("file"), "two").unwrap();
+        git(dir, &["commit", "-q", "-am", "c2"]);
+    }
+
+    /// Refreshing a nested repo's checkout keeps its hands off every declared
+    /// repo below it — one nested in it, and a borrowed checkout that is one of
+    /// its submodules — while an undeclared submodule still follows its pin.
+    #[test]
+    fn a_nested_checkout_leaves_the_declared_repos_below_it_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let src = |name: &str| root.path().join("src").join(name);
+        for name in ["inner", "lib", "loose"] {
+            two_commits(&src(name));
+        }
+        let subsrc = src("sub");
+        two_commits(&subsrc);
+        for name in ["inner", "lib", "loose"] {
+            git(
+                &subsrc,
+                &["submodule", "add", "-q", src(name).to_str().unwrap(), name],
+            );
+        }
+        git(&subsrc, &["commit", "-q", "-m", "submodules"]);
+
+        let main = root.path().join("main");
+        two_commits(&main);
+        git(
+            &main,
+            &["submodule", "add", "-q", subsrc.to_str().unwrap(), "sub"],
+        );
+        git(&main, &["commit", "-q", "-m", "sub"]);
+        git(
+            &main,
+            &["submodule", "update", "-q", "--init", "--recursive"],
+        );
+
+        let sub = main.join("sub");
+        let head = |name: &str| git(&sub.join(name), &["rev-parse", "HEAD"]);
+        let pinned = head("loose");
+        for name in ["inner", "lib", "loose"] {
+            git(&sub.join(name), &["checkout", "-q", "HEAD~1"]);
+        }
+        let moved = head("inner");
+        assert_ne!(pinned, moved);
+
+        let config = root.path().join("config");
+        std::fs::create_dir(&config).unwrap();
+        std::fs::write(
+            config.join("p.toml"),
+            format!(
+                r#"
+[project]
+[repos.main]
+path = "{main}"
+main_branch = "main"
+[repos.sub]
+path = "sub"
+main_branch = "main"
+[repos.inner]
+path = "sub/inner"
+main_branch = "main"
+[repos.lib]
+from = "lib"
+"#,
+                main = main.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            config.join("lib.toml"),
+            format!(
+                "[project]\n[repos.main]\npath = \"{}\"\nmain_branch = \"main\"\n",
+                sub.join("lib").display()
+            ),
+        )
+        .unwrap();
+        let ws = Workspace::load_from(&config).unwrap();
+        let project = ws.project("p").unwrap();
+
+        refresh_submodules(&ws, project, "sub", &Repository::new(&sub)).unwrap();
+
+        assert_eq!(head("inner"), moved, "the repo nested in sub was reset");
+        assert_eq!(head("lib"), moved, "the borrowed checkout was reset");
+        assert_eq!(
+            head("loose"),
+            pinned,
+            "the undeclared submodule kept its move"
+        );
+    }
+
+    /// A repo nested in another declared repo comes after it, whatever the
+    /// names: its checkout is inside the other's.
+    #[test]
+    fn the_repo_holding_a_nested_repo_is_updated_first() {
+        let config = tempfile::tempdir().unwrap();
+        std::fs::write(
+            config.path().join("p.toml"),
+            r#"
+[project]
+[repos.main]
+path = "/src/p"
+main_branch = "main"
+[repos.inner]
+path = "sub/inner"
+main_branch = "main"
+[repos.sub]
+path = "sub"
+main_branch = "main"
+[repos.elsewhere]
+path = "/src/q"
+main_branch = "main"
+"#,
+        )
+        .unwrap();
+        let ws = Workspace::load_from(config.path()).unwrap();
+        let order = repo_order(ws.project("p").unwrap());
+        let at = |name: &str| order.iter().position(|n| n == name).unwrap();
+        assert_eq!(order[0], "main");
+        assert!(at("sub") < at("inner"), "{order:?}");
     }
 }

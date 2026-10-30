@@ -68,19 +68,20 @@ pub fn primary_path(ws: &Workspace, project: &Project, repo: &str) -> Result<Pat
 
 /// The checkout that a repo's **nested** repos live inside.
 ///
-/// A conventional clone is its own answer. A bare-backed repo's is a *worktree*
-/// — its own checkout holding `main_branch`, else its bootstrap — because a
-/// git-dir has no tree for anything to be nested in. "Its own" is
-/// [`checkout_holding`]'s answer, so a `main_branch` checkout a sibling repo
-/// places is not where this repo's nested repos are looked for.
-pub fn nesting_root(ws: &Workspace, project: &Project, main: &str) -> Result<PathBuf> {
-    let main = find(project, main)?;
-    let path = project.repo_abs_path(main.name())?;
-    if !main.decl.strategy.is_bare_backed() {
+/// A conventional clone is its own answer — at its [`primary_path`], so a repo
+/// nested under a bare-backed main is found in main's checkout. A bare-backed
+/// repo's is a *worktree* — its own checkout holding `main_branch`, else its
+/// bootstrap — because a git-dir has no tree for anything to be nested in. "Its
+/// own" is [`checkout_holding`]'s answer, so a `main_branch` checkout a sibling
+/// repo places is not where this repo's nested repos are looked for.
+pub fn nesting_root(ws: &Workspace, project: &Project, repo: &str) -> Result<PathBuf> {
+    let repo = find(project, repo)?;
+    let path = primary_path(ws, project, repo.name())?;
+    if !repo.decl.strategy.is_bare_backed() {
         return Ok(path);
     }
     if !path.exists() {
-        return bootstrap_worktree_dir(ws, project, main.name());
+        return bootstrap_worktree_dir(ws, project, repo.name());
     }
     let git = Repository::new(&path);
     // Declared bare-backed but on disk still a conventional checkout — a
@@ -88,13 +89,13 @@ pub fn nesting_root(ws: &Workspace, project: &Project, main: &str) -> Result<Pat
     if git.git_dir().is_none() || !git.is_bare() {
         return Ok(path);
     }
-    let holding = match main.decl.main_branch.as_deref() {
-        Some(branch) => checkout_holding(ws, project, main.name(), branch)?,
+    let holding = match repo.decl.main_branch.as_deref() {
+        Some(branch) => checkout_holding(ws, project, repo.name(), branch)?,
         None => None,
     };
     match holding {
         Some(worktree) => Ok(worktree),
-        None => bootstrap_worktree_dir(ws, project, main.name()),
+        None => bootstrap_worktree_dir(ws, project, repo.name()),
     }
 }
 

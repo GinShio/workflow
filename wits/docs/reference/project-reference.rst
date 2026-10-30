@@ -1306,10 +1306,12 @@ one best-effort and without ``--prune`` — then:
   refusing anything that is not a fast-forward. No working tree is touched and
   no sparse checkout is expanded; nested repo lifecycle work is skipped until a
   main worktree exists again.
-* Declared submodule repos advance via their own lifecycle; undeclared nested
-  submodules are refreshed with ``git submodule update --recursive -- <materialised
-  paths>`` (no ``--init``; ``--init`` happens only on clone or worktree
-  creation).
+* Every declared repo below the checkout — a nested repo at any depth, or a
+  borrowed checkout that sits there — advances via its own lifecycle; repos
+  are updated parents first, so a nested repo's checkout exists before its
+  turn. Undeclared nested submodules are refreshed with ``git submodule update
+  --recursive -- <materialised paths>`` (no ``--init``; ``--init`` happens only
+  on clone or worktree creation).
 
 Failure is fail-fast: a non-zero hook/action stops the operation, an RAII
 guard restores the original branch (and pops any stash), a log line is
