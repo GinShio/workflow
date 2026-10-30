@@ -11,7 +11,9 @@ lxc_unprivileged_user_start = """awk -F: -v u={{@@ env['USER'] @@}} '$1==u{print
 lxc_unprivileged_user_count = """awk -F: -v u={{@@ env['USER'] @@}} '$1==u{printf $3}' /etc/subuid"""
 lxc_unprivileged_group_start = """awk -F: -v u={{@@ env['USER'] @@}} '$1==u{printf $2}' /etc/subgid"""
 lxc_unprivileged_group_count = """awk -F: -v u={{@@ env['USER'] @@}} '$1==u{printf $3}' /etc/subgid"""
-virt_input_whitelist = 'ls -1 /dev/input/by-id/usb-*-event-kbd && ls -1 /dev/input/by-id/usb-*-event-mouse'
+# USB input devices are optional; an unmatched glob must yield an empty list,
+# not a failed command, or Dotdrop rejects the whole config.
+virt_input_whitelist = 'ls -1d /dev/input/by-id/usb-*-event-kbd /dev/input/by-id/usb-*-event-mouse 2>/dev/null || true'
 
 [variables.lxc]
 osrender_device = '/dev/dri/renderD128'
