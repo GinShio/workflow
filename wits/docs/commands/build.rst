@@ -116,18 +116,20 @@ build.
    * - ``--target <T>``
      - ``-t``
      - Build a specific target (where the backend supports it).
-   * - ``--extra-config-args <A>…``
+   * - ``--extra-config-args <A>``
      - ``-Xconfig,<arg>``
-     - Raw args appended to the configure command, verbatim.
-   * - ``--extra-build-args <A>…``
+     - A raw arg appended to the configure command, verbatim; repeatable.
+   * - ``--extra-build-args <A>``
      - ``-Xbuild,<arg>``
-     - Raw args appended to the build command, verbatim.
-   * - ``--extra-install-args <A>…``
+     - A raw arg appended to the build command, verbatim; repeatable.
+   * - ``--extra-install-args <A>``
      - ``-Xinstall,<arg>``
-     - Raw args appended to the install command, verbatim.
+     - A raw arg appended to the install command, verbatim; repeatable.
 
 Extra args are applied **last, at the highest priority**, and are never
-interpreted by the tool — ``-DFOO=BAR`` is handed to cmake verbatim:
+interpreted by the tool — ``-DFOO=BAR`` is handed to cmake verbatim. Each
+flag takes exactly one argument, leading dash and all, so repeat the flag for
+more:
 
 .. code-block:: sh
 
