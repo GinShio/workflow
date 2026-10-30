@@ -520,24 +520,27 @@ of a preset at any level.
    * - Entry
      - Meaning
    * - ``NAME = V``
-     - Supply ``NAME``'s default when the base does not already carry it
-       (dotenv semantics). ``V`` is a scalar or a list of scalars.
+     - Set ``NAME`` to ``V``, replacing whatever the base carries. ``V`` is a
+       scalar or a list of scalars.
    * - ``NAME = { set = V }``
      - The same, in table form.
+   * - ``NAME = { unset = true }``
+     - Remove ``NAME``, whatever the base carries.
    * - ``NAME = { prepend = V }``
      - ``V``, the separator, then the existing value.
    * - ``NAME = { append = V }``
      - The existing value, the separator, then ``V``.
    * - ``separator = S``
-     - In a table: joins a list ``V``, and ``V`` with the existing value.
-       Default ``:``.
+     - In a table: joins a list ``V`` and, for prepend/append, ``V`` with the
+       existing value. Default ``:``. Not allowed with ``unset``.
 
-A table names exactly one of ``set``/``prepend``/``append``; any other key is a
-load-time error. A ``set`` is dotenv-style and never overrides: the base — the
-caller's environment, or the build system's own developer environment — keeps
-any value it already carries, so a project supplies defaults rather than
-replacing what the environment decided. A prepend or append always modifies
-whatever is there. A prepend or append onto a variable that is absent yields
+A table names exactly one of ``set``/``unset``/``prepend``/``append``; any other
+key is a load-time error, and so is ``unset`` with anything but ``true``. A
+``set`` or ``unset`` decides the variable outright: the base — the caller's
+environment, or the build system's own developer environment — does not get
+to keep a value the project declared otherwise, which is what makes
+``VK_DRIVER_FILES = "…"`` select this build's driver even from a shell that
+exported another. A prepend or append onto a variable that is absent yields
 ``V`` alone, and onto one that is present — even empty — joins them: Meson's
 run-mode rule.
 
@@ -556,15 +559,15 @@ L1 project, L2 each applied preset with its ``extends`` first — and a same-nam
 preset's levels in org → project → repo order. They accumulate rather than
 replace, with two rules:
 
-* a ``set`` discards the earlier operations on its variable;
+* a ``set`` or ``unset`` discards the earlier operations on its variable;
 * a prepend or append identical to one still in force is not added again, so a
   preset reached twice through ``extends`` adds its entries once.
 
 **Composition at run time.** The operations land on a base: the build system's
 own developer environment where it keeps one (meson: ``meson devenv -C
 <build_dir>``, read back through ``wits __devenv-capture``), else the caller's
-environment. A ``set`` fills only a variable that base lacks; ``prepend`` and
-``append`` modify it in place. ``WITS_DEVENV`` is then set to the project's key
+environment. A ``set`` replaces and an ``unset`` removes a variable of that
+base; ``prepend`` and ``append`` modify it in place. ``WITS_DEVENV`` is then set to the project's key
 (``org/name``, or the bare name). Neither the build ``environment`` nor the
 toolchain's variables are part of it.
 

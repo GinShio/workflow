@@ -1481,17 +1481,22 @@ as Meson's own ``environment()`` operations do — so a preset can add one entry
 to a list a project declared rather than having to restate it. Accumulating
 needs two rules a replacing merge never did:
 
-* A ``set`` discards the operations before it on the same variable. Under
-  dotenv semantics a ``set`` is the variable's default stated outright, so it
-  takes the variable over from lower levels; keeping their prepend/append would
-  let a lower level resurface whenever the environment already supplies the
-  variable, which is exactly what the set claimed.
+* A ``set`` or ``unset`` discards the operations before it on the same
+  variable. It states the variable outright — a value, or its absence — so
+  nothing a lower level built on it can survive it.
 * A prepend or append identical to one still in force is not added again. A
   preset reached through two ``extends`` paths is applied twice — harmless for
   ``environment``, where the second application rewrites the same values — but
   an accumulated ``VK_DRIVER_FILES`` would list one ICD twice, and the loader
   would load the driver twice. The repeat is judged only against what is still
-  in force, which is why a ``set`` resets it.
+  in force, which is why a ``set`` or ``unset`` resets it.
+
+A ``set`` replaces what the base carries rather than supplying a default. The
+declaration is what selects the build a program runs against: amdvlk's
+``VK_DRIVER_FILES`` points the loader at this build's ICD, and a value the
+caller happened to export — from another devenv, or an earlier ``eval`` of a
+``--dump`` — must not quietly keep it on another driver. ``unset`` is the other
+half: it clears a variable the base carries that the program must not see.
 
 It never switches, and it shares ``build``'s identity
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

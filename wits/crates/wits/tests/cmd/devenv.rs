@@ -208,23 +208,36 @@ DECLARED = "{{build_dir}}/x"
     );
 }
 
-/// A `set` is dotenv-style: it supplies a default and never overrides a value
-/// the base already carries — neither Meson's own developer environment nor the
-/// caller's own.
+/// A `set` replaces what the base carries — Meson's own developer environment
+/// and the caller's alike — and an `unset` removes it, so the program runs with
+/// what the project declared rather than whatever the shell exported.
 #[test]
-fn a_set_leaves_a_base_value_alone() {
+fn a_set_replaces_the_base_value_and_unset_removes_it() {
     let fx = Fixture::new();
-    fx.meson_project("[project.devenv]\nPROBE_SET = \"declared\"\nDECLARED = \"x\"\n");
+    fx.meson_project(
+        "[project.devenv]\nPROBE_SET = \"declared\"\nPROBE_LIST = { unset = true }\n\
+         DECLARED = \"x\"\n",
+    );
 
     let out = fx.ok(
         &["devenv", "probe", "-b", "main", "--", "sh", "-c", SHOW],
-        &[("DECLARED", "caller")],
+        &[("DECLARED", "caller"), ("PROBE_LIST", "caller")],
     );
-    assert_eq!(out.stdout.trim(), "from-meson|meson|caller|probe");
+    assert_eq!(out.stdout.trim(), "declared||x|probe");
+
+    let dump = fx.ok(
+        &["devenv", "probe", "-b", "main", "--dump"],
+        &[("DECLARED", "caller"), ("PROBE_LIST", "caller")],
+    );
     assert!(
-        !out.stdout.contains("declared"),
-        "a set overrode the base: {}",
-        out.stdout
+        dump.stdout.contains("export DECLARED='x'\n"),
+        "{}",
+        dump.stdout
+    );
+    assert!(
+        dump.stdout.contains("unset PROBE_LIST\n"),
+        "{}",
+        dump.stdout
     );
 }
 

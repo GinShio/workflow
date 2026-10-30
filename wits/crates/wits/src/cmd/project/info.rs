@@ -328,17 +328,23 @@ fn describe(ws: &Workspace, project: &Project, focus: &str, profile: &ProfileArg
             (None, None) => println!("  base: none — no build_dir to run against"),
         }
         for entry in &logical.devenv {
-            let separator = if entry.op != DevenvOp::Set && entry.separator != DEVENV_SEPARATOR {
-                format!(" (separator {:?})", entry.separator)
-            } else {
-                String::new()
-            };
-            println!(
-                "  {} {} {}{separator}",
-                entry.name,
-                entry.op.as_str(),
-                entry.value
-            );
+            match entry.op {
+                DevenvOp::Unset => println!("  {} unset", entry.name),
+                DevenvOp::Set => println!("  {} set {}", entry.name, entry.value),
+                DevenvOp::Prepend | DevenvOp::Append => {
+                    let separator = if entry.separator != DEVENV_SEPARATOR {
+                        format!(" (separator {:?})", entry.separator)
+                    } else {
+                        String::new()
+                    };
+                    println!(
+                        "  {} {} {}{separator}",
+                        entry.name,
+                        entry.op.as_str(),
+                        entry.value
+                    );
+                }
+            }
         }
     }
     for (label, args) in [

@@ -85,8 +85,8 @@ Declaring a runtime environment
    VK_LOADER_DRIVERS_SELECT = "*radeon*"
 
 A bare value — a string, a number, a boolean, or a list of them — **sets** the
-variable. A table names one operation, in the vocabulary of Meson's
-``environment()``:
+variable, replacing whatever your environment or Meson's had. A table names one
+operation, in the vocabulary of Meson's ``environment()`` plus ``unset``:
 
 .. list-table::
    :header-rows: 1
@@ -96,6 +96,8 @@ variable. A table names one operation, in the vocabulary of Meson's
      - Effect
    * - ``{ set = V }``
      - Replace the value (the same as a bare ``V``).
+   * - ``{ unset = true }``
+     - Remove the variable, so the program does not see it at all.
    * - ``{ prepend = V }``
      - Put ``V`` in front of the value, joined by the separator.
    * - ``{ append = V }``
@@ -126,8 +128,8 @@ the project's, then each applied preset's — its ``extends`` first, and a
 same-named preset's org, project, and repo levels in that order. Two rules keep
 the result predictable:
 
-* A ``set`` discards the operations before it on the same variable, since it
-  overwrites whatever they built.
+* A ``set`` or ``unset`` discards the operations before it on the same
+  variable, since it decides the variable outright.
 * A prepend or append repeating one still in force is not added again, so a
   preset reached twice through ``extends`` cannot list one ICD manifest twice —
   and load its driver twice.
@@ -189,17 +191,20 @@ When it fails
    * - ``build directory … is not configured``
      - A meson directory without ``meson setup`` behind it; ``wits build``
        configures it.
-   * - ``has no branch checked out; pass --detach …``
-     - The checkout is at a detached ``HEAD``; ``--detach`` uses it as-is,
-       ``--branch`` names a branch.
+   * - ``has no branch checked out; pass --branch …``
+     - The checkout is at a detached ``HEAD``; ``--branch`` names a branch,
+       ``--detach`` uses the checkout as-is.
    * - ``meson devenv … failed``
      - Meson's own message follows (a build directory from another Meson
        version, say).
    * - ``devenv variable … is not valid UTF-8``
-     - A variable the devenv changes cannot be spelled on a command line or in
-       a dump. Variables it leaves alone are inherited untouched, whatever they
-       hold.
+     - Only ``--dump`` says this: a dump is text, and a variable the devenv
+       changes has no spelling in it. Running a program passes the bytes
+       through, and variables the devenv leaves alone are inherited untouched,
+       whatever they hold.
 
 Variables already in your environment carry through, because the base starts
-from it. Mesa's devenv *appends* to ``VK_DRIVER_FILES``, so a devenv started
-inside another one loads both builds' drivers.
+from it — except one the project declares with ``set`` or ``unset``, which
+decides it. Mesa's devenv *appends* to ``VK_DRIVER_FILES``, so a devenv started
+inside another one loads both builds' drivers; amdvlk's *sets* it, so its devenv
+loads amdvlk's alone.

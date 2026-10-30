@@ -509,10 +509,12 @@ pub struct OrgDecl {
 
 /// What a `devenv` entry does to its variable — Meson's `environment()`
 /// vocabulary, since Meson's own developer environment is the base the
-/// operations land on for a meson build.
+/// operations land on for a meson build, plus `unset` for a variable the base
+/// carries that the program must not see.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DevenvOp {
     Set,
+    Unset,
     Prepend,
     Append,
 }
@@ -522,6 +524,7 @@ impl DevenvOp {
     pub fn as_str(self) -> &'static str {
         match self {
             DevenvOp::Set => "set",
+            DevenvOp::Unset => "unset",
             DevenvOp::Prepend => "prepend",
             DevenvOp::Append => "append",
         }
@@ -533,9 +536,10 @@ impl DevenvOp {
 pub const DEVENV_SEPARATOR: &str = ":";
 
 /// One `devenv` entry as written. A bare scalar or list sets the variable; a
-/// table names exactly one of `set`/`prepend`/`append`, with an optional
-/// `separator` that joins a list and, for prepend/append, the existing value.
-/// The values are templates, resolved by the pipeline like `environment`'s.
+/// table names exactly one of `set`/`unset`/`prepend`/`append`, with an
+/// optional `separator` that joins a list and, for prepend/append, the existing
+/// value. `unset = true` carries no value. The values are templates, resolved
+/// by the pipeline like `environment`'s.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevenvDecl {
     pub op: DevenvOp,
@@ -565,19 +569,34 @@ impl DevenvDecl {
                     continue;
                 }
                 "set" => DevenvOp::Set,
+                "unset" => DevenvOp::Unset,
                 "prepend" => DevenvOp::Prepend,
                 "append" => DevenvOp::Append,
                 other => {
                     return Err(format!(
-                        "unknown key '{other}' (use one of set, prepend, append, and optionally separator)"
+                        "unknown key '{other}' (use one of set, unset, prepend, append, \
+                         and optionally separator)"
                     ))
                 }
             };
             if operation.replace((op, value)).is_some() {
-                return Err("names more than one of set, prepend, append".to_owned());
+                return Err("names more than one of set, unset, prepend, append".to_owned());
             }
         }
-        let (op, value) = operation.ok_or("names none of set, prepend, append")?;
+        let (op, value) = operation.ok_or("names none of set, unset, prepend, append")?;
+        if op == DevenvOp::Unset {
+            if value != toml::Value::Boolean(true) {
+                return Err("unset takes `true`".to_owned());
+            }
+            if separator.is_some() {
+                return Err("unset has no value for a separator to join".to_owned());
+            }
+            return Ok(DevenvDecl {
+                op,
+                values: Vec::new(),
+                separator: DEVENV_SEPARATOR.to_owned(),
+            });
+        }
         Ok(DevenvDecl {
             op,
             values: devenv_parts(value)?,
@@ -1113,6 +1132,7 @@ mod tests {
             D = { prepend = "{{build_dir}}/bin" }
             E = { append = ["p", "q"], separator = ";" }
             F = { set = "s" }
+            G = { unset = true }
             "#,
         )
         .unwrap();
@@ -1126,6 +1146,7 @@ mod tests {
         assert_eq!(op("D"), (DevenvOp::Prepend, 1, ":".into()));
         assert_eq!(op("E"), (DevenvOp::Append, 2, ";".into()));
         assert_eq!(op("F"), (DevenvOp::Set, 1, ":".into()));
+        assert_eq!(op("G"), (DevenvOp::Unset, 0, ":".into()));
     }
 
     #[test]
@@ -1140,6 +1161,10 @@ mod tests {
             ),
             (r#"A = { set = { x = 1 } }"#, "scalar"),
             (r#"A = [["nested"]]"#, "scalar"),
+            (r#"A = { unset = false }"#, "unset takes `true`"),
+            (r#"A = { unset = "x" }"#, "unset takes `true`"),
+            (r#"A = { unset = true, set = "x" }"#, "more than one"),
+            (r#"A = { unset = true, separator = ";" }"#, "no value"),
         ] {
             let err = devenv(body).unwrap_err();
             assert!(err.contains(needle), "{body}: {err}");

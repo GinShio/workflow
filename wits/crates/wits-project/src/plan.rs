@@ -68,17 +68,22 @@ pub struct DevenvEntry {
 }
 
 impl DevenvEntry {
-    /// Apply this operation to `env`. A `set` is dotenv-style: it supplies the
-    /// variable's default and leaves a value the base already carries — the
-    /// caller's own, or one the build system's developer environment composed —
-    /// untouched. A prepend/append onto a variable that is absent yields the
-    /// value alone, while one onto a present variable — even empty — joins with
-    /// the separator: Meson's run-mode rule.
+    /// Apply this operation to `env`. A `set` replaces whatever the base
+    /// carries — the caller's value, or one the build system's developer
+    /// environment composed — and an `unset` removes it: the declaration is
+    /// what the program runs with, so a variable the caller happens to export
+    /// cannot quietly point the program at another build. A prepend/append onto
+    /// a variable that is absent yields the value alone, while one onto a
+    /// present variable — even empty — joins with the separator: Meson's
+    /// run-mode rule.
     pub fn apply(&self, env: &mut BTreeMap<std::ffi::OsString, std::ffi::OsString>) {
         let key = std::ffi::OsString::from(&self.name);
         let joined = match (self.op, env.get(&key)) {
-            (DevenvOp::Set, Some(_)) => return,
-            (DevenvOp::Set, None) | (_, None) => std::ffi::OsString::from(&self.value),
+            (DevenvOp::Unset, _) => {
+                env.remove(&key);
+                return;
+            }
+            (DevenvOp::Set, _) | (_, None) => std::ffi::OsString::from(&self.value),
             (DevenvOp::Prepend, Some(current)) => {
                 let mut out = std::ffi::OsString::from(&self.value);
                 out.push(&self.separator);
@@ -97,16 +102,13 @@ impl DevenvEntry {
 }
 
 impl LogicalConfig {
-    /// Accumulate a `devenv` operation. A `set` discards the operations on its
-    /// variable that came before it: under dotenv semantics it states the
-    /// variable's default outright and takes the variable over from lower
-    /// levels. Keeping their prepend/append would let a lower level resurface
-    /// whenever the environment already supplies the variable, which is exactly
-    /// what the set claimed. A prepend/append repeating one still in force is
-    /// not added again, so a preset reached twice through `extends` cannot add
-    /// the same entry twice.
+    /// Accumulate a `devenv` operation. A `set` or an `unset` discards the
+    /// operations on its variable that came before it: it states the variable
+    /// outright, so nothing a lower level built on it survives. A prepend/append
+    /// repeating one still in force is not added again, so a preset reached
+    /// twice through `extends` cannot add the same entry twice.
     pub fn add_devenv(&mut self, entry: DevenvEntry) {
-        if entry.op == DevenvOp::Set {
+        if matches!(entry.op, DevenvOp::Set | DevenvOp::Unset) {
             self.devenv.retain(|e| e.name != entry.name);
         } else if self.devenv.contains(&entry) {
             return;
@@ -1271,37 +1273,36 @@ anchor = "main"
         assert!(plan.logical.env_entry("VK").is_none());
     }
 
-    /// A `set` is dotenv-style: the base's value wins for a variable it already
-    /// carries, and only an absent one is supplied. prepend/append still modify
-    /// whatever is there.
+    /// A `set` replaces a value the base carries and an `unset` removes it —
+    /// otherwise a `VK_DRIVER_FILES` the caller exported would keep the program
+    /// on another build's driver. prepend/append modify whatever is there.
     #[test]
-    fn a_devenv_set_supplies_a_default_and_never_overrides() {
+    fn a_devenv_set_replaces_the_base_value_and_unset_removes_it() {
         let os = std::ffi::OsString::from;
         let mut env: BTreeMap<std::ffi::OsString, std::ffi::OsString> = BTreeMap::new();
         env.insert(os("X"), os("base"));
+        env.insert(os("GONE"), os("caller"));
 
         devenv_entry("X", DevenvOp::Set, "declared").apply(&mut env);
-        assert_eq!(
-            env.get(&os("X")),
-            Some(&os("base")),
-            "a set overrode the base"
-        );
+        assert_eq!(env.get(&os("X")), Some(&os("declared")));
         devenv_entry("X", DevenvOp::Append, "more").apply(&mut env);
-        assert_eq!(env.get(&os("X")), Some(&os("base:more")));
+        assert_eq!(env.get(&os("X")), Some(&os("declared:more")));
         devenv_entry("X", DevenvOp::Prepend, "first").apply(&mut env);
-        assert_eq!(env.get(&os("X")), Some(&os("first:base:more")));
+        assert_eq!(env.get(&os("X")), Some(&os("first:declared:more")));
 
         devenv_entry("Y", DevenvOp::Set, "supplied").apply(&mut env);
-        assert_eq!(
-            env.get(&os("Y")),
-            Some(&os("supplied")),
-            "a set on an absent variable did not apply"
-        );
+        assert_eq!(env.get(&os("Y")), Some(&os("supplied")));
+
+        devenv_entry("GONE", DevenvOp::Unset, "").apply(&mut env);
+        assert!(!env.contains_key(&os("GONE")));
+        devenv_entry("NEVER", DevenvOp::Unset, "").apply(&mut env);
+        assert!(!env.contains_key(&os("NEVER")));
     }
 
-    /// A `set` takes its variable over from lower levels, and an operation
-    /// identical to one still in force is not added twice — otherwise a preset
-    /// reached through two `extends` paths would append the same ICD twice.
+    /// A `set` or an `unset` takes its variable over from lower levels, and an
+    /// operation identical to one still in force is not added twice —
+    /// otherwise a preset reached through two `extends` paths would append the
+    /// same ICD twice.
     #[test]
     fn a_set_discards_earlier_operations_and_a_repeat_in_force_is_not_added() {
         let mut cfg = LogicalConfig::default();
@@ -1329,6 +1330,19 @@ anchor = "main"
         cfg.add_devenv(devenv_entry("Q", DevenvOp::Set, "q"));
         let on_q: Vec<_> = cfg.devenv.iter().filter(|e| e.name == "Q").collect();
         assert_eq!(on_q, vec![&devenv_entry("Q", DevenvOp::Set, "q")]);
+
+        // An unset wipes what came before it the same way; a later append then
+        // starts from nothing.
+        cfg.add_devenv(devenv_entry("P", DevenvOp::Unset, ""));
+        cfg.add_devenv(devenv_entry("P", DevenvOp::Append, "/z"));
+        let on_p: Vec<_> = cfg.devenv.iter().filter(|e| e.name == "P").collect();
+        assert_eq!(
+            on_p,
+            vec![
+                &devenv_entry("P", DevenvOp::Unset, ""),
+                &devenv_entry("P", DevenvOp::Append, "/z")
+            ]
+        );
     }
 
     /// Meson's run-mode rules: an absent variable stands alone, a present one —
