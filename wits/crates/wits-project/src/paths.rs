@@ -172,7 +172,7 @@ pub fn resolve_paths(
         let dir = match (input.work_dir, repo.name() == build_repo, input.branch) {
             (Some(dir), true, _) => dir.to_path_buf(),
             (_, _, Some(branch)) => layout::work_dir(ws, project, repo, branch)?,
-            (_, _, None) => layout::detached_work_dir(ws, project, repo, &ctx)?,
+            (_, _, None) => layout::detached_work_dir(ws, project, repo)?,
         };
         ctx.set(
             &format!("repos.{}.workdir", repo.name()),

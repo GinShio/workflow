@@ -26,7 +26,7 @@ use minijinja::Value;
 use wits_core::git::{Repository, Worktree};
 use wits_core::path::{expand_tilde, same_path, slug};
 
-use crate::context::{context_for_repo, insert_path, repo_value, Bindings, Ctx, TemplateError};
+use crate::context::{context_for_repo, insert_path, Bindings, Ctx, TemplateError};
 use crate::decl::{BranchStrategy, Kind};
 use crate::workspace::{Project, Repo, Workspace};
 
@@ -140,8 +140,7 @@ pub fn bootstrap_worktree_dir(ws: &Workspace, project: &Project, repo: &Repo) ->
 /// strategy — the standalone form of what [`crate::paths::resolve_paths`] binds
 /// as `repos.<name>.workdir`.
 pub fn work_dir(ws: &Workspace, project: &Project, repo: &Repo, branch: &str) -> Result<PathBuf> {
-    let ctx = Ctx::new(branch_root(ws, project, repo, branch));
-    resolve_work_dir(ws, project, repo, &ctx, repo.decl.strategy, branch)
+    resolve_work_dir(ws, project, repo, repo.decl.strategy, branch)
 }
 
 /// Whether a live worktree of `repo`'s repository is `repo`'s own checkout.
@@ -272,26 +271,20 @@ fn places(ws: &Workspace, project: &Project, repo: &Repo, wt: &Worktree) -> bool
 }
 
 /// The path one repo's `worktree_dir` template places, or `None` when it declares
-/// none or the template cannot answer against the Profile-free per-repo context.
+/// none or the template cannot answer.
 ///
 /// A fixed selector is defined as a template that resolves without `branch.*`
-/// (the detached rule in `docs/reference/project-reference.rst`), which is
-/// exactly what this context can render; a template needing a Profile binding
-/// (`{{branch.slug}}`, `{{build_type}}`) has no branch-independent placement to
-/// compare and answers `None`.
+/// (the detached rule in `docs/reference/project-reference.rst`); a branch-keyed
+/// template has no branch-independent placement to compare and answers `None`.
+/// A template that fails to render places nothing here — resolving it for a
+/// build or a query is where that error is reported.
 fn declared_placement(
     ws: &Workspace,
     project: &Project,
     repo: &Repo,
     branch: Option<&str>,
 ) -> Option<PathBuf> {
-    repo.decl.worktree_dir.as_deref()?;
-    let root = match branch {
-        Some(branch) => branch_root(ws, project, repo, branch),
-        None => context_for_repo(ws, project, repo.name()),
-    };
-    let ctx = Ctx::new(root);
-    resolve_declared_worktree_dir(ws, project, repo, &ctx, branch)
+    resolve_declared_worktree_dir(ws, project, repo, branch)
         .ok()
         .flatten()
 }
@@ -399,7 +392,6 @@ fn resolve_work_dir(
     ws: &Workspace,
     project: &Project,
     repo: &Repo,
-    ctx: &Ctx,
     strategy: BranchStrategy,
     branch: &str,
 ) -> Result<PathBuf> {
@@ -412,15 +404,13 @@ fn resolve_work_dir(
                     return Ok(path);
                 }
             }
-            resolve_declared_worktree_dir(ws, project, repo, ctx, Some(branch))?.with_context(
-                || {
-                    format!(
-                        "repo '{}' uses {} strategy but has no worktree_dir",
-                        repo.name(),
-                        strategy.as_str()
-                    )
-                },
-            )
+            resolve_declared_worktree_dir(ws, project, repo, Some(branch))?.with_context(|| {
+                format!(
+                    "repo '{}' uses {} strategy but has no worktree_dir",
+                    repo.name(),
+                    strategy.as_str()
+                )
+            })
         }
     }
 }
@@ -432,13 +422,8 @@ fn resolve_work_dir(
 /// checkout happens to contain the caller. A branch-keyed template cannot answer
 /// without inventing an identity and falls through to the live checkout:
 /// caller's checkout when it belongs to this repo, otherwise the primary.
-pub(crate) fn detached_work_dir(
-    ws: &Workspace,
-    project: &Project,
-    repo: &Repo,
-    ctx: &Ctx,
-) -> Result<PathBuf> {
-    if let Some(path) = resolve_declared_worktree_dir(ws, project, repo, ctx, None)? {
+pub(crate) fn detached_work_dir(ws: &Workspace, project: &Project, repo: &Repo) -> Result<PathBuf> {
+    if let Some(path) = resolve_declared_worktree_dir(ws, project, repo, None)? {
         return Ok(path);
     }
     if let Some(path) = current_checkout(ws, project, repo)? {
@@ -457,27 +442,26 @@ pub(crate) fn detached_work_dir(
 /// Render one repo's declared worktree path in the namespace of the project
 /// that owns it. `None` for a detached build means a missing `branch.*` binding
 /// is not an error: that template describes branch worktrees, not this checkout.
+///
+/// The context is the repo-scoped one, plus `branch.*` when a branch is
+/// asked for — never a build's profile. Path lookup, `update`, and
+/// `worktree` have no profile to offer, and a checkout's location must not
+/// depend on how it is going to be built, so attached, detached, and
+/// attribution all render the template the same way.
 fn resolve_declared_worktree_dir(
     ws: &Workspace,
     project: &Project,
     repo: &Repo,
-    ctx: &Ctx,
     branch: Option<&str>,
 ) -> Result<Option<PathBuf>> {
     let Some(tpl) = repo.decl.worktree_dir.as_deref() else {
         return Ok(None);
     };
     let (owner_project, owner_repo) = owner(ws, project, repo)?;
-    let mut scoped = if std::ptr::eq(owner_project, project) && std::ptr::eq(owner_repo, repo) {
-        ctx.clone()
-    } else {
-        let root = match branch {
-            Some(branch) => branch_root(ws, owner_project, owner_repo, branch),
-            None => context_for_repo(ws, owner_project, owner_repo.name()),
-        };
-        Ctx::new(root)
-    };
-    scoped.set("repo", repo_value(owner_project, owner_repo.name()));
+    let mut scoped = Ctx::new(match branch {
+        Some(branch) => branch_root(ws, owner_project, owner_repo, branch),
+        None => context_for_repo(ws, owner_project, owner_repo.name()),
+    });
     let primary = primary_path(ws, owner_project, owner_repo)?;
     scoped.set("repo.path", Value::from(primary.display().to_string()));
     let rendered = match scoped.render_path(tpl) {

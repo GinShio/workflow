@@ -722,6 +722,13 @@ Context variables
   the org declares the key; references to undeclared keys are hard errors.
   They are **not** available in a ``repos.*.path`` template, which resolves
   against the Profile-free path context.
+* Repo-scoped fields — hooks, ``worktree_dir``, ``bootstrap_worktree_dir`` —
+  resolve against the per-repo context: ``project.*``, ``repo.*`` and
+  ``repos.<name>.*`` without ``workdir``, ``org.*``, ``system.*``, ``env.*``,
+  and ``branch.*`` for a branch-keyed ``worktree_dir``. The build profile
+  (``build_type``, ``generator``, ``toolchain.*``, ``spec.*``) and the resolved
+  output paths are not part of it: ``update``, ``worktree``, and path lookup
+  have no profile, and a checkout must be found the same way by all of them.
 
 Errors
 ~~~~~~
@@ -906,7 +913,9 @@ Repos, branches, and build contexts
        is a fixed checkout selector even for an in-place entry; a
        branch-keyed template falls back to the caller's/primary checkout. A
        relative result is anchored beside ``repo.path``, never at process
-       cwd.
+       cwd. Rendered in the repo-scoped context (`Context variables`_), never
+       the build's profile, so a checkout's location does not depend on how
+       it is built.
    * - ``bootstrap_worktree_dir``
      - template
      - hybrid; optional for worktree

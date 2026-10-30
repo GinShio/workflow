@@ -443,6 +443,40 @@ anchor = "main"
         assert_eq!(paths, vec![at("shared/_build/feat")], "{found:?}");
     }
 
+    /// A checkout's location never depends on how it is built: `worktree_dir`
+    /// renders in the repo-scoped context attached or detached, so a template
+    /// naming the build profile fails the same way in both. A detached build
+    /// used to render it against the plan, selecting a checkout that path
+    /// lookup could not attribute.
+    #[test]
+    fn worktree_dir_renders_without_the_build_profile_attached_or_detached() {
+        let body = r#"
+            [project]
+            [repos.main]
+            path = "/src/p.git"
+            main_branch = "main"
+            branch_strategy = "worktree"
+            worktree_dir = "{{repo.path}}.wt/{{build_type}}"
+        "#;
+        let (_d, ws) = ws_with(body, "p");
+        let project = ws.project("p").unwrap();
+        let profile = Profile::default();
+        for branch in [Some("main"), None] {
+            let input = PathInput {
+                profile: &profile,
+                branch,
+                work_dir: None,
+                build_dir: None,
+                install_dir: None,
+            };
+            let Err(err) = resolve_paths(&ws, project, &input) else {
+                panic!("{branch:?}: a profile binding in worktree_dir must not resolve");
+            };
+            let err = format!("{err:#}");
+            assert!(err.contains("'build_type'"), "{branch:?}: {err}");
+        }
+    }
+
     #[test]
     fn detached_worktree_fallback_only_ignores_the_missing_branch_namespace() {
         let branch = TemplateError::UnknownPath("branch.slug".into());
