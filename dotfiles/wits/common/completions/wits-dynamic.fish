@@ -146,20 +146,33 @@ function __wits_repos
     wits project __names repos 2>/dev/null
 end
 
-# The ProfileArgs axes live on project/build/devenv (flattened there), and
-# nowhere else — `update`, `stack`, `review`, `worktree` take no profile.
+# The profile flags sit after the verb that reads them, and nowhere else
+# (wits/docs/reference/project-reference.rst, "CLI"): the whole profile goes
+# with a build — `build`, `devenv`, `project info` — while the checkout queries
+# `project hash` and `project branch-build-dirs` take only --branch and
+# --focus. `update`, `stack`, `review`, `worktree` take no profile.
+function __wits_takes_profile --description 'true where the whole build profile is accepted'
+    __wits_ctx build devenv; and return 0
+    __wits_ctx project; and __fish_seen_subcommand_from info
+end
+
+function __wits_takes_branch --description 'true where --branch and --focus are accepted'
+    __wits_takes_profile; and return 0
+    __wits_ctx project; and __fish_seen_subcommand_from hash branch-build-dirs
+end
+
 complete -c wits -c wits-project -c wits-build -c wits-devenv \
-    -f -n '__wits_ctx project build devenv' -l toolchain -s T -r -a '(__wits_toolchains)'
+    -f -n __wits_takes_profile -l toolchain -s T -r -a '(__wits_toolchains)'
 complete -c wits -c wits-project -c wits-build -c wits-devenv \
-    -f -n '__wits_ctx project build devenv' -l preset -s p -r -a '(__wits_presets)'
+    -f -n __wits_takes_profile -l preset -s p -r -a '(__wits_presets)'
 # `--focus` names a repo of the target, so it takes the same registry list the
 # `repos.<name>.*` paths above do.
 complete -c wits -c wits-project -c wits-build -c wits-devenv \
-    -f -n '__wits_ctx project build devenv' -l focus -r -a '(__wits_repos)'
+    -f -n __wits_takes_branch -l focus -r -a '(__wits_repos)'
 # Build types are meson-aligned, lowercase
 # (wits/docs/reference/project-reference.rst).
 complete -c wits -c wits-project -c wits-build -c wits-devenv \
-    -f -n '__wits_ctx project build devenv' -l build-type -s B -r -a 'plain debug debugoptimized release minsize'
+    -f -n __wits_takes_profile -l build-type -s B -r -a 'plain debug debugoptimized release minsize'
 
 # Branches: local branches of the current repo. Self-contained — fish 4.x
 # removed the old __fish_git_branches helper, and depending on which of its
@@ -180,7 +193,7 @@ complete -c wits -c wits-stack \
 complete -c wits -c wits-stack \
     -f -n '__wits_ctx stack; and __fish_seen_subcommand_from tree; and __fish_seen_subcommand_from rm mv' -a '(__wits_git_branches)'
 complete -c wits -c wits-project -c wits-build -c wits-devenv \
-    -f -n '__wits_ctx project build devenv' -l branch -s b -r -a '(__wits_git_branches)'
+    -f -n __wits_takes_branch -l branch -s b -r -a '(__wits_git_branches)'
 
 # Worktrees: `create`/`switch` take a REV that must be a local branch
 # (--detach widens it to any revision; not worth a conditional), and
