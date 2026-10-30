@@ -249,10 +249,16 @@ fn fetch_feed(
 ) -> Result<()> {
     let query = cfg.feed(key, name).with_context(|| {
         let known = cfg.feed_names(key);
-        if known.is_empty() {
-            format!("no feed '{name}' — no feeds configured for {key}")
-        } else {
-            format!("no feed '{name}'; configured feeds: {}", known.join(", "))
+        match cfg.path() {
+            Some(path) if !known.is_empty() => format!(
+                "no feed '{name}' for {key} in {}; configured feeds: {}",
+                path.display(),
+                known.join(", ")
+            ),
+            _ => format!(
+                "no feed '{name}' — no feeds configured for {key}: {}",
+                cfg.why_no_feeds(key)
+            ),
         }
     })?;
     // The flag wins over the feed's own default, which wins over `auto`.
@@ -369,7 +375,9 @@ fn fetch_all_feeds(
     let names = cfg.feed_names(key);
     if names.is_empty() {
         anyhow::bail!(
-            "no feeds configured for {key}; give an MR number, or add a feed to review.toml"
+            "no feeds configured for {key}: {}; give an MR number, or declare a feed under \
+             [repo.\"{key}\"]",
+            cfg.why_no_feeds(key)
         );
     }
     // Phase 1: the feeds, by their limits. Every MR any feed writes is recorded.

@@ -17,7 +17,7 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -141,8 +141,13 @@ impl FeedDef {
     }
 }
 
-/// The loaded configuration.
+/// The loaded configuration, and where it was looked for.
 pub struct Config {
+    /// The file the lookup settled on; `None` when there was nowhere to look.
+    path: Option<PathBuf>,
+    /// Whether that file exists. An absent default file is a legitimate empty
+    /// config, but an error message still has to say it was absent.
+    found: bool,
     file: ConfigFile,
 }
 
@@ -151,19 +156,13 @@ pub fn repo_key(info: &RemoteInfo) -> String {
     format!("{}/{}/{}", info.host, info.owner, info.repo)
 }
 
-fn config_path() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("WITS_REVIEW_CONFIG") {
-        return Some(PathBuf::from(p));
-    }
-    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(xdg).join("wits").join("review.toml"));
-    }
-    std::env::var_os("HOME").map(|h| {
-        PathBuf::from(h)
-            .join(".config")
-            .join("wits")
-            .join("review.toml")
-    })
+/// Where the file is when `WITS_REVIEW_CONFIG` does not name one: XDG's config
+/// directory, of which `$HOME/.config` is the XDG default.
+fn default_path() -> Option<PathBuf> {
+    let dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(dir.join("wits").join("review.toml"))
 }
 
 /// Parse and check a config file's text. Serde refuses unknown keys and
@@ -201,23 +200,40 @@ fn check_repo_key(key: &str) -> Result<()> {
 }
 
 impl Config {
-    /// Load the config, or an empty one when the file is absent (feeds are then
-    /// simply unavailable — not an error).
+    /// Load the config. A default location with no file is an empty config, so
+    /// feeds are simply unavailable; a `WITS_REVIEW_CONFIG` naming no file is an
+    /// error, since an instruction that cannot be carried out must not read as
+    /// "nothing configured".
     pub fn load() -> Result<Config> {
-        let Some(path) = config_path() else {
-            return Ok(Config {
-                file: ConfigFile::default(),
-            });
-        };
-        if !path.exists() {
-            return Ok(Config {
-                file: ConfigFile::default(),
-            });
+        if let Some(named) = std::env::var_os("WITS_REVIEW_CONFIG") {
+            let path = PathBuf::from(named);
+            if !path.is_file() {
+                bail!(
+                    "WITS_REVIEW_CONFIG points at {} which is not a file",
+                    path.display()
+                );
+            }
+            return Config::read(path);
         }
+        match default_path() {
+            Some(path) if path.exists() => Config::read(path),
+            path => Ok(Config {
+                path,
+                found: false,
+                file: ConfigFile::default(),
+            }),
+        }
+    }
+
+    fn read(path: PathBuf) -> Result<Config> {
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
         let file = parse(&text).with_context(|| format!("parsing {}", path.display()))?;
-        Ok(Config { file })
+        Ok(Config {
+            path: Some(path),
+            found: true,
+            file,
+        })
     }
 
     /// The feed named `name` for the repo keyed by `key`, resolved into a query.
@@ -240,6 +256,37 @@ impl Config {
             .map(|s| s.feed.keys().cloned().collect())
             .unwrap_or_default()
     }
+
+    /// The file the feeds were read from, when one exists.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref().filter(|_| self.found)
+    }
+
+    /// Why the repo keyed by `key` has no feeds, naming the file consulted — for
+    /// an error that has to tell a missing file, a section filed under another
+    /// spelling of the repo, and a section with no feed in it apart.
+    pub fn why_no_feeds(&self, key: &str) -> String {
+        let Some(path) = &self.path else {
+            return "there is no config file to read: set WITS_REVIEW_CONFIG, \
+                    XDG_CONFIG_HOME, or HOME"
+                .to_owned();
+        };
+        if !self.found {
+            return format!("{} does not exist", path.display());
+        }
+        if self.file.repo.contains_key(key) {
+            return format!(
+                "its [repo.\"{key}\"] section in {} holds no feed",
+                path.display()
+            );
+        }
+        let keys: Vec<&str> = self.file.repo.keys().map(String::as_str).collect();
+        if keys.is_empty() {
+            format!("{} configures no repository", path.display())
+        } else {
+            format!("{} configures only {}", path.display(), keys.join(", "))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -248,6 +295,8 @@ mod tests {
 
     fn loaded(text: &str) -> Config {
         Config {
+            path: Some(PathBuf::from("/cfg/review.toml")),
+            found: true,
             file: parse(text).unwrap(),
         }
     }
@@ -399,5 +448,38 @@ mod tests {
         assert_eq!(cfg.feed_stack(key, "plain"), None);
         assert_eq!(cfg.feed_stack(key, "whole"), Some(StackMode::All));
         assert_eq!(cfg.feed_stack(key, "flat"), Some(StackMode::None));
+    }
+
+    #[test]
+    fn why_no_feeds_tells_the_absences_apart() {
+        let key = "github.com/o/r";
+        let missing = Config {
+            path: Some(PathBuf::from("/cfg/review.toml")),
+            found: false,
+            file: ConfigFile::default(),
+        };
+        assert_eq!(missing.why_no_feeds(key), "/cfg/review.toml does not exist");
+        assert!(missing.path().is_none());
+
+        let other = loaded("[repo.\"github.com/O/R\"]\nfeed.x = { reviewer = \"@me\" }");
+        assert_eq!(
+            other.why_no_feeds(key),
+            "/cfg/review.toml configures only github.com/O/R"
+        );
+        assert_eq!(other.path(), Some(Path::new("/cfg/review.toml")));
+
+        let empty = loaded("[repo.\"github.com/o/r\"]");
+        assert!(
+            empty.why_no_feeds(key).contains("holds no feed"),
+            "{}",
+            empty.why_no_feeds(key)
+        );
+
+        let nowhere = Config {
+            path: None,
+            found: false,
+            file: ConfigFile::default(),
+        };
+        assert!(nowhere.why_no_feeds(key).contains("WITS_REVIEW_CONFIG"));
     }
 }

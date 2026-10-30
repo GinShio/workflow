@@ -561,6 +561,62 @@ fn submit_never_takes_the_token_kept_for_another_owner() {
     );
 }
 
+#[test]
+fn a_feed_fetch_with_no_matching_section_names_the_file_and_its_repos() {
+    let fx = Fixture::new();
+    let config = fx.write_config(
+        r#"[repo."github.com/me/other"]
+           feed.mine = { reviewer = "@me" }"#,
+    );
+
+    let out = fx.run_configured(&["review", "fetch"], &config);
+    assert!(!out.success, "stdout: {}", out.stdout);
+    for expected in [
+        config.as_str(),
+        "configures only github.com/me/other",
+        "[repo.\"github.com/me/proj\"]",
+    ] {
+        assert!(
+            out.stderr.contains(expected),
+            "missing {expected:?} in: {}",
+            out.stderr
+        );
+    }
+}
+
+#[test]
+fn a_feed_fetch_with_no_config_file_says_where_it_looked() {
+    let fx = Fixture::new();
+    let xdg = fx.store.with_file_name("xdg");
+
+    let out = fx.run_full(
+        &["review", "fetch"],
+        None,
+        Some("x"),
+        &[("XDG_CONFIG_HOME", xdg.to_str().unwrap())],
+    );
+    assert!(!out.success, "stdout: {}", out.stdout);
+    let looked = format!("{} does not exist", xdg.join("wits/review.toml").display());
+    assert!(out.stderr.contains(&looked), "{}", out.stderr);
+}
+
+#[test]
+fn a_named_config_that_does_not_exist_is_an_error_not_an_empty_one() {
+    let fx = Fixture::new();
+    let missing = fx.store.with_file_name("nope.toml");
+
+    let out = fx.run_configured(
+        &["review", "fetch", "--feed", "mine"],
+        missing.to_str().unwrap(),
+    );
+    assert!(!out.success, "stdout: {}", out.stdout);
+    assert!(
+        out.stderr.contains("WITS_REVIEW_CONFIG points at") && out.stderr.contains("not a file"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Read leniently, the misspelled facet would be dropped and the feed would
 /// pull every open MR instead.
 #[test]
@@ -578,6 +634,29 @@ fn a_misspelled_facet_fails_the_load_instead_of_widening_the_feed() {
         "{}",
         out.stderr
     );
+}
+
+#[test]
+fn an_unknown_feed_lists_the_configured_ones_and_their_file() {
+    let fx = Fixture::new();
+    let config = fx.write_config(
+        r#"[repo."github.com/me/proj"]
+           feed.mine = { reviewer = "@me" }"#,
+    );
+
+    let out = fx.run_configured(&["review", "fetch", "--feed", "theirs"], &config);
+    assert!(!out.success, "stdout: {}", out.stdout);
+    for expected in [
+        "no feed 'theirs'",
+        config.as_str(),
+        "configured feeds: mine",
+    ] {
+        assert!(
+            out.stderr.contains(expected),
+            "missing {expected:?} in: {}",
+            out.stderr
+        );
+    }
 }
 
 /// The regression: `prune` carried no dry-run guard at all, so `-n` destroyed the

@@ -902,6 +902,8 @@ Environment variables
    * - ``WITS_REVIEW_CONFIG``
      - Absolute path to the feed config file, overriding the default
        ``review.toml`` location. Handy to keep one config outside ``$HOME``.
+       It must name an existing file: a missing one is an error, not an empty
+       config.
    * - ``XDG_STATE_HOME``
      - When set (and ``WITS_REVIEW_DIR`` isn't), the store lives at
        ``$XDG_STATE_HOME/wits/review``. This is *state*, not config.
@@ -1131,13 +1133,18 @@ Troubleshooting
      - It shares ``--range``'s grammar, so a bare flag would be ambiguous;
        name the range or SHA.
    * - ``no feed 'x'``
-     - The repo has no ``feed.x`` under its ``[repo."…"]`` section in
-       ``review.toml``.
+     - The repo has no ``feed.x`` under its ``[repo."…"]`` section; the message
+       names the file read and the feeds it does configure.
    * - ``no feeds configured for …``
-     - Bare ``fetch`` needs at least one feed; add one, or name an MR.
+     - Bare ``fetch`` needs at least one feed; add one, or name an MR. The
+       message says which absence it is: no file, a file filing its sections
+       under other keys (compare them with the ``[repo."…"]`` it asks for), or a
+       section holding no feed.
    * - ``parsing …/review.toml``
      - The file breaks one of the rules under *Feeds* above; the location
        beneath the message points at the key.
+   * - ``WITS_REVIEW_CONFIG points at … which is not a file``
+     - The override names no file; fix the path, or unset it for the default.
    * - ``working tree has uncommitted changes`` (checkout)
      - In-place checkout moves HEAD; commit/stash first, or use a worktree.
    * - ``some actions did not submit``
