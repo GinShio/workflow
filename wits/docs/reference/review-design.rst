@@ -92,7 +92,7 @@ model, generalized to threads, outdating, and stacks.
 
    # Materialize / housekeep.
    wits review checkout <mr> [--next|--prev] [--in-place|--worktree DIR]
-   wits review prune [--older-than DAYS|DATE]
+   wits review prune [mr] [--older-than DAYS|DATE] [--force]
 
 The split earns its keep the way ``stack``'s does: when ``submit`` fails on
 the third of five MRs you want to know exactly where you were and re-run only
@@ -1064,6 +1064,15 @@ held alive by the ``refs/wits/review/*`` pins. Pins are created by a **full**
 ``fetch <mr>`` only; a merely feed-listed MR pins nothing. ``prune`` is then
 idempotent, automatable, a no-op when nothing dangles — it drops the pins and the store directory of terminal MRs (and,
 with ``--older-than``, dormant ones) and lets git GC the objects.
+
+The one exception is an MR holding **unfinished work** that no refetch can
+rebuild — an unsubmitted ``local.json``, an ``edit.md`` buffer that did not
+apply, or a failed submit's ``inflight.json``. ``prune`` keeps it unless
+``--force``, the way ``wits worktree prune`` keeps a worktree with uncommitted
+changes: a sweep warns and moves on, and naming the MR is an error, since that
+one was asked for. The check comes before the pins are dropped, so a kept draft
+keeps the objects it is anchored to. ``--force`` discards the record of a
+failed submit's leftovers, not the leftovers: those stay on the forge.
 
 Rejected alternatives
 ---------------------

@@ -4,8 +4,12 @@
 //! *dormant* ones — those not fetched within a day count or since an ISO date.
 //! Pruning removes both the per-MR directory and the snapshot pins
 //! (`refs/wits/review/*`), so git can finally collect the reviewed objects.
+//!
+//! An MR holding work nothing could rebuild — an unsubmitted draft, an `edit`
+//! that did not apply, or a failed submit's forge-side cleanup — is kept unless
+//! `--force`, as `wits worktree prune` keeps a worktree with uncommitted changes.
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use wits_core::forge::MrState;
 use wits_core::git::Repository;
@@ -21,9 +25,17 @@ pub fn run(repo: &Repository, args: &PruneArgs) -> Result<()> {
     let current = ctx.store.current();
 
     // A named MR is dropped whatever its state — the "I'm done with this one,
-    // reclaim its store even though it hasn't merged" path.
+    // reclaim its store even though it hasn't merged" path. Unfinished work
+    // still needs `--force`, and keeping it is an error rather than a skip: you
+    // asked for this one by name.
     if let Some(handle) = &args.mr {
         let id = parse_mr_handle(handle)?;
+        if !args.force && holds_work(&ctx, &id) {
+            bail!(
+                "MR {id} holds unfinished work (a draft, an edit that did not apply, or a \
+                 failed submit's forge cleanup); finish it, or pass --force to discard it"
+            );
+        }
         prune_one(&ctx, &id, "requested", &current)?;
         reclaim_worktree_if_empty(&ctx, std::slice::from_ref(&id));
         return Ok(());
@@ -33,6 +45,7 @@ pub fn run(repo: &Repository, args: &PruneArgs) -> Result<()> {
     // `--older-than` is a day count or an ISO-8601 date, as a Unix instant.
     let cutoff = args.older_than.as_deref().map(parse_cutoff).transpose()?;
     let mut pruned: Vec<String> = Vec::new();
+    let mut kept = 0;
     for info in ctx.store.list_infos() {
         let terminal = matches!(info.mr.state, MrState::Merged | MrState::Closed);
         let stale = cutoff.is_some_and(|before| info.fetched_at < before);
@@ -44,12 +57,27 @@ pub fn run(repo: &Repository, args: &PruneArgs) -> Result<()> {
         } else {
             "dormant"
         };
+        // In a sweep, unfinished work is kept with a warning rather than
+        // failing the run: one MR holding work in progress must not stop the
+        // rest of the sweep, and dropping it in silence would be worse than
+        // either.
+        if !args.force && holds_work(&ctx, &info.mr.id) {
+            log::warn!(
+                "kept MR {} ({why}, but it holds unfinished work — finish it, or --force to \
+                 discard it)",
+                info.mr.id
+            );
+            kept += 1;
+            continue;
+        }
         prune_one(&ctx, &info.mr.id, why, &current)?;
         pruned.push(info.mr.id.clone());
     }
 
     if pruned.is_empty() {
-        log::info!("nothing to prune");
+        if kept == 0 {
+            log::info!("nothing to prune");
+        }
     } else {
         let verb = if wits_log::is_dry_run() {
             "would prune"
@@ -60,6 +88,12 @@ pub fn run(repo: &Repository, args: &PruneArgs) -> Result<()> {
         reclaim_worktree_if_empty(&ctx, &pruned);
     }
     Ok(())
+}
+
+/// Whether pruning `id` would lose work nothing can rebuild: what `submit` still
+/// has to send or clean up, or an `edit` buffer that did not apply.
+fn holds_work(ctx: &ReviewCtx, id: &str) -> bool {
+    ctx.store.has_pending(id) || ctx.store.edit_paths(id).0.exists()
 }
 
 /// Drop one MR's local footprint: its snapshot pins (so git can GC the objects)

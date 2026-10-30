@@ -132,7 +132,7 @@ Eight verbs; only ``fetch`` and ``submit`` touch the network.
    * - ``checkout [mr] [--next\|--prev] [--in-place\|--worktree DIR]``
      - —
      - Materialise the code to build/test.
-   * - ``prune [mr] [--older-than DAYS\|DATE]``
+   * - ``prune [mr] [--older-than DAYS\|DATE] [--force]``
      - —
      - Drop one MR, or sweep terminal/dormant ones.
 
@@ -853,6 +853,7 @@ Housekeeping: ``prune``
    wits review prune --older-than 30    # …and any not refreshed in 30 days
    wits review prune --older-than 2026-06-01   # …or last refreshed before a date
    wits review prune 123                # just MR 123, whatever its state
+   wits review prune --force            # …even an MR holding unfinished work
 
 ``prune`` drops the store directory and snapshot pins
 (``refs/wits/review/*``) of terminal MRs — and their **review worktree** if it
@@ -865,6 +866,15 @@ Naming an MR prunes **just that one, whatever its state** — the way to reclaim
 a review worktree and store for an MR you are finished reviewing before it
 merges. (A ``--worktree <custom>`` checkout is not tracked, so only the default
 worktree path is removed automatically.)
+
+An MR holding **unfinished work** — something no fetch could rebuild — is
+kept, as ``wits worktree prune`` keeps a worktree with uncommitted changes:
+an unsubmitted ``local.json``, an ``edit`` buffer that did not apply
+(``edit.md``), or the record of a failed ``submit``'s forge-side leftovers
+(``inflight.json``). A sweep keeps such an MR with a warning and prunes the
+rest; naming it is an error, since you asked for that one. ``--force`` drops it
+either way: the draft and the buffer are discarded, and a failed submit's
+leftovers stay on the forge for you to delete there.
 
 Outdating
 ---------
@@ -1146,6 +1156,11 @@ Troubleshooting
        beneath the message points at the key.
    * - ``WITS_REVIEW_CONFIG points at … which is not a file``
      - The override names no file; fix the path, or unset it for the default.
+   * - ``kept MR N (…, but it holds unfinished work …)``,
+       ``MR N holds unfinished work``
+     - ``prune`` will not discard a draft, an edit that did not apply, or a
+       failed submit's cleanup; ``submit`` or ``edit`` the MR to finish it, or
+       pass ``--force`` to discard it.
    * - ``working tree has uncommitted changes`` (checkout)
      - In-place checkout moves HEAD; commit/stash first, or use a worktree.
    * - ``some actions did not submit``

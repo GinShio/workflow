@@ -158,17 +158,21 @@ impl Store {
             .collect()
     }
 
-    /// The ids of MRs with pending work: a non-empty local draft, or an in-flight
-    /// cleanup a prior failed submit deferred. `submit --all` uses this, so a
-    /// deferred cleanup is retried even after the draft that spawned it is gone.
+    /// The ids of MRs with [pending work](Self::has_pending). `submit --all` uses
+    /// this, so a deferred cleanup is retried even after the draft that spawned
+    /// it is gone.
     pub fn local_ids(&self) -> Vec<String> {
         self.mr_ids()
             .into_iter()
-            .filter(|id| {
-                let dir = self.mr_dir(id);
-                dir.join("local.json").exists() || dir.join("inflight.json").exists()
-            })
+            .filter(|id| self.has_pending(id))
             .collect()
+    }
+
+    /// Whether an MR holds work `submit` still has to do: a non-empty local
+    /// draft, or an in-flight cleanup a prior failed submit deferred.
+    pub fn has_pending(&self, id: &str) -> bool {
+        let dir = self.mr_dir(id);
+        dir.join("local.json").exists() || dir.join("inflight.json").exists()
     }
 
     /// Drop an MR's whole directory — for `prune`.

@@ -210,6 +210,37 @@ impl Fixture {
         self.mr_dir(id).join("local.json").exists()
     }
 
+    fn has_ref(&self, name: &str) -> bool {
+        Command::new("git")
+            .args(["show-ref", "--verify", "--quiet", name])
+            .current_dir(&self.repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
+            .unwrap()
+            .success()
+    }
+
+    /// Seed the terminal MR `id` with an unsubmitted draft and a snapshot pin —
+    /// the state a prune would lose for good.
+    fn seed_drafted_merged(&self, id: &str) -> String {
+        self.seed_info(
+            id,
+            &MERGED.replace("\"id\": \"1\"", &format!("\"id\": \"{id}\"")),
+        );
+        self.write_local(
+            id,
+            r#"{ "schema": 1,
+                 "actions": [
+                   { "action": "comment", "file": "src/x.c", "line": 3, "body": "unsubmitted" }
+                 ] }"#,
+        );
+        self.write("f", id);
+        let pin = format!("refs/wits/review/{id}/{}", self.commit(&format!("MR {id}")));
+        self.git(&["update-ref", &pin, "HEAD"]);
+        pin
+    }
+
     /// Write the feed file a test runs against, returning its path for
     /// `WITS_REVIEW_CONFIG`.
     fn write_config(&self, text: &str) -> String {
@@ -681,20 +712,14 @@ fn feeds_prints_this_repositorys_feed_names_for_completion() {
 
 /// The regression: `prune` carried no dry-run guard at all, so `-n` destroyed the
 /// very thing it was meant to preview — `local.json` included, the one file in the
-/// store that no refetch can rebuild.
+/// store that no refetch can rebuild. A drafted MR is only reached with
+/// `--force` now, so that is the run previewed.
 #[test]
 fn prune_dry_run_previews_without_dropping_the_store() {
     let fx = Fixture::new();
-    fx.seed_info("1", MERGED);
-    fx.write_local(
-        "1",
-        r#"{ "schema": 1,
-             "actions": [
-               { "action": "comment", "file": "src/x.c", "line": 3, "body": "unsubmitted" }
-             ] }"#,
-    );
+    fx.seed_drafted_merged("1");
 
-    let preview = fx.run(&["-n", "review", "prune"]);
+    let preview = fx.run(&["-n", "review", "prune", "--force"]);
     assert!(preview.success, "stderr: {}", preview.stderr);
     assert!(
         preview.stdout.contains("[DRY-RUN]") && preview.stdout.contains("prune MR 1"),
@@ -707,9 +732,65 @@ fn prune_dry_run_previews_without_dropping_the_store() {
     );
 
     // The real sweep still drops it, so the guard did not disable pruning.
-    let real = fx.run(&["review", "prune"]);
+    let real = fx.run(&["review", "prune", "--force"]);
     assert!(real.success, "stderr: {}", real.stderr);
     assert!(!fx.local_exists("1"));
+}
+
+#[test]
+fn a_sweep_keeps_an_mr_holding_unfinished_work_and_prunes_the_rest() {
+    let fx = Fixture::new();
+    let pin = fx.seed_drafted_merged("1");
+    fx.seed_info("2", &MERGED.replace("\"id\": \"1\"", "\"id\": \"2\""));
+    // An edit whose buffer did not apply holds text no draft has yet.
+    fx.seed_info("3", &MERGED.replace("\"id\": \"1\"", "\"id\": \"3\""));
+    let buffer = fx.mr_dir("3").join("edit.md");
+    std::fs::write(&buffer, "a review that has not reached the draft\n").unwrap();
+
+    let out = fx.run(&["review", "prune"]);
+    assert!(out.success, "stderr: {}", out.stderr);
+    for expected in ["kept MR 1", "kept MR 3", "--force"] {
+        assert!(
+            out.stderr.contains(expected),
+            "missing {expected:?} in: {}",
+            out.stderr
+        );
+    }
+    assert!(fx.local_exists("1"), "the draft was dropped");
+    assert!(
+        fx.has_ref(&pin),
+        "the pin the draft is anchored to was dropped"
+    );
+    assert!(buffer.exists(), "the unfinished edit was dropped");
+    assert!(
+        !fx.mr_dir("2").exists(),
+        "the sweep stopped at the kept MRs"
+    );
+
+    let forced = fx.run(&["review", "prune", "--force"]);
+    assert!(forced.success, "stderr: {}", forced.stderr);
+    assert!(!fx.local_exists("1") && !buffer.exists());
+    assert!(!fx.has_ref(&pin));
+}
+
+/// Named, the MR was asked for, so keeping it is a failure rather than a note.
+#[test]
+fn pruning_an_mr_holding_unfinished_work_by_name_needs_force() {
+    let fx = Fixture::new();
+    let pin = fx.seed_drafted_merged("1");
+
+    let refused = fx.run(&["review", "prune", "1"]);
+    assert!(!refused.success, "stdout: {}", refused.stdout);
+    assert!(
+        refused.stderr.contains("unfinished work") && refused.stderr.contains("--force"),
+        "{}",
+        refused.stderr
+    );
+    assert!(fx.local_exists("1") && fx.has_ref(&pin));
+
+    let forced = fx.run(&["review", "prune", "1", "--force"]);
+    assert!(forced.success, "stderr: {}", forced.stderr);
+    assert!(!fx.local_exists("1") && !fx.has_ref(&pin));
 }
 
 #[test]

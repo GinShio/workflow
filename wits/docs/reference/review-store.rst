@@ -146,7 +146,8 @@ action, not a top-level field. Every stored action has an id; later actions
 with the same id replace earlier ones, and ``drop`` removes a live local
 action. It exists only while you have a draft — ``submit`` deletes it once
 flushed, and an empty draft is the same as no file. This is the state that
-would be *lost*, so it is what migration moves.
+would be *lost*, so it is what migration moves, and ``prune`` keeps an MR that
+has one unless told ``--force``.
 
 You need not know this path to write it: ``wits review draft <mr> -`` (or a
 file) hands a batch of actions to the tool, which appends, assigns missing
@@ -175,7 +176,9 @@ showed — the review point, the verdict, the summary and the drafts under a
 marker — to ``edit.json``. What is read back is measured against
 ``edit.json``, so a draft that changed meanwhile is not overwritten by a stale
 copy. Both are removed once the edit applies; a buffer that does not parse
-stays for the next ``edit`` to reopen, and ``edit --discard`` removes it.
+stays for the next ``edit`` to reopen, and ``edit --discard`` removes it. While
+it stays it holds text no draft has yet, so ``prune`` keeps the MR unless told
+``--force``.
 
 ``inflight.json`` — deferred forge-side cleanup (transient)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -185,7 +188,8 @@ created but could not publish (a GitHub pending review, GitLab draft notes).
 The next ``submit`` deletes them **first** — touching only ids wits itself
 recorded — and removes the file once the cleanup is done, so an orphan can
 never be published twice. ``submit --all`` counts it as pending work, so a
-deferred cleanup is retried even after the draft that spawned it is gone.
+deferred cleanup is retried even after the draft that spawned it is gone, and
+``prune`` keeps the MR unless told ``--force``.
 
 Git refs — pinning reviewed objects
 -----------------------------------
@@ -209,7 +213,7 @@ snapshot you reviewed:
 The names carry only what disambiguates within one clone — the MR number and
 the SHA. Enumerate them with ``git for-each-ref refs/wits/review/``; ``prune``
 deletes them (letting git collect the objects) once an MR is terminal or
-dormant.
+dormant — and holds no unfinished work, unless told ``--force``.
 
 Moving a review to another machine
 ----------------------------------

@@ -263,6 +263,11 @@ pub struct PruneArgs {
     /// ISO-8601 date (`2026-06-01`) — anything last updated before it.
     #[arg(long, value_name = "DAYS|DATE")]
     pub older_than: Option<String>,
+    /// Drop even an MR holding unfinished work — a draft, an edit that did not
+    /// apply, or a failed submit's forge cleanup. The draft and the edit are
+    /// discarded; the failed submit's leftovers stay on the forge.
+    #[arg(long)]
+    pub force: bool,
 }
 
 pub fn run(args: &ReviewArgs) -> Result<()> {
