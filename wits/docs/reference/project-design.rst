@@ -450,9 +450,12 @@ checked out for *this* build's build repo":
 * **in-place**: ``{{repos.<name>.workdir}}`` = the repo's ``path``. Building
   a non-current branch runs the classic dance — stash → switch → build →
   switch back → pop — driven by an **RAII restore guard** that returns to the
-  original branch and pops the stash on *any* exit (success, error, or
-  panic). A dirty tree is always auto-stashed; because the guard always
-  restores, this is safe and needs no config knob.
+  original branch, moves the submodules the switch moved back to that
+  branch's pins, and pops the stash on *any* exit (success, error, or panic).
+  A dirty tree is always auto-stashed; because the guard always restores,
+  this is safe and needs no config knob. On success the restore is explicit,
+  so its failure fails the build; a guard dropped on an error path can only
+  log, since the error already leaving is the one to report.
 * **worktree**: the repo is cloned bare and ``{{repos.<name>.workdir}}`` is
   the deterministic ``worktree_dir`` for the target branch.
   ``bootstrap_worktree_dir`` is optional; without it, the initial main-branch

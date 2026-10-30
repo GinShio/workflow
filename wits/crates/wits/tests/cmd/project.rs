@@ -2106,6 +2106,139 @@ origin = "{up}"
     );
 }
 
+/// A cargo crate at `dir` on `main`, ready for branches; `name` is the package.
+fn cargo_fixture(dir: &Path, name: &str) {
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    git(dir, &["init", "-q", "-b", "main", "."]);
+    std::fs::write(
+        dir.join("Cargo.toml"),
+        format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+}
+
+/// Declare `src`, cloned from `up`, as the in-place cargo project `name`.
+fn declare_in_place(fx: &Fixture, name: &str, src: &Path, up: &Path) {
+    std::fs::write(
+        fx.config.join(format!("{name}.toml")),
+        format!(
+            r#"
+[project]
+build_system = "cargo"
+[repos.main]
+path = "{src}"
+main_branch = "main"
+build_dir = "{{{{repos.main.workdir}}}}/target/{{{{branch.slug}}}}"
+[repos.main.remotes]
+origin = "{up}"
+"#,
+            src = src.display(),
+            up = up.display()
+        ),
+    )
+    .unwrap();
+}
+
+/// An in-place build moves the checkout's submodules to the built branch's
+/// pins. The restore has to move them back, or the checkout ends up on its own
+/// branch with another branch's dependencies.
+#[test]
+fn an_in_place_build_returns_the_submodules_to_the_original_pins() {
+    let fx = Fixture::new();
+
+    let dep = fx.path("up-dep");
+    std::fs::create_dir_all(&dep).unwrap();
+    git(&dep, &["init", "-q", "-b", "main", "."]);
+    std::fs::write(dep.join("v"), "1").unwrap();
+    git(&dep, &["add", "-A"]);
+    git(&dep, &["commit", "-q", "-m", "v1"]);
+    let v1 = git_out(&dep, &["rev-parse", "HEAD"]).trim().to_owned();
+    std::fs::write(dep.join("v"), "2").unwrap();
+    git(&dep, &["commit", "-q", "-am", "v2"]);
+    let v2 = git_out(&dep, &["rev-parse", "HEAD"]).trim().to_owned();
+
+    let up = fx.path("up-pinned");
+    cargo_fixture(&up, "pinned-fixture");
+    git(
+        &up,
+        &["submodule", "add", "-q", dep.to_str().unwrap(), "dep"],
+    );
+    git(&up.join("dep"), &["checkout", "-q", &v1]);
+    git(&up, &["add", "-A"]);
+    git(&up, &["commit", "-q", "-m", "pin v1"]);
+    git(&up, &["switch", "-q", "-c", "feat"]);
+    git(&up.join("dep"), &["checkout", "-q", &v2]);
+    git(&up, &["add", "dep"]);
+    git(&up, &["commit", "-q", "-m", "pin v2"]);
+    git(&up, &["switch", "-q", "main"]);
+
+    let src = fx.path("src-pinned");
+    declare_in_place(&fx, "pinned", &src, &up);
+    fx.ok(&["update", "pinned"]);
+    git(&src, &["branch", "feat", "origin/feat"]);
+    let pin = |checkout: &Path| git_out(&checkout.join("dep"), &["rev-parse", "HEAD"]);
+    assert_eq!(pin(&src).trim(), v1, "fixture: main pins v1");
+
+    fx.ok(&["build", "pinned", "-b", "feat"]);
+    assert_eq!(
+        git_out(&src, &["symbolic-ref", "--short", "HEAD"]).trim(),
+        "main",
+        "the in-place checkout was not restored to its branch"
+    );
+    assert_eq!(
+        pin(&src).trim(),
+        v1,
+        "the submodule was left at the built branch's pin"
+    );
+}
+
+/// When the checkout cannot be switched back after a successful build, the
+/// command fails: exit 0 would tell a script the checkout is back where it
+/// was. The auto-stash stays stashed rather than landing on the wrong branch.
+#[test]
+fn an_in_place_build_that_cannot_switch_back_fails_and_keeps_the_stash() {
+    let fx = Fixture::new();
+
+    let up = fx.path("up-gen");
+    cargo_fixture(&up, "gen-fixture");
+    std::fs::write(up.join("gen.txt"), "tracked on main\n").unwrap();
+    git(&up, &["add", "-A"]);
+    git(&up, &["commit", "-q", "-m", "c1"]);
+    // The built branch generates the file main tracks, so switching back would
+    // overwrite an untracked file, which git refuses.
+    git(&up, &["switch", "-q", "-c", "feat"]);
+    git(&up, &["rm", "-q", "gen.txt"]);
+    std::fs::write(
+        up.join("build.rs"),
+        "fn main() { std::fs::write(\"gen.txt\", \"generated\\n\").unwrap(); }\n",
+    )
+    .unwrap();
+    git(&up, &["add", "-A"]);
+    git(&up, &["commit", "-q", "-m", "generate gen.txt"]);
+    git(&up, &["switch", "-q", "main"]);
+
+    let src = fx.path("src-gen");
+    declare_in_place(&fx, "gen", &src, &up);
+    fx.ok(&["update", "gen"]);
+    git(&src, &["branch", "feat", "origin/feat"]);
+    std::fs::write(src.join("src/main.rs"), "fn main() { /* local */ }\n").unwrap();
+
+    let out = fx.run(&["build", "gen", "-b", "feat"]);
+    assert!(!out.success, "a failed restore was reported as success");
+    assert!(
+        out.stderr.contains("the build succeeded, but")
+            && out.stderr.contains("auto-stash is kept"),
+        "stderr: {}",
+        out.stderr
+    );
+    assert_eq!(
+        git_out(&src, &["stash", "list"]).lines().count(),
+        1,
+        "the auto-stash was popped onto the wrong branch"
+    );
+}
+
 /// A hook that fails stops the repo there: the default action must not run
 /// behind a failed `pre_update`, or an override could be contradicted silently.
 #[test]

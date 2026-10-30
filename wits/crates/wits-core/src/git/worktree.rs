@@ -618,16 +618,22 @@ pub fn primary_checkout(repo: &Repository) -> Option<PathBuf> {
     }
 }
 
-/// Restores a repo to the branch (and stash) it was on when captured, on *any*
-/// scope exit — success, `?`-propagated error, or panic. This is the RAII form
-/// of the classic stash → switch → build → switch back → pop dance: correctness
-/// no longer depends on remembering to restore on every path. Restore is
-/// best-effort and logs (Drop cannot return errors), which is the right failure
-/// mode — a failed restore should warn, not mask the original error.
+/// Returns a checkout to the branch it was on when captured — with the
+/// submodules the switch moved, and the stash — on *any* scope exit: success,
+/// `?`-propagated error, or panic. This is the RAII form of the classic stash →
+/// switch → build → switch back → pop dance, so correctness does not depend on
+/// remembering to restore on every path.
+///
+/// The success path calls [`finish`](Self::finish), which restores and returns a
+/// failure: a command that leaves the checkout on another branch has not
+/// succeeded. Every other exit restores in `Drop`, which can only log — the
+/// failure already on its way out is the one to report.
 pub struct RestoreGuard<'a> {
     repo: &'a Repository,
     original_branch: Option<String>,
+    submodules: Vec<String>,
     stashed: bool,
+    finished: bool,
 }
 
 impl<'a> RestoreGuard<'a> {
@@ -636,28 +642,74 @@ impl<'a> RestoreGuard<'a> {
         RestoreGuard {
             repo,
             original_branch: repo.current_branch(),
+            submodules: Vec::new(),
             stashed: false,
+            finished: false,
         }
     }
 
     pub fn mark_stashed(&mut self) {
         self.stashed = true;
     }
+
+    /// Record the submodules the switch is about to move to the new branch's
+    /// pins, so the restore moves them back to the original branch's.
+    pub fn mark_submodules(&mut self, paths: Vec<String>) {
+        self.submodules = paths;
+    }
+
+    /// The checkout this guard restores.
+    pub fn checkout(&self) -> &Path {
+        self.repo.path()
+    }
+
+    /// Restore now, and return what failed.
+    pub fn finish(mut self) -> Result<(), GitError> {
+        self.finished = true;
+        self.restore()
+    }
+
+    /// Switch back, return the recorded submodules that the original branch
+    /// still has to its pins, then pop the stash. A failed switch stops there:
+    /// the stash belongs on the original branch, so it stays stashed rather than
+    /// landing on the wrong one.
+    fn restore(&self) -> Result<(), GitError> {
+        if let Some(orig) = &self.original_branch {
+            if self.repo.current_branch().as_deref() != Some(orig.as_str()) {
+                self.repo.switch(orig).map_err(|e| match self.stashed {
+                    true => GitError::Failed {
+                        operation: format!("switch back to {orig}"),
+                        message: format!("{e}; the auto-stash is kept (see `git stash list`)"),
+                    },
+                    false => e,
+                })?;
+            }
+        }
+        let mut submodules = Ok(());
+        if !self.submodules.is_empty() {
+            let present: Vec<String> = self
+                .repo
+                .materialised_submodules()
+                .into_iter()
+                .map(|sub| sub.path)
+                .filter(|path| self.submodules.contains(path))
+                .collect();
+            submodules = self.repo.submodule_update(&present, false);
+        }
+        if self.stashed {
+            self.repo.stash_pop()?;
+        }
+        submodules
+    }
 }
 
 impl Drop for RestoreGuard<'_> {
     fn drop(&mut self) {
-        if let Some(orig) = &self.original_branch {
-            if self.repo.current_branch().as_deref() != Some(orig.as_str()) {
-                if let Err(e) = self.repo.switch(orig) {
-                    log::warn!("could not restore branch {orig}: {e}");
-                }
-            }
+        if self.finished {
+            return;
         }
-        if self.stashed {
-            if let Err(e) = self.repo.stash_pop() {
-                log::warn!("could not pop auto-stash: {e}");
-            }
+        if let Err(e) = self.restore() {
+            log::warn!("could not restore {}: {e}", self.repo.path().display());
         }
     }
 }

@@ -1062,10 +1062,13 @@ branch — runs in that ``workdir``, never in ``path``, which for a bare-backed
 repo is a git-dir with no working tree at all.
 
 * **in-place**: ``repos.<name>.workdir`` = that repo's ``path``. Switching
-  the focus to a non-current branch stashes, switches, builds, then always
-  restores (branch, stash, and the focus's submodules) on any exit. This is
-  the only strategy that switches anything: a bare-backed repo holds each
-  branch in a worktree already.
+  the focus to a non-current branch stashes, switches, moves the checkout's
+  submodules to that branch's pins, and builds; on any exit it then switches
+  back, returns those submodules to the original branch's pins, and pops the
+  stash. A restore that fails after a successful build fails the build, and
+  a failed switch back keeps the stash rather than popping it onto the wrong
+  branch. This is the only strategy that switches anything: a bare-backed
+  repo holds each branch in a worktree already.
 * **worktree**: ``repos.<name>.workdir`` = that repo's resolved
   ``worktree_dir`` for the target branch. It must already exist; ``build``
   never creates it. ``wits worktree create <branch> "$(project info --get repo.workdir … --

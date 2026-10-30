@@ -106,7 +106,7 @@ pub fn build(ws: &Workspace, project: &Project, request: &BuildRequest) -> Resul
     // so neither the worktree-exists gate nor the in-place branch dance applies.
     // This is the whole point of the override: the two commands meet only at the
     // path.
-    let _guard = if identity.work_dir.is_some() {
+    let guard = if identity.work_dir.is_some() {
         if !plan.paths.work_dir.exists() {
             bail!(
                 "--work-dir {} does not exist",
@@ -162,6 +162,12 @@ pub fn build(ws: &Workspace, project: &Project, request: &BuildRequest) -> Resul
         if code != 0 {
             bail!("{} failed (exit {code})", step.description);
         }
+    }
+    if let Some(guard) = guard {
+        let checkout = guard.checkout().display().to_string();
+        guard
+            .finish()
+            .with_context(|| format!("the build succeeded, but {checkout} was not restored"))?;
     }
     Ok(())
 }
@@ -337,12 +343,14 @@ fn prepare_branch<'a>(
         guard.mark_stashed();
     }
     git.switch(branch)?;
-    // Align that checkout's own submodules to the target's recorded state.
+    // Align that checkout's own submodules to the target's recorded state, and
+    // have the guard return them to the original branch's.
     let subs: Vec<String> = git
         .materialised_submodules()
         .into_iter()
         .map(|sub| sub.path)
         .collect();
+    guard.mark_submodules(subs.clone());
     git.submodule_update(&subs, false)?;
     Ok(Some(guard))
 }

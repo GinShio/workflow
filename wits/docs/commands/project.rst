@@ -379,8 +379,10 @@ project:
    bootstrap_worktree_dir = "{{repo.path}}.primary"
 
 * **in-place**: ``build --branch X`` stashes, switches to X, builds, then
-  always switches back and restores your working tree — even if the build
-  fails. This is the only strategy that switches anything, and it switches
+  always switches back and restores your working tree, submodules included —
+  even if the build fails. If switching back fails (say the build wrote a file
+  your branch tracks), ``build`` exits non-zero and your changes stay in
+  ``git stash``. This is the only strategy that switches anything, and it switches
   only the repo carrying branch identity: where a project borrows that
   identity from a bare-backed component, the branch already sits in one of its
   worktrees.
