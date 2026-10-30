@@ -17,9 +17,10 @@
 # both forms.
 #
 # Registry-sourced names (toolchains, presets, repos) come from `wits project
-# __names`, the hidden query the tool ships for exactly this: completion asks
-# the registry instead of keeping a TOML parser and a copy of the config
-# ladder, the same bargain `__trunk` made for the git hooks.
+# __names`, and feed names from `wits review __feeds` — the hidden queries the
+# tool ships for exactly this: completion asks wits instead of keeping a TOML
+# parser and a copy of the config ladder, the same bargain `__trunk` made for
+# the git hooks.
 
 # The built-ins, as `wits __applets` lists them and wits/meson.build installs
 # their applets.
@@ -242,27 +243,10 @@ end
 complete -c wits \
     -f -n '__wits_ctx review; and __fish_seen_subcommand_from fetch show diff draft edit submit checkout prune' -a '(__wits_review_mrs)'
 
-# Feeds: one global TOML file (wits/docs/commands/review.rst) declares one
-# [repo."host/…"] section per repo, each feed a `feed.<name> = { … }` key;
-# the names are what --feed takes. The path ladder mirrors
-# crates/wits/src/cmd/review/config.rs: $WITS_REVIEW_CONFIG, then
-# $XDG_CONFIG_HOME/wits/review.toml, then $HOME/.config/wits/review.toml.
+# Feeds: the names --feed takes are the ones configured for the repository
+# this checkout reviews against, so only those are offered.
 function __wits_review_feeds
-    set -l cfg ~/.config/wits/review.toml
-    if set -q WITS_REVIEW_CONFIG
-        set cfg $WITS_REVIEW_CONFIG
-    else if set -q XDG_CONFIG_HOME
-        set cfg $XDG_CONFIG_HOME/wits/review.toml
-    end
-    test -f "$cfg"; or return
-    set -l repo
-    while read -l row
-        if set -l m (string match -r '^\s*\[repo\."([^"]+)"\]' -- $row)
-            set repo $m[2]
-        else if set -l m (string match -r '^\s*feed\.([\w-]+)\s*=' -- $row)
-            printf '%s\t%s\n' $m[2] $repo
-        end
-    end <$cfg
+    wits review __feeds 2>/dev/null
 end
 # --feed exists only on `review fetch`.
 complete -c wits \
