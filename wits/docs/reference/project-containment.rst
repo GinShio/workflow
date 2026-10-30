@@ -156,8 +156,11 @@ What crosses, and what does not
 ``wits_core::worktree``: those are command concerns — the CLI and
 ``wits-actions`` need them, the project layer does not. Cargo cannot enforce
 that split because all three live in ``wits-core``, so
-``crates/wits-project/tests/boundaries.rs`` greps the project sources for the
-two forbidden paths. That test is part of ``cargo test --workspace``.
+``crates/wits-project/tests/boundaries.rs`` scans the code of the project
+sources for anything that reaches either module: a path through it, an import
+group naming it, or a glob or alias of ``wits_core`` that would hide it.
+Comments are not code and are skipped. That test is part of ``cargo test
+--workspace``.
 
 ``wits-build`` does not name ``wits-core`` in its normal dependencies. It
 receives project types and implements the core-owned seam. ``wits-actions`` may
@@ -198,7 +201,7 @@ How the boundary is checked
 
 .. code-block:: sh
 
-   cargo test --workspace        # includes the wits-project boundary grep
+   cargo test --workspace        # includes the wits-project boundary scan
    # core + anyhow/log/minijinja/serde/toml/thiserror
    cargo tree -p wits-project
    # the narrow crates, without the removed utility layer
