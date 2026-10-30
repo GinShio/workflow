@@ -72,21 +72,26 @@ function __wits_target
 end
 
 # Projects: `wits project list` prints one `org/name focus=… build=…` row per
-# project. Both the bare name and org/name are accepted as [NAME|PATH]
-# (wits/docs/commands/project.rst), so the candidate is the bare name with
-# org/name as the description.
+# project, or `name …` for one that joins no org — `org` is optional
+# (wits/docs/reference/project-reference.rst, `[project]`). Both the bare
+# name and org/name are accepted as [NAME|PATH]
+# (wits/docs/commands/project.rst), so the candidate is the bare name, with
+# org/name as the description when there is an org.
 function __wits_projects
     wits project list 2>/dev/null | while read -l row
-        set -l orgname (string split -f 1 ' ' -- $row)
-        string match -q '*/*' -- $orgname; or continue
-        printf '%s\t%s\n' (string split -m 1 -f 2 / -- $orgname) $orgname
+        set -l qualified (string split -f 1 ' ' -- $row)
+        if string match -q '*/*' -- $qualified
+            printf '%s\t%s\n' (string split -m 1 -f 2 / -- $qualified) $qualified
+        else
+            printf '%s\n' $qualified
+        end
     end
 end
 complete -c wits -f -n '__wits_ctx build devenv update' -a '(__wits_projects)'
 # Scoped past the verbs: `wits project <TAB>` must offer the verbs, not the
-# projects the verbs consume.
+# projects the verbs consume — and only the verbs that take a project.
 complete -c wits \
-    -f -n '__wits_ctx project; and __fish_seen_subcommand_from list info check exists branch-build-dirs hash' -a '(__wits_projects)'
+    -f -n '__wits_ctx project; and __fish_seen_subcommand_from info check exists branch-build-dirs hash' -a '(__wits_projects)'
 
 # `project info --get` paths: a dotted lookup into the template context
 # (wits/docs/reference/project-reference.rst). The namespace is open — `env.*`
