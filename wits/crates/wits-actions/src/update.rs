@@ -318,12 +318,16 @@ fn update_repo(ws: &Workspace, project: &Project, name: &str, git: &Repository) 
     //
     // The checkout **holding `main_branch`** is what a fast-forward may advance —
     // only that one, since `update` never moves a branch a checkout is not on. It
-    // may genuinely be absent, and then the branch moves as a ref instead.
+    // may genuinely be absent, and then the branch moves as a ref instead. Which
+    // checkout holds the branch is asked of the repository, not of this repo's
+    // placements: a worktree a sibling repo places, or one moved off the
+    // `worktree_dir` template, still holds it, and moving the ref under it
+    // would strand that checkout behind its own HEAD.
     let holding = repo
         .decl()
         .main_branch
         .as_deref()
-        .map(|branch| layout::checkout_holding(ws, project, repo, branch))
+        .map(|branch| layout::branch_checkout(ws, project, repo, branch))
         .transpose()?
         .flatten()
         .map(Repository::new);

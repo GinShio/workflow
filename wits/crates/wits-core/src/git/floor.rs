@@ -830,6 +830,12 @@ impl Repository {
     /// a branch that has genuinely diverged says so instead of being silently
     /// reset.
     ///
+    /// A branch some live worktree has checked out is refused outright. `git
+    /// update-ref` does not check, and moving the ref there leaves that
+    /// checkout's HEAD ahead of its index and files — every upstream change
+    /// reads as a staged revert, which a later `commit -a` would make real. A
+    /// held branch advances through `merge --ff-only` in the checkout holding it.
+    ///
     /// A dry run does not perform the fetch that would create `target`, so an
     /// unresolvable target is planned against its ref name rather than treated as
     /// an error: the printed `update-ref` is exactly what the real run executes
@@ -837,6 +843,19 @@ impl Repository {
     /// non-fast-forward check, and a real run always resolves it before writing.
     pub fn fast_forward_branch(&self, branch: &str, target: &str) -> Result<(), GitError> {
         let refname = format!("refs/heads/{branch}");
+        if let Some(holder) = self
+            .worktrees()
+            .into_iter()
+            .find(|wt| wt.is_live() && wt.branch.as_deref() == Some(branch))
+        {
+            return Err(GitError::Failed {
+                operation: format!("fast-forward {branch}"),
+                message: format!(
+                    "{branch} is checked out at {}; advance it there with a fast-forward merge",
+                    holder.path.display()
+                ),
+            });
+        }
         let Some(target_oid) = self.rev_parse(target) else {
             if crate::log::is_dry_run() {
                 return self.capture(
@@ -1191,20 +1210,25 @@ mod tests {
         assert!(repo.gitlinks("HEAD~1").is_empty());
     }
 
-    /// A sibling checkout can leave `update` with no checkout holding the branch,
-    /// so it plans a ref advance. A dry run skips the fetch that would create the
-    /// tracking ref; planning must still succeed, against the ref name, without
-    /// moving anything. A real run keeps the hard error for a target that does not
-    /// exist.
+    /// A branch no checkout holds advances as a ref. A dry run skips the fetch
+    /// that would create the tracking ref; planning must still succeed, against
+    /// the ref name, without moving anything. A real run keeps the hard error for
+    /// a target that does not exist.
     #[test]
     fn a_dry_run_plans_a_fast_forward_whose_target_the_skipped_fetch_would_create() {
         let _guard = crate::log::test_flag_guard();
         let dir = init_repo();
         let repo = Repository::new(dir.path());
-        let before = repo.rev_parse("main").unwrap();
+        Command::new("git")
+            .args(["branch", "side"])
+            .current_dir(dir.path())
+            .force_run()
+            .exec()
+            .unwrap();
+        let before = repo.rev_parse("side").unwrap();
 
         crate::log::init(false, true);
-        let planned = repo.fast_forward_branch("main", "origin/main");
+        let planned = repo.fast_forward_branch("side", "origin/side");
         crate::log::init(false, false);
 
         assert!(
@@ -1212,16 +1236,53 @@ mod tests {
             "a dry run must not require the fetched ref: {planned:?}"
         );
         assert_eq!(
-            repo.rev_parse("main").as_deref(),
+            repo.rev_parse("side").as_deref(),
             Some(before.as_str()),
             "a dry run must not move the branch"
         );
 
-        let err = repo.fast_forward_branch("main", "origin/main").unwrap_err();
+        let err = repo.fast_forward_branch("side", "origin/side").unwrap_err();
         assert!(
             err.to_string().contains("does not name a commit"),
             "a real run must still refuse an unresolvable target: {err}"
         );
+    }
+
+    /// A branch checked out anywhere — the main worktree or a linked one — is
+    /// never moved as a bare ref, real run or dry run: the checkout holding it
+    /// would be left with HEAD ahead of its index and files.
+    #[test]
+    fn a_fast_forward_refuses_a_branch_a_worktree_has_checked_out() {
+        let _guard = crate::log::test_flag_guard();
+        let dir = init_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let held = linked.path().join("held");
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args.iter().copied())
+                .current_dir(dir.path())
+                .force_run()
+                .exec()
+                .unwrap();
+        };
+        run(&["commit", "--allow-empty", "-m", "next"]);
+        run(&["branch", "ahead"]);
+        run(&["reset", "--hard", "HEAD~1"]);
+        run(&["worktree", "add", "-b", "other", held.to_str().unwrap()]);
+        let repo = Repository::new(dir.path());
+
+        for dry_run in [false, true] {
+            crate::log::init(false, dry_run);
+            for branch in ["main", "other"] {
+                let err = repo.fast_forward_branch(branch, "ahead").unwrap_err();
+                assert!(
+                    err.to_string().contains("is checked out at"),
+                    "{branch} (dry run {dry_run}): {err}"
+                );
+            }
+        }
+        crate::log::init(false, false);
+        assert_ne!(repo.rev_parse("main"), repo.rev_parse("ahead"));
     }
 
     #[test]

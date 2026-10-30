@@ -289,6 +289,26 @@ pub fn checkout_holding(
     Ok(None)
 }
 
+/// The live checkout of `repo`'s repository that has `branch` checked out,
+/// whichever declared repo placed it.
+///
+/// Git lets one checkout hold a branch, so this is a fact about the repository,
+/// and it is the question to ask before *moving* a branch: a ref advanced under
+/// the checkout holding it leaves that checkout's HEAD ahead of its index and
+/// files. [`checkout_holding`] answers a different question — which checkout
+/// this repo builds from — and declines a worktree a sibling repo places.
+pub fn branch_checkout(
+    ws: &Workspace,
+    project: &Project,
+    repo: &Repo,
+    branch: &str,
+) -> Result<Option<PathBuf>> {
+    Ok(repository_worktree_for_branch(
+        &repository_of(ws, project, repo)?,
+        branch,
+    ))
+}
+
 /// The checkout `repo`'s working-tree work runs in when no branch selects one:
 /// its own working tree, or a bare-backed repo's stand-in for the main worktree
 /// it does not have. `None` only when the repo has no checkout at all.

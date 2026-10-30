@@ -914,6 +914,112 @@ anchor = "main"
     );
 }
 
+/// The checkout that has `main_branch` checked out is advanced *through* a
+/// fast-forward merge, whichever declared repo placed it. Two repos sharing one
+/// bare host is amdllpc's layout: when main's branch sits in the checkout the
+/// sibling places, moving the ref under it instead would leave that checkout
+/// with HEAD ahead of its index and files.
+#[test]
+fn update_advances_main_in_the_checkout_a_sibling_repo_places() {
+    let fx = Fixture::new();
+    let upstream = Fixture::seed(&fx.root, "up-shared", &["top.c"]);
+    let bare = fx.path("shared.git");
+    let trees = fx.path("shared");
+    std::fs::write(
+        fx.config.join("shared.toml"),
+        format!(
+            r#"
+[project]
+[repos.main]
+path = "{bare}"
+main_branch = "main"
+branch_strategy = "hybrid"
+worktree_dir = "{trees}/work"
+bootstrap_worktree_dir = "main"
+[repos.main.remotes]
+origin = "{upstream}"
+[repos.review]
+path = "{bare}"
+main_branch = "main"
+branch_strategy = "in-place"
+worktree_dir = "{trees}/review"
+"#,
+            bare = bare.display(),
+            trees = trees.display(),
+            upstream = upstream.display(),
+        ),
+    )
+    .unwrap();
+    fx.ok(&["update", "shared"]);
+
+    let bootstrap = trees.join("main");
+    let review = trees.join("review");
+    git(&bootstrap, &["switch", "-q", "-c", "parked"]);
+    git(
+        &bare,
+        &["worktree", "add", "-q", review.to_str().unwrap(), "main"],
+    );
+    std::fs::write(upstream.join("top.c"), "v2").unwrap();
+    git(&upstream, &["commit", "-q", "-am", "v2"]);
+
+    fx.ok(&["update", "shared"]);
+    assert_eq!(
+        git_out(&review, &["rev-parse", "HEAD"]),
+        git_out(&upstream, &["rev-parse", "main"])
+    );
+    assert_eq!(std::fs::read_to_string(review.join("top.c")).unwrap(), "v2");
+    assert_eq!(git_out(&review, &["status", "--porcelain"]), "");
+}
+
+/// A worktree moved off the `worktree_dir` template still holds its branch, so
+/// it is still the checkout `update` advances main through.
+#[test]
+fn update_advances_main_in_a_worktree_moved_off_its_template() {
+    let fx = Fixture::new();
+    let upstream = Fixture::seed(&fx.root, "up-moved", &["top.c"]);
+    let bare = fx.path("moved.git");
+    std::fs::write(
+        fx.config.join("moved.toml"),
+        format!(
+            r#"
+[project]
+[repos.main]
+path = "{bare}"
+main_branch = "main"
+branch_strategy = "worktree"
+worktree_dir = "{root}/moved.wt/{{{{branch.slug}}}}"
+[repos.main.remotes]
+origin = "{upstream}"
+"#,
+            bare = bare.display(),
+            root = fx.root.display(),
+            upstream = upstream.display(),
+        ),
+    )
+    .unwrap();
+    fx.ok(&["update", "moved"]);
+
+    let elsewhere = fx.path("elsewhere-main");
+    git(
+        &bare,
+        &[
+            "worktree",
+            "move",
+            fx.path("moved.wt/main").to_str().unwrap(),
+            elsewhere.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(upstream.join("top.c"), "v2").unwrap();
+    git(&upstream, &["commit", "-q", "-am", "v2"]);
+
+    fx.ok(&["update", "moved"]);
+    assert_eq!(
+        std::fs::read_to_string(elsewhere.join("top.c")).unwrap(),
+        "v2"
+    );
+    assert_eq!(git_out(&elsewhere, &["status", "--porcelain"]), "");
+}
+
 /// A `skip`ped submodule must never be **materialised** on the way to being
 /// masked. A bare host has no checkout for `git worktree add` to copy sparse
 /// patterns from, so its bootstrap starts out full — and a mask applied only
