@@ -8,6 +8,7 @@ members = [
     "crates/wits-crypto",
     "crates/wits",
     "crates/wits-scaffold",
+    "crates/wits-gputest",
 ]
 
 [workspace.package]
@@ -41,6 +42,11 @@ base64 = "0.22"
 rand = "0.8"
 toml = "0.8"
 tempfile = "3"
+# The gputest archive: one tar.zst per run. `tar` writes the members and
+# reads back `run.toml` before the CSVs; `zstd` is the codec the store is
+# defined in, not a per-run choice.
+tar = "0.4"
+zstd = "0.13"
 # The one template engine in the tree. `wits_core::jinja` is the language;
 # `wits-project` resolves config against it (lazy dotted paths over a context
 # whose values are themselves templates) and the scaffold plugin adds its own

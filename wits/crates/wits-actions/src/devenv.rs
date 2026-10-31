@@ -116,7 +116,11 @@ pub fn compose(
 /// The difference between the environment the program would inherit (`caller`)
 /// and the composed one: what to set, what to remove. Both sides are ordered
 /// maps, so the lists are stable.
-fn overlay_between(caller: &Env, env: &Env) -> Overlay {
+///
+/// Public because a plugin that extends a composed devenv with further layers
+/// must keep the same rule: the final overlay is always relative to the
+/// scrubbed caller, not to an intermediate environment.
+pub fn overlay_between(caller: &Env, env: &Env) -> Overlay {
     let mut overlay = Overlay::default();
     for (name, value) in env {
         if caller.get(name) != Some(value) {

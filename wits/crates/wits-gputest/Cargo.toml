@@ -1,0 +1,30 @@
+[package]
+name = "wits-gputest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Run GPU test suites against a wits build, compare, and archive the evidence"
+
+[[bin]]
+name = "wits-gputest"
+path = "src/main.rs"
+
+[dependencies]
+wits-core.workspace = true
+wits-project.workspace = true
+wits-actions.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tar.workspace = true
+zstd.workspace = true
+regex.workspace = true
+minijinja.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

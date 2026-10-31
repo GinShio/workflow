@@ -120,6 +120,7 @@ endforeach
 # mirroring `wits` above.
 plugins = [
   'wits-scaffold',
+  'wits-gputest',
 ]
 foreach plugin : plugins
   custom_target(

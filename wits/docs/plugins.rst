@@ -83,6 +83,7 @@ is one-way; a plugin should pick the lowest layer that answers its question:
    * - ``wits-actions``
      - The ``build``/``update``/``devenv`` actions, for a plugin that drives a
        project's lifecycle in process rather than by parsing CLI output.
+       ``wits-gputest`` uses ``compose`` and ``build`` this way.
    * - ``wits-crypto``
      - The authenticated-encryption packet format and KDFs.
    * - ``wits``

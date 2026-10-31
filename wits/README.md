@@ -82,6 +82,7 @@ Shipped in this workspace:
 | Plugin | Purpose |
 |---|---|
 | [`wits scaffold`](docs/scaffold.rst) | Register a new Vulkan/SPIR-V extension everywhere a tree needs it, from the specification that defines it |
+| [`wits gputest`](docs/commands/gputest.rst) | Run a GPU test suite against a wits build, compare it with the previous build, and archive the evidence |
 
 ## Global flags
 

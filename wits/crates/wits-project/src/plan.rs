@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::context::{self, Ctx};
-use crate::decl::{BuildSystem, DevenvOp};
+use crate::decl::{BuildSystem, DevenvDecl, DevenvOp};
 use crate::paths::{resolve_paths, PathInput, ResolvedPaths};
 use crate::presets;
 use crate::profile::Profile;
@@ -99,6 +99,27 @@ impl DevenvEntry {
             }
         };
         env.insert(key, joined);
+    }
+}
+
+/// Resolve a `devenv` declaration literally, with no template context.
+///
+/// The project registry's own `devenv` path renders every value through the plan
+/// context; a consumer that has no template language (the gputest plugin) still
+/// wants the declaration vocabulary — set/unset/prepend/append, the separator,
+/// and the list join — without reimplementing it. A string that looks like a
+/// template is passed through as written.
+pub fn literal_entry(name: &str, decl: &DevenvDecl) -> DevenvEntry {
+    let parts: Vec<String> = decl
+        .values
+        .iter()
+        .map(|part| context::value_to_string(&context::from_toml(part)))
+        .collect();
+    DevenvEntry {
+        name: name.to_owned(),
+        op: decl.op,
+        value: parts.join(&decl.separator),
+        separator: decl.separator.clone(),
     }
 }
 
@@ -1554,6 +1575,36 @@ anchor = "main"
         assert_eq!(get("FRESH"), "/only");
         assert_eq!(get("EMPTY"), "/e:");
         assert_eq!(get("SET"), "v");
+    }
+
+    /// A literal entry keeps the declaration vocabulary without a template
+    /// context: the parts join with the separator, and the operation survives.
+    #[test]
+    fn a_literal_entry_joins_parts_and_keeps_the_operation() {
+        let decl = DevenvDecl {
+            op: DevenvOp::Prepend,
+            values: vec![
+                toml::Value::String("a".into()),
+                toml::Value::String("b".into()),
+            ],
+            separator: ":".into(),
+        };
+        let entry = literal_entry("P", &decl);
+        assert_eq!(entry.name, "P");
+        assert_eq!(entry.op, DevenvOp::Prepend);
+        assert_eq!(entry.value, "a:b");
+        assert_eq!(entry.separator, ":");
+
+        let unset = literal_entry(
+            "GONE",
+            &DevenvDecl {
+                op: DevenvOp::Unset,
+                values: Vec::new(),
+                separator: ":".into(),
+            },
+        );
+        assert_eq!(unset.op, DevenvOp::Unset);
+        assert_eq!(unset.value, "");
     }
 
     /// The anchor supplies output defaults, but a focus may name its own output

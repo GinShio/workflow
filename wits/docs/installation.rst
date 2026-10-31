@@ -3,10 +3,10 @@
 Installation
 ============
 
-``wits`` is a Cargo workspace: the ``wits`` binary, the ``wits-scaffold`` plugin,
-and the libraries beneath them (``wits-core``, ``wits-project``, ``wits-build``,
-``wits-actions``, and the ``wits-crypto`` leaf). Two build systems work together,
-by design.
+``wits`` is a Cargo workspace: the ``wits`` binary, the ``wits-scaffold`` and
+``wits-gputest`` plugins, and the libraries beneath them (``wits-core``,
+``wits-project``, ``wits-build``, ``wits-actions``, and the ``wits-crypto``
+leaf). Two build systems work together, by design.
 **Meson** owns the build and install orchestration; **cargo** does the actual
 Rust compilation underneath. That split is not an accident. Some dependencies
 ship native-code build scripts (notably ``ring``, pulled in by the forge's HTTPS
@@ -79,10 +79,10 @@ Cargo alone is enough, no Meson required::
    cargo build --release  # …or at target/release/wits
    cargo test             # unit and integration tests
 
-There is also the plugin crate ``wits-scaffold``, built the same way (binary
-beside ``wits`` in the same profile directory). Put the profile directory on
-your ``$PATH`` and both the umbrella and the plugin work without any install
-step.
+There are also the plugin crates ``wits-scaffold`` and ``wits-gputest``, built
+the same way (binaries beside ``wits`` in the same profile directory). Put the
+profile directory on your ``$PATH`` and the umbrella and the plugins work
+without any install step.
 
 What ``meson install`` produces
 -------------------------------
@@ -90,7 +90,7 @@ What ``meson install`` produces
   * the ``wits`` binary;
   * one ``wits-<name>`` **applet symlink** per built-in subcommand, pointing at
     ``wits``;
-  * the ``wits-scaffold`` plugin binary;
+  * the ``wits-scaffold`` and ``wits-gputest`` plugin binaries;
   * the shell completion scripts, ``<datadir>/fish/vendor_completions.d/wits.fish``
     and ``<datadir>/bash-completion/completions/wits.bash``. They are generated
     by the binary just built, so reinstalling is what brings them in step with

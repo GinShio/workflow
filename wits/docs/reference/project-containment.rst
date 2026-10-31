@@ -28,6 +28,7 @@ The crate graph
 
    wits-crypto                  (leaf: no wits-* crate)
    wits-scaffold (bin)          (core)
+   wits-gputest (bin)           (core, project, actions)
 
 .. list-table::
    :header-rows: 1
@@ -67,6 +68,10 @@ The crate graph
      - the Vulkan/SPIR-V scaffolding plugin
      - ``wits-core`` and external crates
      - ``wits-project``, ``wits-build``, ``wits-actions``, ``wits-crypto``
+   * - ``wits-gputest``
+     - the GPU test-run plugin: config, kinds, identity, archives
+     - ``wits-core``, ``wits-project``, ``wits-actions`` and external crates
+     - ``wits``, ``wits-crypto``
 
 The rule behind the graph is one sentence: **a crate may depend only on the
 layer below the question it answers.** The dependency direction is what keeps a
@@ -166,7 +171,10 @@ Comments are not code and are skipped. That test is part of ``cargo test
 ``wits-build`` does not name ``wits-core`` in its normal dependencies. It
 receives project types and implements the core-owned seam. ``wits-actions`` may
 use all three lower layers. ``wits`` may use all of them. ``wits-scaffold``
-depends, among ``wits`` crates, on ``wits-core`` only.
+depends, among ``wits`` crates, on ``wits-core`` only. ``wits-gputest`` is a
+plugin: it uses ``wits-actions`` for the in-process build and devenv actions,
+``wits-project`` for the registry and resolution, and ``wits-core`` for the
+floor; it does not depend on the ``wits`` CLI.
 
 ``wits-crypto`` is a leaf: it names no other ``wits`` crate and is used only by
 ``transcrypt`` and the dotfiles commands.

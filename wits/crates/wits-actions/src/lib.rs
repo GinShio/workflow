@@ -20,7 +20,7 @@ pub mod devenv;
 pub mod update;
 
 pub use build::{build, BuildOptions, BuildRequest};
-pub use devenv::{capture, compose, run, DevenvRequest, Overlay};
+pub use devenv::{capture, compose, overlay_between, run, DevenvRequest, Overlay};
 pub use update::{update, UpdateOptions};
 // `BuildMode`'s source of truth is `wits-build`; re-exported so a consumer of
 // the actions can name the mode without adding the backends as a direct

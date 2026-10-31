@@ -51,13 +51,15 @@ Command         What it does
                 configurations.
 ==============  =============================================================
 
-One *plugin* ships in the same workspace:
+Two *plugins* ship in the same workspace:
 
 ==============  =============================================================
 Plugin          What it does
 ==============  =============================================================
 ``scaffold``    Copy facts from the Vulkan and SPIR-V specifications into the
                 repeated boilerplate a source tree expects.
+``gputest``     Run a GPU test suite against a wits build, compare it with the
+                previous build, and archive the evidence.
 ==============  =============================================================
 
 Anything else is a plugin of your own: ``wits anything`` runs a ``wits-anything``
@@ -87,6 +89,7 @@ Start with one of these paths, whichever matches what you came for:
 * **A monorepo whose build flags you keep retyping** — :doc:`commands/project`.
 * **Dotfiles that need different content per machine** — :doc:`commands/dotfiles`.
 * **A new Vulkan extension that has to appear in seven places** — :doc:`scaffold`.
+* **"Did the driver regress since last night?"** — :doc:`commands/gputest`.
 * **The shared floor** — the mechanism chapter, :doc:`concepts`, explains the
   floor every command stands on: process, git, config, crypto, log, template,
   time, and host facts.
@@ -113,6 +116,7 @@ are written in the ``NAME`` form and also appear in the references as
    commands/project
    commands/build
    commands/devenv
+   commands/gputest
    commands/update
    commands/dotfiles
    plugins
