@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+# The projects' own install hooks stage the trees; gputest only derives the
+# project list from the suites, builds release on each project's main branch
+# and writes the install stamps a run checks.
+wits gputest install

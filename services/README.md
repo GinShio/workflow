@@ -150,7 +150,7 @@ running the very unit it was written to stop.
 | | `direct` | The same, before the proxy is set. |
 | | `install` | Of those, the ones whose release build is installed to its own install directory. |
 | | `install-local` | Of those, the ones whose release build is installed into `~/.local`; it wins over `install`. |
-| `gpu-test-run` | `drivers` | `<driver>,<suite>` pairs to test. Each is tested only when its driver's libraries differ from the ones it was last tested with. |
+| `gpu-test-run` | `cases` | The gputest cases this machine runs, by name (`radv-vk lvp-vk`). A case whose identity is unchanged since its last completed run is skipped by `wits gputest run --if-changed`. |
 
 ## What a run reports
 

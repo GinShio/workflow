@@ -1,5 +1,6 @@
-# Off until the harness it drives, `gputest.py` at the repository root, exists.
+# The install act for the suites and runners the gputest config declares; the
+# run unit never installs. The installed trees live under $XDG_RUNTIME_DIR, so
+# they do not survive a session: a schedule record would outlive its tree and
+# skip the reinstall the next session needs, which is why there is no `every`.
 runs: autostart
 when: gpu:any
-optional: python3
-enable: no

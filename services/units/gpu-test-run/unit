@@ -1,8 +1,9 @@
-# Off until the harness it drives, `gputest.py` at the repository root, exists.
+# The nightly run, against the suites `gpu-test-install` staged. `every` keeps
+# a full dEQP suite (9 CPU-hours on the reference machine) to one night in
+# three; a driver whose content is unchanged since its last completed run is
+# skipped by --if-changed either way.
 runs: nightly
 every: 3d
 power: ac
 when: gpu:any
-optional: python3
-enable: no
-params: drivers
+params: cases

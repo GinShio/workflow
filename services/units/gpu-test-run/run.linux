@@ -1,0 +1,44 @@
+#!/bin/sh
+set -eu
+
+# shellcheck disable=SC1091
+. "$SERVICES_ROOT/scripts/detect.sh"
+
+# Case names the gputest config declares; the services declaration decides
+# which of them this machine runs.
+cases=${SERVICES_PARAM_CASES:-}
+if [ -z "$cases" ]; then
+    echo 'gpu-test-run: no cases declared for this machine'
+    exit 0
+fi
+
+# The cap `terminal` puts around its tmux session: 75% of RAM, at least 4G, so
+# a runaway suite cannot take the session down with it.
+mem_total=$(detect_memory_mb)
+_mem_gb=$(( mem_total / 1024 ))
+_target_gb=$(( _mem_gb * 3 / 4 ))
+[ "$_target_gb" -ge 4 ] || _target_gb=4
+
+# --collect drops a stale scope left by a killed run; a live one still refuses
+# a second run of the same case set.
+status=0
+# shellcheck disable=SC2086 # the case list is space-separated on purpose
+systemd-run --user --scope --collect \
+    -p MemoryMax="${_target_gb}G" \
+    -p MemorySwapMax=0 \
+    -p TasksMax=512 \
+    -p OOMPolicy=continue \
+    --unit=gpu-test-run \
+    -- wits gputest run $cases --if-changed || status=$?
+
+# Retention, once the evidence is written: only a run writes the store, so this
+# cannot race a writer from another unit. A regression's verdict outranks a
+# prune failure.
+prune_status=0
+wits gputest prune || prune_status=$?
+if [ "$prune_status" -ne 0 ]; then
+    echo "gpu-test-run: prune failed (exit $prune_status)" >&2
+    [ "$status" -ne 0 ] || status=$prune_status
+fi
+
+exit "$status"
