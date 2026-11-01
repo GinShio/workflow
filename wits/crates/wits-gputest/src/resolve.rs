@@ -56,6 +56,7 @@ pub struct Components {
     pub driver_config: String,
     pub suite: String,
     pub runner: String,
+    pub argv: String,
 }
 
 #[derive(Debug, Clone)]
@@ -171,7 +172,7 @@ pub fn prepare(
     } else if let Some(branch) = flags.branch.clone().or_else(|| driver.branch.clone()) {
         Some(branch)
     } else {
-        Some(focus_main_branch(driver_project)?)
+        Some(focus_main_branch(driver_project, flags.focus.as_deref())?)
     };
 
     let identity = Identity {
@@ -203,18 +204,24 @@ pub fn prepare(
             OsString::from(select),
         );
     }
-    for (_, entry) in &driver.env {
+    for entry in &driver.env {
         env::apply_entry(&mut composed_env, entry);
     }
-    for (_, entry) in &suite.env {
+    for entry in &suite.env {
         env::apply_entry(&mut composed_env, entry);
     }
-    for (_, entry) in &case.env {
+    for entry in &case.env {
         env::apply_entry(&mut composed_env, entry);
     }
     let overlay = overlay_between(caller, &composed_env);
 
-    suite.kind.check_driver(&composed_env)?;
+    suite.shape.check_driver(&composed_env).with_context(|| {
+        format!(
+            "case '{case_name}': driver '{}' (project '{}'); if the driver's ICD is not \
+             installed, run `wits build '{}' --install`",
+            driver.name, driver.project, driver.project
+        )
+    })?;
 
     let suite_root = install_root(ws, suite_project)?;
     let runner_root = install_root(ws, runner_project)?;
@@ -222,7 +229,7 @@ pub fn prepare(
     let suite_stamp = stamp::read(&suite_root, &suite_project.key())?;
     let runner_stamp = stamp::read(&runner_root, &runner_project.key())?;
 
-    let runner_bin = runner_root.join(suite.kind.runner_bin());
+    let runner_bin = runner_root.join(suite.shape.runner_bin());
     if !runner_bin.is_file() {
         bail!(
             "suite '{}': runner binary {} is missing; install with `wits gputest install {}`",
@@ -238,7 +245,7 @@ pub fn prepare(
             runner_bin.display()
         );
     }
-    suite.kind.check_assets(&suite, &suite_root)?;
+    suite.shape.check_assets(&suite, &suite_root)?;
 
     let jobs = suite.jobs.number();
     if jobs == 0 {
@@ -252,8 +259,7 @@ pub fn prepare(
         suite: &suite,
         jobs,
     };
-    let identity_argv = suite.kind.identity_argv(&run_ctx)?;
-    let argv_hash = content::hash_argv(&identity_argv);
+    let identity_argv = suite.shape.identity_argv(&run_ctx)?;
 
     let components = Components {
         driver_icd: content::hash_set(&icd::component(&composed_env, cache)?)?,
@@ -261,6 +267,7 @@ pub fn prepare(
         driver_config: hash_config(&composed_env, cache)?,
         suite: suite_stamp.hash.clone(),
         runner: runner_stamp.hash.clone(),
+        argv: content::hash_argv(&identity_argv),
     };
     let identity = content::hash_identity(&[
         ("suite", components.suite.clone()),
@@ -268,7 +275,7 @@ pub fn prepare(
         ("driver.icd", components.driver_icd.clone()),
         ("driver.libs", components.driver_libs.clone()),
         ("driver.config", components.driver_config.clone()),
-        ("argv", argv_hash),
+        ("argv", components.argv.clone()),
         ("env", content::hash_overlay(&overlay)),
     ]);
 
@@ -323,20 +330,45 @@ pub fn prepare(
     })
 }
 
-/// The focus repo's `main_branch`: the default branch a driver run resolves
-/// when neither the driver table nor the command line names one.
-pub fn focus_main_branch(project: &Project) -> Result<String> {
-    let focus = project.focus_name(None);
-    project
-        .repo(focus)
-        .and_then(|repo| repo.decl().main_branch.clone())
-        .with_context(|| {
-            format!(
-                "project '{}' has no main_branch on focus repo '{focus}'; \
-                 pass --branch or declare the branch",
-                project.key()
-            )
-        })
+/// The repo that carries the focus's branch identity: the focus itself when it
+/// has its own git, else its anchor. A subtree has no `main_branch` of its own,
+/// so the branch comes from the nearest own-git repo.
+fn identity_main_branch(
+    project: &Project,
+    focus: Option<&str>,
+) -> Result<(String, Option<String>)> {
+    let flag = focus.is_some();
+    let focus = project.focus_name(focus);
+    // `resolve_paths` validates the focus too, but the branch is resolved first;
+    // name the bad focus here rather than blame its missing `main_branch`.
+    if project.repo(focus).is_none() {
+        bail!(
+            "project '{}' has no repo '{focus}'{}",
+            project.key(),
+            if flag { " (--focus)" } else { "" }
+        );
+    }
+    let name = identity_repo(project, focus).unwrap_or_else(|| focus.to_owned());
+    let main = project
+        .repo(&name)
+        .and_then(|repo| repo.decl().main_branch.clone());
+    Ok((name, main))
+}
+
+/// The default branch a driver run resolves when neither the driver table nor
+/// the command line names one: the identity repo's `main_branch` for the
+/// *resolved* focus (`--focus`, else the project's). The resolved focus is
+/// what `resolve_paths`/`compose` build, so the branch and the build cannot
+/// disagree.
+pub fn focus_main_branch(project: &Project, focus: Option<&str>) -> Result<String> {
+    let (name, main) = identity_main_branch(project, focus)?;
+    main.with_context(|| {
+        format!(
+            "project '{}' has no main_branch on repo '{name}'; \
+             pass --branch or declare the branch",
+            project.key()
+        )
+    })
 }
 
 /// The suite and runner roots must be disjoint. Each install stamp hashes its
@@ -370,18 +402,14 @@ pub fn ensure_separate_roots(suite_root: &Path, runner_root: &Path) -> Result<()
 /// own-git repo from the focus, so a subtree focus still resolves from the
 /// checkout that carries the branch.
 pub fn project_main_branch(project: &Project) -> Result<String> {
-    let focus = project.focus_name(None);
-    let name = identity_repo(project, focus).unwrap_or_else(|| focus.to_owned());
-    project
-        .repo(&name)
-        .and_then(|repo| repo.decl().main_branch.clone())
-        .with_context(|| {
-            format!(
-                "project '{}' has no main_branch on repo '{name}'; \
-                 gputest installs the main branch, so it must be declared",
-                project.key()
-            )
-        })
+    let (name, main) = identity_main_branch(project, None)?;
+    main.with_context(|| {
+        format!(
+            "project '{}' has no main_branch on repo '{name}'; \
+             gputest installs the main branch, so it must be declared",
+            project.key()
+        )
+    })
 }
 
 /// The `install_dir` of a suite or runner project, resolved with `release` on
@@ -666,6 +694,35 @@ mod tests {
             root: root.to_path_buf(),
             archive_days: 360,
         }
+    }
+
+    #[test]
+    fn a_focus_override_takes_its_identity_repo_main_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        fs::create_dir_all(&main).unwrap();
+        fs::write(
+            dir.path().join("p.toml"),
+            format!(
+                "[project]\n[repos.main]\npath = \"{}\"\nmain_branch = \"main\"\n\n\
+                 [repos.engine]\npath = \"third_party/engine\"\nmain_branch = \"stable\"\n\
+                 anchor = \"main\"\n",
+                main.display()
+            ),
+        )
+        .unwrap();
+        let ws = Workspace::load_from(dir.path()).unwrap();
+        let project = ws.project("p").unwrap();
+
+        // No override: the project's focus (and therefore `main`).
+        assert_eq!(focus_main_branch(project, None).unwrap(), "main");
+        // The focus's own identity repo has a different `main_branch`.
+        assert_eq!(
+            focus_main_branch(project, Some("engine")).unwrap(),
+            "stable"
+        );
+        // `install` never takes a focus override.
+        assert_eq!(project_main_branch(project).unwrap(), "main");
     }
 
     #[test]

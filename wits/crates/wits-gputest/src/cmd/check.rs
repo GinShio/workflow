@@ -92,7 +92,7 @@ fn check_suite_assets(
         problems.push(format!("suite '{}': {err:#}", suite.name));
         return;
     }
-    if let Err(err) = suite.kind.check_assets(suite, &root) {
+    if let Err(err) = suite.shape.check_assets(suite, &root) {
         problems.push(format!("suite '{}': {err:#}", suite.name));
     }
 }
@@ -109,7 +109,7 @@ fn check_runner(ws: &Workspace, project: &Project, suite: &Suite, problems: &mut
         problems.push(format!("suite '{}': runner: {err:#}", suite.name));
         return;
     }
-    let binary = root.join(suite.kind.runner_bin());
+    let binary = root.join(suite.shape.runner_bin());
     if !binary.is_file() {
         problems.push(format!(
             "suite '{}': runner binary {} is missing; install with `wits gputest install {}`",

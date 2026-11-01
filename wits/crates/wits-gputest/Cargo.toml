@@ -25,6 +25,3 @@ tar.workspace = true
 zstd.workspace = true
 regex.workspace = true
 minijinja.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true

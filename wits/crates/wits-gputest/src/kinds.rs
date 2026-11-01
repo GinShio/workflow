@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use wits_actions::Env;
 
-use crate::config::Suite;
+use crate::config::{DeqpDecl, PiglitDecl, Suite};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -33,24 +33,48 @@ impl Kind {
         }
     }
 
-    /// The binary the runner project installs for this shape.
+    /// The binary the runner project installs for this shape. Kept on `Kind`
+    /// because `install` groups runner projects by kind before any suite shape
+    /// is involved.
     pub fn runner_bin(self) -> &'static str {
         match self {
             Kind::Deqp => "deqp-runner",
             Kind::Piglit => "piglit-runner",
         }
     }
+}
+
+/// The resolved per-kind declaration. The variant *is* the kind's data, so a
+/// suite cannot claim one kind while carrying another's table: the invariant
+/// the loader enforces is the type's shape here.
+#[derive(Debug, Clone)]
+pub enum SuiteShape {
+    Deqp(DeqpDecl),
+    Piglit(PiglitDecl),
+}
+
+impl SuiteShape {
+    pub fn kind(&self) -> Kind {
+        match self {
+            SuiteShape::Deqp(_) => Kind::Deqp,
+            SuiteShape::Piglit(_) => Kind::Piglit,
+        }
+    }
+
+    pub fn runner_bin(&self) -> &'static str {
+        self.kind().runner_bin()
+    }
 
     /// The complete command line for one run. Every path is absolute; the args
     /// are a list, never a shell string, so nothing is word-split or quoted.
-    pub fn argv(self, ctx: &RunContext<'_>) -> Result<Vec<String>> {
+    pub fn argv(&self, ctx: &RunContext<'_>) -> Result<Vec<String>> {
         let runner = path_text(&ctx.runner_root.join(self.runner_bin()), "runner binary")?;
         let mut argv = vec![runner, "run".to_owned()];
         argv.push("--output".to_owned());
         argv.push(path_text(ctx.run_dir, "run directory")?);
 
         match self {
-            Kind::Deqp => {
+            SuiteShape::Deqp(_) => {
                 for entry in &ctx.suite.case_list {
                     argv.push("--caselist".to_owned());
                     argv.push(path_text(
@@ -59,12 +83,7 @@ impl Kind {
                     )?);
                 }
             }
-            Kind::Piglit => {
-                let piglit = ctx
-                    .suite
-                    .piglit
-                    .as_ref()
-                    .expect("a piglit suite has its piglit table");
+            SuiteShape::Piglit(piglit) => {
                 argv.push("--piglit-folder".to_owned());
                 argv.push(path_text(
                     &ctx.suite_root.join(&piglit.folder),
@@ -84,29 +103,27 @@ impl Kind {
         argv.push("--timeout".to_owned());
         argv.push(ctx.suite.timeout.to_string());
 
-        if self == Kind::Deqp {
-            let deqp = ctx
-                .suite
-                .deqp
-                .as_ref()
-                .expect("a deqp suite has its deqp table");
-            if let Some(n) = deqp.tests_per_group {
-                argv.push("--tests-per-group".to_owned());
-                argv.push(n.to_string());
+        match self {
+            SuiteShape::Deqp(deqp) => {
+                if let Some(n) = deqp.tests_per_group {
+                    argv.push("--tests-per-group".to_owned());
+                    argv.push(n.to_string());
+                }
+                argv.push("--deqp".to_owned());
+                argv.push(path_text(
+                    &ctx.suite_root.join(&deqp.exe),
+                    "dEQP executable",
+                )?);
+                argv.push("--".to_owned());
+                argv.extend(deqp.args.iter().cloned());
+                if let Some(waiver) = &deqp.waiver {
+                    argv.push(format!(
+                        "--deqp-waiver-file={}",
+                        path_text(&ctx.suite_root.join(waiver), "waiver")?
+                    ));
+                }
             }
-            argv.push("--deqp".to_owned());
-            argv.push(path_text(
-                &ctx.suite_root.join(&deqp.exe),
-                "dEQP executable",
-            )?);
-            argv.push("--".to_owned());
-            argv.extend(deqp.args.iter().cloned());
-            if let Some(waiver) = &deqp.waiver {
-                argv.push(format!(
-                    "--deqp-waiver-file={}",
-                    path_text(&ctx.suite_root.join(waiver), "waiver")?
-                ));
-            }
+            SuiteShape::Piglit(_) => {}
         }
 
         Ok(argv)
@@ -115,7 +132,7 @@ impl Kind {
     /// The argv that participates in identity: the run directory replaced by a
     /// marker and the baseline omitted, so the first run and a rerun of the
     /// same build hash the same command line.
-    pub fn identity_argv(self, ctx: &RunContext<'_>) -> Result<Vec<String>> {
+    pub fn identity_argv(&self, ctx: &RunContext<'_>) -> Result<Vec<String>> {
         let ctx = RunContext {
             run_dir: Path::new(crate::content::RUN_DIR_MARKER),
             baseline: None,
@@ -127,19 +144,19 @@ impl Kind {
     /// Verify the installed layout the kind needs. The caller has already
     /// checked the suite root and the install stamp; this is the kind's own
     /// asset set.
-    pub fn check_assets(self, suite: &Suite, suite_root: &Path) -> Result<()> {
+    pub fn check_assets(&self, suite: &Suite, suite_root: &Path) -> Result<()> {
         match self {
-            Kind::Deqp => check_deqp_assets(suite, suite_root),
-            Kind::Piglit => check_piglit_assets(suite, suite_root),
+            SuiteShape::Deqp(deqp) => check_deqp_assets(suite, deqp, suite_root),
+            SuiteShape::Piglit(piglit) => check_piglit_assets(suite, piglit, suite_root),
         }
     }
 
     /// The API-specific guard. dEQP Vulkan must load exactly one selected ICD;
     /// Piglit GL needs no ICD and may select zink through its own environment.
-    pub fn check_driver(self, env: &Env) -> Result<()> {
+    pub fn check_driver(&self, env: &Env) -> Result<()> {
         match self {
-            Kind::Deqp => crate::icd::guard(env).map(|_| ()),
-            Kind::Piglit => Ok(()),
+            SuiteShape::Deqp(_) => crate::icd::guard(env).map(|_| ()),
+            SuiteShape::Piglit(_) => Ok(()),
         }
     }
 }
@@ -156,11 +173,7 @@ pub struct RunContext<'a> {
     pub jobs: u32,
 }
 
-fn check_deqp_assets(suite: &Suite, suite_root: &Path) -> Result<()> {
-    let deqp = suite
-        .deqp
-        .as_ref()
-        .expect("a deqp suite has its deqp table");
+fn check_deqp_assets(suite: &Suite, deqp: &DeqpDecl, suite_root: &Path) -> Result<()> {
     let exe = suite_root.join(&deqp.exe);
     if !exe.is_file() {
         bail!(
@@ -232,11 +245,7 @@ fn check_deqp_assets(suite: &Suite, suite_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn check_piglit_assets(suite: &Suite, suite_root: &Path) -> Result<()> {
-    let piglit = suite
-        .piglit
-        .as_ref()
-        .expect("a piglit suite has its piglit table");
+fn check_piglit_assets(suite: &Suite, piglit: &PiglitDecl, suite_root: &Path) -> Result<()> {
     let folder = suite_root.join(&piglit.folder);
     if !folder.is_dir() {
         bail!(
@@ -329,9 +338,20 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     fn suite(kind: Kind) -> Suite {
+        let shape = match kind {
+            Kind::Deqp => SuiteShape::Deqp(DeqpDecl {
+                exe: "deqp-vk".to_owned(),
+                waiver: Some("waivers/vk.xml".to_owned()),
+                args: vec!["--deqp-log-images=disable".to_owned()],
+                tests_per_group: Some(4096),
+            }),
+            Kind::Piglit => SuiteShape::Piglit(PiglitDecl {
+                folder: "lib64/piglit".to_owned(),
+            }),
+        };
         Suite {
             name: "s".to_owned(),
-            kind,
+            shape,
             project: "test".to_owned(),
             runner: "runner".to_owned(),
             case_list: match kind {
@@ -341,15 +361,6 @@ mod tests {
             jobs: Jobs::Count(4),
             timeout: 300,
             env: Vec::new(),
-            deqp: (kind == Kind::Deqp).then(|| DeqpDecl {
-                exe: "deqp-vk".to_owned(),
-                waiver: Some("waivers/vk.xml".to_owned()),
-                args: vec!["--deqp-log-images=disable".to_owned()],
-                tests_per_group: Some(4096),
-            }),
-            piglit: (kind == Kind::Piglit).then(|| PiglitDecl {
-                folder: "lib64/piglit".to_owned(),
-            }),
         }
     }
 
@@ -377,7 +388,8 @@ mod tests {
         let runner = Path::new("/runner");
         let run = Path::new("/run/1");
         let baseline = Path::new("/run/1/baseline.csv");
-        let argv = Kind::Deqp
+        let argv = suite
+            .shape
             .argv(&context(&suite, run, Some(baseline), root, runner))
             .unwrap();
         assert_eq!(
@@ -418,11 +430,11 @@ mod tests {
             root,
             runner,
         );
-        let first = Kind::Deqp.identity_argv(&ctx).unwrap();
+        let first = suite.shape.identity_argv(&ctx).unwrap();
         assert!(!first.iter().any(|a| a == "--baseline"));
         assert!(first.iter().any(|a| a == "{run}"));
         let ctx2 = context(&suite, Path::new("/other"), None, root, runner);
-        assert_eq!(first, Kind::Deqp.identity_argv(&ctx2).unwrap());
+        assert_eq!(first, suite.shape.identity_argv(&ctx2).unwrap());
     }
 
     #[test]
@@ -430,7 +442,8 @@ mod tests {
         let suite = suite(Kind::Piglit);
         let root = Path::new("/suite");
         let runner = Path::new("/runner");
-        let argv = Kind::Piglit
+        let argv = suite
+            .shape
             .argv(&context(&suite, Path::new("/run"), None, root, runner))
             .unwrap();
         assert_eq!(
@@ -464,10 +477,10 @@ mod tests {
         fs::write(root.join("waivers/vk.xml"), "<waivers/>").unwrap();
         fs::write(root.join("deqp-vk"), "").unwrap();
         fs::set_permissions(root.join("deqp-vk"), fs::Permissions::from_mode(0o755)).unwrap();
-        Kind::Deqp.check_assets(&suite, root).unwrap();
+        suite.shape.check_assets(&suite, root).unwrap();
 
         fs::remove_file(root.join("deqp-vk")).unwrap();
-        let err = Kind::Deqp.check_assets(&suite, root).unwrap_err();
+        let err = suite.shape.check_assets(&suite, root).unwrap_err();
         assert!(format!("{err:#}").contains("wits gputest install s"));
     }
 
@@ -483,7 +496,7 @@ mod tests {
         fs::write(root.join("waivers/vk.xml"), "<waivers/>").unwrap();
         fs::write(root.join("deqp-vk"), "").unwrap();
         fs::set_permissions(root.join("deqp-vk"), fs::Permissions::from_mode(0o755)).unwrap();
-        let err = Kind::Deqp.check_assets(&suite, root).unwrap_err();
+        let err = suite.shape.check_assets(&suite, root).unwrap_err();
         assert!(format!("{err:#}").contains("empty"), "{err:#}");
     }
 
@@ -498,10 +511,10 @@ mod tests {
         fs::write(folder.join("tests/quick.meta.xml"), "<profile/>").unwrap();
         fs::write(folder.join("bin/shader_runner"), "").unwrap();
         fs::write(folder.join("lib/libpiglit.so"), "").unwrap();
-        Kind::Piglit.check_assets(&suite, dir.path()).unwrap();
+        suite.shape.check_assets(&suite, dir.path()).unwrap();
 
         fs::remove_file(folder.join("tests/quick.meta.xml")).unwrap();
-        let err = Kind::Piglit.check_assets(&suite, dir.path()).unwrap_err();
+        let err = suite.shape.check_assets(&suite, dir.path()).unwrap_err();
         assert!(format!("{err:#}").contains("profile 'quick'"), "{err:#}");
     }
 }

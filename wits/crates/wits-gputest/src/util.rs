@@ -25,10 +25,18 @@ pub fn env_text<'a>(env: &'a Env, key: &str) -> Result<Option<&'a str>> {
         .with_context(|| format!("environment entry {key} is not UTF-8"))
 }
 
-/// A path-list variable split the way the loader splits it.
+/// A path-list variable split the way the loader splits it, minus empty
+/// components.
+///
+/// An empty component is the *current directory* to the loader, not a named
+/// path; the identity is built from named paths, so `LD_LIBRARY_PATH` is the
+/// build's list and `VK_DRIVER_FILES=""` names no manifest rather than a
+/// phantom one.
 pub fn env_paths(env: &Env, key: &str) -> Vec<PathBuf> {
     match env_os(env, key) {
-        Some(value) => std::env::split_paths(value).collect(),
+        Some(value) => std::env::split_paths(value)
+            .filter(|path| !path.as_os_str().is_empty())
+            .collect(),
         None => Vec::new(),
     }
 }

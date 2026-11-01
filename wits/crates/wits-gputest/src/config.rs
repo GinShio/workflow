@@ -22,7 +22,7 @@ use wits_core::config::Root;
 use wits_core::path::expand_tilde;
 use wits_project::{literal_entry, DevenvDecl, DevenvEntry};
 
-use crate::kinds::Kind;
+use crate::kinds::{Kind, SuiteShape};
 
 /// Where the gputest config tree lives.
 const CONFIG_ROOT: Root<'static> = Root {
@@ -52,21 +52,25 @@ pub struct Driver {
     pub build_type: String,
     pub branch: Option<String>,
     pub select: Option<String>,
-    pub env: Vec<(String, DevenvEntry)>,
+    pub env: Vec<DevenvEntry>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Suite {
     pub name: String,
-    pub kind: Kind,
     pub project: String,
     pub runner: String,
     pub case_list: Vec<String>,
     pub jobs: Jobs,
     pub timeout: u64,
-    pub env: Vec<(String, DevenvEntry)>,
-    pub deqp: Option<DeqpDecl>,
-    pub piglit: Option<PiglitDecl>,
+    pub env: Vec<DevenvEntry>,
+    pub shape: SuiteShape,
+}
+
+impl Suite {
+    pub fn kind(&self) -> Kind {
+        self.shape.kind()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -74,7 +78,7 @@ pub struct Case {
     pub name: String,
     pub driver: String,
     pub suite: String,
-    pub env: Vec<(String, DevenvEntry)>,
+    pub env: Vec<DevenvEntry>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -423,15 +427,13 @@ fn resolve_suite(name: &str, decl: SuiteDecl) -> Result<Suite> {
             validate_env(&format!("suite.{name}.env"), &decl.env)?;
             Ok(Suite {
                 name: name.to_owned(),
-                kind: Kind::Deqp,
                 project: decl.project,
                 runner: decl.runner,
                 case_list: decl.case_list,
                 jobs: decl.jobs,
                 timeout: decl.timeout,
                 env: resolve_env(decl.env),
-                deqp: Some(deqp),
-                piglit: None,
+                shape: SuiteShape::Deqp(deqp),
             })
         }
         Kind::Piglit => {
@@ -455,15 +457,13 @@ fn resolve_suite(name: &str, decl: SuiteDecl) -> Result<Suite> {
             validate_env(&format!("suite.{name}.env"), &decl.env)?;
             Ok(Suite {
                 name: name.to_owned(),
-                kind: Kind::Piglit,
                 project: decl.project,
                 runner: decl.runner,
                 case_list: decl.case_list,
                 jobs: decl.jobs,
                 timeout: decl.timeout,
                 env: resolve_env(decl.env),
-                deqp: None,
-                piglit: Some(piglit),
+                shape: SuiteShape::Piglit(piglit),
             })
         }
     }
@@ -529,12 +529,9 @@ fn validate_env(table: &str, env: &BTreeMap<String, DevenvDecl>) -> Result<()> {
     Ok(())
 }
 
-fn resolve_env(env: BTreeMap<String, DevenvDecl>) -> Vec<(String, DevenvEntry)> {
+fn resolve_env(env: BTreeMap<String, DevenvDecl>) -> Vec<DevenvEntry> {
     env.into_iter()
-        .map(|(name, decl)| {
-            let entry = literal_entry(&name, &decl);
-            (name, entry)
-        })
+        .map(|(name, decl)| literal_entry(&name, &decl))
         .collect()
 }
 
@@ -612,12 +609,18 @@ env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
     fn the_reference_configuration_loads() {
         let config = load(REFERENCE).unwrap();
         let suite = config.suite("deqp-vk").unwrap();
-        assert_eq!(suite.kind, Kind::Deqp);
+        assert_eq!(suite.kind(), Kind::Deqp);
         assert_eq!(suite.case_list, ["mustpass/vk-default.txt"]);
-        assert_eq!(suite.deqp.as_ref().unwrap().tests_per_group, Some(4096));
+        let SuiteShape::Deqp(deqp) = &suite.shape else {
+            panic!("deqp-vk is not a deqp suite")
+        };
+        assert_eq!(deqp.tests_per_group, Some(4096));
         assert_eq!(config.store.archive_days, 360);
         assert_eq!(config.store.root, expand_tilde("~/Public/results"));
-        assert_eq!(config.suite("piglit").unwrap().env[0].0, "PIGLIT_PLATFORM");
+        assert_eq!(
+            config.suite("piglit").unwrap().env[0].name,
+            "PIGLIT_PLATFORM"
+        );
         assert_eq!(config.case("radv-zink-gl").unwrap().env.len(), 1);
     }
 
@@ -631,7 +634,7 @@ env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
         let config = load(&body).unwrap();
         let env = &config.case("env-test").unwrap().env;
         assert_eq!(env.len(), 3);
-        let by_name = |name: &str| env.iter().find(|(key, _)| key == name).unwrap().1.clone();
+        let by_name = |name: &str| env.iter().find(|entry| entry.name == name).unwrap().clone();
         assert_eq!(by_name("GONE").op, wits_project::DevenvOp::Unset);
         assert_eq!(by_name("PREFIX").op, wits_project::DevenvOp::Prepend);
         assert_eq!(by_name("PREFIX").value, "x");

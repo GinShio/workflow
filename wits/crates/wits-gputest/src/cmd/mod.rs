@@ -39,8 +39,8 @@ pub fn dispatch(command: Command) -> Result<u8> {
 /// The build-identity flags, mirroring `wits`'s `IdentityArgs`.
 #[derive(Debug, Args, Default)]
 pub struct ProfileFlags {
-    /// Target branch. Default: the driver's branch, else the project's
-    /// main branch.
+    /// Target branch. Default: the driver's branch, else the main branch of
+    /// the resolved focus's identity repo.
     #[arg(short = 'b', long)]
     pub branch: Option<String>,
     /// Use the selected detached HEAD as-is, without assigning it a branch

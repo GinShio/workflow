@@ -134,9 +134,10 @@ pub struct PruneReport {
     pub failed: Vec<String>,
 }
 
-/// Remove archives older than `store.archive_days`, every stale `.part`, and
-/// empty case/device directories. State is left alone: it is the fact that a
-/// build was tested, not the evidence.
+/// Remove archives older than `store.archive_days`, every `.part` (the crash
+/// leftover of an interrupted install; `prune` assumes no run is writing one),
+/// and empty case/device directories. State is left alone: it is the fact that
+/// a build was tested, not the evidence.
 pub fn prune(store: &Store, dry_run: bool) -> Result<PruneReport> {
     let cutoff = crate::time::now_secs().saturating_sub(store.archive_days.saturating_mul(86_400));
     let mut report = PruneReport::default();

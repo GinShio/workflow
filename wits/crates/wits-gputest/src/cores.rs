@@ -43,8 +43,14 @@ fn from_topology(root: &Path) -> Option<u32> {
             continue;
         }
         let topology = entry.path().join("topology");
-        let package = read_trim(&topology.join("physical_package_id"))?;
-        let core = read_trim(&topology.join("core_id"))?;
+        // One CPU without the topology files (a partial offline state) must not
+        // discard the cores the others already proved.
+        let (Some(package), Some(core)) = (
+            read_trim(&topology.join("physical_package_id")),
+            read_trim(&topology.join("core_id")),
+        ) else {
+            continue;
+        };
         cores.insert((package, core));
     }
     (!cores.is_empty()).then_some(cores.len() as u32)
@@ -100,6 +106,9 @@ mod tests {
             fs::write(topology.join("physical_package_id"), package).unwrap();
             fs::write(topology.join("core_id"), core).unwrap();
         }
+        // A CPU whose topology is incomplete falls back to the other entries,
+        // not to the whole-scan failure path.
+        fs::create_dir_all(dir.path().join("cpu5")).unwrap();
         assert_eq!(from_topology(dir.path()), Some(3));
     }
 

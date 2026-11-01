@@ -22,7 +22,7 @@ use crate::stamp::{self, Stamp, StampProject};
 use crate::time;
 use crate::util;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Target {
     suite_assets: Vec<String>,
     runner_kinds: BTreeSet<Kind>,
@@ -50,35 +50,7 @@ pub fn run(args: &InstallArgs) -> Result<()> {
         return Ok(());
     }
 
-    let mut targets: BTreeMap<String, Target> = BTreeMap::new();
-    for suite_name in &selected {
-        let suite = config.suite(suite_name)?;
-        let suite_project = ws
-            .project(&suite.project)
-            .with_context(|| format!("suite '{}': project '{}'", suite.name, suite.project))?;
-        targets
-            .entry(suite_project.key())
-            .or_default()
-            .suite_assets
-            .push(suite.name.clone());
-
-        let runner_project = ws.project(&suite.runner).with_context(|| {
-            format!("suite '{}': runner project '{}'", suite.name, suite.runner)
-        })?;
-        // Refuse an overlapping layout before any build or stamp removal. The
-        // stamps hash whole install trees, so nested roots would make one
-        // project's identity move when the other installs.
-        let suite_root = resolve::install_root(&ws, suite_project)?;
-        let runner_root = resolve::install_root(&ws, runner_project)?;
-        resolve::ensure_separate_roots(&suite_root, &runner_root)
-            .with_context(|| format!("suite '{}'", suite.name))?;
-
-        targets
-            .entry(runner_project.key())
-            .or_default()
-            .runner_kinds
-            .insert(suite.kind);
-    }
+    let targets = targets(&ws, &config, &selected)?;
 
     for (key, target) in targets {
         let project = ws.project(&key)?;
@@ -96,6 +68,47 @@ pub fn run(args: &InstallArgs) -> Result<()> {
         install_one(&ws, &config, project, &main, &root, &target)?;
     }
     Ok(())
+}
+
+/// Group the selected suites by the project that has to be installed: the
+/// suite's project contributes the assets to check, the runner's project the
+/// binary its kind names. One build per project, and no second list to keep in
+/// step with the suites.
+fn targets(
+    ws: &Workspace,
+    config: &Config,
+    selected: &[String],
+) -> Result<BTreeMap<String, Target>> {
+    let mut targets: BTreeMap<String, Target> = BTreeMap::new();
+    for suite_name in selected {
+        let suite = config.suite(suite_name)?;
+        let suite_project = ws
+            .project(&suite.project)
+            .with_context(|| format!("suite '{}': project '{}'", suite.name, suite.project))?;
+        targets
+            .entry(suite_project.key())
+            .or_default()
+            .suite_assets
+            .push(suite.name.clone());
+
+        let runner_project = ws.project(&suite.runner).with_context(|| {
+            format!("suite '{}': runner project '{}'", suite.name, suite.runner)
+        })?;
+        // Refuse an overlapping layout before any build or stamp removal. The
+        // stamps hash whole install trees, so nested roots would make one
+        // project's identity move when the other installs.
+        let suite_root = resolve::install_root(ws, suite_project)?;
+        let runner_root = resolve::install_root(ws, runner_project)?;
+        resolve::ensure_separate_roots(&suite_root, &runner_root)
+            .with_context(|| format!("suite '{}'", suite.name))?;
+
+        targets
+            .entry(runner_project.key())
+            .or_default()
+            .runner_kinds
+            .insert(suite.kind());
+    }
+    Ok(targets)
 }
 
 fn install_one(
@@ -134,7 +147,7 @@ fn install_one(
     for suite_name in &target.suite_assets {
         let suite: &Suite = config.suite(suite_name)?;
         suite
-            .kind
+            .shape
             .check_assets(suite, root)
             .with_context(|| format!("checking the installed layout of suite '{}'", suite.name))?;
     }
@@ -189,4 +202,81 @@ fn install_one(
     stamp::write(root, &stamp)?;
     println!("installed {} into {}", project.key(), root.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    /// A registry with a suite and a runner project, and a config naming one
+    /// piglit suite. The paths need not exist: `targets` only resolves them.
+    fn fixture(root: &Path, runner_install: &Path) -> (Workspace, Config) {
+        let projects = root.join("projects");
+        fs::create_dir_all(&projects).unwrap();
+        for (name, install) in [
+            ("suite", root.join("suite-install")),
+            ("runner", runner_install.to_path_buf()),
+        ] {
+            fs::write(
+                projects.join(format!("{name}.toml")),
+                format!(
+                    "[project]\n[repos.main]\npath = \"{}\"\nmain_branch = \"main\"\n\
+                     install_dir = \"{}\"\n",
+                    root.join(format!("{name}-src")).display(),
+                    install.display()
+                ),
+            )
+            .unwrap();
+        }
+
+        let config_root = root.join("config");
+        fs::create_dir_all(&config_root).unwrap();
+        fs::write(
+            config_root.join("gputest.toml"),
+            format!(
+                "[store]\nroot = \"{}\"\n\n\
+                 [suite.s]\nkind = \"piglit\"\nproject = \"suite\"\nrunner = \"runner\"\n\
+                 case_list = [\"quick\"]\n\n[suite.s.piglit]\nfolder = \"lib64/piglit\"\n",
+                root.join("store").display()
+            ),
+        )
+        .unwrap();
+
+        (
+            Workspace::load_from(&projects).unwrap(),
+            Config::load_from(&config_root).unwrap(),
+        )
+    }
+
+    #[test]
+    fn install_groups_suite_assets_and_runner_kinds_one_build_per_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let (ws, config) = fixture(root, &root.join("runner-install"));
+
+        let targets = targets(&ws, &config, &["s".to_owned()]).unwrap();
+        assert_eq!(targets.len(), 2, "{targets:?}");
+        assert_eq!(targets["suite"].suite_assets, ["s"]);
+        assert!(targets["suite"].runner_kinds.is_empty());
+        assert_eq!(
+            targets["runner"]
+                .runner_kinds
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [Kind::Piglit]
+        );
+    }
+
+    #[test]
+    fn install_refuses_overlapping_suite_and_runner_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let (ws, config) = fixture(root, &root.join("suite-install/runner"));
+
+        let err = targets(&ws, &config, &["s".to_owned()]).unwrap_err();
+        assert!(format!("{err:#}").contains("overlap"), "{err:#}");
+    }
 }

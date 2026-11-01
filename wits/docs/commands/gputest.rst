@@ -75,7 +75,7 @@ silently does nothing.
    project = "mesa"               # a wits project by registry name
    select = "*radeon*"            # VK_LOADER_DRIVERS_SELECT
    # build_type = "release"       # the default
-   # branch = "main"              # default: the focus repo's main_branch
+   # branch = "main"              # default: the resolved focus's identity-repo main_branch
 
    [driver.lvp]
    project = "mesa"
@@ -137,7 +137,9 @@ silently does nothing.
        state and baselines are local.
    * - ``[driver.*]``
      - ``project`` is required. ``build_type`` defaults to ``release``;
-       ``branch`` defaults to the focus repo's ``main_branch``. ``select`` is
+       ``branch`` defaults to the resolved focus's identity-repo
+       ``main_branch`` (the focus repo when it has its own git, else its
+       anchor). ``select`` is
        set as ``VK_LOADER_DRIVERS_SELECT``. ``env`` is a ``devenv``
        declaration table applied after ``devenv``.
    * - ``[suite.*]``
@@ -180,9 +182,10 @@ A kind is one runner shape, not one API. Both kinds use a binary from the
   CMake install output (``<folder>/{tests,bin,lib}``). Its driver guard is
   empty; a case selects zink with ``env``.
 
-Adding a kind is a code change, not a config value: a new variant, its
-sub-table, and ``runner_bin``/``argv``/``check_assets``/``check_driver``. The
-core pipeline never branches on the kind itself.
+Adding a kind is a code change, not a config value: the ``Kind`` variant and
+its ``SuiteShape`` variant, the sub-table, and
+``runner_bin``/``argv``/``check_assets``/``check_driver`` on ``SuiteShape``.
+The core pipeline never branches on the kind itself.
 
 Environment
 -----------
@@ -300,7 +303,8 @@ The verbs
 
 ``prune``
    Removes archives older than ``store.archive_days``, stale ``.part`` files
-   and empty directories. State is left alone.
+   and empty directories. State is left alone. A ``.part`` is a crash leftover;
+   do not run ``prune`` while a run or install is writing one.
 
 ``-n``/``--dry-run`` is the plugin's own flag (``wits`` consumes its global
 one before dispatching). ``run -n`` prints the plan; ``install -n`` and

@@ -91,7 +91,17 @@ pub fn guard(env: &Env) -> Result<PathBuf> {
             .join(", ")
     };
     match selected.len() {
-        1 => Ok(selected.into_iter().next().expect("length 1")),
+        1 => {
+            let manifest = selected.into_iter().next().expect("length 1");
+            if !manifest.is_file() {
+                bail!(
+                    "selected ICD manifest {} is missing or not a regular file; \
+                     install the driver first (`wits build --install`)",
+                    manifest.display()
+                );
+            }
+            Ok(manifest)
+        }
         0 => match selector {
             Some(selector) => bail!(
                 "VK_LOADER_DRIVERS_SELECT={selector:?} matched 0 ICDs (candidates: {})",
@@ -115,7 +125,6 @@ pub fn guard(env: &Env) -> Result<PathBuf> {
 }
 
 /// The `driver.icd` component: the selected manifests and the libraries they
-/// The driver.icd component: the selected manifests and the libraries they
 /// name, as a content set. It does not require exactly one manifest; the kind's
 /// guard does.
 pub fn component(env: &Env, cache: &mut content::HashCache) -> Result<Vec<(String, String)>> {
@@ -284,6 +293,30 @@ mod tests {
 
         env.insert("VK_LOADER_DRIVERS_SELECT".into(), "*radeon*".into());
         assert_eq!(guard(&env).unwrap(), dir.path().join("radeon.json"));
+    }
+
+    #[test]
+    fn an_empty_driver_files_value_names_no_manifest() {
+        let mut env = Env::new();
+        env.insert("VK_DRIVER_FILES".into(), "".into());
+        assert!(manifests(&env).unwrap().is_empty());
+        let err = guard(&env).unwrap_err();
+        assert!(format!("{err:#}").contains("exposes no ICD"), "{err:#}");
+    }
+
+    #[test]
+    fn a_selected_manifest_that_is_not_installed_is_named_as_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = Env::new();
+        env.insert(
+            "VK_DRIVER_FILES".into(),
+            dir.path().join("radeon.json").into_os_string(),
+        );
+        let err = guard(&env).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("missing or not a regular file"),
+            "{err:#}"
+        );
     }
 
     #[test]

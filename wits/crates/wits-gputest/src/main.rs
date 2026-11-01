@@ -59,7 +59,7 @@ struct Cli {
 enum Command {
     /// Validate config, projects, suite assets and install stamps. Nothing runs.
     Check,
-    /// One line per case: last run, verdict and asset state.
+    /// One line per case: last run id, exit status and asset state.
     List,
     /// Everything a run would do: environment, argv, identity and baseline.
     Plan(cmd::PlanArgs),

@@ -130,7 +130,7 @@ fn plan_one(
         suite: &prepared.suite,
         jobs: prepared.jobs,
     };
-    let argv = prepared.suite.kind.argv(&ctx)?;
+    let argv = prepared.suite.shape.argv(&ctx)?;
 
     println!("case {}", prepared.case);
     println!(
@@ -152,7 +152,7 @@ fn plan_one(
     println!(
         "  suite     {} ({}) project {}",
         prepared.suite.name,
-        prepared.suite.kind.as_str(),
+        prepared.suite.kind().as_str(),
         prepared.suite_project
     );
     println!("  suite root  {}", prepared.suite_root.display());
@@ -179,6 +179,7 @@ fn plan_one(
     println!("    driver.icd    {}", prepared.components.driver_icd);
     println!("    driver.libs   {}", prepared.components.driver_libs);
     println!("    driver.config {}", prepared.components.driver_config);
+    println!("    argv          {}", prepared.components.argv);
     println!(
         "    env           {}",
         crate::content::hash_overlay(&prepared.overlay)
@@ -296,7 +297,7 @@ fn run_one(
         suite: &prepared.suite,
         jobs: prepared.jobs,
     };
-    let argv = match prepared.suite.kind.argv(&ctx) {
+    let argv = match prepared.suite.shape.argv(&ctx) {
         Ok(argv) => argv,
         Err(err) => return error_report(case, Some(id), format!("{err:#}")),
     };
@@ -368,7 +369,7 @@ fn run_one(
         return error_report(case, Some(id), format!("{err:#}"));
     }
 
-    let counts = report::counts(&run_dir).unwrap_or_default();
+    let counts = report::counts(&run_dir);
     let (verdict, detail) = classify(exit, signal, completed, &run_dir);
     if completed {
         let baseline_id = baseline_used
@@ -631,6 +632,35 @@ suite = "p"
             here: Some(root.to_path_buf()),
             ..Flags::default()
         }
+    }
+
+    #[test]
+    fn classify_maps_the_runner_exit_to_the_verdict() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = dir.path();
+
+        // 0/1/2 without the required CSVs did not complete.
+        assert_eq!(classify(0, None, false, run).0, Verdict::Error);
+        assert!(classify(1, None, false, run)
+            .1
+            .unwrap()
+            .contains("without the expected CSVs"));
+        // A code outside 0/1/2 is an error even with the CSVs present.
+        assert_eq!(classify(4, None, false, run).0, Verdict::Error);
+        assert!(classify(4, None, false, run).1.unwrap().contains("code 4"));
+        // A signal is an error, never a regression.
+        assert!(classify(0, Some(9), false, run)
+            .1
+            .unwrap()
+            .contains("signal 9"));
+
+        for name in archive::REQUIRED_CSVS {
+            fs::write(run.join(name), "").unwrap();
+        }
+        assert_eq!(classify(0, None, true, run).0, Verdict::Pass);
+        assert_eq!(classify(1, None, true, run).0, Verdict::Regression);
+        assert_eq!(classify(2, None, true, run).0, Verdict::Improved);
+        assert_eq!(classify(3, None, true, run).0, Verdict::Error);
     }
 
     #[test]

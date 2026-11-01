@@ -8,8 +8,6 @@
 
 use std::path::Path;
 
-use anyhow::Result;
-
 use crate::util;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +66,12 @@ impl CaseReport {
 }
 
 /// Count the unexpected failures and the carried expected failures.
-pub fn counts(run_dir: &Path) -> Result<Counts> {
+///
+/// The counts are the person's summary; the exit status and the archive are the
+/// machine record, so a missing or unreadable failure file contributes zero
+/// rather than turning a completed run into an error. The caller must not treat
+/// this as the verdict.
+pub fn counts(run_dir: &Path) -> Counts {
     let new = match util::read_text(&run_dir.join("failures.csv")) {
         Ok(text) => text
             .lines()
@@ -85,7 +88,7 @@ pub fn counts(run_dir: &Path) -> Result<Counts> {
             .count() as u32,
         Err(_) => 0,
     };
-    Ok(Counts { new, carried })
+    Counts { new, carried }
 }
 
 fn status_of(line: &str) -> Option<&str> {
@@ -117,13 +120,13 @@ mod tests {
             "a,Fail\nb,Crash\nc,UnexpectedImprovement(Pass)\nd,Missing\ne,ExpectedFail\nf,ExpectedFail\n",
         )
         .unwrap();
-        assert_eq!(counts(dir.path()).unwrap(), Counts { new: 3, carried: 2 });
+        assert_eq!(counts(dir.path()), Counts { new: 3, carried: 2 });
     }
 
     #[test]
     fn a_missing_file_counts_zero() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(counts(dir.path()).unwrap(), Counts::default());
+        assert_eq!(counts(dir.path()), Counts::default());
     }
 
     #[test]
