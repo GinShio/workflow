@@ -42,6 +42,13 @@ capabilities = ['develop']
 planes = ['user']
 
 [[install]]
+id = 'wits-gputest'
+dst = '~/.config/wits/gputest/'
+path = 'gputest/'
+capabilities = ['develop']
+planes = ['user']
+
+[[install]]
 id = 'wits-completions'
 dst = '~/.config/fish/conf.d/wits-dynamic-completions.fish'
 path = 'completions/wits-dynamic.fish'

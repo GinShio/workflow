@@ -1,0 +1,10 @@
+# AMDVLK is a project only on this overlay. Its manifest is the one the
+# project's devenv names under install_dir, so the composed environment already
+# exposes exactly one ICD and the driver needs no `select`.
+
+[driver.amdvlk]
+project = "amdvlk"
+
+[case.amdvlk-vk]
+driver = "amdvlk"
+suite = "deqp-vk"

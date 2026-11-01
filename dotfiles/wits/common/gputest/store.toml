@@ -1,0 +1,7 @@
+# One archive per run, `<root>/<case>/<device>/<id>.tar.zst`. The store is a
+# result collection a person browses and copies, so its location is a machine
+# declaration rather than an XDG convention; the khronos3d host overrides
+# testing.result_dir. `prune` reads archive_days and never touches state.
+[store]
+root = "{{@@ testing.result_dir @@}}"
+archive_days = 360

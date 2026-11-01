@@ -1,0 +1,15 @@
+# A driver is the build under test, not a prefix: its environment is whatever
+# `wits devenv` composes for that build, and `select` picks which ICD inside
+# that environment the test loads, as `VK_LOADER_DRIVERS_SELECT`. The defaults
+# name the nightly's build: release, on the project's main branch.
+#
+# AMDVLK is a project only on the khronos3d overlay, so its driver and case are
+# declared there.
+
+[driver.radv]
+project = "mesa"
+select = "*radeon*"
+
+[driver.lvp]
+project = "mesa"
+select = "*lvp*"

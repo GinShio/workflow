@@ -1,0 +1,19 @@
+# A case is the driver × suite pair that names the store directory, the state
+# file and the comparison against the previous archive. Which cases run
+# nightly is a services declaration (`gpu-test-run.cases`); the config only
+# says what a case is.
+
+[case.radv-vk]
+driver = "radv"
+suite = "deqp-vk"
+
+[case.lvp-vk]
+driver = "lvp"
+suite = "deqp-vk"
+
+# The same radv build through zink: a backend is an environment delta, so it
+# is a case env rather than a driver or a suite.
+[case.radv-zink-gl]
+driver = "radv"
+suite = "piglit"
+env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }

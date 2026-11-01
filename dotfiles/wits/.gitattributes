@@ -1,6 +1,10 @@
 khronos3d/** filter=transcrypt-khronos3d diff=transcrypt-khronos3d
 personal/** filter=transcrypt-personal diff=transcrypt-personal
+manifest/khronos3d.toml filter=transcrypt-khronos3d diff=transcrypt-khronos3d
 # Service declarations hold nothing that needs protecting, so they stay plain
-# text in every overlay; later lines override the ones above.
+# text in every overlay; later lines override the ones above. The gputest
+# config is the same kind of data: drivers, suites and cases.
 khronos3d/services/** !filter !diff
 personal/services/** !filter !diff
+khronos3d/gputest/** !filter !diff
+personal/gputest/** !filter !diff
