@@ -51,9 +51,11 @@ rm -rf "$dest/vulkan" "$dest/mustpass/vk-default"
 cp -a "$module/vulkan" "$dest/vulkan"
 install -d "$dest/mustpass"
 
-# The default-profile caselist is generated from the build tree's per-list
-# files; the individual lists are not installed. These six generated lists
-# are not part of the default profile. Sort the files so the case order is
+# The suite's caselist is generated from the build tree's per-list files;
+# the individual lists are not installed. The six lists excluded below are
+# part of vk-default too (external/vulkancts/mustpass/main/vk-default.txt
+# names them): this suite leaves them out deliberately, so the installed
+# caselist is vk-default without them. Sort the files so the case order is
 # deterministic; awk keeps each file's lines intact.
 test -d "$module/vk-default" || {
     echo "deqp.sh: no vk-default case lists in $module" >&2

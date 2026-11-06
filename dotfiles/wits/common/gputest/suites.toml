@@ -3,8 +3,10 @@
 # table names the runner shape.
 #
 # The caselist is the one deqp's install hook generates from the build tree's
-# per-list files (`dotfiles/wits/common/project/install/deqp.sh`); the per-list
-# files themselves are not installed.
+# per-list files (`dotfiles/wits/common/project/install/deqp.sh`): vk-default
+# without the api, image/swapchain-mutable, info, query-pool, video and wsi
+# lists, which the hook leaves out deliberately. The per-list files themselves
+# are not installed.
 
 [suite.deqp-vk]
 project = "deqp"
