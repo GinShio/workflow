@@ -73,9 +73,7 @@ fn run_case(
     let (env, unset) = overlay_record(&prepared.overlay)?;
 
     // Fail before the test runs for hours and then cannot keep its evidence.
-    let archive_dir = store::archive_dir(store, case, &device);
-    std::fs::create_dir_all(&archive_dir)
-        .with_context(|| format!("creating the archive directory {}", archive_dir.display()))?;
+    store::ensure_archive_dir(store, case, &device)?;
     let mut run = RunDir::claim(store, case, &device)?;
     *claimed = Some(run.id.clone());
 
@@ -464,6 +462,7 @@ exit 0
             &format!("install_dir = \"{}\"\n", root.join("runner").display()),
         );
         fs::create_dir_all(root.join("build")).unwrap();
+        fs::create_dir_all(root.join("store")).unwrap();
 
         let piglit = root.join("suite/lib64/piglit");
         write(&piglit.join("tests/quick.meta.xml"), "<profile/>", 0o644);

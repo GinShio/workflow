@@ -29,6 +29,31 @@ pub fn archive_path(store: &Store, case: &str, device: &str, id: &str) -> PathBu
     archive_dir(store, case, device).join(format!("{id}.tar.zst"))
 }
 
+/// Create the case and device directories beneath the store root, but never
+/// the root: it is a machine declaration, often a mounted share, and creating
+/// it would put the archives on the local disk under an unmounted mount
+/// point, where no later run finds its baseline. The two levels are created
+/// one at a time, so a root that disappears meanwhile fails here too.
+pub fn ensure_archive_dir(store: &Store, case: &str, device: &str) -> Result<PathBuf> {
+    let case_dir = store.root.join(case);
+    let device_dir = case_dir.join(device);
+    for dir in [&case_dir, &device_dir] {
+        match std::fs::create_dir(dir) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound && dir == &case_dir => bail!(
+                "store root {} does not exist; gputest never creates it, so mount or create it first",
+                store.root.display()
+            ),
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("creating the archive directory {}", dir.display()))
+            }
+        }
+    }
+    Ok(device_dir)
+}
+
 /// Write a run's archive into the store: a `.part` beside its destination,
 /// then a rename inside the store's filesystem, so a crash never leaves a
 /// truncated archive under a run id.
@@ -39,9 +64,7 @@ pub fn save(
     record: &RunRecord,
     run_dir: &Path,
 ) -> Result<PathBuf> {
-    let dir = archive_dir(store, case, device);
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("creating the archive directory {}", dir.display()))?;
+    let dir = ensure_archive_dir(store, case, device)?;
     let destination = dir.join(format!("{}.tar.zst", record.started));
     let part = dir.join(format!("{}.tar.zst.part", record.started));
     archive::write(&part, record, run_dir)?;
@@ -235,9 +258,25 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_store_root_is_refused_rather_than_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let unmounted = dir.path().join("share/results");
+        let err = ensure_archive_dir(&store(&unmounted), "c", "d").unwrap_err();
+        assert!(format!("{err:#}").contains("never creates it"), "{err:#}");
+        assert!(!dir.path().join("share").exists());
+
+        let run = dir.path().join("run");
+        fs::create_dir_all(&run).unwrap();
+        let record = crate::archive::tests::record();
+        assert!(save(&store(&unmounted), "c", "d", &record, &run).is_err());
+        assert!(!dir.path().join("share").exists());
+    }
+
+    #[test]
     fn a_saved_archive_lands_under_its_run_id_without_a_part_file() {
         let dir = tempfile::tempdir().unwrap();
         let store = store(&dir.path().join("store"));
+        fs::create_dir_all(&store.root).unwrap();
         let run = dir.path().join("run");
         fs::create_dir_all(&run).unwrap();
         let record = crate::archive::tests::record();

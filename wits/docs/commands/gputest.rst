@@ -132,9 +132,12 @@ typo that silently does nothing.
    * - Section
      - What it says
    * - ``[store]``
-     - ``root`` is required and absolute (``~`` is expanded). ``archive_days``
-       defaults to 360 and is what ``prune`` reads. The store is per machine:
-       state and baselines are local.
+     - ``root`` is required and absolute (``~`` is expanded), and it must
+       exist: a run creates ``<case>/<device>`` beneath it but never the root
+       itself, so a share that is not mounted is an error rather than a copy
+       on the local disk under the mount point. ``archive_days`` defaults to
+       360 and is what ``prune`` reads. The store is per machine: state and
+       baselines are local.
    * - ``[driver.*]``
      - ``project`` is required. ``build_type`` defaults to ``release``;
        ``branch`` defaults to the resolved focus's identity-repo
@@ -543,6 +546,9 @@ When it fails
    * - ``state file … cannot be read``
      - An unreadable state is an error, not a first run: treating it as empty
        would silently drop the baseline. Delete the file to start over.
+   * - ``store root … does not exist``
+     - The store's filesystem is not there — typically a network share that
+       is not mounted. Mount it, or create the directory, and run again.
    * - ``XDG_RUNTIME_DIR is not set``
      - The run directories live there; run under a login session or the user
        service manager.
