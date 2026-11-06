@@ -6,7 +6,6 @@
 //! `compose` diffs against and the runner inherits.
 
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -349,8 +348,8 @@ pub fn prepare(s: &Session<'_>, case_name: &str) -> Result<Prepared> {
         suite: installed.suite.hash.clone(),
         runner: installed.runner.hash.clone(),
         driver_icd: icd::component(&env)?,
-        driver_libs: hash_libs(&env)?,
-        driver_config: hash_config(&env)?,
+        driver_libs: hash_libs(&driver.libs, &driver.linked, &env)?,
+        driver_config: hash_config(&driver.config)?,
         argv: content::hash_argv(&identity_argv),
         env: content::hash_overlay(&overlay, &s.caller),
     };
@@ -409,97 +408,83 @@ pub fn commits(
         .collect()
 }
 
-/// The `driver.libs` component: every shared object directly under the loader
-/// paths the composed environment carries, labelled by the path the loader
-/// sees and hashed by the content it resolves to. An entry that resolves to
-/// nothing cannot load, and is skipped.
-fn hash_libs(env: &Env) -> Result<String> {
-    let mut entries = Vec::new();
-    for key in [
-        "LD_LIBRARY_PATH",
-        "LIBGL_DRIVERS_PATH",
-        "GBM_BACKENDS_PATH",
-        "LIBVA_DRIVERS_PATH",
-    ] {
-        for dir in util::env_paths(env, key) {
-            let read = match std::fs::read_dir(&dir) {
-                Ok(read) => read,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(err) => {
-                    return Err(err)
-                        .with_context(|| format!("reading loader path {}", dir.display()))
-                }
+/// The `driver.libs` component: the files `paths` lists, and the libraries the
+/// ICD links that `linked` names. A name naming nothing the ICD links, or a
+/// library the dynamic loader does not find, is an error like a missing path.
+fn hash_libs(paths: &[PathBuf], linked: &[String], env: &Env) -> Result<String> {
+    let mut entries = declared_entries("libs", paths)?;
+    if !linked.is_empty() {
+        let loaded = icd::linked(env)?;
+        for name in linked {
+            let mut named = loaded.iter().filter(|(soname, _)| names(name, soname));
+            let Some(first) = named.next() else {
+                bail!("the driver's libs entry '{name}' names no library its ICD links");
             };
-            for entry in read {
-                let path = entry
-                    .with_context(|| format!("reading loader path {}", dir.display()))?
-                    .path();
-                let shared_object = path
-                    .file_name()
-                    .and_then(OsStr::to_str)
-                    .is_some_and(|name| name.ends_with(".so") || name.contains(".so."));
-                if shared_object && is_loadable_file(&path)? {
-                    entries.push((
-                        path.to_string_lossy().into_owned(),
-                        content::hash_file(&path)?,
-                    ));
-                }
+            for (soname, path) in std::iter::once(first).chain(named) {
+                let path = path.as_ref().with_context(|| {
+                    format!(
+                        "the driver's libs entry '{name}' names {soname}, which the dynamic \
+                         loader does not find"
+                    )
+                })?;
+                entries.push((
+                    path.to_string_lossy().into_owned(),
+                    content::hash_file(path)?,
+                ));
             }
         }
     }
     content::hash_set(&entries)
 }
 
-/// The `driver.config` component: the EGL vendor files, and the drirc files
-/// Mesa reads (`src/util/xmlconfig.c`, `driParseConfigFiles`): every `*.conf`
-/// directly inside each `DRIRC_CONFIGDIR` entry — scanned, not walked — then
-/// `$HOME/.drirc`. A driver whose environment sets no `DRIRC_CONFIGDIR` reads
-/// its compiled-in data directory instead, which this does not cover.
-fn hash_config(env: &Env) -> Result<String> {
+/// The `driver.config` component: the files `paths` lists.
+fn hash_config(paths: &[PathBuf]) -> Result<String> {
+    content::hash_set(&declared_entries("config", paths)?)
+}
+
+/// Whether a bare `libs` name names a linked library: it is that library's
+/// whole name or the part before its version, so `libLLVM.so` names
+/// `libLLVM.so.23.1` while `libz.so` does not name `libzstd.so.1`.
+fn names(name: &str, linked: &str) -> bool {
+    linked
+        .strip_prefix(name)
+        .is_some_and(|version| version.is_empty() || version.starts_with('.'))
+}
+
+/// The content of what the driver's `key` lists by path, and of nothing else.
+/// A listed file stands for itself and a listed directory for every file
+/// directly inside it, scanned, not walked. Each file is labelled by the path
+/// the driver opens and hashed by the content that path resolves to. A file in
+/// a listed directory that resolves to nothing cannot be opened and is
+/// skipped; a listed path that is missing is an error instead, so a mistyped
+/// one cannot pin the identity while the real file changes.
+fn declared_entries(key: &str, declared: &[PathBuf]) -> Result<Vec<(String, String)>> {
     let mut entries = Vec::new();
-    for file in util::env_paths(env, "__EGL_VENDOR_LIBRARY_FILENAMES") {
-        if !file.is_file() {
+    for path in declared {
+        if path.is_dir() {
+            let reading = || format!("reading the driver's {key} directory {}", path.display());
+            for entry in std::fs::read_dir(path).with_context(reading)? {
+                let file = entry.with_context(reading)?.path();
+                if is_loadable_file(&file)? {
+                    entries.push((
+                        file.to_string_lossy().into_owned(),
+                        content::hash_file(&file)?,
+                    ));
+                }
+            }
+        } else if path.is_file() {
+            entries.push((
+                path.to_string_lossy().into_owned(),
+                content::hash_file(path)?,
+            ));
+        } else {
             bail!(
-                "__EGL_VENDOR_LIBRARY_FILENAMES names {}, which is not a file",
-                file.display()
+                "the driver's {key} entry {} is missing or neither a file nor a directory",
+                path.display()
             );
         }
-        entries.push((
-            file.to_string_lossy().into_owned(),
-            content::hash_file(&file)?,
-        ));
     }
-    for dir in util::env_paths(env, "DRIRC_CONFIGDIR") {
-        let read = match std::fs::read_dir(&dir) {
-            Ok(read) => read,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(err) => {
-                return Err(err)
-                    .with_context(|| format!("reading drirc directory {}", dir.display()))
-            }
-        };
-        for entry in read {
-            let path = entry
-                .with_context(|| format!("reading drirc directory {}", dir.display()))?
-                .path();
-            if path.extension().is_some_and(|ext| ext == "conf") && is_loadable_file(&path)? {
-                entries.push((
-                    path.to_string_lossy().into_owned(),
-                    content::hash_file(&path)?,
-                ));
-            }
-        }
-    }
-    if let Some(home) = env.get(OsStr::new("HOME")) {
-        let drirc = Path::new(home).join(".drirc");
-        if is_loadable_file(&drirc)? {
-            entries.push((
-                drirc.to_string_lossy().into_owned(),
-                content::hash_file(&drirc)?,
-            ));
-        }
-    }
-    content::hash_set(&entries)
+    Ok(entries)
 }
 
 /// Whether `path` resolves to a regular file. A dangling symlink resolves to
@@ -542,52 +527,80 @@ mod tests {
         assert!(focus_main_branch(project, Some("nope")).is_err());
     }
 
-    fn env_with(key: &str, value: &Path) -> Env {
-        let mut env = Env::new();
-        env.insert(key.into(), value.as_os_str().to_owned());
-        env
+    #[test]
+    fn a_declared_file_moves_the_component_and_fails_once_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("settings.cfg");
+        fs::write(&settings, "a").unwrap();
+        let declared = [settings.clone()];
+        let first = hash_config(&declared).unwrap();
+        assert_ne!(first, hash_config(&[]).unwrap());
+
+        fs::write(&settings, "b").unwrap();
+        assert_ne!(first, hash_config(&declared).unwrap());
+
+        fs::remove_file(&settings).unwrap();
+        let err = format!("{:#}", hash_config(&declared).unwrap_err());
+        assert!(
+            err.contains("config entry") && err.contains("is missing"),
+            "{err}"
+        );
     }
 
     #[test]
-    fn library_hashing_reads_shared_objects_and_skips_what_cannot_load() {
+    fn a_declared_directory_stands_for_every_file_directly_inside_it() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("libradeon.so.1"), "x").unwrap();
-        fs::write(dir.path().join("notes.sorted"), "not a library").unwrap();
-        let env = env_with("LD_LIBRARY_PATH", dir.path());
-        let first = hash_libs(&env).unwrap();
-        assert_eq!(first, hash_libs(&env).unwrap());
+        let lib = dir.path().join("lib");
+        fs::create_dir_all(lib.join("sub")).unwrap();
+        fs::write(lib.join("libradeon.so.1"), "x").unwrap();
+        fs::write(lib.join("sub/libnested.so"), "nested").unwrap();
+        let declared = [lib.clone()];
+        let libs = |declared: &[PathBuf]| hash_libs(declared, &[], &Env::new()).unwrap();
+        let first = libs(&declared);
 
-        std::os::unix::fs::symlink("gone.so.1", dir.path().join("libgone.so")).unwrap();
-        fs::write(dir.path().join("notes.sorted"), "edited").unwrap();
-        assert_eq!(first, hash_libs(&env).unwrap());
+        // A subdirectory is not walked, and a dangling symlink is no file.
+        fs::write(lib.join("sub/libnested.so"), "edited").unwrap();
+        std::os::unix::fs::symlink("gone.so.1", lib.join("libgone.so")).unwrap();
+        assert_eq!(first, libs(&declared));
 
-        fs::write(dir.path().join("libradeon.so.1"), "y").unwrap();
-        assert_ne!(first, hash_libs(&env).unwrap());
-    }
-
-    #[test]
-    fn config_hashing_reads_drirc_files_the_way_mesa_does() {
-        let dir = tempfile::tempdir().unwrap();
-        let drirc = dir.path().join("drirc");
-        fs::create_dir_all(drirc.join("tests")).unwrap();
-        fs::write(drirc.join("00-defaults.conf"), "a").unwrap();
-        fs::write(drirc.join("tests/00-test.conf"), "fixture").unwrap();
-        fs::write(drirc.join("README"), "x").unwrap();
-        let home = dir.path().join("home");
-        fs::create_dir_all(&home).unwrap();
-        let mut env = env_with("DRIRC_CONFIGDIR", &drirc);
-        env.insert("HOME".into(), home.as_os_str().to_owned());
-        let first = hash_config(&env).unwrap();
-
-        // Mesa scans the directory without descending into it.
-        fs::write(drirc.join("tests/00-test.conf"), "edited fixture").unwrap();
-        assert_eq!(first, hash_config(&env).unwrap());
-
-        fs::write(drirc.join("00-defaults.conf"), "b").unwrap();
-        let edited = hash_config(&env).unwrap();
+        fs::write(lib.join("libradeon.so.1"), "y").unwrap();
+        let edited = libs(&declared);
         assert_ne!(first, edited);
 
-        fs::write(home.join(".drirc"), "<driconf/>").unwrap();
-        assert_ne!(edited, hash_config(&env).unwrap());
+        // Whatever the file's name: the declaration chose the directory.
+        fs::write(lib.join("notes.txt"), "z").unwrap();
+        assert_ne!(edited, libs(&declared));
+    }
+
+    #[test]
+    fn a_bare_name_names_a_linked_library_with_or_without_its_version() {
+        assert!(names("libLLVM.so", "libLLVM.so.23.1"));
+        assert!(names("libLLVM.so", "libLLVM.so"));
+        assert!(!names("libz.so", "libzstd.so.1"));
+        assert!(!names("libLLVM.so.2", "libLLVM.so.23.1"));
+    }
+
+    #[test]
+    fn a_bare_name_hashes_the_library_the_icd_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("self.json");
+        let exe = std::env::current_exe().unwrap();
+        fs::write(
+            &manifest,
+            format!(r#"{{"file_format_version":"1.0.0","ICD":{{"library_path":{exe:?}}}}}"#),
+        )
+        .unwrap();
+        let mut env = Env::new();
+        env.insert("VK_DRIVER_FILES".into(), manifest.into_os_string());
+        env.insert("PATH".into(), std::env::var_os("PATH").unwrap());
+
+        let none = hash_libs(&[], &[], &env).unwrap();
+        assert_ne!(none, hash_libs(&[], &["libc.so".into()], &env).unwrap());
+
+        let err = format!(
+            "{:#}",
+            hash_libs(&[], &["libnowhere.so".into()], &env).unwrap_err()
+        );
+        assert!(err.contains("names no library its ICD links"), "{err}");
     }
 }

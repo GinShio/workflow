@@ -11,9 +11,9 @@ suite = "deqp-vk"
 driver = "lvp"
 suite = "deqp-vk"
 
-# The same radv build through zink: a backend is an environment delta, so it
-# is a case env rather than a driver or a suite.
+# Piglit through zink on the radv build. Zink is a driver rather than a case
+# env on radv: a GL test loads files a Vulkan test does not, and the files
+# the identity hashes are a driver's.
 [case.radv-zink-gl]
-driver = "radv"
+driver = "zink"
 suite = "piglit"
-env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }

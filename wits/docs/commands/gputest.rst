@@ -83,9 +83,6 @@ typo that silently does nothing.
    project = "mesa"
    select = "*lvp*"
 
-   [driver.amdvlk]
-   project = "amdvlk"
-
    [suite.deqp-vk]
    project = "deqp"               # suite root = its install_dir
    case_list = ["mustpass/vk-default.txt"]
@@ -143,7 +140,17 @@ typo that silently does nothing.
        ``branch`` defaults to the resolved focus's identity-repo
        ``main_branch`` (the focus repo when it has its own git, else its
        anchor). ``select`` is set as ``VK_LOADER_DRIVERS_SELECT``. ``env`` is a
-       ``devenv`` declaration table applied after ``devenv``.
+       ``devenv`` declaration table applied after ``devenv``. ``libs`` lists
+       the libraries the driver loads besides its ICD's own, and ``config``
+       the settings it reads, such as ``~/.drirc`` or a file its ``env``
+       points it at. Each entry is an absolute path (``~`` is expanded) to a
+       file, or to a directory that stands for every file directly inside it,
+       and must exist when the case runs. A ``libs`` entry without a ``/`` is
+       instead a library the ICD links, named without its version
+       (``libLLVM.so`` for ``libLLVM.so.23.1``) and found the way the dynamic
+       loader finds it in the case's environment; naming nothing the ICD
+       links is an error. Their content is the identity's ``driver.libs`` and
+       ``driver.config``; gputest adds nothing to either on its own.
    * - ``[suite.*]``
      - ``project`` is required; ``runner`` defaults to ``runner``.
        ``case_list`` is interpreted by the runner shape. ``jobs`` defaults to
@@ -354,12 +361,12 @@ one SHA-256 over seven component hashes, and the archive records all eight:
    * - ``driver.icd``
      - the selected ICD manifests and the libraries they name
    * - ``driver.libs``
-     - every shared object (``*.so``, ``*.so.*``) directly under the loader
-       paths, following symlinks; one that resolves to nothing cannot load and
-       is skipped
+     - the files the driver's ``libs`` lists, following symlinks, and the
+       libraries its bare names find among those the ICD links; a listed
+       directory contributes every file directly inside it, skipping one that
+       resolves to nothing
    * - ``driver.config``
-     - the EGL vendor files, and the drirc files Mesa reads: every ``*.conf``
-       directly inside each ``DRIRC_CONFIGDIR`` entry, then ``$HOME/.drirc``
+     - the files the driver's ``config`` lists, read the same way
    * - ``argv``
      - the runner argv with the run directory replaced by a marker and
        ``--baseline`` omitted
@@ -524,8 +531,8 @@ When it fails
    * - ``driver exposes no ICD`` / ``… matched N of the ICDs``
      - The composed environment does not name exactly one Vulkan driver after
        ``VK_LOADER_DRIVERS_SELECT``. Fix the driver's project ``devenv`` or its
-       ``select``. An AMDVLK case whose manifest is not installed needs the
-       driver's ``wits build --install`` first.
+       ``select``. A driver whose ``devenv`` names the manifest its install
+       step writes needs ``wits build --install`` first.
    * - ``the install roots of … overlap``
      - Two installed trees contain each other. Give every suite and runner
        project its own ``install_dir``, e.g.

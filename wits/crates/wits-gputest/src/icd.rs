@@ -1,5 +1,5 @@
 //! The Vulkan ICD set: what the composed environment exposes, which of it the
-//! loader selects, and the content that identifies it.
+//! loader selects, the content that identifies it, and what it links.
 //!
 //! `VK_DRIVER_FILES` wins over `VK_ICD_FILENAMES`; a directory entry expands to
 //! its `*.json` manifests. A manifest's `library_path` is relative to the
@@ -17,6 +17,7 @@
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
@@ -130,14 +131,18 @@ pub fn guard(env: &Env) -> Result<()> {
     Ok(())
 }
 
+/// The manifests the loader selects from what the environment names.
+fn selected(env: &Env) -> Result<Vec<PathBuf>> {
+    let selector = util::env_text(env, "VK_LOADER_DRIVERS_SELECT")?;
+    Ok(select(&manifests(env)?, selector))
+}
+
 /// The `driver.icd` component: the selected manifests and the libraries they
 /// name, as a content set. It does not require exactly one manifest; the kind's
 /// guard does.
 pub fn component(env: &Env) -> Result<String> {
-    let all = manifests(env)?;
-    let selector = util::env_text(env, "VK_LOADER_DRIVERS_SELECT")?;
     let mut entries = Vec::new();
-    for manifest in select(&all, selector) {
+    for manifest in selected(env)? {
         entries.push((
             format!("manifest:{}", manifest.to_string_lossy()),
             content::hash_file(&manifest)?,
@@ -153,6 +158,49 @@ pub fn component(env: &Env) -> Result<String> {
         entries.push((format!("library:{}", library.to_string_lossy()), hash));
     }
     content::hash_set(&entries)
+}
+
+/// What the selected ICDs' libraries link, directly or through one another:
+/// each linked name with the file the dynamic loader finds for it in `env`,
+/// or `None` where it finds none. `ldd` asks the loader itself, so the search
+/// is the one the runner's process makes.
+pub fn linked(env: &Env) -> Result<Vec<(String, Option<PathBuf>)>> {
+    let mut out = Vec::new();
+    for manifest in selected(env)? {
+        let library = library_path(&manifest)?;
+        let output = Command::new("ldd")
+            .arg(&library)
+            .env_clear()
+            .envs(env)
+            .output()
+            .with_context(|| format!("running ldd on {}", library.display()))?;
+        if !output.status.success() {
+            bail!(
+                "ldd {} failed: {}",
+                library.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let text = String::from_utf8(output.stdout)
+            .with_context(|| format!("ldd {} printed a non-UTF-8 path", library.display()))?;
+        out.extend(parse_ldd(&text));
+    }
+    Ok(out)
+}
+
+/// `ldd`'s `name => path (address)` lines. The vDSO and the dynamic loader are
+/// listed without a name, and are left out.
+fn parse_ldd(text: &str) -> Vec<(String, Option<PathBuf>)> {
+    text.lines()
+        .filter_map(|line| {
+            let (name, target) = line.trim().split_once(" => ")?;
+            let path = target.split_once(" (").map_or(target, |(path, _)| path);
+            Some((
+                name.to_owned(),
+                (path != "not found").then(|| PathBuf::from(path)),
+            ))
+        })
+        .collect()
 }
 
 /// The library a manifest names, resolved against the manifest's directory.
@@ -306,5 +354,42 @@ mod tests {
         let first = component(&env).unwrap();
         fs::write(dir.path().join("libradeon.so"), "second").unwrap();
         assert_ne!(first, component(&env).unwrap());
+    }
+
+    #[test]
+    fn ldd_lines_pair_each_linked_name_with_what_the_loader_finds() {
+        let text = "\tlinux-vdso.so.1 (0x00007ffd5b9f2000)\n\
+                    \tlibLLVM.so.23.1 => /lib64/libLLVM.so.23.1 (0x00007f2073a00000)\n\
+                    \tlibgone.so.2 => not found\n\
+                    \t/lib64/ld-linux-x86-64.so.2 (0x00007f207d8dc000)\n";
+        assert_eq!(
+            parse_ldd(text),
+            [
+                (
+                    "libLLVM.so.23.1".to_owned(),
+                    Some(PathBuf::from("/lib64/libLLVM.so.23.1"))
+                ),
+                ("libgone.so.2".to_owned(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_selected_icd_lists_what_it_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let mut env = Env::new();
+        env.insert(
+            "VK_DRIVER_FILES".into(),
+            manifest(dir.path(), "self.json", exe.to_str().unwrap()).into_os_string(),
+        );
+        env.insert("PATH".into(), std::env::var_os("PATH").unwrap());
+        let linked = linked(&env).unwrap();
+        assert!(
+            linked
+                .iter()
+                .any(|(name, path)| name == "libc.so.6" && path.is_some()),
+            "{linked:?}"
+        );
     }
 }

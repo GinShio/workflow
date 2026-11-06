@@ -4,6 +4,8 @@
 
 [driver.amdvlk]
 project = "amdvlk"
+env = { AMD_CONFIG_DIR = "{{@@ sysenv.amd_config_dir @@}}" }
+config = ["{{@@ sysenv.amd_config_dir @@}}/amdVulkanSettings.cfg"]
 
 [case.amdvlk-vk]
 driver = "amdvlk"

@@ -36,9 +36,9 @@ pub struct Content {
     pub runner: String,
     /// The selected ICD manifests and the libraries they name.
     pub driver_icd: String,
-    /// Every shared object directly under the loader paths.
+    /// What the driver's `libs` lists.
     pub driver_libs: String,
-    /// The EGL vendor files and the drirc files the driver reads.
+    /// What the driver's `config` lists.
     pub driver_config: String,
     /// The runner's argv without the run directory and the baseline.
     pub argv: String,
@@ -169,9 +169,8 @@ fn walk(
 }
 
 /// The canonical hash of a labelled set — the loader's ICD manifests and
-/// libraries, the loader paths' shared objects, the loader configuration files.
-/// A label may repeat (two variables naming one directory) only with the same
-/// content.
+/// libraries, the files a driver lists. A label may repeat (a file listed both
+/// on its own and through its directory) only with the same content.
 pub fn hash_set(entries: &[(String, String)]) -> Result<String> {
     let mut map = BTreeMap::new();
     for (label, hash) in entries {

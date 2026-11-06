@@ -54,6 +54,16 @@ pub struct Driver {
     /// `VK_LOADER_DRIVERS_SELECT`.
     pub select: Option<String>,
     pub env: Vec<DevenvEntry>,
+    /// The libraries the driver loads besides its ICD's own, as files and
+    /// directories; their content is `driver.libs`. Absolute.
+    pub libs: Vec<PathBuf>,
+    /// Libraries the driver's ICD links, each by the name a linked library
+    /// carries alone or before its version (`libLLVM.so` for
+    /// `libLLVM.so.23.1`); their content is `driver.libs` too.
+    pub linked: Vec<String>,
+    /// The settings the driver reads, as files and directories; their content
+    /// is `driver.config`. Absolute.
+    pub config: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +108,10 @@ struct DriverDecl {
     select: Option<String>,
     #[serde(default)]
     env: BTreeMap<String, DevenvDecl>,
+    #[serde(default)]
+    libs: Vec<String>,
+    #[serde(default)]
+    config: Vec<String>,
 }
 
 fn default_build_type() -> String {
@@ -288,14 +302,42 @@ fn resolve_driver(name: String, decl: DriverDecl) -> Result<Driver> {
     if decl.branch.as_deref() == Some("") {
         bail!("driver '{name}': branch is empty");
     }
+    // A name without a `/` is searched for rather than opened, the way the
+    // dynamic loader treats one.
+    let (linked, libs): (Vec<String>, Vec<String>) = decl
+        .libs
+        .into_iter()
+        .partition(|entry| !entry.contains('/'));
+    if linked.iter().any(String::is_empty) {
+        bail!("driver '{name}': a libs entry is empty");
+    }
     Ok(Driver {
         env: resolve_env(&format!("driver.{name}.env"), decl.env)?,
+        libs: absolute_paths(&name, "libs", &libs)?,
+        linked,
+        config: absolute_paths(&name, "config", &decl.config)?,
         name,
         project: decl.project,
         build_type: decl.build_type,
         branch: decl.branch,
         select: decl.select,
     })
+}
+
+/// A driver's declared paths with `~` expanded. The runner does not run where
+/// gputest does, so a relative path would name a different file for each of
+/// them.
+fn absolute_paths(driver: &str, key: &str, paths: &[String]) -> Result<Vec<PathBuf>> {
+    paths
+        .iter()
+        .map(|path| {
+            let expanded = expand_tilde(path);
+            if !expanded.is_absolute() {
+                bail!("driver '{driver}': {key} path '{path}' is not absolute");
+            }
+            Ok(expanded)
+        })
+        .collect()
 }
 
 fn resolve_suite(name: String, decl: SuiteDecl) -> Result<Suite> {
@@ -527,6 +569,33 @@ env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
             &REFERENCE.replace("[suite.piglit]\n", "[suite.piglit]\nkind = \"piglit\"\n")
         )
         .contains("unknown field"));
+    }
+
+    #[test]
+    fn driver_paths_are_absolute_and_a_bare_libs_name_is_a_linked_library() {
+        let body = REFERENCE.replace(
+            "[driver.lvp]\nproject = \"mesa\"\n",
+            "[driver.lvp]\nproject = \"mesa\"\nlibs = [\"~/lib\", \"libLLVM.so\"]\n\
+             config = [\"~/settings.cfg\"]\n",
+        );
+        let config = load(&body).unwrap();
+        let lvp = config.driver("lvp").unwrap();
+        assert_eq!(lvp.libs, [expand_tilde("~/lib")]);
+        assert_eq!(lvp.linked, ["libLLVM.so"]);
+        assert_eq!(lvp.config, [expand_tilde("~/settings.cfg")]);
+        for (declared, key, path) in [
+            ("~/lib", "libs", "lib/relative"),
+            ("~/settings.cfg", "config", "relative"),
+            ("~/settings.cfg", "config", ""),
+        ] {
+            let err = error(&body.replace(declared, path));
+            assert!(
+                err.contains(&format!("{key} path '{path}' is not absolute")),
+                "{key} {path:?}: {err}"
+            );
+        }
+        let err = error(&body.replace("libLLVM.so", ""));
+        assert!(err.contains("a libs entry is empty"), "{err}");
     }
 
     #[test]
