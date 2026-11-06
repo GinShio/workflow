@@ -62,7 +62,9 @@ pub struct Overlay {
 /// The result is an [`Overlay`] rather than the whole environment, because the
 /// only questions asked of a devenv — run a program with it, or print what it
 /// changes — are both about the change. `caller` must be the environment the
-/// program will inherit; the CLI passes its own process environment.
+/// program will inherit; the CLI passes its own process environment. The
+/// backend's base is captured in `caller` too, so one devenv may be composed on
+/// top of another one's result.
 pub fn compose(
     ws: &Workspace,
     project: &Project,
@@ -150,26 +152,40 @@ fn base(project: &Project, build_dir: &Path, capture_program: &Path, caller: &En
             build_dir.display()
         );
     }
+    run_capture(&runner, capture_program, caller)
+}
 
+/// Run the backend's devenv `runner` around the capture plumbing, in `caller`,
+/// and read back the environment the capture inherited.
+fn run_capture(runner: &[String], capture_program: &Path, caller: &Env) -> Result<Env> {
     // A file rather than the runner's stdout: `meson devenv` writes its own
     // messages there, errors included.
     let file = tempfile::NamedTempFile::new().context("creating the devenv capture file")?;
     let (program, prefix) = runner
         .split_first()
         .context("the backend's devenv runner is empty")?;
+    let mut command = Command::new(program);
+    command.args(prefix.iter().cloned()).args([
+        capture_program.display().to_string(),
+        "__devenv-capture".to_owned(),
+        file.path().display().to_string(),
+    ]);
+    // In `caller`, not in this process's environment, so a devenv composed on
+    // top of another one's result keeps what that one set. Only the difference
+    // is applied: a caller that is this process's environment changes nothing.
+    let inherited: Env = std::env::vars_os().collect();
+    let change = overlay_between(&inherited, caller);
+    for (name, value) in &change.set {
+        command.env_os(name, value);
+    }
+    for name in &change.unset {
+        command.env_remove_os(name);
+    }
     // The base must be known for the result to be described, so this read runs
     // under a dry-run too — the program it would run is what dry-run withholds.
     // Meson's run mode writes nothing outside the build directory, and inside it
     // only GDB auto-load files, for a project that installs GDB helpers.
-    let result = Command::new(program)
-        .args(prefix.iter().cloned())
-        .args([
-            capture_program.display().to_string(),
-            "__devenv-capture".to_owned(),
-            file.path().display().to_string(),
-        ])
-        .force_run()
-        .exec()?;
+    let result = command.force_run().exec()?;
     if !result.is_success() {
         let output = [result.stdout.trim(), result.stderr.trim()]
             .into_iter()
@@ -304,5 +320,34 @@ mod tests {
             vec![(OsString::from("X"), joined)]
         );
         assert!(overlay_between(&caller, &caller).set.is_empty());
+    }
+
+    /// The capture sees the environment it was given, not this process's: what
+    /// the given one adds arrives, and what it leaves out stays out.
+    #[test]
+    fn the_capture_runs_in_the_given_environment() {
+        // `env -0` writes the capture file's format: each NAME=VALUE ends in a NUL.
+        let runner = ["sh", "-c", r#"env -0 > "$3""#, "sh"].map(str::to_owned);
+        let mut caller: Env = std::env::vars_os().collect();
+        caller.insert(OsString::from("WITS_TEST_STACKED"), OsString::from("1"));
+        // Any inherited name the shell does not set again itself.
+        let left_out = caller
+            .keys()
+            .find(|name| {
+                !["PATH", "PWD", "OLDPWD", "SHLVL", "_"].contains(&name.to_str().unwrap_or(""))
+            })
+            .cloned()
+            .expect("the test process inherits some variable");
+        caller.remove(&left_out);
+
+        let captured = run_capture(&runner, Path::new("capture"), &caller).unwrap();
+        assert_eq!(
+            captured.get(&OsString::from("WITS_TEST_STACKED")),
+            Some(&OsString::from("1"))
+        );
+        assert!(
+            !captured.contains_key(&left_out),
+            "{left_out:?} was inherited"
+        );
     }
 }
