@@ -1,12 +1,12 @@
 # A suite is one runner invocation. Its project's install_dir is the suite
-# root, so every path below is relative to that root.
+# root, so every path below is relative to that root; the `.deqp` or `.piglit`
+# table names the runner shape.
 #
 # The caselist is the one deqp's install hook generates from the build tree's
 # per-list files (`dotfiles/wits/common/project/install/deqp.sh`); the per-list
 # files themselves are not installed.
 
 [suite.deqp-vk]
-kind = "deqp"
 project = "deqp"
 case_list = ["mustpass/vk-default.txt"]
 jobs = "cores"
@@ -29,7 +29,6 @@ tests_per_group = 4096
 # PYTHONDONTWRITEBYTECODE keeps a run from writing __pycache__ into the tree
 # its install stamp hashes.
 [suite.piglit]
-kind = "piglit"
 project = "piglit"
 case_list = ["quick"]
 jobs = 4
