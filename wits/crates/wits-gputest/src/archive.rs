@@ -48,10 +48,13 @@ pub struct RunRecord {
     /// The archive this run compared against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<String>,
-    /// Profile flags chose another build than the case's own, so the run left
-    /// the case's state alone.
+    /// Profile flags chose another build than the case's own, or `--group`
+    /// chose its tests, so the run left the case's state alone.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compare_only: bool,
+    /// The suite's groups the run selected, in name order.
+    #[serde(default)]
+    pub groups: Vec<String>,
     pub argv: Vec<String>,
     /// Names the composed environment removed from the caller's.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -108,6 +111,16 @@ impl RunRecord {
             self.detail.as_deref(),
             self.compare_only,
         )
+    }
+
+    /// The groups a history or list line shows, or `-` when the archive
+    /// records none.
+    pub fn groups_label(&self) -> String {
+        if self.groups.is_empty() {
+            "-".to_owned()
+        } else {
+            self.groups.join(",")
+        }
     }
 
     /// The driver commit a history line shows: the focus repo's if recorded,
@@ -262,6 +275,7 @@ pub(crate) mod tests {
             detail: None,
             baseline: Some("20261023T213012Z".to_owned()),
             compare_only: false,
+            groups: vec!["image".to_owned(), "ray-tracing".to_owned()],
             argv: vec!["runner".to_owned(), "--x".to_owned()],
             unset: vec!["LD_PRELOAD".to_owned()],
             counts: Some(Counts {
@@ -351,6 +365,17 @@ pub(crate) mod tests {
             read_back.summary(),
             "regression  new=2 carried=3 improved=0"
         );
+        assert_eq!(read_back.groups_label(), "image,ray-tracing");
+        // An archive written before runs recorded their groups still reads.
+        let text = toml::to_string(&record()).unwrap();
+        let without: String = text
+            .lines()
+            .filter(|line| !line.starts_with("groups ="))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        assert_ne!(text, without);
+        let older: RunRecord = toml::from_str(&without).unwrap();
+        assert_eq!(older.groups_label(), "-");
 
         let mut failures = Vec::new();
         assert!(copy_member(&archive, "failures.csv", &mut failures).unwrap());

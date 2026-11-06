@@ -1,0 +1,211 @@
+# The deqp-vk suite runs the Vulkan CTS through deqp-runner. Its paths are
+# relative to the deqp project's install_dir, which that project's install
+# hook, `project/install/deqp.sh`, stages.
+[suite.deqp-vk]
+project = "deqp"
+jobs = "cores"
+timeout = 300
+
+[suite.deqp-vk.groups]
+all = ["mustpass/vk-default.txt"]
+
+buffer = [
+    # "mustpass/vk-default/memory.txt",
+    "mustpass/vk-default/pipeline/monolithic/push-constant.txt",
+    "mustpass/vk-default/robustness.txt",
+    "mustpass/vk-default/ssbo.txt",
+    "mustpass/vk-default/ubo.txt",
+]
+
+compute = [
+    "mustpass/vk-default/compute.txt",
+    "mustpass/vk-default/cooperative-vector.txt",
+    # "mustpass/vk-default/data-graph.txt",
+    "mustpass/vk-default/memory-model.txt",
+    "mustpass/vk-default/reconvergence.txt",
+    "mustpass/vk-default/spirv-assembly.txt",
+    "mustpass/vk-default/subgroups.txt",
+    "mustpass/vk-default/tensor.txt",
+]
+
+descriptor = [
+    "mustpass/vk-default/binding-model.txt",
+    "mustpass/vk-default/descriptor-indexing.txt",
+    # "mustpass/vk-default/pipeline/monolithic/bind-point.txt",
+    "mustpass/vk-default/pipeline/monolithic/descriptor-limits.txt",
+    "mustpass/vk-default/pipeline/monolithic/dynamic-offset.txt",
+    "mustpass/vk-default/pipeline/monolithic/push-descriptor.txt",
+]
+
+dynamic-state = [
+    "mustpass/vk-default/dynamic-state.txt",
+    "mustpass/vk-default/pipeline/monolithic/extended-dynamic-state.txt",
+]
+
+fragment = [
+    # Shading
+    "mustpass/vk-default/fragment-shader-interlock.txt",
+    "mustpass/vk-default/fragment-shading-barycentric.txt",
+    "mustpass/vk-default/fragment-shading-rate.txt",
+    # Operations
+    "mustpass/vk-default/fragment-operations.txt",
+    "mustpass/vk-default/pipeline/monolithic/empty-fs.txt",
+    # Multisampling
+    "mustpass/vk-default/pipeline/monolithic/multisample-interpolation.txt",
+    "mustpass/vk-default/pipeline/monolithic/multisample-shader-builtin.txt",
+    # "mustpass/vk-default/pipeline/monolithic/multisample-with-fragment-shading-rate.txt",
+    "mustpass/vk-default/pipeline/monolithic/multisample.txt",
+    # Depth
+    "mustpass/vk-default/depth.txt",
+    # "mustpass/vk-default/pipeline/monolithic/depth-range-unrestricted.txt",
+    # "mustpass/vk-default/pipeline/monolithic/depth.txt",
+    # Stencil
+    "mustpass/vk-default/pipeline/monolithic/shader-stencil-export.txt",
+    # "mustpass/vk-default/pipeline/monolithic/stencil.txt",
+    # Color blending
+    "mustpass/vk-default/pipeline/monolithic/blend-operation-advanced.txt",
+    "mustpass/vk-default/pipeline/monolithic/blend.txt",
+    # "mustpass/vk-default/pipeline/monolithic/color-write-enable-maxa.txt",
+    # "mustpass/vk-default/pipeline/monolithic/color-write-enable.txt",
+    # "mustpass/vk-default/pipeline/monolithic/logic-op-na-formats.txt",
+    "mustpass/vk-default/pipeline/monolithic/logic-op.txt",
+]
+
+image = [
+    # Image layouts
+    # "mustpass/vk-default/image/depth-stencil-descriptor.txt",
+    # "mustpass/vk-default/image/general-layout.txt",
+    # Memory layout
+    # "mustpass/vk-default/drm-format-modifiers.txt",
+    # "mustpass/vk-default/image/subresource-layout.txt",
+    # "mustpass/vk-default/image/tiling-control.txt",
+    # Transfers
+    "mustpass/vk-default/image/concurrent-copy.txt",
+    "mustpass/vk-default/image/host-image-copy.txt",
+    # "mustpass/vk-default/image/queue-transfer.txt",
+    "mustpass/vk-default/ycbcr.txt",
+    # Formats
+    # "mustpass/vk-default/image/astc-decode-mode.txt",
+    # "mustpass/vk-default/image/extended-usage-bit-compatibility.txt",
+    # "mustpass/vk-default/image/extended-usage-bit.txt",
+    # "mustpass/vk-default/image/format-reinterpret.txt",
+    "mustpass/vk-default/image/mismatched-formats.txt",
+    "mustpass/vk-default/image/mismatched-write-op.txt",
+    # "mustpass/vk-default/image/mutable.txt",
+    # "mustpass/vk-default/image/texel-view-compatible.txt",
+    # Views
+    # "mustpass/vk-default/image/2d-array-compatible.txt",
+    # "mustpass/vk-default/pipeline/monolithic/image-2d-view-3d-image.txt",
+    "mustpass/vk-default/pipeline/monolithic/image-view.txt",
+    # "mustpass/vk-default/pipeline/monolithic/sliced-view-of-3d-image.txt",
+    # Load and store
+    "mustpass/vk-default/image/atomic-operations.txt",
+    # "mustpass/vk-default/image/depth-stencil-separate-access.txt",
+    "mustpass/vk-default/image/device-scope-access.txt",
+    "mustpass/vk-default/image/extend-operands-spirv1p4.txt",
+    "mustpass/vk-default/image/image-size.txt",
+    "mustpass/vk-default/image/load-store-lod.txt",
+    "mustpass/vk-default/image/load-store-multisample.txt",
+    "mustpass/vk-default/image/load-store.txt",
+    "mustpass/vk-default/image/nontemporal-operand.txt",
+    "mustpass/vk-default/image/qualifiers.txt",
+    "mustpass/vk-default/image/store-load-consistency.txt",
+    "mustpass/vk-default/image/store.txt",
+    # Sampling
+    "mustpass/vk-default/image-processing.txt",
+    # "mustpass/vk-default/image/misaligned-cube.txt",
+    "mustpass/vk-default/image/non-uniform-offset-sample.txt",
+    # "mustpass/vk-default/image/sample-cubemap.txt",
+    # "mustpass/vk-default/image/sample-texture.txt",
+    "mustpass/vk-default/pipeline/monolithic/image.txt",
+    "mustpass/vk-default/pipeline/monolithic/sampler.txt",
+    "mustpass/vk-default/texture.txt",
+    # Sparse resources
+    "mustpass/vk-default/sparse-resources.txt",
+]
+
+modern-graphics = ["mustpass/vk-default/mesh-shader.txt"]
+
+# The other groups take the pipeline tests as monolithic pipelines only;
+# their graphics pipeline library and shader object variants are here. A
+# directory or pattern entry takes every installed list it covers, so a list
+# upstream adds there joins this group.
+pipeline = [
+    # Graphics pipeline libraries
+    "mustpass/vk-default/pipeline/fast-linked-library.txt",
+    "mustpass/vk-default/pipeline/pipeline-library.txt",
+    # Shader objects
+    "mustpass/vk-default/pipeline/shader-object-*.txt",
+    "mustpass/vk-default/pipeline/shader-object-unlinked-spirv/",
+    "mustpass/vk-default/shader-object/",
+    # Device-generated commands
+    "mustpass/vk-default/dgc.txt",
+]
+
+ray-tracing = [
+    "mustpass/vk-default/ray-query.txt",
+    "mustpass/vk-default/ray-tracing-pipeline.txt",
+]
+
+render = [
+    # Render passes
+    # "mustpass/vk-default/imageless-framebuffer.txt",
+    # "mustpass/vk-default/multiview.txt",
+    # "mustpass/vk-default/pipeline/monolithic/attachment-feedback-loop-layout.txt",
+    # "mustpass/vk-default/pipeline/monolithic/framebuffer-attachment.txt",
+    # "mustpass/vk-default/pipeline/monolithic/matched-attachments.txt",
+    # "mustpass/vk-default/pipeline/monolithic/render-to-image.txt",
+    # "mustpass/vk-default/renderpasses.txt",
+    # Draws
+    "mustpass/vk-default/conditional-rendering.txt",
+    # "mustpass/vk-default/draw.txt",
+    # Rasterization
+    "mustpass/vk-default/rasterization.txt",
+    # Queries
+    # "mustpass/vk-default/pipeline/monolithic/timestamp.txt",
+    # "mustpass/vk-default/query-pool.txt",
+]
+
+shader = [
+    "mustpass/vk-default/glsl.txt",
+    "mustpass/vk-default/graphicsfuzz.txt",
+    "mustpass/vk-default/pipeline/monolithic/spec-constant.txt",
+]
+
+sync = [
+    "mustpass/vk-default/synchronization.txt",
+    "mustpass/vk-default/synchronization2.txt",
+]
+
+traditional-graphics = [
+    # Input assembly
+    # "mustpass/vk-default/pipeline/monolithic/input-assembly.txt",
+    # "mustpass/vk-default/pipeline/monolithic/primitive-restart-index.txt",
+    # Vertex input
+    "mustpass/vk-default/pipeline/monolithic/bind-buffers-2.txt",
+    "mustpass/vk-default/pipeline/monolithic/dynamic-vertex-attribute.txt",
+    "mustpass/vk-default/pipeline/monolithic/input-attribute-offset.txt",
+    "mustpass/vk-default/pipeline/monolithic/vertex-input.txt",
+    # Geometry
+    "mustpass/vk-default/geometry.txt",
+    # Tessellation
+    "mustpass/vk-default/pipeline/monolithic/dynamic-control-points.txt",
+    "mustpass/vk-default/tessellation.txt",
+    # Stage output
+    "mustpass/vk-default/clipping.txt",
+    "mustpass/vk-default/pipeline/monolithic/interface-matching.txt",
+    "mustpass/vk-default/pipeline/monolithic/max-varyings.txt",
+    "mustpass/vk-default/pipeline/monolithic/no-position.txt",
+    "mustpass/vk-default/transform-feedback.txt",
+]
+
+[suite.deqp-vk.deqp]
+exe = "deqp-vk"
+waiver = "waivers/vk.xml"
+args = [
+    "--deqp-log-images=disable",
+    "--deqp-log-shader-sources=disable",
+    "--deqp-log-decompiled-spirv=disable",
+    "--deqp-shadercache=disable",
+]
+tests_per_group = 4096

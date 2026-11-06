@@ -21,6 +21,7 @@ pub fn run(args: &RunArgs) -> Result<u8> {
         config: &config,
         ws: &ws,
         profile: &args.profile,
+        groups: &args.groups,
         here: std::env::current_dir().ok(),
         caller,
         device: device::probe()?,

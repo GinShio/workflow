@@ -27,10 +27,11 @@ pub fn run(args: &HistoryArgs) -> Result<()> {
                     .map(|commit| commit.chars().take(12).collect::<String>())
                     .unwrap_or_else(|| "-".to_owned());
                 println!(
-                    "{}  {}  {:<12}  {}",
+                    "{}  {}  {:<12}  {}  {}",
                     found.id,
                     found.device,
                     commit,
+                    record.groups_label(),
                     record.summary()
                 );
             }

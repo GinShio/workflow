@@ -6,12 +6,12 @@
 //! `$HOME/.wits/gputest`.
 //!
 //! Strictness is the point: an unknown section, an unknown key, a second
-//! definition of one name, a path that climbs out of its suite root, or a
-//! caselist cardinality the kind cannot honour is a load-time error. A config
-//! typo that silently does nothing is the one failure mode an unattended test
-//! run cannot afford.
+//! definition of one name, a path that climbs out of its suite root, a group
+//! the kind cannot run, or a case naming a group its suite does not declare is
+//! a load-time error. A config typo that silently does nothing is the one
+//! failure mode an unattended test run cannot afford.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -21,7 +21,7 @@ use wits_core::config::Root;
 use wits_core::path::expand_tilde;
 use wits_project::{literal_entry, DevenvDecl, DevenvEntry};
 
-use crate::suite::{DeqpDecl, Jobs, Kind, PiglitDecl, Suite};
+use crate::suite::{is_pattern, DeqpDecl, Jobs, Kind, PiglitDecl, Suite};
 
 const CONFIG_ROOT: Root<'static> = Root {
     env: "WITS_GPUTEST_CONFIG",
@@ -90,6 +90,8 @@ pub struct Case {
     pub driver: String,
     pub layer: Option<String>,
     pub suite: String,
+    /// The suite's groups the case runs; at least one, each declared there.
+    pub groups: Vec<String>,
     pub env: Vec<DevenvEntry>,
 }
 
@@ -157,7 +159,8 @@ struct SuiteDecl {
     project: String,
     #[serde(default = "default_runner")]
     runner: String,
-    case_list: Vec<String>,
+    #[serde(default)]
+    groups: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     jobs: Jobs,
     #[serde(default = "default_timeout")]
@@ -182,6 +185,8 @@ struct CaseDecl {
     driver: String,
     layer: Option<String>,
     suite: String,
+    #[serde(default)]
+    groups: Vec<String>,
     #[serde(default)]
     env: BTreeMap<String, DevenvDecl>,
 }
@@ -295,15 +300,29 @@ impl Config {
                 if let Some(layer) = decl.layer.as_ref().filter(|l| !layers.contains_key(*l)) {
                     bail!("case '{name}': layer '{layer}' is not declared");
                 }
-                if !suites.contains_key(&decl.suite) {
+                let Some(suite) = suites.get(&decl.suite) else {
                     bail!("case '{name}': suite '{}' is not declared", decl.suite);
+                };
+                if decl.groups.is_empty() {
+                    bail!("case '{name}': groups is empty; a case runs at least one group of its suite");
                 }
+                let mut named = BTreeSet::new();
+                for group in &decl.groups {
+                    suite.group(group).with_context(|| format!("case '{name}'"))?;
+                    if !named.insert(group) {
+                        bail!("case '{name}': group '{group}' is named twice");
+                    }
+                }
+                suite
+                    .check_group_count(decl.groups.len())
+                    .with_context(|| format!("case '{name}'"))?;
                 let case = Case {
                     env: resolve_env(&format!("case.{name}.env"), decl.env)?,
                     name: name.clone(),
                     driver: decl.driver,
                     layer: decl.layer,
                     suite: decl.suite,
+                    groups: decl.groups,
                 };
                 Ok((name, case))
             })
@@ -412,6 +431,19 @@ fn resolve_suite(name: String, decl: SuiteDecl) -> Result<Suite> {
     if decl.jobs == Jobs::Count(0) {
         bail!("suite '{name}': jobs must be positive");
     }
+    if decl.groups.is_empty() {
+        bail!("suite '{name}' declares no groups; a case runs the groups it names from its suite");
+    }
+    for (group, entries) in &decl.groups {
+        if !is_name(group) {
+            bail!(
+                "suite '{name}': group name '{group}' is not usable (allowed: A-Z a-z 0-9 . _ -)"
+            );
+        }
+        if entries.is_empty() {
+            bail!("suite '{name}': group '{group}' is empty");
+        }
+    }
     let kind = match (decl.deqp, decl.piglit) {
         (Some(deqp), None) => {
             validate_suite_path(&name, "deqp.exe", &deqp.exe)?;
@@ -421,25 +453,31 @@ fn resolve_suite(name: String, decl: SuiteDecl) -> Result<Suite> {
             if deqp.tests_per_group == Some(0) {
                 bail!("suite '{name}': deqp.tests_per_group must be positive");
             }
-            if decl.case_list.is_empty() {
-                bail!(
-                    "suite '{name}': case_list is empty; a deqp suite names at least one caselist"
-                );
-            }
-            for entry in &decl.case_list {
-                validate_suite_path(&name, "case_list entry", entry)?;
+            for (group, entries) in &decl.groups {
+                for entry in entries {
+                    validate_suite_path(&name, &format!("group '{group}' entry"), entry)?;
+                }
             }
             Kind::Deqp(deqp)
         }
         (None, Some(piglit)) => {
             validate_suite_path(&name, "piglit.folder", &piglit.folder)?;
-            let [profile] = decl.case_list.as_slice() else {
-                bail!(
-                    "suite '{name}': piglit takes one profile per invocation (got {} case_list entries)",
-                    decl.case_list.len()
-                );
-            };
-            validate_suite_path(&name, "case_list profile", profile)?;
+            for (group, entries) in &decl.groups {
+                let [profile] = entries.as_slice() else {
+                    bail!(
+                        "suite '{name}': piglit takes one profile per invocation (group '{group}' \
+                         names {})",
+                        entries.len()
+                    );
+                };
+                if is_pattern(profile) {
+                    bail!(
+                        "suite '{name}': piglit takes one profile per invocation, and group \
+                         '{group}' names the pattern '{profile}'"
+                    );
+                }
+                validate_suite_path(&name, &format!("group '{group}' profile"), profile)?;
+            }
             Kind::Piglit(piglit)
         }
         (None, None) => bail!(
@@ -456,7 +494,7 @@ fn resolve_suite(name: String, decl: SuiteDecl) -> Result<Suite> {
         name,
         project: decl.project,
         runner: decl.runner,
-        case_list: decl.case_list,
+        groups: decl.groups,
         jobs: decl.jobs,
         timeout: decl.timeout,
         kind,
@@ -466,16 +504,22 @@ fn resolve_suite(name: String, decl: SuiteDecl) -> Result<Suite> {
 /// A case names a store and a state directory, so it is a path component and
 /// nothing else.
 fn validate_case_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name == "."
-        || name == ".."
-        || !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-    {
+    if !is_name(name) {
         bail!("case name '{name}' is not a path component (allowed: A-Z a-z 0-9 . _ -)");
     }
     Ok(())
+}
+
+/// A path component of letters, digits, `.`, `_` and `-`: what a case name
+/// must be, and a group name too, since `history` and `list` join a run's
+/// groups with commas.
+fn is_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 /// A suite path is relative to the suite root and stays inside it: the install
@@ -533,9 +577,15 @@ project = "amdvlk"
 
 [suite.deqp-vk]
 project = "deqp"
-case_list = ["mustpass/vk-default.txt"]
 jobs = "cores"
 timeout = 300
+
+[suite.deqp-vk.groups]
+all = ["mustpass/vk-default.txt"]
+ray-tracing = [
+    "mustpass/vk-default/ray-query.txt",
+    "mustpass/vk-default/ray-tracing-pipeline.txt",
+]
 
 [suite.deqp-vk.deqp]
 exe = "deqp-vk"
@@ -545,9 +595,12 @@ tests_per_group = 4096
 
 [suite.piglit]
 project = "piglit"
-case_list = ["quick"]
 jobs = 4
 timeout = 300
+
+[suite.piglit.groups]
+quick = ["quick"]
+gpu = ["gpu"]
 
 [suite.piglit.piglit]
 folder = "lib64/piglit"
@@ -563,11 +616,13 @@ env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
 [case.radv-vk]
 driver = "radv"
 suite = "deqp-vk"
+groups = ["all"]
 
 [case.radv-zink-gl]
 driver = "radv"
 layer = "zink"
 suite = "piglit"
+groups = ["quick"]
 "#;
 
     const DEQP_TABLE: &str = "[suite.deqp-vk.deqp]\nexe = \"deqp-vk\"\nwaiver = \"waivers/vk.xml\"\nargs = [\"--deqp-log-images=disable\"]\ntests_per_group = 4096\n";
@@ -593,7 +648,9 @@ suite = "piglit"
         let config = load(REFERENCE).unwrap();
         let suite = config.suite("deqp-vk").unwrap();
         assert_eq!(suite.kind.name(), "deqp");
-        assert_eq!(suite.case_list, ["mustpass/vk-default.txt"]);
+        assert_eq!(suite.groups["all"], ["mustpass/vk-default.txt"]);
+        assert_eq!(suite.groups["ray-tracing"].len(), 2);
+        assert_eq!(config.case("radv-vk").unwrap().groups, ["all"]);
         let Kind::Deqp(deqp) = &suite.kind else {
             panic!("deqp-vk is not a deqp suite")
         };
@@ -642,6 +699,7 @@ suite = "piglit"
     fn the_env_tables_use_the_devenv_declaration_vocabulary() {
         let body = format!(
             "{REFERENCE}\n[case.env-test]\ndriver = \"radv\"\nsuite = \"deqp-vk\"\n\
+             groups = [\"all\"]\n\
              env = {{ GONE = {{ unset = true }}, PREFIX = {{ prepend = \"x\" }}, \
              WORDS = [\"a\", \"b\"] }}\n"
         );
@@ -708,8 +766,10 @@ suite = "piglit"
     #[test]
     fn a_case_name_must_be_a_path_component() {
         for name in [".", "..", "a/b", "a b", ""] {
-            let body =
-                format!("{REFERENCE}\n[case.\"{name}\"]\ndriver = \"radv\"\nsuite = \"deqp-vk\"\n");
+            let body = format!(
+                "{REFERENCE}\n[case.\"{name}\"]\ndriver = \"radv\"\nsuite = \"deqp-vk\"\n\
+                 groups = [\"all\"]\n"
+            );
             assert!(error(&body).contains("path component"), "{name:?}");
         }
     }
@@ -718,12 +778,75 @@ suite = "piglit"
     fn a_suite_path_may_not_escape_its_root() {
         for value in ["/abs/case.txt", "../case.txt", "a/../../case.txt"] {
             let body = REFERENCE.replace(
-                "case_list = [\"mustpass/vk-default.txt\"]",
-                &format!("case_list = [{value:?}]"),
+                "all = [\"mustpass/vk-default.txt\"]",
+                &format!("all = [{value:?}]"),
             );
             let err = error(&body);
-            assert!(err.contains("suite root"), "{value:?}: {err}");
+            assert!(
+                err.contains("group 'all' entry") && err.contains("suite root"),
+                "{value:?}: {err}"
+            );
         }
+    }
+
+    #[test]
+    fn a_suite_declares_named_groups_and_a_case_runs_some_of_them() {
+        let suite_errors = [
+            (
+                "[suite.deqp-vk.groups]\nall = [\"mustpass/vk-default.txt\"]\nray-tracing = [\n    \
+                 \"mustpass/vk-default/ray-query.txt\",\n    \
+                 \"mustpass/vk-default/ray-tracing-pipeline.txt\",\n]\n",
+                "",
+                "suite 'deqp-vk' declares no groups",
+            ),
+            (
+                "all = [\"mustpass/vk-default.txt\"]",
+                "all = []",
+                "suite 'deqp-vk': group 'all' is empty",
+            ),
+            (
+                "all = [\"mustpass/vk-default.txt\"]",
+                "\"a b\" = [\"mustpass/vk-default.txt\"]",
+                "group name 'a b' is not usable",
+            ),
+        ];
+        for (from, to, expected) in suite_errors {
+            let err = error(&REFERENCE.replace(from, to));
+            assert!(err.contains(expected), "{expected}: {err}");
+        }
+
+        let case = "[case.radv-vk]\ndriver = \"radv\"\nsuite = \"deqp-vk\"\ngroups = [\"all\"]\n";
+        let case_errors = [
+            (
+                "groups = [\"all\"]\n",
+                "",
+                "case 'radv-vk': groups is empty",
+            ),
+            (
+                "groups = [\"all\"]",
+                "groups = [\"rt\"]",
+                "case 'radv-vk': suite 'deqp-vk' has no group 'rt'; its groups: all, ray-tracing",
+            ),
+            (
+                "groups = [\"all\"]",
+                "groups = [\"all\", \"all\"]",
+                "case 'radv-vk': group 'all' is named twice",
+            ),
+        ];
+        for (from, to, expected) in case_errors {
+            let err = error(&REFERENCE.replace(case, &case.replace(from, to)));
+            assert!(err.contains(expected), "{expected}: {err}");
+        }
+
+        // Groups of one suite may overlap; whether a case's do is checked
+        // against the installed tree when it runs.
+        let config =
+            load(&REFERENCE.replace("groups = [\"all\"]", "groups = [\"ray-tracing\", \"all\"]"))
+                .unwrap();
+        assert_eq!(
+            config.case("radv-vk").unwrap().groups,
+            ["ray-tracing", "all"]
+        );
     }
 
     #[test]
@@ -740,11 +863,30 @@ suite = "piglit"
 
     #[test]
     fn piglit_takes_exactly_one_profile() {
-        let body = REFERENCE.replace(
-            "case_list = [\"quick\"]",
-            "case_list = [\"quick\", \"all\"]",
+        let two_profiles = REFERENCE.replace("quick = [\"quick\"]", "quick = [\"quick\", \"all\"]");
+        let err = error(&two_profiles);
+        assert!(
+            err.contains("piglit takes one profile per invocation (group 'quick' names 2)"),
+            "{err}"
         );
-        assert!(error(&body).contains("one profile"));
+        for pattern in ["qu*", "tests/"] {
+            let err = error(
+                &REFERENCE.replace("quick = [\"quick\"]", &format!("quick = [\"{pattern}\"]")),
+            );
+            assert!(
+                err.contains(&format!("group 'quick' names the pattern '{pattern}'")),
+                "{err}"
+            );
+        }
+
+        let two_groups = REFERENCE.replace("groups = [\"quick\"]", "groups = [\"quick\", \"gpu\"]");
+        let err = error(&two_groups);
+        assert!(
+            err.contains(
+                "case 'radv-zink-gl': suite 'piglit': piglit takes one profile per invocation"
+            ),
+            "{err}"
+        );
     }
 
     #[test]

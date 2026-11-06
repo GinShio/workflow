@@ -1,7 +1,8 @@
 //! `wits gputest list` — one line per case: its newest archive on this device,
 //! and whether the case can run now. It exits 1 when any case cannot, so it is
 //! also the check before a long run. It reads the registry, the stamps, the
-//! installed layouts and `run.toml`s, and never composes a driver.
+//! installed layouts, the caselists each case selects and `run.toml`s, and
+//! never composes a driver.
 
 use anyhow::{Context, Result};
 
@@ -42,13 +43,19 @@ fn newest(config: &Config, case: &str, device: &str) -> String {
         return format!("{:<16}  never run", "-");
     };
     match archive::read_run(&found.path) {
-        Ok(record) => format!("{:<16}  {}", found.id, record.summary()),
+        Ok(record) => format!(
+            "{:<16}  {}  {}",
+            found.id,
+            record.groups_label(),
+            record.summary()
+        ),
         Err(err) => format!("{:<16}  unreadable: {err:#}", found.id),
     }
 }
 
 /// Whether the case can run: its driver's project and its layer's are in the
-/// registry, and its suite is installed.
+/// registry, its suite is installed, and the installed tree holds what the
+/// case's groups select.
 fn ready(config: &Config, ws: &Workspace, case: &Case) -> Result<()> {
     let driver = config.driver(&case.driver)?;
     ws.project(&driver.project).with_context(|| {
@@ -66,6 +73,8 @@ fn ready(config: &Config, ws: &Workspace, case: &Case) -> Result<()> {
             )
         })?;
     }
-    resolve::installed(ws, config.suite(&case.suite)?)?;
+    let suite = config.suite(&case.suite)?;
+    let installed = resolve::installed(ws, suite)?;
+    suite.select(&installed.suite_root, &case.groups)?;
     Ok(())
 }

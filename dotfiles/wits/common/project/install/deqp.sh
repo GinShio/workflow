@@ -61,12 +61,12 @@ test -s "$index" || {
 }
 install -d "$dest/mustpass"
 
-# The suite leaves six of the indexed lists out deliberately: the installed
+# The suite leaves five of the indexed lists out deliberately: the installed
 # index is upstream's without them, and only the lists it names are
 # installed. Each must still be named upstream: a rename there would
 # otherwise bring its tests back without a word.
 excluded=$(printf 'vk-default/%s.txt\n' \
-    api image/swapchain-mutable info query-pool video wsi)
+    api image/swapchain-mutable info video wsi)
 for list in $excluded; do
     grep -qxF "$list" "$index" || {
         echo "deqp.sh: upstream's vk-default index no longer names $list" >&2

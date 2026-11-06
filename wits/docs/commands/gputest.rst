@@ -10,6 +10,7 @@ build, and keep one self-describing archive.
 
    wits gputest run radv-vk --if-changed   # the nightly question
    wits gputest run radv-vk                # always run, compare with the last
+   wits gputest run radv-vk --group ray-tracing  # only these tests, same baseline
    wits gputest run radv-vk -n             # why is it loading that driver?
    wits gputest list                       # what ran last, and can each case run?
    wits gputest install deqp-vk            # stage the suite and its runner
@@ -47,17 +48,18 @@ The five nouns
        it loads and reads.
    * - **suite**
      - One runner invocation: a runner shape, the test project whose
-       ``install_dir`` is the suite root, the case list, and the runner
-       arguments.
+       ``install_dir`` is the suite root, the named groups of tests it offers,
+       and the runner arguments.
    * - **case**
-     - A named ``driver × suite``, with an optional layer and environment, and
-       the unit of history, identity, and baseline.
+     - A named ``driver × suite`` and the suite's groups it runs, with an
+       optional layer and environment, and the unit of history, identity, and
+       baseline.
    * - **run**
      - One execution: an id, a run directory, one archive in the store, and at
        most one state update.
 
 The runner's individual entries are **tests**, not cases; a caselist names
-tests, and the case names the comparison.
+tests, a group names caselists, and the case names the comparison.
 
 Configuration
 -------------
@@ -94,9 +96,19 @@ typo that silently does nothing.
 
    [suite.deqp-vk]
    project = "deqp"               # suite root = its install_dir
-   case_list = ["mustpass/vk-default.txt"]
    jobs = "cores"                 # physical cores; or a number
    timeout = 300
+
+   [suite.deqp-vk.groups]         # what a case or a narrowed run selects
+   all = ["mustpass/vk-default.txt"]
+   ray-tracing = [
+       "mustpass/vk-default/ray-query.txt",
+       "mustpass/vk-default/ray-tracing-pipeline.txt",
+   ]
+   shader-object = [
+       "mustpass/vk-default/pipeline/shader-object-*.txt",  # a pattern
+       "mustpass/vk-default/shader-object/",                # a directory
+   ]
 
    [suite.deqp-vk.deqp]           # the runner shape is this table's name
    exe = "deqp-vk"
@@ -111,9 +123,11 @@ typo that silently does nothing.
 
    [suite.piglit]
    project = "piglit"
-   case_list = ["quick"]          # exactly one profile per invocation
    jobs = 4
    timeout = 300
+
+   [suite.piglit.groups]
+   quick = ["quick"]              # exactly one profile per group
 
    [suite.piglit.piglit]
    folder = "lib64/piglit"        # the CMake-installed data directory
@@ -125,11 +139,18 @@ typo that silently does nothing.
    [case.radv-vk]
    driver = "radv"
    suite = "deqp-vk"
+   groups = ["all"]
+
+   [case.radv-vk-rt]              # its own history, of the ray tracing lists
+   driver = "radv"
+   suite = "deqp-vk"
+   groups = ["ray-tracing"]
 
    [case.radv-zink-gl]
    driver = "radv"
    layer = "zink"                 # Piglit's GL through zink, on radv
    suite = "piglit"
+   groups = ["quick"]
 
 .. list-table::
    :header-rows: 1
@@ -170,32 +191,45 @@ typo that silently does nothing.
        main branch, composed beneath the driver's, so where both set a
        variable the driver's value wins and the ICD stays the driver's.
    * - ``[suite.*]``
-     - ``project`` is required; ``runner`` defaults to ``runner``.
-       ``case_list`` is interpreted by the runner shape. ``jobs`` defaults to
-       physical cores; ``timeout`` (seconds per test) to 60. ``env`` is applied
-       after the driver. Exactly one of the two tables below names the runner
+     - ``project`` is required; ``runner`` defaults to ``runner``. ``jobs``
+       defaults to physical cores; ``timeout`` (seconds per test) to 60.
+       ``env`` is applied after the driver. A suite declares at least one
+       group, and exactly one of the two shape tables below names its runner
        shape.
+   * - ``[suite.<name>.groups]``
+     - Each key names a group, ``[A-Za-z0-9._-]+``, and its value lists what
+       the group runs; no group is empty. A name with a ``.`` is quoted
+       (``"image.layout" = […]``), since a bare dotted key declares a nested
+       table instead. For ``deqp`` an entry is a caselist
+       file, one ``--caselist`` each, or names several: one that ends in
+       ``/`` stands for every ``.txt`` list directly inside that directory,
+       and one holding ``*`` or ``?`` for every ``.txt`` list it matches, a
+       ``*`` standing for any run of characters and a ``?`` for one, neither
+       crossing a ``/``. A caselist may also be an index, as VK-GL-CTS's
+       mustpass ``vk-default.txt`` is: deqp-runner reads each line that ends
+       in ``.txt`` as another caselist beside the index. For ``piglit`` a group
+       names exactly one profile, never a pattern.
    * - ``[suite.<name>.deqp]``
      - ``exe`` is required; ``waiver``, ``args`` and ``tests_per_group`` are
-       optional. ``deqp`` accepts any number of caselist files and passes one
-       ``--caselist`` per entry. A caselist may be an index, as VK-GL-CTS's
-       mustpass ``vk-default.txt`` is: deqp-runner reads each line that ends
-       in ``.txt`` as another caselist beside the index. Entries are literal
-       paths, so an index, not a glob, is how one entry names many lists.
+       optional.
    * - ``[suite.<name>.piglit]``
      - ``folder`` is required: the directory holding ``tests/``, ``bin/`` and
        ``lib/``. Piglit takes exactly one profile per invocation.
    * - ``[case.*]``
-     - ``driver`` and ``suite`` are required; ``layer`` attaches a declared
-       layer to the driver; ``env`` is applied last. The case name is a path
-       component and must match ``[A-Za-z0-9._-]+``.
+     - ``driver``, ``suite`` and ``groups`` are required. ``groups`` names at
+       least one of the suite's groups, each once, and exactly one for a
+       ``piglit`` suite. ``layer`` attaches a declared layer to the driver;
+       ``env`` is applied last. The case name is a path component and must
+       match ``[A-Za-z0-9._-]+``.
 
-Every suite path (``exe``, ``waiver``, each caselist, ``folder``) is relative
-to the suite root and must not escape it: absolute paths and components that
-climb out with ``..`` are load-time errors, because the install stamp hashes
-that tree and a file outside it would be tested without being part of the
-identity. A shape's keys live only in its own table; a ``deqp`` key in a
-``piglit`` table is an unknown key.
+Every suite path (``exe``, ``waiver``, each group entry, ``folder``) is
+relative to the suite root and must not escape it: absolute paths and
+components that climb out with ``..`` are load-time errors, because the install
+stamp hashes that tree and a file outside it would be tested without being part
+of the identity. A shape's keys live only in its own table; a ``deqp`` key in a
+``piglit`` table is an unknown key. A suite's subtables belong to the file that
+declares the suite: in another file, ``[suite.<name>.groups]`` starts a suite of
+its own, which fails to load for want of a ``project``.
 
 There is no ``enabled`` flag and no schedule. Which cases run nightly is a
 service declaration; the config declares what a case *is*, not when it runs.
@@ -207,15 +241,72 @@ A shape is one runner invocation, not one API. Both run a binary from the
 ``deqp-runner`` project, and gputest reads the same evidence from both.
 
 * ``deqp`` — dEQP Vulkan through ``deqp-runner``. The installed tree needs the
-  dEQP executable, ``vulkan/``, the caselists and the waiver. Its driver guard
-  requires exactly one selected Vulkan ICD.
+  dEQP executable, ``vulkan/`` and the waiver, and the caselists a run
+  selects. Its driver guard requires exactly one selected Vulkan ICD.
 * ``piglit`` — Piglit GL through ``piglit-runner``. The installed tree is the
-  CMake install output (``<folder>/{tests,bin,lib}``). Its driver guard is
-  empty; a case reaches a Vulkan driver through a layer such as zink.
+  CMake install output (``<folder>/{tests,bin,lib}``) and the profile a run
+  selects. Its driver guard is empty; a case reaches a Vulkan driver through a
+  layer such as zink.
 
 Adding a shape is a code change, not a config value: a ``Kind`` variant
-carrying its table, and its arms in ``runner_bin``, ``argv``, ``check_assets``
-and ``check_driver``. The pipeline never branches on the shape itself.
+carrying its table, and its arms in ``runner_bin``, ``check_group_count``,
+``select``, ``argv``, ``check_assets`` and ``check_driver``. The pipeline never
+branches on the shape itself.
+
+Groups
+------
+
+A group is a named set of a suite's tests. A case runs the groups it names,
+and ``run --group`` narrows a run to others; both select from one suite,
+because a selection is what one runner invocation runs. A ``piglit`` selection
+is one group and its one profile.
+
+* **A set.** A selection runs every test its groups reach, each once:
+  deqp-runner neither deduplicates its test list nor notices a cycle, so a
+  test listed twice would run twice and its second result would be recorded
+  as a failure. An entry whose caselists another selected entry reaches too is
+  dropped and the larger kept, so ``all`` with any group inside it runs as
+  ``all``, and a list that two groups name runs once. The runner reads each
+  entry whole, so an index that names a caselist twice, or names itself, is
+  an error, and so are two indexes that share caselists without one holding
+  the other. Overlap is judged by caselist, not by test.
+* **One order.** The groups are taken in name order and a repeated name counts
+  once, so one set of groups always reaches the runner in one order. The order
+  is not cosmetic: deqp-runner shuffles its tests with a fixed seed, so it
+  decides which tests share a dEQP process, and the identity hashes it as part
+  of the argv. Reordering a case's ``groups``, or adding a group whose
+  caselists the selection already reaches, changes neither what runs nor its
+  identity.
+* **Read as the runner reads them.** To know what a selection reaches, gputest
+  reads every caselist in it the way deqp-runner does: a line that ends in
+  ``.txt`` names another caselist beside the one holding it, and any other line
+  is a test. Each caselist must be a non-empty file inside the suite root.
+  gputest reads caselists only as plain text, so a ``.txt.zst`` line, or a
+  ``.zst`` file beside a caselist (which deqp-runner would open instead), is
+  an error.
+* **Patterns follow the tree.** A directory or pattern entry is expanded when
+  a run selects its group, into the lists it matches in byte order, each of
+  which counts like a list named on its own. It follows the installed tree: a
+  list that upstream adds, renames or removes there joins or leaves the group
+  without an error, so a pattern suits a directory that is one category as a
+  whole. One that matches nothing is an error.
+* **Checked when selected.** ``install`` checks the shape's layout and not what
+  the groups name, so a broken group fails only the runs that select it and
+  never one that does not. ``run`` and ``run -n`` check the selection before
+  the driver is composed; ``list`` checks each case's own.
+
+``--group`` narrows every named case to the given groups for one run. The run
+is compare-only: it compares against the case's state, is archived with the
+groups it ran, and leaves the state alone, so the case's next run still
+compares with a run of the case as declared. What the groups reach must be
+inside what the case runs, because the baseline is the case's last run, which
+never judged any other test: each of their known failures would count as new.
+``--group`` and ``--if-changed`` exclude each other: the state records only runs
+of the case as declared, so it cannot say whether a ``--group`` selection was
+already tested.
+
+Groups that deserve a history of their own belong in a case of their own:
+``radv-vk-rt`` above keeps its own state, store directory and baseline.
 
 Environment
 -----------
@@ -257,13 +348,16 @@ whole environment — is recorded in the archive.
 Installation
 ------------
 
-``run`` never installs. A missing asset, stamp or selection fails before the
-driver is composed and names the ``wits gputest install`` command that fixes it.
+``run`` never installs. A missing asset or stamp fails before the driver is
+composed and names the ``wits gputest install`` command that fixes it; a
+caselist or profile that a selection names and the installed tree lacks fails
+there too, and names that file.
 
 ``wits gputest install [<suite>…]`` derives the project list from the selected
 suites (the runner projects included), builds ``release`` on each project's main
 branch with the install phase, and verifies the shape's installed layout before
-it writes the stamp. It removes the old stamp *before* the build starts, so a
+it writes the stamp; what the groups name is checked when a run selects it. It
+removes the old stamp *before* the build starts, so a
 failed install leaves no stamp for a run to mistake for a good tree. Each
 project installs on its own: one that fails is reported, the others still
 install, and the command exits non-zero at the end.
@@ -302,18 +396,21 @@ The verbs
 
    wits gputest list                      # newest archive per case; can it run?
    wits gputest install [<suite>…]        # install test suites; never tests
-   wits gputest run <case>… [--if-changed] [profile flags]
+   wits gputest run <case>… [--if-changed | --group <group>…] [profile flags]
    wits gputest run <case>… -n            # the plan: env, argv, identity, baseline
    wits gputest history <case> [--limit N]
    wits gputest show <case> <id> [--failures]
    wits gputest prune
 
 ``list``
-   One line per case: its newest archive on this device with the verdict and
-   counts, and ``[not ready: …]`` when the case cannot run now — its driver's
-   project is not in the registry, or its suite or runner is not installed. It
-   exits 1 when any case cannot run, so it is the check before a long run. It
-   reads stamps, layouts and ``run.toml`` and never composes a driver.
+   One line per case: its newest archive on this device with the groups it
+   ran, the verdict and counts, and ``[not ready: …]`` when the case cannot run
+   now — its driver's project is not in the registry, its suite or runner is
+   not installed, or its groups do not select from the installed tree as
+   `Groups`_ requires. It exits
+   1 when any case cannot run, so it is the check before a long run. It reads
+   stamps, layouts, the caselists each case selects and ``run.toml``, and never
+   composes a driver.
 
 ``install``
    The installation act above.
@@ -322,14 +419,16 @@ The verbs
    The run pipeline. ``--if-changed`` skips a case whose identity was already
    tested and records nothing; without it a run always runs. A rerun of the
    same identity compares against the stored baseline, not against itself.
-   ``-n`` prints everything a run would do instead: the composed environment's
-   set and unset, the argv, the identity and its components, the baseline and
-   the state. Composition and stamp reads still happen, because the plan cannot
-   be printed without them.
+   ``--group`` narrows each case to those groups for one compare-only run (see
+   `Groups`_). ``-n`` prints everything a run would do instead: the groups, the
+   composed environment's set and unset, the argv, the identity and its
+   components, the baseline and the state. Composition, stamp and caselist
+   reads still happen, because the plan cannot be printed without them.
 
 ``history``
-   The archives for one case, newest first: id, device, driver commit, verdict
-   and counts, each read from the archive's ``run.toml``.
+   The archives for one case, newest first: id, device, driver commit, the
+   groups it ran, verdict and counts, each read from the archive's
+   ``run.toml``.
 
 ``show``
    One archive's ``run.toml`` as written; ``--failures`` adds the runner's
@@ -369,6 +468,14 @@ A review checkout is therefore:
    wits gputest run radv-vk --work-dir ../mesa.review --detach -B release \
        --build-dir ../mesa.review/_build/review-release
 
+Profile flags combine with ``--group``, so a review checkout can run only the
+tests its change touches, against the same baseline:
+
+.. code-block:: sh
+
+   wits gputest run radv-vk --work-dir ../mesa.review --detach -B release \
+       --build-dir ../mesa.review/_build/review-release --group ray-tracing
+
 Identity
 --------
 
@@ -400,8 +507,8 @@ one SHA-256 over nine component hashes, and the archive records all ten:
    * - ``layer.config``
      - the files the case's layer's ``config`` lists, read the same way
    * - ``argv``
-     - the runner argv with the run directory replaced by a marker and
-       ``--baseline`` omitted
+     - the runner argv, the selection's caselists or profile in their order,
+       with the run directory replaced by a marker and ``--baseline`` omitted
    * - ``env``
      - what the final overlay changed relative to the scrubbed caller; where a
        value extends the caller's own (Meson prepends its build directories to
@@ -474,7 +581,8 @@ One run that reaches the runner produces one archive:
 
 ``run.toml`` has ``started`` (the run id), ``duration``, ``exit``, ``verdict``,
 ``detail`` (why an error is one), ``baseline`` (the archive compared against),
-``compare_only``, ``argv`` and ``unset`` at the top, then ``[counts]``,
+``compare_only``, ``groups`` (what the run selected), ``argv`` and ``unset`` at
+the top, then ``[counts]``,
 ``[env]``, ``[device]``, ``[driver]`` (including the ``build_dir`` whose
 environment the run used), ``[layer]`` (its name and project, and the build it
 brought when it comes from another project), ``[suite]``, ``[runner]`` and
@@ -571,9 +679,35 @@ When it fails
      - Two installed trees contain each other. Give every suite and runner
        project its own ``install_dir``, e.g.
        ``$XDG_RUNTIME_DIR/wits/gputest/{deqp,piglit,runner}``.
+   * - ``suite … has no group …``
+     - A case or ``--group`` names a group the suite does not declare; the
+       error lists the suite's groups.
+   * - ``piglit takes one profile per invocation``
+     - A piglit group names several profiles or a pattern, or a piglit case or
+       run selects several groups.
+   * - ``group …: … matches no caselist``
+     - A directory or pattern entry matches no ``.txt`` list in the installed
+       tree. Fix the entry, or the install that should have put the lists
+       there.
    * - ``caselist … is missing`` / ``… is not a non-empty file``
-     - The install layout and the suite config disagree. Fix the install hook
-       or the caselist path; a run never silently tests fewer cases.
+     - The install layout and a selected group disagree. Fix the install hook
+       or the group's entry; a run never silently tests fewer cases.
+   * - ``caselist … is reached twice through one entry``
+     - An index names a caselist twice, or names itself. deqp-runner reads the
+       index whole and would run those tests twice; fix the index.
+   * - ``… but neither entry holds the other``
+     - Two indexes share caselists and each also reaches some the other does
+       not, so neither can be dropped. Select one of them, or name the lists
+       instead.
+   * - ``group … selects …, which case … does not run``
+     - ``--group`` reaches tests the case's own groups do not, which its
+       baseline never judged. Narrow a case that runs them, or declare a case
+       for them.
+   * - ``caselist … names …, which is outside the suite root``
+     - An index line is absolute or climbs out with ``..``; the install stamp
+       hashes only the suite root.
+   * - ``… compressed caselist …`` / ``….zst exists``
+     - gputest reads caselists only as plain text; install them uncompressed.
    * - ``runner was killed by signal …``
      - The runner died; the run is an error, not a regression. The signal is
        recorded as a negative exit in ``run.toml``; the state is left alone.
@@ -619,6 +753,6 @@ What it deliberately does not do
 --------------------------------
 
 There is no build, no install during a run, no shell hook, no command template,
-no glob expansion, no scheduler, no forge interaction, no multi-machine
-dispatch and no machine-output format. The exit status and the archive are the
+no glob expansion beyond a deqp group's entries, no scheduler, no forge
+interaction, no multi-machine dispatch and no machine-output format. The exit status and the archive are the
 machine interface; the terminal is for a person.

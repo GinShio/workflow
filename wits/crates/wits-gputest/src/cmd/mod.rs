@@ -33,6 +33,11 @@ pub struct RunArgs {
     /// Skip a case whose identity was already tested.
     #[arg(long)]
     pub if_changed: bool,
+    /// Run only this group of each case's suite (repeatable). The groups must
+    /// lie within what the case runs: the run compares with the case's
+    /// baseline and leaves its state alone.
+    #[arg(long = "group", value_name = "GROUP", conflicts_with = "if_changed")]
+    pub groups: Vec<String>,
     #[command(flatten)]
     pub profile: ProfileFlags,
 }

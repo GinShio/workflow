@@ -6,9 +6,10 @@
 //! forwards its global `-n`/`-v` ahead of the plugin's arguments.
 //!
 //! A *driver* is a wits project plus a profile plus an ICD selector; a *suite*
-//! is one runner invocation; a *case* is the driver × suite pair that names the
-//! comparison and the store; a *run* is one execution, one archive, and at most
-//! one state update.
+//! is one runner invocation and the named groups of tests it offers; a *case*
+//! is a driver × suite pair and the groups it runs, which names the comparison
+//! and the store; a *run* is one execution, one archive, and at most one state
+//! update.
 
 mod archive;
 mod cmd;

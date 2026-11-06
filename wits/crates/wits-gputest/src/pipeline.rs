@@ -95,6 +95,7 @@ fn run_case(
     };
     let baseline_path = baseline.as_ref().map(|(_, path)| path.as_path());
     let argv = prepared.suite.argv(&RunContext {
+        selection: &prepared.selection,
         run_dir: &run.dir,
         baseline: baseline_path,
         suite_root: &prepared.installed.suite_root,
@@ -127,6 +128,7 @@ fn run_case(
         detail: outcome.as_ref().err().map(|err| format!("{err:#}")),
         baseline: baseline.map(|(id, _)| id),
         compare_only: s.compare_only(),
+        groups: prepared.selection.groups,
         argv,
         unset,
         counts: outcome.as_ref().ok().copied(),
@@ -294,6 +296,7 @@ fn print_plan(s: &Session<'_>, case: &str) -> Result<()> {
     let baseline_path = baseline.as_ref().map(|_| run_dir.join(BASELINE));
     let installed = &prepared.installed;
     let argv = prepared.suite.argv(&RunContext {
+        selection: &prepared.selection,
         run_dir: &run_dir,
         baseline: baseline_path.as_deref(),
         suite_root: &installed.suite_root,
@@ -334,6 +337,17 @@ fn print_plan(s: &Session<'_>, case: &str) -> Result<()> {
         prepared.suite.kind.name(),
         installed.suite.source.project
     );
+    let groups = prepared.selection.groups.join(", ");
+    if s.groups.is_empty() {
+        println!("  groups      {groups}");
+    } else {
+        let mut declared = s.config.case(case)?.groups.clone();
+        declared.sort();
+        println!(
+            "  groups      {groups} (narrowed from {})",
+            declared.join(", ")
+        );
+    }
     println!("  suite root  {}", installed.suite_root.display());
     println!("  runner root {}", installed.runner_root.display());
     println!("  run dir     {}", run_dir.display());
@@ -381,7 +395,7 @@ fn print_plan(s: &Session<'_>, case: &str) -> Result<()> {
         None => println!("  state    none"),
     }
     if s.compare_only() {
-        println!("  profile flags given: the run compares but leaves the state alone");
+        println!("  profile flags or --group given: the run compares but leaves the state alone");
     }
     Ok(())
 }
@@ -507,14 +521,17 @@ exit 0
             &root.join("config/gputest.toml"),
             &format!(
                 "[store]\nroot = \"{}\"\n\n[driver.d]\nproject = \"driver\"\n\n\
-                 [suite.p]\nproject = \"suite\"\nrunner = \"runner\"\ncase_list = [\"quick\"]\n\n\
+                 [suite.p]\nproject = \"suite\"\nrunner = \"runner\"\n\n\
+                 [suite.p.groups]\nquick = [\"quick\"]\ngpu = [\"gpu\"]\n\n\
                  [suite.p.piglit]\nfolder = \"lib64/piglit\"\n\n\
-                 [case.c]\ndriver = \"d\"\nsuite = \"p\"\n\n\
+                 [case.c]\ndriver = \"d\"\nsuite = \"p\"\ngroups = [\"quick\"]\n\n\
                  [layer.other]\nproject = \"layer\"\nenv = {{ LAYER_ENV = \"on\" }}\n\
                  libs = [\"{}\"]\n\n\
                  [layer.same]\nproject = \"driver\"\nenv = {{ LAYER_ENV = \"same\" }}\n\n\
-                 [case.other]\ndriver = \"d\"\nlayer = \"other\"\nsuite = \"p\"\n\n\
-                 [case.same]\ndriver = \"d\"\nlayer = \"same\"\nsuite = \"p\"\n",
+                 [case.other]\ndriver = \"d\"\nlayer = \"other\"\nsuite = \"p\"\n\
+                 groups = [\"quick\"]\n\n\
+                 [case.same]\ndriver = \"d\"\nlayer = \"same\"\nsuite = \"p\"\n\
+                 groups = [\"quick\"]\n",
                 root.join("store").display(),
                 root.join("layer-libs").display()
             ),
@@ -559,6 +576,7 @@ exit 0
             config: &config,
             ws: &ws,
             profile,
+            groups: &[],
             here: Some(root.to_path_buf()),
             caller: scrubbed_caller(),
             device: device.clone(),
@@ -649,6 +667,70 @@ exit 0
     }
 
     #[test]
+    fn a_narrowed_run_compares_with_the_case_and_leaves_its_state() {
+        let _lock = crate::testutil::lock();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let _runtime = crate::testutil::EnvGuard::set("XDG_RUNTIME_DIR", root.join("run"));
+        let _state = crate::testutil::EnvGuard::set("XDG_STATE_HOME", root.join("state"));
+        let (ws, config) = fixture(root);
+        let profile = ProfileFlags::default();
+        let session = |groups| Session {
+            config: &config,
+            ws: &ws,
+            profile: &profile,
+            groups,
+            here: Some(root.to_path_buf()),
+            caller: scrubbed_caller(),
+            device: Device {
+                pci: String::new(),
+                id: "1002:150e".to_owned(),
+                drm: String::new(),
+                kernel: String::new(),
+            },
+        };
+        let lineage = || state::read("c", "1002-150e").unwrap().unwrap();
+        fs::write(root.join("runner/raw.csv"), "t1,Pass\nt2,Fail\n").unwrap();
+        let first = run(&session(&[]), false);
+        let first_id = first.id.clone().unwrap();
+
+        // Within the case's groups: compared with its last run and archived
+        // with the groups it ran, while the state stays the case's.
+        stamp_tree(&root.join("runner"), "runner", "v2");
+        let quick = ["quick".to_owned()];
+        let narrowed = run(&session(&quick), false);
+        assert_eq!(narrowed.verdict, Verdict::Pass, "{narrowed}");
+        assert!(narrowed.compare_only, "{narrowed}");
+        assert_eq!(lineage().run, first_id);
+        let found = store::find(&config.store, "c", narrowed.id.as_deref().unwrap()).unwrap();
+        let record = archive::read_run(&found.path).unwrap();
+        assert!(record.compare_only);
+        assert_eq!(record.groups, ["quick"]);
+        assert_eq!(record.baseline.as_deref(), Some(first_id.as_str()));
+
+        // A group the case does not run has no baseline to judge it by, so the
+        // run stops before the runner starts and archives nothing.
+        write(
+            &root.join("suite/lib64/piglit/tests/gpu.meta.xml"),
+            "<profile/>",
+            0o644,
+        );
+        let gpu = ["gpu".to_owned()];
+        let refused = run(&session(&gpu), false);
+        assert_eq!(refused.verdict, Verdict::Error);
+        assert!(refused.id.is_none(), "{refused}");
+        assert!(
+            refused
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("group 'gpu' selects gpu, which case 'c' does not run"),
+            "{refused}"
+        );
+        assert_eq!(store::archives(&config.store, "c").unwrap().len(), 2);
+    }
+
+    #[test]
     fn a_layer_brings_its_own_build_only_from_another_project() {
         let _lock = crate::testutil::lock();
         let dir = tempfile::tempdir().unwrap();
@@ -659,6 +741,7 @@ exit 0
             config: &config,
             ws: &ws,
             profile: &profile,
+            groups: &[],
             here: Some(root.to_path_buf()),
             caller: scrubbed_caller(),
             device: Device {
@@ -720,6 +803,7 @@ exit 0
             config: &config,
             ws: &ws,
             profile: &profile,
+            groups: &[],
             here: Some(root.to_path_buf()),
             caller: scrubbed_caller(),
             device: Device {

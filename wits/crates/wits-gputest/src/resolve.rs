@@ -21,7 +21,7 @@ use crate::content::{self, Content};
 use crate::device::Device;
 use crate::icd;
 use crate::stamp::{self, Stamp};
-use crate::suite::Suite;
+use crate::suite::{Selection, Suite};
 use crate::util;
 
 /// Which build a run tests when it is not the driver's declared one. These
@@ -80,6 +80,8 @@ pub struct Session<'a> {
     pub config: &'a Config,
     pub ws: &'a Workspace,
     pub profile: &'a ProfileFlags,
+    /// The groups `--group` narrows every case to; empty runs each case's own.
+    pub groups: &'a [String],
     /// Where the command runs; a detached build takes its checkout here.
     pub here: Option<PathBuf>,
     /// The scrubbed process environment.
@@ -88,12 +90,13 @@ pub struct Session<'a> {
 }
 
 impl Session<'_> {
-    /// Whether profile flags chose another build than the case's own: a review
-    /// checkout, another branch or build type. Such a run compares against the
-    /// case's state but leaves it alone, so the declared build's next run still
-    /// compares with the declared build.
+    /// Whether a run tests something other than what the case declares:
+    /// profile flags chose another build (a review checkout, another branch or
+    /// build type), or `--group` chose its tests. Such a run compares against
+    /// the case's state but leaves it alone, so the case's next run still
+    /// compares with a run of the case as declared.
     pub fn compare_only(&self) -> bool {
-        *self.profile != ProfileFlags::default()
+        *self.profile != ProfileFlags::default() || !self.groups.is_empty()
     }
 }
 
@@ -254,6 +257,8 @@ fn focus_main_branch(project: &Project, focus: Option<&str>) -> Result<String> {
 pub struct Prepared {
     pub suite: Suite,
     pub installed: Installed,
+    /// What the run tests: the case's groups, or those `--group` narrowed it to.
+    pub selection: Selection,
     pub driver: BuildRecord,
     pub layer: Option<LayerRecord>,
     /// The caller plus the overlay: what the runner is spawned with.
@@ -275,9 +280,17 @@ pub fn prepare(s: &Session<'_>, case_name: &str) -> Result<Prepared> {
         .transpose()?;
     let suite = s.config.suite(&case.suite)?.clone();
 
-    // The installed trees first: checking them reads a few files, while
-    // composing the driver runs Meson.
+    // The installed trees and what the case selects in them first: checking
+    // those only reads files, while composing the driver runs Meson.
     let installed = installed(s.ws, &suite)?;
+    let own = suite.select(&installed.suite_root, &case.groups)?;
+    let selection = if s.groups.is_empty() {
+        own
+    } else {
+        let narrowed = suite.select(&installed.suite_root, s.groups)?;
+        narrowed.check_within(&own, case_name)?;
+        narrowed
+    };
 
     let project = s.ws.project(&driver.project).with_context(|| {
         format!(
@@ -357,7 +370,12 @@ pub fn prepare(s: &Session<'_>, case_name: &str) -> Result<Prepared> {
     })?;
 
     let jobs = suite.jobs.number();
-    let identity_argv = suite.identity_argv(&installed.suite_root, &installed.runner_root, jobs)?;
+    let identity_argv = suite.identity_argv(
+        &selection,
+        &installed.suite_root,
+        &installed.runner_root,
+        jobs,
+    )?;
     let no_layer = Files::default();
     let layer_files = layer.map_or(&no_layer, |layer| &layer.files);
     let mut content = Content {
@@ -392,6 +410,7 @@ pub fn prepare(s: &Session<'_>, case_name: &str) -> Result<Prepared> {
     Ok(Prepared {
         suite,
         installed,
+        selection,
         driver,
         layer: layer_record,
         env,

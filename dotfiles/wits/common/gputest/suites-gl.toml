@@ -1,0 +1,65 @@
+# The deqp-gl suite runs the Khronos GL and GLES CTS through deqp-runner. Its
+# paths are relative to the deqp project's install_dir, as deqp-vk's are.
+[suite.deqp-gl]
+project = "deqp"
+jobs = 4
+timeout = 300
+
+[suite.deqp-gl.groups]
+all = [
+    "mustpass/gl/khronos_mustpass/main/*-main.txt",
+    "mustpass/gles/khronos_mustpass/main/*-main.txt",
+]
+
+[suite.deqp-gl.deqp]
+exe = "glcts"
+waiver = "waivers/gl.xml"
+# Every list runs in this one configuration. A conformance run instead uses
+# the configurations the Khronos mustpass's `mustpass.xml` gives each list.
+args = [
+    "--deqp-gl-config-name=rgba8888d24s8ms0",
+    "--deqp-surface-height=256",
+    "--deqp-surface-width=256",
+    "--deqp-visibility=hidden",
+]
+tests_per_group = 4096
+
+# The piglit suite runs Piglit through piglit-runner. Its paths are relative
+# to the piglit project's install_dir.
+[suite.piglit]
+project = "piglit"
+jobs = 4
+timeout = 300
+
+# piglit-runner takes one profile per run, so a group names one profile: each
+# one a Piglit build installs, but two. piglit-runner reads only tests that
+# carry a command, which vulkan's vkrunner tests do not, and quick_cl draws on
+# the cl profiles, which only a PIGLIT_BUILD_CL_TESTS build installs.
+[suite.piglit.groups]
+all = ["all"]
+cpu = ["cpu"]
+glslparser = ["glslparser"]
+glslparser_arb_compat = ["glslparser_arb_compat"]
+gpu = ["gpu"]
+llvmpipe = ["llvmpipe"]
+llvmpipe_gl = ["llvmpipe_gl"]
+no_error = ["no_error"]
+opengl = ["opengl"]
+quick = ["quick"]
+quick_gl = ["quick_gl"]
+quick_shader = ["quick_shader"]
+sanity = ["sanity"]
+shader = ["shader"]
+
+# Piglit's CMake install puts its tests, libraries and framework under
+# `${CMAKE_INSTALL_LIBDIR}/piglit`; GNUInstallDirs sets that libdir to lib64
+# on 64-bit openSUSE, whatever the prefix.
+[suite.piglit.piglit]
+folder = "lib64/piglit"
+
+# PIGLIT_PLATFORM=gbm renders without a window system. PYTHONDONTWRITEBYTECODE
+# keeps a run from writing __pycache__ into the installed tree, which the
+# install stamp hashes.
+[suite.piglit.env]
+PIGLIT_PLATFORM = "gbm"
+PYTHONDONTWRITEBYTECODE = "1"

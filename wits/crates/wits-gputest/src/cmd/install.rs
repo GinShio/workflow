@@ -218,8 +218,9 @@ mod tests {
             config_root.join("gputest.toml"),
             format!(
                 "[store]\nroot = \"{}\"\n\n\
-                 [suite.s]\nproject = \"suite\"\nrunner = \"runner\"\n\
-                 case_list = [\"quick\"]\n\n[suite.s.piglit]\nfolder = \"lib64/piglit\"\n",
+                 [suite.s]\nproject = \"suite\"\nrunner = \"runner\"\n\n\
+                 [suite.s.groups]\nquick = [\"quick\"]\n\n\
+                 [suite.s.piglit]\nfolder = \"lib64/piglit\"\n",
                 root.join("store").display()
             ),
         )
