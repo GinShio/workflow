@@ -13,7 +13,9 @@ select = "*radeon*"
 [driver.lvp]
 project = "mesa"
 select = "*lvp*"
-# deqp-runner already runs one dEQP process per job, and llvmpipe would give
-# each of them one render thread per CPU (its LP_NUM_THREADS default); half
-# the CPUs per process bounds that.
-env = { LP_NUM_THREADS = "{{@@ [1, (sys_cpu_count | int) // 2] | max @@}}" }
+# Every lavapipe screen starts LP_NUM_THREADS rasterizer threads and as many
+# compute threads, one per CPU by default (llvmpipe's lp_screen.c), while
+# deqp-runner runs one dEQP process per job: one per physical core, under
+# deqp-vk's jobs = "cores". Each process gets its share of the CPUs instead
+# of all of them: online CPUs over physical cores, at least 1.
+env = { LP_NUM_THREADS = "{{@@ [1, (sys_cpu_count | int) // ([1, sys_cpu_cores | int] | max)] | max @@}}" }

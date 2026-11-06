@@ -327,6 +327,23 @@ detect_cpu_count() {
     getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1
 }
 
+# The physical cores: the distinct (package, core) topology ids of the online
+# CPUs, so SMT siblings count once. wits gputest resolves `jobs = "cores"` the
+# same way, down to its fallback to the logical count without that topology.
+detect_cpu_cores() {
+    _cores=$(
+        for _topology in /sys/devices/system/cpu/cpu[0-9]*/topology; do
+            [ -r "$_topology/physical_package_id" ] && [ -r "$_topology/core_id" ] || continue
+            echo "$(cat "$_topology/physical_package_id"):$(cat "$_topology/core_id")"
+        done | sort -u | awk 'END { print NR }'
+    )
+    if [ "$_cores" -gt 0 ]; then
+        echo "$_cores"
+    else
+        detect_cpu_count
+    fi
+}
+
 detect_memory_mb() {
     _os=$(get_os)
     if [ "$_os" = "linux" ]; then
@@ -437,6 +454,7 @@ if [ "${0##*/}" = "detect.sh" ] && [ "$#" -gt 0 ]; then
         arch) detect_arch ;;
         cpu) detect_cpu_vendor ;;
         cpu_count) detect_cpu_count ;;
+        cpu_cores) detect_cpu_cores ;;
         gpu) detect_gpu_vendor ;;
         mem|memory_mb) detect_memory_mb ;;
         host|hostname) detect_hostname ;;

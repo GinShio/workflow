@@ -45,6 +45,7 @@ histfile-install = '''grep -Phor '\bhistory_[\w-]*' {{@@ _dotfile_abs_dst @@}} |
 sys_arch = "{{@@ projects.script_dir @@}}/scripts/detect.sh arch"
 sys_cpu = "{{@@ projects.script_dir @@}}/scripts/detect.sh cpu"
 sys_cpu_count = "{{@@ projects.script_dir @@}}/scripts/detect.sh cpu_count"
+sys_cpu_cores = "{{@@ projects.script_dir @@}}/scripts/detect.sh cpu_cores"
 sys_gpu = "{{@@ projects.script_dir @@}}/scripts/detect.sh gpu"
 sys_platform = "{{@@ projects.script_dir @@}}/scripts/detect.sh platform"
 sys_distro = "{{@@ projects.script_dir @@}}/scripts/detect.sh distro"
