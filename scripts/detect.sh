@@ -322,6 +322,11 @@ has_cmdline() {
     fi
 }
 
+# The online logical CPUs, SMT siblings included.
+detect_cpu_count() {
+    getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1
+}
+
 detect_memory_mb() {
     _os=$(get_os)
     if [ "$_os" = "linux" ]; then
@@ -431,6 +436,7 @@ if [ "${0##*/}" = "detect.sh" ] && [ "$#" -gt 0 ]; then
     case "$1" in
         arch) detect_arch ;;
         cpu) detect_cpu_vendor ;;
+        cpu_count) detect_cpu_count ;;
         gpu) detect_gpu_vendor ;;
         mem|memory_mb) detect_memory_mb ;;
         host|hostname) detect_hostname ;;

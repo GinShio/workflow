@@ -13,3 +13,7 @@ select = "*radeon*"
 [driver.lvp]
 project = "mesa"
 select = "*lvp*"
+# deqp-runner already runs one dEQP process per job, and llvmpipe would give
+# each of them one render thread per CPU (its LP_NUM_THREADS default); half
+# the CPUs per process bounds that.
+env = { LP_NUM_THREADS = "{{@@ [1, (sys_cpu_count | int) // 2] | max @@}}" }
