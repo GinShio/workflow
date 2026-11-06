@@ -1,18 +1,24 @@
-//! The Vulkan ICD set: what the composed environment exposes, how the loader
-//! selects among it, and the content that identifies it.
+//! The Vulkan ICD set: what the composed environment exposes, which of it the
+//! loader selects, and the content that identifies it.
 //!
 //! `VK_DRIVER_FILES` wins over `VK_ICD_FILENAMES`; a directory entry expands to
-//! its `*.json` manifests. `VK_LOADER_DRIVERS_SELECT` is the loader's own rule:
-//! a comma-delimited list of case-insensitive globs matched against the
-//! manifest's *filename*, never its path or library. A manifest's
-//! `library_path` is relative to the manifest's directory; a bare filename is
-//! refused because the loader would search system paths and identity could not
-//! name what loaded.
+//! its `*.json` manifests. A manifest's `library_path` is relative to the
+//! manifest's directory; a bare filename is refused because the loader would
+//! search system paths and identity could not name what loaded.
+//!
+//! `VK_LOADER_DRIVERS_SELECT` follows the loader's own filter rule (Vulkan-Loader
+//! `loader/loader_environment.c`: `parse_generic_filter_environment_var`,
+//! `determine_filter_type`, `check_name_matches_filter_environment_var`).
+//! Tokens are comma-separated and not trimmed; each is compared,
+//! case-insensitively, with the manifest's file name as a prefix (`x*`), a
+//! suffix (`*x`), a substring (`*x*`) or the whole name (`x`), and `*`, `**`
+//! and `~all~` match every name. A `*` anywhere else, `?` and `[` are literal,
+//! so a selector here selects exactly what the loader would.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use regex::Regex;
 
 use wits_actions::Env;
 
@@ -20,61 +26,72 @@ use crate::content;
 use crate::util;
 
 /// The manifests the environment names, before selection.
-pub fn manifests(env: &Env) -> Result<Vec<PathBuf>> {
-    let paths = if util::env_os(env, "VK_DRIVER_FILES").is_some() {
-        util::env_paths(env, "VK_DRIVER_FILES")
+fn manifests(env: &Env) -> Result<Vec<PathBuf>> {
+    let variable = if env.contains_key(OsStr::new("VK_DRIVER_FILES")) {
+        "VK_DRIVER_FILES"
     } else {
-        util::env_paths(env, "VK_ICD_FILENAMES")
+        "VK_ICD_FILENAMES"
     };
-
     let mut out = Vec::new();
-    for path in paths {
+    for path in util::env_paths(env, variable) {
         if path.is_dir() {
-            let mut entries: Vec<PathBuf> = std::fs::read_dir(&path)
+            for entry in std::fs::read_dir(&path)
                 .with_context(|| format!("reading ICD directory {}", path.display()))?
-                .filter_map(|entry| {
-                    let entry = entry.ok()?;
-                    let path = entry.path();
-                    (path.extension().and_then(|e| e.to_str()) == Some("json")).then_some(path)
-                })
-                .collect();
-            entries.sort_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
-            out.extend(entries);
+            {
+                let manifest = entry
+                    .with_context(|| format!("reading ICD directory {}", path.display()))?
+                    .path();
+                if manifest.extension().is_some_and(|ext| ext == "json") {
+                    out.push(manifest);
+                }
+            }
         } else {
             out.push(path);
         }
     }
-    out.sort_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
+    out.sort();
     out.dedup();
     Ok(out)
 }
 
-/// Apply the loader's selector. `None` means no selector and every manifest.
-pub fn select(all: &[PathBuf], select: Option<&str>) -> Result<Vec<PathBuf>> {
-    let Some(select) = select else {
-        return Ok(all.to_vec());
-    };
-    let patterns: Vec<Regex> = select
+/// The manifests the loader selects. A missing or empty selector selects all.
+fn select(all: &[PathBuf], selector: Option<&str>) -> Vec<PathBuf> {
+    let tokens: Vec<String> = selector
+        .unwrap_or("")
         .split(',')
-        .map(str::trim)
-        .filter(|pattern| !pattern.is_empty())
-        .map(glob_regex)
-        .collect::<Result<_>>()?;
-    Ok(all
-        .iter()
+        .filter(|token| !token.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    if tokens.is_empty() {
+        return all.to_vec();
+    }
+    all.iter()
         .filter(|manifest| {
             let name = manifest
                 .file_name()
-                .map(|name| name.to_string_lossy())
+                .map(|name| name.to_string_lossy().to_ascii_lowercase())
                 .unwrap_or_default();
-            patterns.iter().any(|pattern| pattern.is_match(&name))
+            tokens.iter().any(|token| filter_matches(token, &name))
         })
         .cloned()
-        .collect())
+        .collect()
 }
 
-/// The driver guard: exactly one selected ICD.
-pub fn guard(env: &Env) -> Result<PathBuf> {
+/// One lower-cased loader filter token against a lower-cased file name.
+fn filter_matches(token: &str, name: &str) -> bool {
+    if token.starts_with('~') || token == "*" || token == "**" {
+        return matches!(token, "~all~" | "*" | "**");
+    }
+    match (token.strip_prefix('*'), token.strip_suffix('*')) {
+        (Some(_), Some(_)) => name.contains(&token[1..token.len() - 1]),
+        (Some(suffix), None) => name.ends_with(suffix),
+        (None, Some(prefix)) => name.starts_with(prefix),
+        (None, None) => name == token,
+    }
+}
+
+/// The deqp driver guard: exactly one selected ICD, and it is installed.
+pub fn guard(env: &Env) -> Result<()> {
     let all = manifests(env)?;
     if all.is_empty() {
         bail!(
@@ -83,80 +100,65 @@ pub fn guard(env: &Env) -> Result<PathBuf> {
         );
     }
     let selector = util::env_text(env, "VK_LOADER_DRIVERS_SELECT")?;
-    let selected = select(&all, selector)?;
-    let names = || {
-        all.iter()
+    let selected = select(&all, selector);
+    let [manifest] = selected.as_slice() else {
+        let names = all
+            .iter()
             .map(|path| path.display().to_string())
             .collect::<Vec<_>>()
-            .join(", ")
-    };
-    match selected.len() {
-        1 => {
-            let manifest = selected.into_iter().next().expect("length 1");
-            if !manifest.is_file() {
-                bail!(
-                    "selected ICD manifest {} is missing or not a regular file; \
-                     install the driver first (`wits build --install`)",
-                    manifest.display()
-                );
-            }
-            Ok(manifest)
-        }
-        0 => match selector {
+            .join(", ");
+        match selector.filter(|selector| !selector.is_empty()) {
             Some(selector) => bail!(
-                "VK_LOADER_DRIVERS_SELECT={selector:?} matched 0 ICDs (candidates: {})",
-                names()
-            ),
-            None => unreachable!("a selector-less non-empty set cannot select zero"),
-        },
-        n => match selector {
-            Some(selector) => bail!(
-                "VK_LOADER_DRIVERS_SELECT={selector:?} matched {n} ICDs ({}); \
-                 a deqp case must load exactly one",
-                names()
+                "VK_LOADER_DRIVERS_SELECT={selector:?} matched {} of the ICDs ({names}); \
+                 a deqp case loads exactly one",
+                selected.len()
             ),
             None => bail!(
-                "the composed environment exposes {n} ICDs ({}); \
-                 set driver.select to name exactly one for a deqp case",
-                names()
+                "the composed environment exposes {} ICDs ({names}); \
+                 set the driver's select to name exactly one",
+                all.len()
             ),
-        },
+        }
+    };
+    if !manifest.is_file() {
+        bail!(
+            "selected ICD manifest {} is missing or not a regular file; \
+             install the driver first (`wits build --install`)",
+            manifest.display()
+        );
     }
+    Ok(())
 }
 
 /// The `driver.icd` component: the selected manifests and the libraries they
 /// name, as a content set. It does not require exactly one manifest; the kind's
 /// guard does.
-pub fn component(env: &Env, cache: &mut content::HashCache) -> Result<Vec<(String, String)>> {
+pub fn component(env: &Env) -> Result<String> {
     let all = manifests(env)?;
     let selector = util::env_text(env, "VK_LOADER_DRIVERS_SELECT")?;
-    let selected = select(&all, selector)?;
     let mut entries = Vec::new();
-    for manifest in selected {
-        let manifest_hash = cache.hash_file(&manifest)?;
+    for manifest in select(&all, selector) {
         entries.push((
             format!("manifest:{}", manifest.to_string_lossy()),
-            manifest_hash,
+            content::hash_file(&manifest)?,
         ));
-        if let Some(library) = library_path(&manifest)? {
-            let hash = cache.hash_file(&library).with_context(|| {
-                format!(
-                    "hashing the library {} named by {}",
-                    library.display(),
-                    manifest.display()
-                )
-            })?;
-            entries.push((format!("library:{}", library.to_string_lossy()), hash));
-        }
+        let library = library_path(&manifest)?;
+        let hash = content::hash_file(&library).with_context(|| {
+            format!(
+                "hashing the library {} named by {}",
+                library.display(),
+                manifest.display()
+            )
+        })?;
+        entries.push((format!("library:{}", library.to_string_lossy()), hash));
     }
-    Ok(entries)
+    content::hash_set(&entries)
 }
 
-/// The library a manifest names, resolved against the manifest's directory. A
-/// bare filename is refused: the loader would search the system paths, and the
-/// identity could not name what loaded.
-fn library_path(manifest: &Path) -> Result<Option<PathBuf>> {
-    let bytes = util::read_bytes(manifest)?;
+/// The library a manifest names, resolved against the manifest's directory.
+fn library_path(manifest: &Path) -> Result<PathBuf> {
+    let bytes = std::fs::read(manifest)
+        .with_context(|| format!("reading ICD manifest {}", manifest.display()))?;
     let json: serde_json::Value = serde_json::from_slice(&bytes)
         .with_context(|| format!("parsing ICD manifest {}", manifest.display()))?;
     let Some(library) = json
@@ -169,76 +171,17 @@ fn library_path(manifest: &Path) -> Result<Option<PathBuf>> {
             manifest.display()
         );
     };
-    let library = Path::new(library);
-    if !library.to_string_lossy().contains('/') {
+    if !library.contains('/') {
         bail!(
-            "ICD manifest {} names a bare library_path {:?}; the loader would search system paths, \
-             so the identity cannot name what loaded",
-            manifest.display(),
-            library
+            "ICD manifest {} names a bare library_path {library:?}; the loader would search \
+             system paths, so the identity cannot name what loaded",
+            manifest.display()
         );
     }
-    if library.is_absolute() {
-        Ok(Some(library.to_path_buf()))
-    } else {
-        let parent = manifest
-            .parent()
-            .with_context(|| format!("{} has no parent directory", manifest.display()))?;
-        Ok(Some(parent.join(library)))
-    }
-}
-
-/// The loader's glob rule, compiled for a filename. `*`, `?`, `[…]` with `!`
-/// or `^` negation; every other character is literal. Matching is
-/// case-insensitive.
-fn glob_regex(pattern: &str) -> Result<Regex> {
-    let mut out = String::from("(?i)^");
-    let mut chars = pattern.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '*' => out.push_str(".*"),
-            '?' => out.push('.'),
-            '[' => {
-                let mut class = String::new();
-                if let Some(&first) = chars.peek() {
-                    if first == '!' || first == '^' {
-                        class.push('^');
-                        chars.next();
-                    }
-                }
-                let mut closed = false;
-                for c in chars.by_ref() {
-                    if c == ']' {
-                        closed = true;
-                        break;
-                    }
-                    match c {
-                        '\\' => class.push_str("\\\\"),
-                        '-' => class.push('-'),
-                        c => class.push_str(&regex::escape(&c.to_string())),
-                    }
-                }
-                if closed {
-                    out.push('[');
-                    out.push_str(&class);
-                    out.push(']');
-                } else {
-                    out.push_str("\\[");
-                    out.push_str(&regex::escape(&class));
-                }
-            }
-            '\\' => {
-                if let Some(next) = chars.next() {
-                    out.push_str(&regex::escape(&next.to_string()));
-                } else {
-                    out.push_str("\\\\");
-                }
-            }
-            other => out.push_str(&regex::escape(&other.to_string())),
-        }
-    }
-    out.push('$');
-    Regex::new(&out).with_context(|| format!("compiling the loader glob {pattern:?}"))
+    let parent = manifest
+        .parent()
+        .with_context(|| format!("{} has no parent directory", manifest.display()))?;
+    Ok(parent.join(library))
 }
 
 #[cfg(test)]
@@ -256,6 +199,13 @@ mod tests {
         path
     }
 
+    fn names(selected: &[PathBuf]) -> Vec<String> {
+        selected
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
     #[test]
     fn a_directory_expands_to_json_manifests_only() {
         let dir = tempfile::tempdir().unwrap();
@@ -264,25 +214,46 @@ mod tests {
         fs::write(dir.path().join("README"), "").unwrap();
         let mut env = Env::new();
         env.insert("VK_DRIVER_FILES".into(), dir.path().as_os_str().to_owned());
-        let manifests = manifests(&env).unwrap();
-        assert_eq!(manifests.len(), 2);
-        assert!(manifests.iter().all(|p| p.extension().unwrap() == "json"));
+        assert_eq!(
+            names(&manifests(&env).unwrap()),
+            ["lvp.json", "radeon.json"]
+        );
     }
 
     #[test]
-    fn selection_matches_the_filename_case_insensitively() {
-        let all = vec![
+    fn selection_follows_the_loader_filter_forms() {
+        let all = [
             PathBuf::from("/a/radeon_icd.x86_64.json"),
             PathBuf::from("/a/lvp_icd.x86_64.json"),
         ];
-        let selected = select(&all, Some("*RADEON*")).unwrap();
-        assert_eq!(selected, [PathBuf::from("/a/radeon_icd.x86_64.json")]);
-        assert!(select(&all, Some("*amd*")).unwrap().is_empty());
-        assert_eq!(select(&all, None).unwrap().len(), 2);
+        let pick = |selector| names(&select(&all, Some(selector)));
+        assert_eq!(pick("*RADEON*"), ["radeon_icd.x86_64.json"]);
+        assert_eq!(pick("lvp*"), ["lvp_icd.x86_64.json"]);
+        assert_eq!(pick("*.x86_64.json").len(), 2);
+        assert_eq!(pick("radeon_icd.x86_64.json"), ["radeon_icd.x86_64.json"]);
+        assert_eq!(pick("*lvp*,*radeon*").len(), 2);
+        assert_eq!(pick("*").len(), 2);
+        assert_eq!(pick("~all~").len(), 2);
+        assert_eq!(names(&select(&all, Some(""))).len(), 2);
+        assert_eq!(names(&select(&all, None)).len(), 2);
+
+        // Neither a glob in the middle, a class, `?`, nor a padded token is
+        // anything the loader understands: it matches no file name.
+        for selector in [
+            "radeon*json",
+            "[rl]vp*",
+            "radeon_icd.??????.json",
+            "*lvp*, *radeon*",
+        ] {
+            assert!(
+                !pick(selector).contains(&"radeon_icd.x86_64.json".to_owned()),
+                "{selector}"
+            );
+        }
     }
 
     #[test]
-    fn the_guard_requires_exactly_one_selected_manifest() {
+    fn the_guard_requires_exactly_one_installed_selected_manifest() {
         let dir = tempfile::tempdir().unwrap();
         manifest(dir.path(), "radeon.json", "./libradeon.so");
         manifest(dir.path(), "lvp.json", "./liblvp.so");
@@ -292,31 +263,26 @@ mod tests {
         assert!(format!("{err:#}").contains("exposes 2 ICDs"), "{err:#}");
 
         env.insert("VK_LOADER_DRIVERS_SELECT".into(), "*radeon*".into());
-        assert_eq!(guard(&env).unwrap(), dir.path().join("radeon.json"));
+        guard(&env).unwrap();
+
+        env.insert(
+            "VK_DRIVER_FILES".into(),
+            dir.path().join("missing.json").into_os_string(),
+        );
+        env.remove(OsStr::new("VK_LOADER_DRIVERS_SELECT"));
+        let err = guard(&env).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("missing or not a regular file"),
+            "{err:#}"
+        );
     }
 
     #[test]
     fn an_empty_driver_files_value_names_no_manifest() {
         let mut env = Env::new();
         env.insert("VK_DRIVER_FILES".into(), "".into());
-        assert!(manifests(&env).unwrap().is_empty());
         let err = guard(&env).unwrap_err();
         assert!(format!("{err:#}").contains("exposes no ICD"), "{err:#}");
-    }
-
-    #[test]
-    fn a_selected_manifest_that_is_not_installed_is_named_as_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut env = Env::new();
-        env.insert(
-            "VK_DRIVER_FILES".into(),
-            dir.path().join("radeon.json").into_os_string(),
-        );
-        let err = guard(&env).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("missing or not a regular file"),
-            "{err:#}"
-        );
     }
 
     #[test]
@@ -337,29 +303,8 @@ mod tests {
             "VK_DRIVER_FILES".into(),
             dir.path().join("radeon.json").into_os_string(),
         );
-        let mut cache = content::HashCache::new();
-        let first = content::hash_set(&component(&env, &mut cache).unwrap()).unwrap();
+        let first = component(&env).unwrap();
         fs::write(dir.path().join("libradeon.so"), "second").unwrap();
-        // A fresh cache: the per-command cache is not expected to notice a file
-        // changing during one command.
-        let mut cache = content::HashCache::new();
-        let second = content::hash_set(&component(&env, &mut cache).unwrap()).unwrap();
-        assert_ne!(first, second);
-    }
-
-    #[test]
-    fn a_glob_with_a_class_and_a_question_mark_matches_like_fn_match() {
-        let all = vec![
-            PathBuf::from("/a/radeon_icd.x86_64.json"),
-            PathBuf::from("/a/lvp_icd.x86_64.json"),
-        ];
-        assert_eq!(
-            select(&all, Some("radeon_icd.??????.json")).unwrap(),
-            [PathBuf::from("/a/radeon_icd.x86_64.json")]
-        );
-        assert_eq!(
-            select(&all, Some("[rl]vp_icd*")).unwrap(),
-            [PathBuf::from("/a/lvp_icd.x86_64.json")]
-        );
+        assert_ne!(first, component(&env).unwrap());
     }
 }

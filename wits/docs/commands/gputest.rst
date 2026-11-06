@@ -10,7 +10,8 @@ build, and keep one self-describing archive.
 
    wits gputest run radv-vk --if-changed   # the nightly question
    wits gputest run radv-vk                # always run, compare with the last
-   wits gputest plan radv-vk               # why is it loading that driver?
+   wits gputest run radv-vk -n             # why is it loading that driver?
+   wits gputest list                       # what ran last, and can each case run?
    wits gputest install deqp-vk            # stage the suite and its runner
    wits gputest history radv-vk            # one line per archive
 
@@ -40,14 +41,15 @@ The four nouns
        prefix: its environment is whatever ``devenv`` composes, and ``select``
        chooses which ICD inside that environment the test loads.
    * - **suite**
-     - One runner invocation: a kind, the test project whose ``install_dir`` is
-       the suite root, the case list, and the runner arguments.
+     - One runner invocation: a runner shape, the test project whose
+       ``install_dir`` is the suite root, the case list, and the runner
+       arguments.
    * - **case**
      - A named ``driver × suite`` plus optional environment, and the unit of
        history, identity, and baseline.
    * - **run**
-     - One execution: an id, a directory under the runtime dir, one archive in
-       the store, and one state update when it completes.
+     - One execution: an id, a run directory, one archive in the store, and at
+       most one state update.
 
 The runner's individual entries are **tests**, not cases; a caselist names
 tests, and the case names the comparison.
@@ -62,8 +64,8 @@ a file contributes.
 
 ``[store]``, ``[driver.*]``, ``[suite.*]`` and ``[case.*]`` accumulate across
 the tree. The same name twice is a load-time error, not an override; an unknown
-section or key is a load-time error too. A test tool cannot afford a typo that
-silently does nothing.
+section or key is a load-time error too. An unattended test run cannot afford a
+typo that silently does nothing.
 
 .. code-block:: toml
 
@@ -85,13 +87,12 @@ silently does nothing.
    project = "amdvlk"
 
    [suite.deqp-vk]
-   kind = "deqp"
    project = "deqp"               # suite root = its install_dir
    case_list = ["mustpass/vk-default.txt"]
    jobs = "cores"                 # physical cores; or a number
    timeout = 300
 
-   [suite.deqp-vk.deqp]
+   [suite.deqp-vk.deqp]           # the runner shape is this table's name
    exe = "deqp-vk"
    waiver = "waivers/vk.xml"
    args = [
@@ -103,7 +104,6 @@ silently does nothing.
    tests_per_group = 4096
 
    [suite.piglit]
-   kind = "piglit"
    project = "piglit"
    case_list = ["quick"]          # exactly one profile per invocation
    jobs = 4
@@ -139,14 +139,14 @@ silently does nothing.
      - ``project`` is required. ``build_type`` defaults to ``release``;
        ``branch`` defaults to the resolved focus's identity-repo
        ``main_branch`` (the focus repo when it has its own git, else its
-       anchor). ``select`` is
-       set as ``VK_LOADER_DRIVERS_SELECT``. ``env`` is a ``devenv``
-       declaration table applied after ``devenv``.
+       anchor). ``select`` is set as ``VK_LOADER_DRIVERS_SELECT``. ``env`` is a
+       ``devenv`` declaration table applied after ``devenv``.
    * - ``[suite.*]``
-     - ``kind`` and ``project`` are required. ``runner`` defaults to
-       ``runner``. ``case_list`` is interpreted by the kind. ``jobs`` defaults
-       to physical cores; ``timeout`` to 60 seconds. ``env`` is applied after
-       the driver.
+     - ``project`` is required; ``runner`` defaults to ``runner``.
+       ``case_list`` is interpreted by the runner shape. ``jobs`` defaults to
+       physical cores; ``timeout`` (seconds per test) to 60. ``env`` is applied
+       after the driver. Exactly one of the two tables below names the runner
+       shape.
    * - ``[suite.<name>.deqp]``
      - ``exe`` is required; ``waiver``, ``args`` and ``tests_per_group`` are
        optional. ``deqp`` accepts any number of caselist files and passes one
@@ -160,20 +160,19 @@ silently does nothing.
 
 Every suite path (``exe``, ``waiver``, each caselist, ``folder``) is relative
 to the suite root and must not escape it: absolute paths and components that
-climb out with ``..`` are load-time errors. The kind's sub-table is the only
-place its keys live; a ``deqp`` key in a ``piglit`` table is an unknown key.
-``kind`` must name exactly one sub-table.
+climb out with ``..`` are load-time errors, because the install stamp hashes
+that tree and a file outside it would be tested without being part of the
+identity. A shape's keys live only in its own table; a ``deqp`` key in a
+``piglit`` table is an unknown key.
 
 There is no ``enabled`` flag and no schedule. Which cases run nightly is a
 service declaration; the config declares what a case *is*, not when it runs.
 
-Kinds
------
+Runner shapes
+-------------
 
-A kind is one runner shape, not one API. Both kinds use a binary from the
-``deqp-runner`` project and the same evidence contract: ``results.csv``,
-``failures.csv``, ``failures-all.csv``, ``expectations.json``, and exit
-``0``/``1``/``2``.
+A shape is one runner invocation, not one API. Both run a binary from the
+``deqp-runner`` project, and gputest reads the same evidence from both.
 
 * ``deqp`` — dEQP Vulkan through ``deqp-runner``. The installed tree needs the
   dEQP executable, ``vulkan/``, the caselists and the waiver. Its driver guard
@@ -182,10 +181,9 @@ A kind is one runner shape, not one API. Both kinds use a binary from the
   CMake install output (``<folder>/{tests,bin,lib}``). Its driver guard is
   empty; a case selects zink with ``env``.
 
-Adding a kind is a code change, not a config value: the ``Kind`` variant and
-its ``SuiteShape`` variant, the sub-table, and
-``runner_bin``/``argv``/``check_assets``/``check_driver`` on ``SuiteShape``.
-The core pipeline never branches on the kind itself.
+Adding a shape is a code change, not a config value: a ``Kind`` variant
+carrying its table, and its arms in ``runner_bin``, ``argv``, ``check_assets``
+and ``check_driver``. The pipeline never branches on the shape itself.
 
 Environment
 -----------
@@ -211,9 +209,9 @@ The three test-only tables use the same vocabulary as the project registry's
 ``separator``. Values are literal: there is no template language here, and a
 string that looks like one is passed through as written.
 
-The scrub removes the names from the plugin's own process environment before it
-composes anything, so the caller ``devenv`` sees is exactly the environment the
-runner inherits. It is also why a stale ``MESA_*`` knob in your shell cannot
+The scrub removes the names from the plugin's own process environment before
+the registry loads, so the caller ``devenv`` sees is exactly the environment
+the runner inherits. It is also why a stale ``MESA_*`` knob in your shell cannot
 leak into a test.
 
 The runner is spawned with the scrubbed environment plus the final overlay,
@@ -223,14 +221,16 @@ whole environment — is recorded in the archive.
 Installation
 ------------
 
-``run`` never installs. A missing asset, stamp or selection fails and names the
-``wits gputest install`` command that fixes it.
+``run`` never installs. A missing asset, stamp or selection fails before the
+driver is composed and names the ``wits gputest install`` command that fixes it.
 
 ``wits gputest install [<suite>…]`` derives the project list from the selected
 suites (the runner projects included), builds ``release`` on each project's main
-branch with the install phase, and verifies the kind's installed layout before
+branch with the install phase, and verifies the shape's installed layout before
 it writes the stamp. It removes the old stamp *before* the build starts, so a
-failed install leaves no stamp for a run to mistake for a good tree.
+failed install leaves no stamp for a run to mistake for a good tree. Each
+project installs on its own: one that fails is reported, the others still
+install, and the command exits non-zero at the end.
 
 .. code-block:: sh
 
@@ -247,74 +247,73 @@ CMake's install rules.
 project's ``install_dir`` and the runner root is the runner project's
 ``install_dir``; both are declarations in the project registry. A path under
 ``$XDG_RUNTIME_DIR`` is a valid choice, with whatever lifetime that choice
-has. The two roots **must not contain each other**: each install stamp hashes
-its whole installed tree, so an overlapping root would make one project's
-stamp change when the other installs. ``check``, ``install``, ``plan`` and
-``run`` refuse an overlapping layout. Siblings such as
-``$XDG_RUNTIME_DIR/wits/gputest/{deqp,piglit,runner}`` are disjoint.
+has. The roots **must not contain each other**: each install stamp hashes its
+whole installed tree, so a root inside another would make that project's stamp
+change when the other installs. ``install`` checks every pair of roots before
+anything builds. Siblings such as ``$XDG_RUNTIME_DIR/wits/gputest/{deqp,piglit,runner}``
+are disjoint.
 
 The stamp is ``<install_dir>/.gputest.toml``: the canonical tree hash, the
-install time, the project key, the branch and the commits. It is part of the
-installed tree, not of gputest's state. A tree installed by a bare ``wits build
---install`` has no stamp; install it through ``wits gputest install``.
+install time, and a ``[source]`` table with the project key, the branch and the
+commits. It is part of the installed tree, not of gputest's state. A tree
+installed by a bare ``wits build --install`` has no stamp; install it through
+``wits gputest install``.
 
 The verbs
 ---------
 
 .. code-block:: sh
 
-   wits gputest check                     # config, registry, assets, stamps
-   wits gputest list                      # cases, last run, asset state
-   wits gputest plan <case>…              # env, argv, identity, baseline
+   wits gputest list                      # newest archive per case; can it run?
    wits gputest install [<suite>…]        # install test suites; never tests
    wits gputest run <case>… [--if-changed] [profile flags]
+   wits gputest run <case>… -n            # the plan: env, argv, identity, baseline
    wits gputest history <case> [--limit N]
    wits gputest show <case> <id> [--failures]
    wits gputest prune
 
-``check``
-   Validates the config tree, every referenced project, every suite's kind
-   config, its assets and the install stamps. It does not compose a driver or
-   resolve a build. It exits non-zero when any class of problem is found.
-
 ``list``
-   One line per case: last run id, exit, and whether the assets and stamps are
-   present. It does not compose a driver, so it stays cheap.
-
-``plan``
-   Everything a run would do, printed: the composed environment's set/unset,
-   the kind's argv, the identity and its components, the baseline, and the
-   paths. Use it when "why is this loading that driver?" is the question.
+   One line per case: its newest archive on this device with the verdict and
+   counts, and ``[not ready: …]`` when the case cannot run now — its driver's
+   project is not in the registry, or its suite or runner is not installed. It
+   exits 1 when any case cannot run, so it is the check before a long run. It
+   reads stamps, layouts and ``run.toml`` and never composes a driver.
 
 ``install``
    The installation act above.
 
 ``run``
-   The run pipeline. ``--if-changed`` skips a build whose identity was already
+   The run pipeline. ``--if-changed`` skips a case whose identity was already
    tested and records nothing; without it a run always runs. A rerun of the
    same identity compares against the stored baseline, not against itself.
+   ``-n`` prints everything a run would do instead: the composed environment's
+   set and unset, the argv, the identity and its components, the baseline and
+   the state. Composition and stamp reads still happen, because the plan cannot
+   be printed without them.
 
 ``history``
-   The archives for one case, newest first, read from each archive's first
-   member. No CSV is parsed.
+   The archives for one case, newest first: id, device, driver commit, verdict
+   and counts, each read from the archive's ``run.toml``.
 
 ``show``
-   One archive's ``run.toml``; ``--failures`` adds its ``failures.csv``.
+   One archive's ``run.toml`` as written; ``--failures`` adds the runner's
+   ``failures.csv``.
 
 ``prune``
    Removes archives older than ``store.archive_days``, stale ``.part`` files
-   and empty directories. State is left alone. A ``.part`` is a crash leftover;
-   do not run ``prune`` while a run or install is writing one.
+   and the directories that leaves empty. State is left alone. A ``.part`` is
+   the leftover of a run that crashed while writing its archive; do not run
+   ``prune`` while a run is writing one.
 
-``-n``/``--dry-run`` is the plugin's own flag (``wits`` consumes its global
-one before dispatching). ``run -n`` prints the plan; ``install -n`` and
-``prune -n`` print what they would do. Composition and stamp reads still
-happen under ``run -n``, because the plan cannot be printed without them.
+``-n``/``--dry-run`` and ``-v``/``--verbose`` are the plugin's own flags;
+``wits -n gputest …`` forwards them, so it means the same as
+``wits gputest -n …``. ``install -n`` and ``prune -n`` print what they would
+do.
 
 Which build
 -----------
 
-The driver table names the default build. The ad-hoc flags are the ones
+The driver table names the case's build. The ad-hoc flags are the ones
 :doc:`build` and :doc:`devenv` already use:
 
 * ``-b``/``--branch``, ``-B``/``--build-type``, ``-T``/``--toolchain``,
@@ -323,7 +322,10 @@ The driver table names the default build. The ad-hoc flags are the ones
 * ``--detach`` for a detached checkout;
 * ``--build-dir``/``--install-dir`` overrides.
 
-A review checkout is therefore:
+A run given any of them is **compare-only**: it compares against the case's
+state and is archived like any run, but it does not move the state, so the
+declared build's next run still compares with the declared build. A review
+checkout is therefore:
 
 .. code-block:: sh
 
@@ -334,7 +336,7 @@ Identity
 --------
 
 Identity answers one question: *is this the same thing we already tested?* It is
-one SHA-256 over seven component hashes:
+one SHA-256 over seven component hashes, and the archive records all eight:
 
 .. list-table::
    :header-rows: 1
@@ -349,19 +351,30 @@ one SHA-256 over seven component hashes:
    * - ``driver.icd``
      - the selected ICD manifests and the libraries they name
    * - ``driver.libs``
-     - every ``*.so*`` directly under the loader paths, following symlinks
+     - every shared object (``*.so``, ``*.so.*``) directly under the loader
+       paths, following symlinks; one that resolves to nothing cannot load and
+       is skipped
    * - ``driver.config``
-     - the EGL vendor files and every ``*.conf`` under ``DRIRC_CONFIGDIR``
+     - the EGL vendor files, and the drirc files Mesa reads: every ``*.conf``
+       directly inside each ``DRIRC_CONFIGDIR`` entry, then ``$HOME/.drirc``
    * - ``argv``
-     - the kind's argv with the run directory replaced by a marker and
+     - the runner argv with the run directory replaced by a marker and
        ``--baseline`` omitted
    * - ``env``
-     - the final applied overlay relative to the scrubbed caller
+     - what the final overlay changed relative to the scrubbed caller; where a
+       value extends the caller's own (Meson prepends its build directories to
+       ``PATH``), only the added part
 
 The suite and runner trees are hashed once at install. The driver's content is
 hashed at run time. Content, not commits: a failed nightly can leave the
 previous build tree in place while the checkout has moved, and content is what
 actually loads. Commits are recorded as provenance.
+
+``VK_LOADER_DRIVERS_SELECT`` follows the loader's own rule: comma-separated
+tokens, each compared case-insensitively with the manifest's file name as a
+prefix (``x*``), a suffix (``*x``), a substring (``*x*``) or the whole name.
+Any other ``*``, ``?`` and ``[`` are literal, so a selector the loader would
+not understand selects nothing here either.
 
 State and baselines
 -------------------
@@ -378,8 +391,8 @@ State is one small file per case and device:
    baseline = "20261023T…"       # what that run compared against
 
 * No state file — run without a baseline.
-* The hash differs — use the previous archive as the baseline, then remember
-  the previous run.
+* The hash differs — use the last run's archive as the baseline, then remember
+  this run.
 * The hash is equal and ``--if-changed`` is given — skip and record nothing.
 * The hash is equal without ``--if-changed`` — run anyway, but keep the stored
   baseline, so a rerun returns the same verdict rather than comparing the build
@@ -387,14 +400,20 @@ State is one small file per case and device:
 * The baseline archive is gone — run without a baseline and say so. Pruning
   evidence never resurrects a run.
 * The run did not complete — a signal, a spawn failure, a missing asset or
-  stamp, or a runner that exits 0/1/2 without the expected CSVs is an error,
-  not a result. The state is left untouched.
+  stamp, or a runner that exits without ``results.csv`` is an error, not a
+  result. The state is left untouched.
+* The run is compare-only — the state is left untouched.
 
-The baseline is the previous archive's ``failures-all.csv``, not its
-``failures.csv``: the latter omits expected failures, so using it as a baseline
-would make a persistent failure alternate between ``Fail`` and
-``ExpectedFail``. The state is not the store's index; a state whose archive has
-aged out still decides that the build was tested.
+The baseline is the previous archive's ``failing.csv``: every test that failed
+in that run, with the status it actually had. gputest writes it from
+``results.csv`` and the baseline that run used. The runner's own
+``failures-all.csv`` cannot serve: it records ``ExpectedFail`` and
+``UnexpectedImprovement(Fail)`` as statuses, and the runner matches a
+``Timeout`` only against ``Timeout`` and a ``Fail`` only against ``Fail`` or
+``ExpectedFail``, so a persistent timeout would alternate between expected and
+new, and a crash that became a failure would come back as new. The state is not
+the store's index; a state whose archive has aged out still decides that the
+build was tested.
 
 Evidence
 --------
@@ -406,24 +425,28 @@ One run that reaches the runner produces one archive:
    <store>/<case>/<device>/<id>.tar.zst
      run.toml                 # first member
      results.csv              # every result, with timings
-     failures.csv             # unexpected results — the new-regression evidence
-     failures-all.csv         # unexpected plus expected failures — the next baseline
+     failures.csv             # unexpected results, as the runner wrote them
+     failures-all.csv         # the runner's failures plus expected ones (deqp-runner ≥ 0.24)
      expectations.json        # the runner's expectation record
+     failing.csv              # every failing test by its own status — the next baseline
 
-``run.toml`` has ``started``, ``duration``, ``exit``, ``env`` and ``argv`` at
-the top, then ``[device]``, ``[driver]``, ``[test]``, ``[runner]`` and
-``[content]``. ``env`` holds the overlay's sets; ``unset`` (when non-empty)
-names what it removed. The content hashes record exactly what was tested; the
-commits record readable provenance.
+``run.toml`` has ``started`` (the run id), ``duration``, ``exit``, ``verdict``,
+``detail`` (why an error is one), ``baseline`` (the archive compared against),
+``compare_only``, ``argv`` and ``unset`` at the top, then ``[counts]``,
+``[env]``, ``[device]``, ``[driver]`` (including the ``build_dir`` whose
+environment the run used), ``[suite]``, ``[runner]`` and ``[content]`` (the
+identity and its seven components).
 
 The archive keeps whatever evidence the runner produced, even on a signal or an
-unexpected exit. It is written in the run directory, copied into the store as a
-``.part`` file, and renamed over the destination; the rename is inside the
-store's filesystem, so a crash never leaves a truncated archive under a run id.
+unexpected exit. It is written into the store as a synced ``.part`` file and
+renamed over the destination, so a crash never leaves a truncated archive under
+a run id.
 
-The run directory is ``$XDG_RUNTIME_DIR/gputest/<case>/<id>/`` (falling back to
-``/run/user/<uid>/gputest``). It is a runtime directory and disappears with the
-session; it is not pruned.
+The run directory is ``$XDG_RUNTIME_DIR/gputest/<case>/<id>/``. It is the
+runner's scratch, and it is removed once its archive is in the store; when the
+archive cannot be written, it is kept and the error names it. A run id is the
+UTC second the run started; a second run of one case within the same second
+waits for the next one.
 
 The report and exit status
 --------------------------
@@ -432,22 +455,25 @@ One line per case on stdout:
 
 ::
 
-   radv-vk  20261026T213012Z  regression  new=2 carried=3
+   radv-vk  20261026T213012Z  regression  new=2 carried=3 improved=0
 
 The verdict is ``pass``, ``regression``, ``improved``, ``skipped`` or
-``error``. New counts are unexpected failures; carried counts are
-``ExpectedFail`` results from the baseline.
+``error``, counted from ``results.csv``: ``new`` are failures the baseline did
+not have (``Fail``, ``Crash``, ``Timeout``, ``Missing``), ``carried`` are
+failures it had (``ExpectedFail``), and ``improved`` are baseline failures that
+no longer fail the same way (``UnexpectedImprovement``). The runner's exit
+status must agree — 0 exactly when nothing is new or improved — or the run is an
+error; that makes every deqp-runner version read the same way. A compare-only
+run ends its line with ``(compare-only)``.
 
 The ``run`` command exits:
 
-* ``0`` — every case passed or only improved;
+* ``0`` — every case passed, improved, or was skipped;
 * ``1`` — a regression landed;
 * ``2`` — a case could not run.
 
 An error outranks a regression. A per-case failure never stops the remaining
-cases: the service wants the whole night's picture, not the first failure. A
-runner exit of ``2`` (improvements only) is a successful command exit while the
-line still says ``improved``.
+cases: the service wants the whole night's picture.
 
 The nightly
 -----------
@@ -478,45 +504,48 @@ When it fails
    * - Message
      - Cause and fix
    * - ``unknown case …``
-     - The name is not in the config. ``check`` catches it before a run; the
-       error lists the declared cases.
+     - The name is not in the config; the error lists the declared cases.
    * - ``case name … is not a path component``
      - The name is ``.``, ``..``, empty, or holds a character outside
        ``[A-Za-z0-9._-]``. It names the store and state directories.
    * - ``project … is not in the registry``
      - The driver, suite or runner names a project this machine does not
        declare.
+   * - ``suite … is not installed; run `wits gputest install …```
+     - A stamp is missing (the tree was not installed by ``wits gputest
+       install``, or that install failed), or the installed layout lacks
+       something the suite needs. Run the named command.
    * - ``build directory … does not exist``
      - ``devenv`` cannot compose an environment for a build that was never
        made. Build it first with :doc:`build`.
-   * - ``install stamp … is missing``
-     - The tree was not installed by ``wits gputest install`` (or that install
-       failed before stamping). Run it again.
-   * - ``driver exposes no ICD`` / ``select matched N ICDs``
+   * - ``driver exposes no ICD`` / ``… matched N of the ICDs``
      - The composed environment does not name exactly one Vulkan driver after
        ``VK_LOADER_DRIVERS_SELECT``. Fix the driver's project ``devenv`` or its
        ``select``. An AMDVLK case whose manifest is not installed needs the
        driver's ``wits build --install`` first.
-   * - ``suite root … and runner root … overlap``
-     - The two installed trees contain each other. Give the suite and runner
-       projects disjoint ``install_dir`` values, e.g.
-       ``$XDG_RUNTIME_DIR/wits/gputest/{deqp,piglit,runner}``. Each stamp
-       hashes its whole tree; an overlap would couple their identities.
-   * - ``caselist … does not exist`` / ``… is empty``
+   * - ``the install roots of … overlap``
+     - Two installed trees contain each other. Give every suite and runner
+       project its own ``install_dir``, e.g.
+       ``$XDG_RUNTIME_DIR/wits/gputest/{deqp,piglit,runner}``.
+   * - ``caselist … is missing`` / ``… is not a non-empty file``
      - The install layout and the suite config disagree. Fix the install hook
        or the caselist path; a run never silently tests fewer cases.
-   * - ``runner exited with signal …``
+   * - ``runner was killed by signal …``
      - The runner died; the run is an error, not a regression. The signal is
        recorded as a negative exit in ``run.toml``; the state is left alone.
    * - ``runner exited with code …``
      - A code outside 0/1/2 is an error, not a regression.
-   * - ``runner exited N without the expected CSVs``
-     - The runner failed before it ran the tests. Exit 1 is also a regression,
-       so the verdict is only read when ``results.csv``, ``failures.csv`` and
-       ``failures-all.csv`` exist.
+   * - ``runner exited N without writing results.csv``
+     - The runner failed before it ran the tests.
+   * - ``runner exited N, but results.csv holds …``
+     - The exit status and the results disagree; the run is an error rather
+       than a guess.
    * - ``state file … cannot be read``
      - An unreadable state is an error, not a first run: treating it as empty
        would silently drop the baseline. Delete the file to start over.
+   * - ``XDG_RUNTIME_DIR is not set``
+     - The run directories live there; run under a login session or the user
+       service manager.
 
 Files and paths
 ---------------
@@ -535,7 +564,7 @@ Files and paths
    * - ``$XDG_STATE_HOME/wits/gputest/<case>/<device>.toml``
      - what the last completed run tested, and its baseline
    * - ``$XDG_RUNTIME_DIR/gputest/<case>/<id>/``
-     - the run directory (CSVs, ``baseline.csv``, the archive while written)
+     - the run directory while a run is going (CSVs, ``baseline.csv``)
    * - ``<project install_dir>/.gputest.toml``
      - the install stamp for a suite or runner tree
 
@@ -545,5 +574,4 @@ What it deliberately does not do
 There is no build, no install during a run, no shell hook, no command template,
 no glob expansion, no scheduler, no forge interaction, no multi-machine
 dispatch and no machine-output format. The exit status and the archive are the
-machine interface; the terminal is for a person. The rationale for each of
-these is in :doc:`/reference/gputest-design`.
+machine interface; the terminal is for a person.

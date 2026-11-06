@@ -1,8 +1,6 @@
-//! `wits gputest run` — the whole pipeline, one report line per case.
-//!
-//! Under `-n` it prints the plan `plan` would print and does not run the test;
-//! composition and stamp reads still happen, because the plan cannot be printed
-//! without them.
+//! `wits gputest run` — the whole pipeline, one report line per case. Under
+//! `-n` it prints each case's plan instead: composition and stamp reads still
+//! happen, because the plan cannot be printed without them.
 
 use anyhow::Result;
 
@@ -10,18 +8,26 @@ use wits_project::Workspace;
 
 use crate::cmd::RunArgs;
 use crate::config::Config;
-use crate::pipeline;
+use crate::resolve::Session;
+use crate::{device, env, pipeline};
 
 pub fn run(args: &RunArgs) -> Result<u8> {
     let config = Config::load()?;
-    // The design's step 2: scrub before the registry is loaded, so a project
-    // template that reads env.* cannot see caller graphics state either.
-    crate::env::scrub_process_env();
+    // Before the registry loads: a project template that reads `env.*` must
+    // not see caller graphics state either.
+    let caller = env::scrub();
     let ws = Workspace::load()?;
-    let flags = args.profile.to_flags();
+    let session = Session {
+        config: &config,
+        ws: &ws,
+        profile: &args.profile,
+        here: std::env::current_dir().ok(),
+        caller,
+        device: device::probe()?,
+    };
     if wits_core::log::is_dry_run() {
-        pipeline::plan_cases(&config, &ws, &args.cases, &flags)?;
+        pipeline::plan_cases(&session, &args.cases)?;
         return Ok(0);
     }
-    pipeline::run_cases(&config, &ws, &args.cases, &flags, args.if_changed)
+    Ok(pipeline::run_cases(&session, &args.cases, args.if_changed))
 }

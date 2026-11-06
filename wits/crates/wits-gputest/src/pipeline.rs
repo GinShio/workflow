@@ -1,162 +1,326 @@
-//! The run pipeline: prepare, decide, choose a baseline, execute, classify,
-//! archive, update state, report.
+//! The run pipeline: prepare, decide, choose a baseline, execute, evaluate,
+//! archive, update state, report — and under `-n`, the plan instead.
 //!
-//! `run` and `plan` share [`resolve::prepare`]. `plan` chooses only a
-//! hypothetical run id so it can print the argv, and stops before creating the
-//! run directory or starting the runner; `run` goes through the whole sequence.
 //! A case's failure never stops the remaining cases: the service wants the
 //! whole night's picture.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::os::unix::process::ExitStatusExt;
-use std::path::Path;
-use std::time::Instant;
+use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 
 use wits_actions::Overlay;
-use wits_project::Workspace;
 
-use crate::archive::{self, DeviceRecord, DriverRecord, RunRecord};
-use crate::config::Config;
-use crate::device::{self, Device};
-use crate::env;
-use crate::kinds::RunContext;
-use crate::report::{self, CaseReport, Counts, Verdict};
-use crate::resolve::{self, Baseline, Flags};
+use crate::archive::{self, RunRecord};
+use crate::config::Store;
+use crate::report::{self, CaseReport};
+use crate::resolve::{self, Session};
 use crate::state::{self, State};
 use crate::store;
+use crate::suite::RunContext;
+use crate::time;
+
+/// The baseline's file name inside the run directory.
+const BASELINE: &str = "baseline.csv";
 
 /// Run every named case, printing one report line each, and return the command
 /// exit status: 0 pass/improved/skipped, 1 regression, 2 error.
-pub fn run_cases(
-    config: &Config,
-    ws: &Workspace,
-    cases: &[String],
-    flags: &Flags,
-    if_changed: bool,
-) -> Result<u8> {
-    // The CLI scrubs before Workspace::load, as the design's step 2 requires;
-    // this repeated call is idempotent and keeps an in-process caller safe.
-    env::scrub_process_env();
-    let caller = env::caller();
-    let device = device::probe()?;
-    let mut status = 0u8;
-    let mut cache = crate::content::HashCache::new();
-    let mut session = Session {
-        caller: &caller,
-        device: &device,
-        cache: &mut cache,
-    };
+pub fn run_cases(s: &Session<'_>, cases: &[String], if_changed: bool) -> u8 {
+    let mut status = 0;
     for case in cases {
-        let report = run_one(config, ws, case, flags, if_changed, &mut session);
-        report.print();
-        status = status.max(match report.verdict {
-            Verdict::Error => 2,
-            Verdict::Regression => 1,
-            _ => 0,
-        });
+        let mut claimed = None;
+        let report = run_case(s, case, if_changed, &mut claimed)
+            .unwrap_or_else(|err| CaseReport::error(case, claimed, &err));
+        println!("{report}");
+        status = status.max(report.verdict.exit_code());
     }
-    Ok(status)
+    status
 }
 
-/// Print everything a run would do, without running or writing.
-pub fn plan_cases(config: &Config, ws: &Workspace, cases: &[String], flags: &Flags) -> Result<()> {
-    // As in `run_cases`: the CLI has already scrubbed before loading the
-    // registry, and this keeps a direct caller of the pipeline safe.
-    env::scrub_process_env();
-    let caller = env::caller();
-    let device = device::probe()?;
-    let mut failed = 0usize;
-    let mut cache = crate::content::HashCache::new();
-    let mut session = Session {
-        caller: &caller,
-        device: &device,
-        cache: &mut cache,
-    };
+/// Print everything a run of each case would do, without running or writing.
+pub fn plan_cases(s: &Session<'_>, cases: &[String]) -> Result<()> {
+    let mut failed = 0;
     for case in cases {
-        if let Err(err) = plan_one(config, ws, case, flags, &mut session) {
+        if let Err(err) = print_plan(s, case) {
             eprintln!("Error: case '{case}': {err:#}");
             failed += 1;
         }
     }
     if failed > 0 {
-        bail!("{failed} case(s) could not be resolved");
+        bail!("{failed} case(s) could not be planned");
     }
     Ok(())
 }
 
-/// The per-command pieces every case shares: the scrubbed caller, the probed
-/// device and the file-hash cache.
-struct Session<'a> {
-    caller: &'a env::Env,
-    device: &'a Device,
-    cache: &'a mut crate::content::HashCache,
+/// One case's run. `claimed` receives the run id as soon as there is one, so a
+/// later error is still reported against it.
+fn run_case(
+    s: &Session<'_>,
+    case: &str,
+    if_changed: bool,
+    claimed: &mut Option<String>,
+) -> Result<CaseReport> {
+    let prepared = resolve::prepare(s, case)?;
+    let device = s.device.key();
+    let state = state::read(case, &device)?;
+    let identity = prepared.content.identity.clone();
+    if if_changed && state.as_ref().is_some_and(|state| state.hash == identity) {
+        return Ok(CaseReport::skipped(case, "identity unchanged"));
+    }
+    let store = &s.config.store;
+    let (env, unset) = overlay_record(&prepared.overlay)?;
+
+    // Fail before the test runs for hours and then cannot keep its evidence.
+    let archive_dir = store::archive_dir(store, case, &device);
+    std::fs::create_dir_all(&archive_dir)
+        .with_context(|| format!("creating the archive directory {}", archive_dir.display()))?;
+    let mut run = RunDir::claim(store, case, &device)?;
+    *claimed = Some(run.id.clone());
+
+    let baseline = match choose_baseline(store, case, &device, &identity, state.as_ref()) {
+        Some((id, archive)) => {
+            let path = run.dir.join(BASELINE);
+            if archive::extract(&archive, report::FAILING, &path)? {
+                Some((id, path))
+            } else {
+                log::warn!(
+                    "baseline archive {} has no {}; running without a baseline",
+                    archive.display(),
+                    report::FAILING
+                );
+                None
+            }
+        }
+        None => None,
+    };
+    let baseline_path = baseline.as_ref().map(|(_, path)| path.as_path());
+    let argv = prepared.suite.argv(&RunContext {
+        run_dir: &run.dir,
+        baseline: baseline_path,
+        suite_root: &prepared.installed.suite_root,
+        runner_root: &prepared.installed.runner_root,
+        jobs: prepared.jobs,
+    })?;
+
+    let started = Instant::now();
+    let status = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .current_dir(&run.dir)
+        .env_clear()
+        .envs(&prepared.env)
+        .status()
+        .with_context(|| format!("spawning runner {}", argv[0]))?;
+    let duration = started.elapsed().as_secs();
+    let exit = status
+        .code()
+        .or_else(|| status.signal().map(|signal| -signal))
+        .expect("a waited-for child has exited or been killed by a signal");
+    let outcome = report::evaluate(exit, &run.dir, baseline_path);
+
+    let record = RunRecord {
+        started: run.id.clone(),
+        duration,
+        exit,
+        verdict: outcome
+            .as_ref()
+            .map_or(report::Verdict::Error, |counts| counts.verdict()),
+        detail: outcome.as_ref().err().map(|err| format!("{err:#}")),
+        baseline: baseline.map(|(id, _)| id),
+        compare_only: s.compare_only(),
+        argv,
+        unset,
+        counts: outcome.as_ref().ok().copied(),
+        env,
+        device: s.device.clone(),
+        driver: prepared.driver,
+        suite: prepared.installed.suite.source,
+        runner: prepared.installed.runner.source,
+        content: prepared.content,
+    };
+    if let Err(err) = store::save(store, case, &device, &record, &run.dir) {
+        run.keep = true;
+        return Err(err.context(format!(
+            "archiving the run; its evidence stays in {}",
+            run.dir.display()
+        )));
+    }
+
+    let counts = match outcome {
+        Ok(counts) => counts,
+        Err(err) => return Ok(CaseReport::error(case, Some(run.id.clone()), &err)),
+    };
+    if !record.compare_only {
+        state::write(
+            case,
+            &device,
+            &State {
+                hash: identity,
+                run: run.id.clone(),
+                baseline: record.baseline.clone(),
+            },
+        )?;
+    }
+    Ok(CaseReport {
+        case: case.to_owned(),
+        id: Some(run.id.clone()),
+        verdict: counts.verdict(),
+        counts: Some(counts),
+        detail: None,
+        compare_only: record.compare_only,
+    })
 }
 
-fn plan_one(
-    config: &Config,
-    ws: &Workspace,
+/// The archive a run of `identity` compares against. The same identity reuses
+/// the stored baseline, never the stored run, so a rerun returns the same
+/// verdict rather than comparing the build with itself; a different identity
+/// compares with the last run. A pruned archive is no baseline, and said so.
+fn choose_baseline(
+    store: &Store,
     case: &str,
-    flags: &Flags,
-    session: &mut Session<'_>,
-) -> Result<()> {
-    let Session {
-        caller,
-        device,
-        cache,
-    } = session;
-    let prepared = resolve::prepare(ws, config, case, flags, caller, cache)?;
-    let state = state::read(case, &device.key())?;
-    let id = resolve::next_run_id(&config.store, case, &device.key(), state.as_ref())?;
-    let run_dir = resolve::run_dir(case, &id)?;
-    let baseline = resolve::choose_baseline(
-        &config.store,
-        case,
-        &device.key(),
-        &prepared.identity,
-        state.as_ref(),
-    );
-    let baseline_path = baseline
-        .archive
-        .as_ref()
-        .map(|_| run_dir.join("baseline.csv"));
-    let ctx = RunContext {
+    device: &str,
+    identity: &str,
+    state: Option<&State>,
+) -> Option<(String, PathBuf)> {
+    let id = match state? {
+        state if state.hash == identity => state.baseline.clone()?,
+        state => state.run.clone(),
+    };
+    let path = store::archive_path(store, case, device, &id);
+    if path.is_file() {
+        Some((id, path))
+    } else {
+        log::warn!("baseline archive {id} is gone; running without a baseline");
+        None
+    }
+}
+
+/// A claimed run directory, `$XDG_RUNTIME_DIR/gputest/<case>/<id>`. It is
+/// removed when the run is done with it, because the archive carries
+/// everything it held; `keep` leaves it for a person when the archive could
+/// not be written.
+struct RunDir {
+    id: String,
+    dir: PathBuf,
+    keep: bool,
+}
+
+impl RunDir {
+    /// Claim the current second as the run id. An id is a UTC second, so a
+    /// second run of one case within it waits for the next one.
+    fn claim(store: &Store, case: &str, device: &str) -> Result<Self> {
+        let parent = runtime_root()?.join(case);
+        std::fs::create_dir_all(&parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+        for _ in 0..3 {
+            let id = time::now_run_id();
+            let dir = parent.join(&id);
+            if !store::archive_path(store, case, device, &id).exists() {
+                match std::fs::create_dir(&dir) {
+                    Ok(()) => {
+                        return Ok(Self {
+                            id,
+                            dir,
+                            keep: false,
+                        })
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(err) => {
+                        return Err(err).with_context(|| {
+                            format!("creating the run directory {}", dir.display())
+                        })
+                    }
+                }
+            }
+            let into_second = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |since| since.subsec_nanos());
+            std::thread::sleep(Duration::from_nanos(u64::from(1_000_000_000 - into_second)));
+        }
+        bail!("could not claim a run id for case '{case}': every recent second is taken")
+    }
+}
+
+impl Drop for RunDir {
+    fn drop(&mut self) {
+        if self.keep {
+            return;
+        }
+        if let Err(err) = std::fs::remove_dir_all(&self.dir) {
+            log::warn!("removing the run directory {}: {err}", self.dir.display());
+        }
+    }
+}
+
+/// Run directories are session scratch, so they live in the session's
+/// runtime directory.
+fn runtime_root() -> Result<PathBuf> {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|dir| !dir.is_empty())
+        .context("XDG_RUNTIME_DIR is not set; gputest keeps its run directories under it")?;
+    Ok(PathBuf::from(dir).join("gputest"))
+}
+
+/// The overlay as `run.toml` records it. TOML holds text, so a name or value
+/// that is not UTF-8 stops the case before the runner starts.
+fn overlay_record(overlay: &Overlay) -> Result<(BTreeMap<String, String>, Vec<String>)> {
+    let text = |value: &std::ffi::OsStr| {
+        value
+            .to_str()
+            .map(str::to_owned)
+            .with_context(|| format!("environment entry {} is not UTF-8", value.to_string_lossy()))
+    };
+    let set = overlay
+        .set
+        .iter()
+        .map(|(name, value)| Ok((text(name)?, text(value)?)))
+        .collect::<Result<_>>()?;
+    let mut unset = overlay
+        .unset
+        .iter()
+        .map(|name| text(name))
+        .collect::<Result<Vec<_>>>()?;
+    unset.sort();
+    Ok((set, unset))
+}
+
+fn print_plan(s: &Session<'_>, case: &str) -> Result<()> {
+    let prepared = resolve::prepare(s, case)?;
+    let device = s.device.key();
+    let state = state::read(case, &device)?;
+    let identity = &prepared.content.identity;
+    let run_dir = runtime_root()?.join(case).join(time::now_run_id());
+    let baseline = choose_baseline(&s.config.store, case, &device, identity, state.as_ref());
+    let baseline_path = baseline.as_ref().map(|_| run_dir.join(BASELINE));
+    let installed = &prepared.installed;
+    let argv = prepared.suite.argv(&RunContext {
         run_dir: &run_dir,
         baseline: baseline_path.as_deref(),
-        suite_root: &prepared.suite_root,
-        runner_root: &prepared.runner_root,
-        suite: &prepared.suite,
+        suite_root: &installed.suite_root,
+        runner_root: &installed.runner_root,
         jobs: prepared.jobs,
-    };
-    let argv = prepared.suite.shape.argv(&ctx)?;
+    })?;
+    let driver = &prepared.driver;
+    let content = &prepared.content;
 
-    println!("case {}", prepared.case);
+    println!("case {case}");
     println!(
-        "  driver    {} (focus {}, branch {}, build_type {})",
-        prepared.driver_meta.project,
-        prepared.driver_meta.focus,
-        prepared.driver_meta.branch.as_deref().unwrap_or("detached"),
-        prepared.driver_meta.build_type
+        "  driver      {} (focus {}, branch {}, build_type {})",
+        driver.project,
+        driver.focus,
+        driver.branch.as_deref().unwrap_or("detached"),
+        driver.build_type
     );
-    if let Some(toolchain) = &prepared.driver_meta.toolchain {
-        println!("  toolchain {toolchain}");
-    }
-    if let Some(generator) = &prepared.driver_meta.generator {
-        println!("  generator {generator}");
-    }
-    if !prepared.driver_meta.presets.is_empty() {
-        println!("  presets   {}", prepared.driver_meta.presets.join(", "));
-    }
+    println!("  build dir   {}", driver.build_dir.display());
     println!(
-        "  suite     {} ({}) project {}",
+        "  suite       {} ({}) from {}",
         prepared.suite.name,
-        prepared.suite.kind().as_str(),
-        prepared.suite_project
+        prepared.suite.kind.name(),
+        installed.suite.source.project
     );
-    println!("  suite root  {}", prepared.suite_root.display());
-    println!("  runner root {}", prepared.runner_root.display());
+    println!("  suite root  {}", installed.suite_root.display());
+    println!("  runner root {}", installed.runner_root.display());
     println!("  run dir     {}", run_dir.display());
     println!("  environment:");
     for (name, value) in &prepared.overlay.set {
@@ -173,320 +337,36 @@ fn plan_one(
     for arg in &argv {
         println!("    {arg}");
     }
-    println!("  identity {}", prepared.identity);
-    println!("    suite         {}", prepared.components.suite);
-    println!("    runner        {}", prepared.components.runner);
-    println!("    driver.icd    {}", prepared.components.driver_icd);
-    println!("    driver.libs   {}", prepared.components.driver_libs);
-    println!("    driver.config {}", prepared.components.driver_config);
-    println!("    argv          {}", prepared.components.argv);
-    println!(
-        "    env           {}",
-        crate::content::hash_overlay(&prepared.overlay)
-    );
-    match &baseline.archive {
-        Some(archive) => println!("  baseline {} ({})", archive.id, archive.path.display()),
+    println!("  identity {identity}");
+    for (label, hash) in [
+        ("suite", &content.suite),
+        ("runner", &content.runner),
+        ("driver.icd", &content.driver_icd),
+        ("driver.libs", &content.driver_libs),
+        ("driver.config", &content.driver_config),
+        ("argv", &content.argv),
+        ("env", &content.env),
+    ] {
+        println!("    {label:<13} {hash}");
+    }
+    match &baseline {
+        Some((id, path)) => println!("  baseline {id} ({})", path.display()),
         None => println!("  baseline none"),
     }
-    if let Some(note) = &baseline.note {
-        println!("  note     {note}");
-    }
-    match state.as_ref() {
-        Some(state) if state.hash == prepared.identity => {
-            println!("  state {} (same; --if-changed would skip)", state.hash)
-        }
-        Some(state) => println!("  state {} (different)", state.hash),
-        None => println!("  state none"),
-    }
-    Ok(())
-}
-
-fn run_one(
-    config: &Config,
-    ws: &Workspace,
-    case: &str,
-    flags: &Flags,
-    if_changed: bool,
-    session: &mut Session<'_>,
-) -> CaseReport {
-    let Session {
-        caller,
-        device,
-        cache,
-    } = session;
-    let prepared = match resolve::prepare(ws, config, case, flags, caller, cache) {
-        Ok(prepared) => prepared,
-        Err(err) => return error_report(case, None, format!("{err:#}")),
-    };
-    let state = match state::read(case, &device.key()) {
-        Ok(state) => state,
-        Err(err) => return error_report(case, None, format!("{err:#}")),
-    };
-    if if_changed
-        && state
-            .as_ref()
-            .is_some_and(|state| state.hash == prepared.identity)
-    {
-        return CaseReport {
-            case: prepared.case,
-            id: None,
-            verdict: Verdict::Skipped,
-            counts: Counts::default(),
-            detail: Some("identity unchanged".to_owned()),
-        };
-    }
-
-    let id = match resolve::next_run_id(&config.store, case, &device.key(), state.as_ref()) {
-        Ok(id) => id,
-        Err(err) => return error_report(case, None, format!("{err:#}")),
-    };
-    let run_dir = match resolve::run_dir(case, &id) {
-        Ok(dir) => dir,
-        Err(err) => return error_report(case, Some(id), format!("{err:#}")),
-    };
-    if let Err(err) = std::fs::create_dir_all(&run_dir) {
-        return error_report(
-            case,
-            Some(id),
-            format!("creating the run directory {}: {err}", run_dir.display()),
-        );
-    }
-    // Fail before the test can run for hours and then discover it cannot keep
-    // its evidence.
-    let archive_dir = store::archive_dir(&config.store, case, &device.key());
-    if let Err(err) = std::fs::create_dir_all(&archive_dir) {
-        return error_report(
-            case,
-            Some(id),
-            format!(
-                "creating the archive directory {}: {err}",
-                archive_dir.display()
-            ),
-        );
-    }
-
-    let baseline = resolve::choose_baseline(
-        &config.store,
-        case,
-        &device.key(),
-        &prepared.identity,
-        state.as_ref(),
-    );
-    if let Some(note) = &baseline.note {
-        log::warn!("{note}");
-    }
-    let (baseline_path, baseline_used) = match extract_baseline(&baseline, &run_dir) {
-        Ok((path, used, note)) => {
-            if let Some(note) = note {
-                log::warn!("{note}");
-            }
-            (path, used)
-        }
-        Err(err) => return error_report(case, Some(id), format!("{err:#}")),
-    };
-
-    let (env_set, env_unset) = match overlay_strings(&prepared.overlay) {
-        Ok(values) => values,
-        Err(err) => return error_report(case, Some(id), format!("{err:#}")),
-    };
-    let ctx = RunContext {
-        run_dir: &run_dir,
-        baseline: baseline_path.as_deref(),
-        suite_root: &prepared.suite_root,
-        runner_root: &prepared.runner_root,
-        suite: &prepared.suite,
-        jobs: prepared.jobs,
-    };
-    let argv = match prepared.suite.shape.argv(&ctx) {
-        Ok(argv) => argv,
-        Err(err) => return error_report(case, Some(id), format!("{err:#}")),
-    };
-
-    let started = Instant::now();
-    let mut command =
-        std::process::Command::new(argv.first().expect("the kind's argv always names a runner"));
-    command
-        .args(&argv[1..])
-        .current_dir(&run_dir)
-        .env_clear()
-        .envs(&prepared.env);
-    let status = command.status();
-    let duration = started.elapsed().as_secs();
-    let status = match status {
-        Ok(status) => status,
-        Err(err) => {
-            return error_report(
-                case,
-                Some(id),
-                format!("spawning runner {}: {err}", argv[0]),
+    match &state {
+        Some(state) if &state.hash == identity => {
+            println!(
+                "  state    {} (same identity; --if-changed would skip)",
+                state.run
             )
         }
-    };
-    let signal = status.signal();
-    let exit = status.code().unwrap_or_else(|| -(signal.unwrap_or(1)));
-    let completed = matches!(exit, 0..=2) && archive::required_csvs_present(&run_dir);
-
-    let record = RunRecord {
-        started: id.clone(),
-        duration,
-        exit,
-        env: env_set,
-        unset: env_unset,
-        argv,
-        device: DeviceRecord {
-            pci: device.pci.clone(),
-            id: device.id.clone(),
-            drm: device.drm.clone(),
-            kernel: device.kernel.clone(),
-        },
-        driver: DriverRecord {
-            project: prepared.driver_meta.project.clone(),
-            focus: prepared.driver_meta.focus.clone(),
-            branch: prepared.driver_meta.branch.clone(),
-            build_type: prepared.driver_meta.build_type.clone(),
-            toolchain: prepared.driver_meta.toolchain.clone(),
-            generator: prepared.driver_meta.generator.clone(),
-            presets: prepared.driver_meta.presets.clone(),
-            commits: prepared.driver_meta.commits.clone(),
-        },
-        test: prepared.test_record(),
-        runner: prepared.runner_record(),
-        content: prepared.content_record(),
-    };
-
-    // From here on the runner has been spawned: the evidence is archived even
-    // for a signal or an unexpected exit. The state only moves on a completed
-    // run.
-    if let Err(err) = archive::write_run_toml(&run_dir, &record) {
-        return error_report(case, Some(id), format!("{err:#}"));
+        Some(state) => println!("  state    {} (another identity)", state.run),
+        None => println!("  state    none"),
     }
-    let archive_path = run_dir.join(format!("{id}.tar.zst"));
-    if let Err(err) = archive::write(&archive_path, &record, &run_dir) {
-        return error_report(case, Some(id), format!("{err:#}"));
+    if s.compare_only() {
+        println!("  profile flags given: the run compares but leaves the state alone");
     }
-    if let Err(err) = store::install_archive(&config.store, case, &device.key(), &id, &archive_path)
-    {
-        return error_report(case, Some(id), format!("{err:#}"));
-    }
-
-    let counts = report::counts(&run_dir);
-    let (verdict, detail) = classify(exit, signal, completed, &run_dir);
-    if completed {
-        let baseline_id = baseline_used
-            .then(|| baseline.archive.as_ref().map(|archive| archive.id.clone()))
-            .flatten();
-        let state = State {
-            hash: prepared.identity.clone(),
-            run: id.clone(),
-            baseline: baseline_id,
-        };
-        if let Err(err) = state::write(case, &device.key(), &state) {
-            return error_report(case, Some(id), format!("{err:#}"));
-        }
-    }
-    CaseReport {
-        case: prepared.case,
-        id: Some(id),
-        verdict,
-        counts,
-        detail,
-    }
-}
-
-fn extract_baseline(
-    baseline: &Baseline,
-    run_dir: &Path,
-) -> Result<(Option<std::path::PathBuf>, bool, Option<String>)> {
-    let Some(archive) = &baseline.archive else {
-        return Ok((None, false, None));
-    };
-    let destination = run_dir.join("baseline.csv");
-    match archive::extract_baseline(&archive.path, run_dir)? {
-        true => Ok((Some(destination), true, None)),
-        false => Ok((
-            None,
-            false,
-            Some(format!(
-                "baseline archive {} has no failures-all.csv; running without a baseline",
-                archive.path.display()
-            )),
-        )),
-    }
-}
-
-fn classify(
-    exit: i32,
-    signal: Option<i32>,
-    completed: bool,
-    run_dir: &Path,
-) -> (Verdict, Option<String>) {
-    if let Some(signal) = signal {
-        return (
-            Verdict::Error,
-            Some(format!("runner exited with signal {signal}")),
-        );
-    }
-    if !completed {
-        if matches!(exit, 0..=2) {
-            let missing = archive::REQUIRED_CSVS
-                .iter()
-                .filter(|name| !run_dir.join(name).is_file())
-                .copied()
-                .collect::<Vec<_>>()
-                .join(", ");
-            return (
-                Verdict::Error,
-                Some(format!(
-                    "runner exited {exit} without the expected CSVs ({missing})"
-                )),
-            );
-        }
-        return (
-            Verdict::Error,
-            Some(format!("runner exited with code {exit}")),
-        );
-    }
-    match exit {
-        0 => (Verdict::Pass, None),
-        1 => (Verdict::Regression, None),
-        2 => (Verdict::Improved, None),
-        _ => (
-            Verdict::Error,
-            Some(format!("runner exited with code {exit}")),
-        ),
-    }
-}
-
-fn overlay_strings(overlay: &Overlay) -> Result<(BTreeMap<String, String>, Vec<String>)> {
-    let mut set = BTreeMap::new();
-    for (name, value) in &overlay.set {
-        let name = env_name(name)?;
-        let value = value
-            .to_str()
-            .with_context(|| format!("environment entry {name} has a value that is not UTF-8"))?;
-        set.insert(name.to_owned(), value.to_owned());
-    }
-    let mut unset = Vec::with_capacity(overlay.unset.len());
-    for name in &overlay.unset {
-        unset.push(env_name(name)?.to_owned());
-    }
-    unset.sort();
-    Ok((set, unset))
-}
-
-fn env_name(name: &OsString) -> Result<&str> {
-    name.to_str()
-        .with_context(|| format!("environment entry {} is not UTF-8", name.to_string_lossy()))
-}
-
-fn error_report(case: &str, id: Option<String>, detail: String) -> CaseReport {
-    CaseReport {
-        case: case.to_owned(),
-        id,
-        verdict: Verdict::Error,
-        counts: Counts::default(),
-        detail: Some(detail.replace('\n', "; ")),
-    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -494,254 +374,286 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::device::Device;
-    use crate::stamp::{self, Stamp, StampProject};
+    use crate::report::{Counts, Verdict};
+    use crate::resolve::ProfileFlags;
+    use crate::stamp::{self, Source, Stamp};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
     use wits_project::Workspace;
 
-    fn write(path: &std::path::Path, text: &str, mode: u32) {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
+    /// A runner that applies `--baseline` to the raw statuses in `raw.csv` the
+    /// way deqp-runner 0.24 does, writes `results.csv`, and exits like it.
+    const FAKE_RUNNER: &str = r#"#!/bin/sh
+out= baseline=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --output) out=$2; shift 2 ;;
+        --baseline) baseline=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+raw="$(dirname "$0")/raw.csv"
+awk -F, -v base="$baseline" '
+BEGIN { if (base != "") while ((getline line < base) > 0) { split(line, f, ","); b[f[1]] = f[2] } }
+{
+    t = $1; s = $2; e = b[t]
+    if (e != "") {
+        if (s == "Fail" && (e == "Fail" || e == "ExpectedFail")) s = "ExpectedFail"
+        else if (s == "Fail" && (e == "Crash" || e == "Timeout")) s = "UnexpectedImprovement(Fail)"
+        else if (s == "Pass" && (e == "Fail" || e == "Crash" || e == "Missing" || e == "Timeout")) s = "UnexpectedImprovement(Pass)"
+        else if (s == "Crash" && (e == "Crash" || e == "ExpectedFail")) s = "ExpectedFail"
+        else if (s == "Timeout" && e == "Timeout") s = "ExpectedFail"
+    }
+    print t "," s ",0.1"
+}' "$raw" > "$out/results.csv"
+grep -Ev ',(Pass|Skip|Warn|Flake|KnownFlake|ExpectedFail),' "$out/results.csv" | cut -d, -f1,2 > "$out/failures.csv"
+printf '[]\n' > "$out/expectations.json"
+if grep -Eq ',(Fail|Crash|Timeout|Missing),' "$out/results.csv"; then exit 1; fi
+if grep -q ',UnexpectedImprovement' "$out/results.csv"; then exit 2; fi
+exit 0
+"#;
+
+    fn write(path: &Path, text: &str, mode: u32) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
     }
 
-    fn project_file(root: &std::path::Path, name: &str, body: &str) {
-        write(&root.join(format!("{name}.toml")), body, 0o644);
+    fn stamp_tree(root: &Path, project: &str, version: &str) {
+        stamp::write(
+            root,
+            &Stamp {
+                hash: format!("sha256:{project}-{version}"),
+                installed: "20261026T213012Z".to_owned(),
+                source: Source {
+                    project: project.to_owned(),
+                    branch: "main".to_owned(),
+                    commits: BTreeMap::new(),
+                },
+            },
+        )
+        .unwrap();
     }
 
-    fn fake_workspace(root: &std::path::Path) {
-        let driver = root.join("driver-src");
-        let suite = root.join("suite");
-        let runner = root.join("runner");
-        fs::create_dir_all(&driver).unwrap();
-        fs::create_dir_all(&suite).unwrap();
-        fs::create_dir_all(&runner).unwrap();
-
+    /// A registry of a driver, a suite and a runner project, an installed
+    /// Piglit layout, the fake runner, and a config declaring case `c`.
+    fn fixture(root: &Path) -> (Workspace, Config) {
         let projects = root.join("projects");
-        fs::create_dir_all(&projects).unwrap();
-        project_file(
-            &projects,
+        let project = |name: &str, extra: &str| {
+            write(
+                &projects.join(format!("{name}.toml")),
+                &format!(
+                    "[project]\n[repos.main]\npath = \"{}\"\nmain_branch = \"main\"\n{extra}",
+                    root.join(format!("{name}-src")).display()
+                ),
+                0o644,
+            );
+            fs::create_dir_all(root.join(format!("{name}-src"))).unwrap();
+        };
+        project(
             "driver",
-            &format!(
-                "[project]\n[repos.main]\npath = \"{}\"\nbuild_dir = \"{}\"\nmain_branch = \"main\"\n",
-                driver.display(),
-                root.join("build").display()
-            ),
+            &format!("build_dir = \"{}\"\n", root.join("build").display()),
         );
-        project_file(
-            &projects,
+        project(
             "suite",
-            &format!(
-                "[project]\n[repos.main]\npath = \"{}\"\ninstall_dir = \"{}\"\nmain_branch = \"main\"\n",
-                suite.display(),
-                suite.display()
-            ),
+            &format!("install_dir = \"{}\"\n", root.join("suite").display()),
         );
-        project_file(
-            &projects,
+        project(
             "runner",
-            &format!(
-                "[project]\n[repos.main]\npath = \"{}\"\ninstall_dir = \"{}\"\nmain_branch = \"main\"\n",
-                runner.display(),
-                runner.display()
-            ),
+            &format!("install_dir = \"{}\"\n", root.join("runner").display()),
         );
         fs::create_dir_all(root.join("build")).unwrap();
 
-        // The CMake Piglit layout the kind checks.
-        let piglit = suite.join("lib64/piglit");
-        fs::create_dir_all(piglit.join("tests")).unwrap();
-        fs::create_dir_all(piglit.join("bin")).unwrap();
-        fs::create_dir_all(piglit.join("lib")).unwrap();
-        fs::write(piglit.join("tests/quick.meta.xml"), "<profile/>").unwrap();
-        fs::write(piglit.join("bin/shader_runner"), "").unwrap();
-        fs::write(piglit.join("lib/libpiglit.so"), "").unwrap();
+        let piglit = root.join("suite/lib64/piglit");
+        write(&piglit.join("tests/quick.meta.xml"), "<profile/>", 0o644);
+        write(&piglit.join("bin/shader_runner"), "", 0o755);
+        write(&piglit.join("lib/libpiglit.so"), "", 0o644);
+        write(&root.join("runner/piglit-runner"), FAKE_RUNNER, 0o755);
+        stamp_tree(&root.join("suite"), "suite", "v1");
+        stamp_tree(&root.join("runner"), "runner", "v1");
 
-        let fake = r#"#!/bin/sh
-out=
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        --output) out=$2; shift 2 ;;
-        *) shift ;;
-    esac
-done
-printf 't,Pass,0.1\n' > "$out/results.csv"
-: > "$out/failures.csv"
-: > "$out/failures-all.csv"
-printf '[]\n' > "$out/expectations.json"
-exit 0
-"#;
-        write(&runner.join("piglit-runner"), fake, 0o755);
-
-        let suite_stamp = Stamp {
-            hash: "sha256:suite-v1".to_owned(),
-            installed: "20261026T213012Z".to_owned(),
-            project: StampProject {
-                key: "suite".to_owned(),
-                branch: Some("main".to_owned()),
-                commits: BTreeMap::new(),
-            },
-        };
-        stamp::write(&suite, &suite_stamp).unwrap();
-        let runner_stamp = Stamp {
-            hash: "sha256:runner-v1".to_owned(),
-            installed: "20261026T213012Z".to_owned(),
-            project: StampProject {
-                key: "runner".to_owned(),
-                branch: Some("main".to_owned()),
-                commits: BTreeMap::new(),
-            },
-        };
-        stamp::write(&runner, &runner_stamp).unwrap();
-    }
-
-    fn fake_config(root: &std::path::Path) -> Config {
-        let config_root = root.join("config");
-        fs::create_dir_all(&config_root).unwrap();
-        let text = format!(
-            r#"
-[store]
-root = "{}"
-
-[driver.d]
-project = "driver"
-
-[suite.p]
-kind = "piglit"
-project = "suite"
-runner = "runner"
-case_list = ["quick"]
-
-[suite.p.piglit]
-folder = "lib64/piglit"
-
-[case.c]
-driver = "d"
-suite = "p"
-"#,
-            root.join("store").display()
+        write(
+            &root.join("config/gputest.toml"),
+            &format!(
+                "[store]\nroot = \"{}\"\n\n[driver.d]\nproject = \"driver\"\n\n\
+                 [suite.p]\nproject = \"suite\"\nrunner = \"runner\"\ncase_list = [\"quick\"]\n\n\
+                 [suite.p.piglit]\nfolder = \"lib64/piglit\"\n\n\
+                 [case.c]\ndriver = \"d\"\nsuite = \"p\"\n",
+                root.join("store").display()
+            ),
+            0o644,
         );
-        fs::write(config_root.join("gputest.toml"), text).unwrap();
-        Config::load_from(&config_root).unwrap()
+        (
+            Workspace::load_from(&projects).unwrap(),
+            Config::load_from(&root.join("config")).unwrap(),
+        )
     }
 
-    fn flags(root: &std::path::Path) -> Flags {
-        Flags {
-            here: Some(root.to_path_buf()),
-            ..Flags::default()
-        }
+    fn run(s: &Session<'_>, if_changed: bool) -> CaseReport {
+        let mut claimed = None;
+        run_case(s, "c", if_changed, &mut claimed)
+            .unwrap_or_else(|err| CaseReport::error("c", claimed, &err))
     }
 
-    #[test]
-    fn classify_maps_the_runner_exit_to_the_verdict() {
-        let dir = tempfile::tempdir().unwrap();
-        let run = dir.path();
-
-        // 0/1/2 without the required CSVs did not complete.
-        assert_eq!(classify(0, None, false, run).0, Verdict::Error);
-        assert!(classify(1, None, false, run)
-            .1
-            .unwrap()
-            .contains("without the expected CSVs"));
-        // A code outside 0/1/2 is an error even with the CSVs present.
-        assert_eq!(classify(4, None, false, run).0, Verdict::Error);
-        assert!(classify(4, None, false, run).1.unwrap().contains("code 4"));
-        // A signal is an error, never a regression.
-        assert!(classify(0, Some(9), false, run)
-            .1
-            .unwrap()
-            .contains("signal 9"));
-
-        for name in archive::REQUIRED_CSVS {
-            fs::write(run.join(name), "").unwrap();
-        }
-        assert_eq!(classify(0, None, true, run).0, Verdict::Pass);
-        assert_eq!(classify(1, None, true, run).0, Verdict::Regression);
-        assert_eq!(classify(2, None, true, run).0, Verdict::Improved);
-        assert_eq!(classify(3, None, true, run).0, Verdict::Error);
+    /// The caller `env::scrub` would leave, without scrubbing the test process.
+    fn scrubbed_caller() -> wits_actions::Env {
+        std::env::vars_os()
+            .filter(|(name, _)| !crate::env::is_scrubbed(name))
+            .collect()
     }
 
     #[test]
-    fn a_fake_piglit_case_runs_archives_states_skips_and_rebaselines() {
+    fn runs_compare_carry_failures_by_their_own_status_and_skip_or_compare_only() {
         let _lock = crate::testutil::lock();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let _runtime = crate::testutil::EnvGuard::set("XDG_RUNTIME_DIR", root.join("run"));
-        let _state_env = crate::testutil::EnvGuard::set("XDG_STATE_HOME", root.join("state"));
-        fs::create_dir_all(root.join("run")).unwrap();
-
-        fake_workspace(root);
-        let config = fake_config(root);
-        let ws = Workspace::load_from(&root.join("projects")).unwrap();
+        let _state = crate::testutil::EnvGuard::set("XDG_STATE_HOME", root.join("state"));
+        let (ws, config) = fixture(root);
+        let raw = root.join("runner/raw.csv");
         let device = Device {
             pci: "0000:01:00.0".to_owned(),
             id: "1002:150e".to_owned(),
             drm: "amdgpu".to_owned(),
             kernel: "test".to_owned(),
         };
-        let caller: env::Env = std::env::vars_os().collect();
-        let flags = flags(root);
-        let mut cache = crate::content::HashCache::new();
-        let mut session = Session {
-            caller: &caller,
-            device: &device,
-            cache: &mut cache,
+        let declared = ProfileFlags::default();
+        let session = |profile| Session {
+            config: &config,
+            ws: &ws,
+            profile,
+            here: Some(root.to_path_buf()),
+            caller: scrubbed_caller(),
+            device: device.clone(),
+        };
+        let s = session(&declared);
+        let lineage = || state::read("c", "1002-150e").unwrap().unwrap();
+        let counts = |new, carried, improved| {
+            Some(Counts {
+                new,
+                carried,
+                improved,
+            })
         };
 
-        let first = run_one(&config, &ws, "c", &flags, false, &mut session);
-        assert_eq!(first.verdict, Verdict::Pass, "{first:?}");
+        // A first run has no baseline: every failure is new, and the evidence
+        // keeps each failing test by its own status.
+        fs::write(&raw, "t1,Pass\nt2,Fail\nt3,Timeout\n").unwrap();
+        let first = run(&s, false);
+        assert_eq!(first.verdict, Verdict::Regression, "{first}");
+        assert_eq!(first.counts, counts(2, 0, 0));
         let first_id = first.id.clone().unwrap();
-        assert_eq!(first.counts, Counts::default());
-
-        let state = state::read("c", "1002-150e").unwrap().unwrap();
-        assert_eq!(state.run, first_id);
-        assert_eq!(state.baseline, None);
+        assert_eq!(lineage().run, first_id);
+        assert_eq!(lineage().baseline, None);
         let archive = store::find(&config.store, "c", &first_id).unwrap();
         let record = archive::read_run(&archive.path).unwrap();
-        assert_eq!(record.test.project, "suite");
-        assert_eq!(record.runner.project, "runner");
-        assert_eq!(record.driver.project, "driver");
+        assert_eq!(record.verdict, Verdict::Regression);
         assert_eq!(record.env.get("WITS_DEVENV"), Some(&"driver".to_owned()));
-        assert_eq!(record.content.suite, "sha256:suite-v1");
-        assert!(archive::required_csvs_present(
-            resolve::run_dir("c", &first_id).unwrap().as_path()
-        ));
+        assert_eq!(record.suite.project, "suite");
+        assert_eq!(record.content.identity, lineage().hash);
+        let mut failing = Vec::new();
+        assert!(archive::copy_member(&archive.path, report::FAILING, &mut failing).unwrap());
+        assert_eq!(String::from_utf8(failing).unwrap(), "t2,Fail\nt3,Timeout\n");
+        assert!(
+            fs::read_dir(root.join("run/gputest/c"))
+                .unwrap()
+                .next()
+                .is_none(),
+            "the run directory outlived its archive"
+        );
 
         // The same identity with --if-changed records nothing.
-        let skipped = run_one(&config, &ws, "c", &flags, true, &mut session);
+        let skipped = run(&s, true);
         assert_eq!(skipped.verdict, Verdict::Skipped);
-        assert!(skipped.id.is_none());
-        assert_eq!(
-            state::read("c", "1002-150e").unwrap().unwrap().run,
-            first_id
-        );
-        assert_eq!(store::archives(&config.store, "c").unwrap().len(), 1);
+        assert_eq!(lineage().run, first_id);
 
-        // A changed suite stamp is a changed identity: the previous archive is
-        // the baseline, and the state remembers both ids separately.
-        let runner = root.join("runner");
-        stamp::write(
-            &runner,
-            &Stamp {
-                hash: "sha256:runner-v2".to_owned(),
-                installed: "20261027T213012Z".to_owned(),
-                project: StampProject {
-                    key: "runner".to_owned(),
-                    branch: Some("main".to_owned()),
-                    commits: BTreeMap::new(),
-                },
-            },
+        // A changed identity compares with the last run. The carried timeout
+        // stays a Timeout in the next baseline, so a third run carries it too
+        // rather than calling it new.
+        stamp_tree(&root.join("runner"), "runner", "v2");
+        let second = run(&s, false);
+        assert_eq!(second.verdict, Verdict::Pass, "{second}");
+        assert_eq!(second.counts, counts(0, 2, 0));
+        assert_eq!(lineage().baseline.as_deref(), Some(first_id.as_str()));
+        stamp_tree(&root.join("runner"), "runner", "v3");
+        let third = run(&s, false);
+        assert_eq!(third.verdict, Verdict::Pass, "{third}");
+        assert_eq!(third.counts, counts(0, 2, 0));
+        let third_id = third.id.clone().unwrap();
+
+        // Profile flags make a run compare-only: it compares with the lineage's
+        // last run and is archived, but does not move the lineage.
+        let review = ProfileFlags {
+            build_dir: Some(root.join("build")),
+            ..ProfileFlags::default()
+        };
+        fs::write(&raw, "t1,Fail\nt2,Fail\nt3,Timeout\n").unwrap();
+        stamp_tree(&root.join("runner"), "runner", "v4");
+        let compared = run(&session(&review), false);
+        assert_eq!(compared.verdict, Verdict::Regression, "{compared}");
+        assert!(compared.compare_only);
+        assert_eq!(lineage().run, third_id);
+        let compared_record = archive::read_run(
+            &store::find(&config.store, "c", compared.id.as_deref().unwrap())
+                .unwrap()
+                .path,
         )
         .unwrap();
-        let second = run_one(&config, &ws, "c", &flags, false, &mut session);
-        assert_eq!(second.verdict, Verdict::Pass, "{second:?}");
-        let second_id = second.id.unwrap();
-        assert_ne!(second_id, first_id);
-        let state = state::read("c", "1002-150e").unwrap().unwrap();
-        assert_eq!(state.run, second_id);
-        assert_eq!(state.baseline.as_deref(), Some(first_id.as_str()));
-        assert_eq!(store::archives(&config.store, "c").unwrap().len(), 2);
+        assert!(compared_record.compare_only);
+        assert_eq!(compared_record.baseline.as_deref(), Some(third_id.as_str()));
+
+        // A fixed test is an improvement, and leaves the baseline.
+        fs::write(&raw, "t1,Pass\nt2,Pass\nt3,Timeout\n").unwrap();
+        stamp_tree(&root.join("runner"), "runner", "v5");
+        let fixed = run(&s, false);
+        assert_eq!(fixed.verdict, Verdict::Improved, "{fixed}");
+        assert_eq!(fixed.counts, counts(0, 1, 1));
+        assert_eq!(store::archives(&config.store, "c").unwrap().len(), 5);
+    }
+
+    #[test]
+    fn a_runner_that_does_not_complete_is_archived_as_an_error_and_moves_nothing() {
+        let _lock = crate::testutil::lock();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let _runtime = crate::testutil::EnvGuard::set("XDG_RUNTIME_DIR", root.join("run"));
+        let _state = crate::testutil::EnvGuard::set("XDG_STATE_HOME", root.join("state"));
+        let (ws, config) = fixture(root);
+        write(
+            &root.join("runner/piglit-runner"),
+            "#!/bin/sh\nexit 0\n",
+            0o755,
+        );
+        let profile = ProfileFlags::default();
+        let s = Session {
+            config: &config,
+            ws: &ws,
+            profile: &profile,
+            here: Some(root.to_path_buf()),
+            caller: scrubbed_caller(),
+            device: Device {
+                pci: String::new(),
+                id: "1002:150e".to_owned(),
+                drm: String::new(),
+                kernel: String::new(),
+            },
+        };
+        let report = run(&s, false);
+        assert_eq!(report.verdict, Verdict::Error);
+        assert!(
+            report
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("without writing results.csv"),
+            "{report}"
+        );
+        assert!(state::read("c", "1002-150e").unwrap().is_none());
+        let archived = store::find(&config.store, "c", report.id.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            archive::read_run(&archived.path).unwrap().verdict,
+            Verdict::Error
+        );
     }
 }

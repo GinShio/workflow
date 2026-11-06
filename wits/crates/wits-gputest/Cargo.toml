@@ -23,5 +23,3 @@ sha2.workspace = true
 tempfile.workspace = true
 tar.workspace = true
 zstd.workspace = true
-regex.workspace = true
-minijinja.workspace = true

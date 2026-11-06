@@ -8,23 +8,21 @@
 //! Strictness is the point: an unknown section, an unknown key, a second
 //! definition of one name, a path that climbs out of its suite root, or a
 //! caselist cardinality the kind cannot honour is a load-time error. A config
-//! typo that silently does nothing is the one failure mode a test tool cannot
-//! afford.
+//! typo that silently does nothing is the one failure mode an unattended test
+//! run cannot afford.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use serde::de::{self, Deserializer};
 use serde::Deserialize;
 
 use wits_core::config::Root;
 use wits_core::path::expand_tilde;
 use wits_project::{literal_entry, DevenvDecl, DevenvEntry};
 
-use crate::kinds::{Kind, SuiteShape};
+use crate::suite::{DeqpDecl, Jobs, Kind, PiglitDecl, Suite};
 
-/// Where the gputest config tree lives.
 const CONFIG_ROOT: Root<'static> = Root {
     env: "WITS_GPUTEST_CONFIG",
     xdg: "wits/gputest",
@@ -41,8 +39,10 @@ pub struct Config {
 
 #[derive(Debug, Clone)]
 pub struct Store {
+    /// `<root>/<case>/<device>/<id>.tar.zst`; absolute.
     pub root: PathBuf,
-    pub archive_days: i64,
+    /// The age `prune` removes archives at.
+    pub archive_days: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -51,26 +51,9 @@ pub struct Driver {
     pub project: String,
     pub build_type: String,
     pub branch: Option<String>,
+    /// `VK_LOADER_DRIVERS_SELECT`.
     pub select: Option<String>,
     pub env: Vec<DevenvEntry>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Suite {
-    pub name: String,
-    pub project: String,
-    pub runner: String,
-    pub case_list: Vec<String>,
-    pub jobs: Jobs,
-    pub timeout: u64,
-    pub env: Vec<DevenvEntry>,
-    pub shape: SuiteShape,
-}
-
-impl Suite {
-    pub fn kind(&self) -> Kind {
-        self.shape.kind()
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -79,58 +62,6 @@ pub struct Case {
     pub driver: String,
     pub suite: String,
     pub env: Vec<DevenvEntry>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DeqpDecl {
-    pub exe: String,
-    pub waiver: Option<String>,
-    #[serde(default)]
-    pub args: Vec<String>,
-    pub tests_per_group: Option<u64>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PiglitDecl {
-    pub folder: String,
-}
-
-/// Parallel test processes. `"cores"` means physical cores, which is the right
-/// number for CPU-bound shader compilation; a number is used verbatim.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Jobs {
-    #[default]
-    Cores,
-    Count(u32),
-}
-
-impl Jobs {
-    pub fn number(self) -> u32 {
-        match self {
-            Jobs::Cores => crate::cores::physical_cores(),
-            Jobs::Count(n) => n,
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for Jobs {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Raw {
-            Word(String),
-            Count(u32),
-        }
-        match Raw::deserialize(d)? {
-            Raw::Word(word) if word == "cores" => Ok(Jobs::Cores),
-            Raw::Word(word) => Err(de::Error::custom(format!(
-                "jobs must be \"cores\" or a positive integer (got {word:?})"
-            ))),
-            Raw::Count(n) => Ok(Jobs::Count(n)),
-        }
-    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -150,14 +81,14 @@ struct ConfigFile {
 struct StoreDecl {
     root: String,
     #[serde(default = "default_archive_days")]
-    archive_days: i64,
+    archive_days: u32,
 }
 
-fn default_archive_days() -> i64 {
+fn default_archive_days() -> u32 {
     360
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DriverDecl {
     project: String,
@@ -173,10 +104,9 @@ fn default_build_type() -> String {
     "release".to_owned()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SuiteDecl {
-    kind: Kind,
     project: String,
     #[serde(default = "default_runner")]
     runner: String,
@@ -199,13 +129,44 @@ fn default_timeout() -> u64 {
     60
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CaseDecl {
     driver: String,
     suite: String,
     #[serde(default)]
     env: BTreeMap<String, DevenvDecl>,
+}
+
+/// Every declaration of one section across the tree, each with the file that
+/// declared it, so a second definition can name both.
+struct Declared<T> {
+    section: &'static str,
+    items: BTreeMap<String, (T, PathBuf)>,
+}
+
+impl<T> Declared<T> {
+    fn new(section: &'static str) -> Self {
+        Self {
+            section,
+            items: BTreeMap::new(),
+        }
+    }
+
+    fn add(&mut self, decls: BTreeMap<String, T>, file: &Path) -> Result<()> {
+        for (name, decl) in decls {
+            if let Some((_, first)) = self.items.get(&name) {
+                bail!(
+                    "{} '{name}' is defined more than once ({} and {})",
+                    self.section,
+                    first.display(),
+                    file.display()
+                );
+            }
+            self.items.insert(name, (decl, file.to_path_buf()));
+        }
+        Ok(())
+    }
 }
 
 impl Config {
@@ -215,151 +176,86 @@ impl Config {
         Self::load_from(&root)
     }
 
-    /// Load from an explicit root; the test and embedder entry point.
+    /// Load from an explicit root; the test entry point.
     pub fn load_from(root: &Path) -> Result<Self> {
         let files = wits_core::config::discover_toml(root)
             .with_context(|| format!("scanning config root {}", root.display()))?;
 
-        let mut store: Option<Store> = None;
-        let mut store_file: Option<PathBuf> = None;
-        let mut drivers = BTreeMap::new();
-        let mut driver_files: BTreeMap<String, PathBuf> = BTreeMap::new();
-        let mut suites = BTreeMap::new();
-        let mut suite_files: BTreeMap<String, PathBuf> = BTreeMap::new();
-        let mut cases = BTreeMap::new();
-        let mut case_files: BTreeMap<String, PathBuf> = BTreeMap::new();
-
+        let mut store: Option<(StoreDecl, PathBuf)> = None;
+        let mut drivers = Declared::new("driver");
+        let mut suites = Declared::new("suite");
+        let mut cases = Declared::new("case");
         for file in files {
             let text = std::fs::read_to_string(&file)
                 .with_context(|| format!("reading {}", file.display()))?;
             let parsed: ConfigFile =
                 toml::from_str(&text).with_context(|| format!("loading {}", file.display()))?;
-
             if let Some(decl) = parsed.store {
-                if let Some(first) = &store_file {
+                if let Some((_, first)) = &store {
                     bail!(
                         "[store] is declared more than once ({} and {})",
                         first.display(),
                         file.display()
                     );
                 }
-                store = Some(Store {
-                    root: expand_tilde(&decl.root),
-                    archive_days: decl.archive_days,
-                });
-                store_file = Some(file.clone());
+                store = Some((decl, file.clone()));
             }
-
-            for (name, decl) in parsed.driver {
-                if let Some(first) = driver_files.get(&name) {
-                    bail!(
-                        "driver '{name}' is defined more than once ({} and {})",
-                        first.display(),
-                        file.display()
-                    );
-                }
-                driver_files.insert(name.clone(), file.clone());
-                drivers.insert(name, decl);
-            }
-            for (name, decl) in parsed.suite {
-                if let Some(first) = suite_files.get(&name) {
-                    bail!(
-                        "suite '{name}' is defined more than once ({} and {})",
-                        first.display(),
-                        file.display()
-                    );
-                }
-                suite_files.insert(name.clone(), file.clone());
-                suites.insert(name, decl);
-            }
-            for (name, decl) in parsed.case {
-                if let Some(first) = case_files.get(&name) {
-                    bail!(
-                        "case '{name}' is defined more than once ({} and {})",
-                        first.display(),
-                        file.display()
-                    );
-                }
-                case_files.insert(name.clone(), file.clone());
-                cases.insert(name, decl);
-            }
+            drivers.add(parsed.driver, &file)?;
+            suites.add(parsed.suite, &file)?;
+            cases.add(parsed.case, &file)?;
         }
 
-        let store = store.context(
+        let (store, _) = store.context(
             "no [store] section in the gputest config tree; declare the archive root first",
         )?;
+        let store = Store {
+            root: expand_tilde(&store.root),
+            archive_days: store.archive_days,
+        };
         if !store.root.is_absolute() {
             bail!(
                 "store.root {} is not absolute; the store is a machine declaration, not a relative path",
                 store.root.display()
             );
         }
-        if store.archive_days < 0 {
-            bail!(
-                "store.archive_days must be non-negative (got {})",
-                store.archive_days
-            );
-        }
 
-        let mut config = Config {
-            store,
-            drivers: BTreeMap::new(),
-            suites: BTreeMap::new(),
-            cases: BTreeMap::new(),
-        };
-
-        for (name, decl) in drivers {
-            validate_plain_name("driver", &name)?;
-            if decl.project.is_empty() {
-                bail!("driver '{name}': project is empty");
-            }
-            if decl.build_type.is_empty() {
-                bail!("driver '{name}': build_type is empty");
-            }
-            if decl.branch.as_deref().is_some_and(str::is_empty) {
-                bail!("driver '{name}': branch is empty");
-            }
-            validate_env(&format!("driver.{name}.env"), &decl.env)?;
-            config.drivers.insert(
-                name.clone(),
-                Driver {
-                    name,
-                    project: decl.project,
-                    build_type: decl.build_type,
-                    branch: decl.branch,
-                    select: decl.select,
-                    env: resolve_env(decl.env),
-                },
-            );
-        }
-
-        for (name, decl) in suites {
-            validate_plain_name("suite", &name)?;
-            let suite = resolve_suite(&name, decl)?;
-            config.suites.insert(name, suite);
-        }
-
-        for (name, decl) in cases {
-            validate_case_name(&name)?;
-            if !config.drivers.contains_key(&decl.driver) {
-                bail!("case '{name}': driver '{}' is not declared", decl.driver);
-            }
-            if !config.suites.contains_key(&decl.suite) {
-                bail!("case '{name}': suite '{}' is not declared", decl.suite);
-            }
-            validate_env(&format!("case.{name}.env"), &decl.env)?;
-            config.cases.insert(
-                name.clone(),
-                Case {
-                    name,
+        let drivers = drivers
+            .items
+            .into_iter()
+            .map(|(name, (decl, _))| Ok((name.clone(), resolve_driver(name, decl)?)))
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let suites = suites
+            .items
+            .into_iter()
+            .map(|(name, (decl, _))| Ok((name.clone(), resolve_suite(name, decl)?)))
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let cases = cases
+            .items
+            .into_iter()
+            .map(|(name, (decl, _))| {
+                validate_case_name(&name)?;
+                if !drivers.contains_key(&decl.driver) {
+                    bail!("case '{name}': driver '{}' is not declared", decl.driver);
+                }
+                if !suites.contains_key(&decl.suite) {
+                    bail!("case '{name}': suite '{}' is not declared", decl.suite);
+                }
+                let case = Case {
+                    env: resolve_env(&format!("case.{name}.env"), decl.env)?,
+                    name: name.clone(),
                     driver: decl.driver,
                     suite: decl.suite,
-                    env: resolve_env(decl.env),
-                },
-            );
-        }
+                };
+                Ok((name, case))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
 
-        Ok(config)
+        Ok(Config {
+            store,
+            drivers,
+            suites,
+            cases,
+        })
     }
 
     pub fn case(&self, name: &str) -> Result<&Case> {
@@ -384,126 +280,105 @@ impl Config {
     }
 }
 
-fn resolve_suite(name: &str, decl: SuiteDecl) -> Result<Suite> {
-    if decl.project.is_empty() {
-        bail!("suite '{name}': project is empty");
+fn resolve_driver(name: String, decl: DriverDecl) -> Result<Driver> {
+    // An empty value would resolve to a build directory nobody declared.
+    if decl.build_type.is_empty() {
+        bail!("driver '{name}': build_type is empty");
     }
-    if decl.runner.is_empty() {
-        bail!("suite '{name}': runner is empty");
+    if decl.branch.as_deref() == Some("") {
+        bail!("driver '{name}': branch is empty");
     }
+    Ok(Driver {
+        env: resolve_env(&format!("driver.{name}.env"), decl.env)?,
+        name,
+        project: decl.project,
+        build_type: decl.build_type,
+        branch: decl.branch,
+        select: decl.select,
+    })
+}
+
+fn resolve_suite(name: String, decl: SuiteDecl) -> Result<Suite> {
     if decl.timeout == 0 {
         bail!("suite '{name}': timeout must be positive");
     }
-    if let Jobs::Count(0) = decl.jobs {
+    if decl.jobs == Jobs::Count(0) {
         bail!("suite '{name}': jobs must be positive");
     }
-
-    match decl.kind {
-        Kind::Deqp => {
-            if decl.piglit.is_some() {
-                bail!("suite '{name}': kind is deqp but a [suite.{name}.piglit] table is present");
-            }
-            let deqp = decl.deqp.with_context(|| {
-                format!("suite '{name}': kind is deqp but [suite.{name}.deqp] is missing")
-            })?;
-            if deqp.exe.is_empty() {
-                bail!("suite '{name}': deqp.exe is empty");
+    let kind = match (decl.deqp, decl.piglit) {
+        (Some(deqp), None) => {
+            validate_suite_path(&name, "deqp.exe", &deqp.exe)?;
+            if let Some(waiver) = &deqp.waiver {
+                validate_suite_path(&name, "deqp.waiver", waiver)?;
             }
             if deqp.tests_per_group == Some(0) {
                 bail!("suite '{name}': deqp.tests_per_group must be positive");
-            }
-            validate_suite_path(name, "deqp.exe", &deqp.exe)?;
-            if let Some(waiver) = &deqp.waiver {
-                validate_suite_path(name, "deqp.waiver", waiver)?;
-            }
-            for entry in &decl.case_list {
-                validate_suite_path(name, "case_list entry", entry)?;
             }
             if decl.case_list.is_empty() {
                 bail!(
                     "suite '{name}': case_list is empty; a deqp suite names at least one caselist"
                 );
             }
-            validate_env(&format!("suite.{name}.env"), &decl.env)?;
-            Ok(Suite {
-                name: name.to_owned(),
-                project: decl.project,
-                runner: decl.runner,
-                case_list: decl.case_list,
-                jobs: decl.jobs,
-                timeout: decl.timeout,
-                env: resolve_env(decl.env),
-                shape: SuiteShape::Deqp(deqp),
-            })
+            for entry in &decl.case_list {
+                validate_suite_path(&name, "case_list entry", entry)?;
+            }
+            Kind::Deqp(deqp)
         }
-        Kind::Piglit => {
-            if decl.deqp.is_some() {
-                bail!("suite '{name}': kind is piglit but a [suite.{name}.deqp] table is present");
-            }
-            let piglit = decl.piglit.with_context(|| {
-                format!("suite '{name}': kind is piglit but [suite.{name}.piglit] is missing")
-            })?;
-            if piglit.folder.is_empty() {
-                bail!("suite '{name}': piglit.folder is empty");
-            }
-            validate_suite_path(name, "piglit.folder", &piglit.folder)?;
-            if decl.case_list.len() != 1 {
+        (None, Some(piglit)) => {
+            validate_suite_path(&name, "piglit.folder", &piglit.folder)?;
+            let [profile] = decl.case_list.as_slice() else {
                 bail!(
                     "suite '{name}': piglit takes one profile per invocation (got {} case_list entries)",
                     decl.case_list.len()
                 );
-            }
-            validate_suite_path(name, "case_list profile", &decl.case_list[0])?;
-            validate_env(&format!("suite.{name}.env"), &decl.env)?;
-            Ok(Suite {
-                name: name.to_owned(),
-                project: decl.project,
-                runner: decl.runner,
-                case_list: decl.case_list,
-                jobs: decl.jobs,
-                timeout: decl.timeout,
-                env: resolve_env(decl.env),
-                shape: SuiteShape::Piglit(piglit),
-            })
+            };
+            validate_suite_path(&name, "case_list profile", profile)?;
+            Kind::Piglit(piglit)
         }
-    }
+        (None, None) => bail!(
+            "suite '{name}': declare its runner shape with a [suite.{name}.deqp] or \
+             [suite.{name}.piglit] table"
+        ),
+        (Some(_), Some(_)) => bail!(
+            "suite '{name}': [suite.{name}.deqp] and [suite.{name}.piglit] are both present; \
+             a suite has one runner shape"
+        ),
+    };
+    Ok(Suite {
+        env: resolve_env(&format!("suite.{name}.env"), decl.env)?,
+        name,
+        project: decl.project,
+        runner: decl.runner,
+        case_list: decl.case_list,
+        jobs: decl.jobs,
+        timeout: decl.timeout,
+        kind,
+    })
 }
 
-fn validate_plain_name(kind: &str, name: &str) -> Result<()> {
-    if name.is_empty() {
-        bail!("{kind} name is empty");
-    }
-    Ok(())
-}
-
-/// A case names a store and state directory, so it is a path component and
+/// A case names a store and a state directory, so it is a path component and
 /// nothing else.
-pub fn validate_case_name(name: &str) -> Result<()> {
-    if name.is_empty() {
-        bail!("case name '' is not a path component");
-    }
-    if name == "." || name == ".." {
-        bail!("case name '{name}' is not a path component");
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+fn validate_case_name(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
     {
         bail!("case name '{name}' is not a path component (allowed: A-Z a-z 0-9 . _ -)");
     }
     Ok(())
 }
 
-/// A suite path is relative to the suite root and must not escape it.
+/// A suite path is relative to the suite root and stays inside it: the install
+/// stamp hashes that tree, so a file outside it would be tested without being
+/// part of the identity.
 fn validate_suite_path(suite: &str, key: &str, value: &str) -> Result<()> {
     if value.is_empty() {
         bail!("suite '{suite}': {key} is empty");
     }
-    let path = Path::new(value);
-    if path.is_absolute() {
-        bail!("suite '{suite}': {key} '{value}' is absolute; suite paths are relative to the suite root");
-    }
-    for component in path.components() {
+    for component in Path::new(value).components() {
         match component {
             Component::ParentDir => bail!(
                 "suite '{suite}': {key} '{value}' climbs out of the suite root with '..'"
@@ -517,21 +392,14 @@ fn validate_suite_path(suite: &str, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_env(table: &str, env: &BTreeMap<String, DevenvDecl>) -> Result<()> {
-    for name in env.keys() {
-        if name.is_empty() {
-            bail!("{table}: environment variable name is empty");
-        }
-        if name.contains('=') || name.contains('\0') {
-            bail!("{table}: {name:?} is not a usable environment variable name");
-        }
-    }
-    Ok(())
-}
-
-fn resolve_env(env: BTreeMap<String, DevenvDecl>) -> Vec<DevenvEntry> {
+fn resolve_env(table: &str, env: BTreeMap<String, DevenvDecl>) -> Result<Vec<DevenvEntry>> {
     env.into_iter()
-        .map(|(name, decl)| literal_entry(&name, &decl))
+        .map(|(name, decl)| {
+            if name.is_empty() || name.contains('=') || name.contains('\0') {
+                bail!("{table}: {name:?} is not a usable environment variable name");
+            }
+            Ok(literal_entry(&name, &decl))
+        })
         .collect()
 }
 
@@ -557,7 +425,6 @@ select = "*lvp*"
 project = "amdvlk"
 
 [suite.deqp-vk]
-kind = "deqp"
 project = "deqp"
 case_list = ["mustpass/vk-default.txt"]
 jobs = "cores"
@@ -570,7 +437,6 @@ args = ["--deqp-log-images=disable"]
 tests_per_group = 4096
 
 [suite.piglit]
-kind = "piglit"
 project = "piglit"
 case_list = ["quick"]
 jobs = 4
@@ -593,6 +459,8 @@ suite = "piglit"
 env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
 "#;
 
+    const DEQP_TABLE: &str = "[suite.deqp-vk.deqp]\nexe = \"deqp-vk\"\nwaiver = \"waivers/vk.xml\"\nargs = [\"--deqp-log-images=disable\"]\ntests_per_group = 4096\n";
+
     fn load(body: &str) -> Result<Config> {
         load_files(&[("config.toml", body)])
     }
@@ -605,16 +473,23 @@ env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
         Config::load_from(dir.path())
     }
 
+    fn error(body: &str) -> String {
+        format!("{:#}", load(body).unwrap_err())
+    }
+
     #[test]
     fn the_reference_configuration_loads() {
         let config = load(REFERENCE).unwrap();
         let suite = config.suite("deqp-vk").unwrap();
-        assert_eq!(suite.kind(), Kind::Deqp);
+        assert_eq!(suite.kind.name(), "deqp");
         assert_eq!(suite.case_list, ["mustpass/vk-default.txt"]);
-        let SuiteShape::Deqp(deqp) = &suite.shape else {
+        let Kind::Deqp(deqp) = &suite.kind else {
             panic!("deqp-vk is not a deqp suite")
         };
         assert_eq!(deqp.tests_per_group, Some(4096));
+        assert_eq!(suite.jobs, Jobs::Cores);
+        assert_eq!(config.suite("piglit").unwrap().kind.name(), "piglit");
+        assert_eq!(config.suite("piglit").unwrap().jobs, Jobs::Count(4));
         assert_eq!(config.store.archive_days, 360);
         assert_eq!(config.store.root, expand_tilde("~/Public/results"));
         assert_eq!(
@@ -633,7 +508,6 @@ env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
         );
         let config = load(&body).unwrap();
         let env = &config.case("env-test").unwrap().env;
-        assert_eq!(env.len(), 3);
         let by_name = |name: &str| env.iter().find(|entry| entry.name == name).unwrap().clone();
         assert_eq!(by_name("GONE").op, wits_project::DevenvOp::Unset);
         assert_eq!(by_name("PREFIX").op, wits_project::DevenvOp::Prepend);
@@ -643,11 +517,16 @@ env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
 
     #[test]
     fn unknown_sections_and_keys_are_load_errors() {
-        let err = load(&format!("{REFERENCE}\n[typo]\nx = 1\n")).unwrap_err();
-        assert!(format!("{err:#}").contains("unknown field"), "{err:#}");
-
-        let err = load(&REFERENCE.replace("tests_per_group = 4096", "unknown = 1")).unwrap_err();
-        assert!(format!("{err:#}").contains("unknown field"), "{err:#}");
+        assert!(error(&format!("{REFERENCE}\n[typo]\nx = 1\n")).contains("unknown field"));
+        assert!(
+            error(&REFERENCE.replace("tests_per_group = 4096", "unknown = 1"))
+                .contains("unknown field")
+        );
+        // The runner shape is its table; there is no `kind` key to repeat it.
+        assert!(error(
+            &REFERENCE.replace("[suite.piglit]\n", "[suite.piglit]\nkind = \"piglit\"\n")
+        )
+        .contains("unknown field"));
     }
 
     #[test]
@@ -665,11 +544,7 @@ env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
         for name in [".", "..", "a/b", "a b", ""] {
             let body =
                 format!("{REFERENCE}\n[case.\"{name}\"]\ndriver = \"radv\"\nsuite = \"deqp-vk\"\n");
-            let err = load(&body).unwrap_err();
-            assert!(
-                format!("{err:#}").contains("path component"),
-                "{name:?}: {err:#}"
-            );
+            assert!(error(&body).contains("path component"), "{name:?}");
         }
     }
 
@@ -680,69 +555,44 @@ env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
                 "case_list = [\"mustpass/vk-default.txt\"]",
                 &format!("case_list = [{value:?}]"),
             );
-            let err = load(&body).unwrap_err();
-            assert!(
-                format!("{err:#}").contains("suite root")
-                    || format!("{err:#}").contains("absolute"),
-                "{value:?}: {err:#}"
-            );
+            let err = error(&body);
+            assert!(err.contains("suite root"), "{value:?}: {err}");
         }
     }
 
     #[test]
-    fn a_suite_has_exactly_the_subtable_its_kind_names() {
-        let missing = REFERENCE.replace(
-            "[suite.deqp-vk.deqp]\nexe = \"deqp-vk\"\nwaiver = \"waivers/vk.xml\"\nargs = [\"--deqp-log-images=disable\"]\ntests_per_group = 4096\n",
-            "",
-        );
-        let err = load(&missing).unwrap_err();
-        assert!(format!("{err:#}").contains("missing"), "{err:#}");
+    fn a_suite_declares_exactly_one_runner_shape() {
+        let err = error(&REFERENCE.replace(DEQP_TABLE, ""));
+        assert!(err.contains("declare its runner shape"), "{err}");
 
-        let second = REFERENCE.replace(
+        let both = REFERENCE.replace(
             "[suite.deqp-vk.deqp]",
             "[suite.deqp-vk.piglit]\nfolder = \"lib64/piglit\"\n\n[suite.deqp-vk.deqp]",
         );
-        let err = load(&second).unwrap_err();
-        assert!(format!("{err:#}").contains("piglit"), "{err:#}");
+        assert!(error(&both).contains("both present"));
     }
 
     #[test]
     fn piglit_takes_exactly_one_profile() {
         let body = REFERENCE.replace(
-            "case_list = [\"quick\"]\njobs = 4",
-            "case_list = [\"quick\", \"quick_gl\"]\njobs = 4",
+            "case_list = [\"quick\"]",
+            "case_list = [\"quick\", \"all\"]",
         );
-        let err = load(&body).unwrap_err();
-        assert!(format!("{err:#}").contains("one profile"), "{err:#}");
+        assert!(error(&body).contains("one profile"));
     }
 
     #[test]
     fn jobs_accepts_cores_or_a_positive_number() {
-        let suite = load(REFERENCE).unwrap().suite("piglit").unwrap().clone();
-        assert_eq!(suite.jobs, Jobs::Count(4));
-        let suite = load(REFERENCE).unwrap().suite("deqp-vk").unwrap().clone();
-        assert_eq!(suite.jobs, Jobs::Cores);
-
-        let zero = REFERENCE.replace("jobs = 4", "jobs = 0");
-        let err = load(&zero).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("jobs must be positive"),
-            "{err:#}"
-        );
-
-        let bad = REFERENCE.replace("jobs = 4", "jobs = \"many\"");
-        let err = load(&bad).unwrap_err();
-        assert!(format!("{err:#}").contains("jobs"), "{err:#}");
+        assert!(error(&REFERENCE.replace("jobs = 4", "jobs = 0")).contains("jobs must be positive"));
+        assert!(error(&REFERENCE.replace("jobs = 4", "jobs = \"many\"")).contains("jobs"));
     }
 
     #[test]
     fn the_store_root_must_be_absolute_and_retention_non_negative() {
-        let err =
-            load(&REFERENCE.replace("root = \"~/Public/results\"", "root = \"relative/results\""))
-                .unwrap_err();
-        assert!(format!("{err:#}").contains("not absolute"), "{err:#}");
-
-        let err = load(&REFERENCE.replace("archive_days = 360", "archive_days = -1")).unwrap_err();
-        assert!(format!("{err:#}").contains("non-negative"), "{err:#}");
+        assert!(error(
+            &REFERENCE.replace("root = \"~/Public/results\"", "root = \"relative/results\"")
+        )
+        .contains("not absolute"));
+        assert!(load(&REFERENCE.replace("archive_days = 360", "archive_days = -1")).is_err());
     }
 }

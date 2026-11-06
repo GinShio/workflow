@@ -4,36 +4,62 @@
 //! tree records entry type, executable bit and symlink target, and every
 //! combination is length-prefixed so no two different inputs can spell the same
 //! byte stream. There are no mtimes, uids or inodes.
-//!
-//! The primitives are `hash_file`, `hash_tree`, `hash_set` and `hash_identity`;
-//! argv and environment have their own canonical forms beside them because
-//! they are not trees or file sets.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::fs::File;
-use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use wits_actions::Overlay;
-
-/// The marker the run directory is replaced with in the identity argv.
-pub const RUN_DIR_MARKER: &str = "{run}";
-
-/// The install stamp's file name, at the root of every installed tree.
-pub const STAMP: &str = ".gputest.toml";
+use wits_actions::{Env, Overlay};
 
 const FILE_DOMAIN: &[u8] = b"wits-gputest-file-v1\0";
 const TREE_DOMAIN: &[u8] = b"wits-gputest-tree-v1\0";
 const SET_DOMAIN: &[u8] = b"wits-gputest-set-v1\0";
 const IDENTITY_DOMAIN: &[u8] = b"wits-gputest-identity-v1\0";
 const ARGV_DOMAIN: &[u8] = b"wits-gputest-argv-v1\0";
-const ENV_DOMAIN: &[u8] = b"wits-gputest-env-v1\0";
+const ENV_DOMAIN: &[u8] = b"wits-gputest-env-v2\0";
+
+/// A run's identity and the seven component hashes it is made of. The archive
+/// records all of them, so two runs can be compared component by component.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Content {
+    pub identity: String,
+    /// The installed suite tree, from its install stamp.
+    pub suite: String,
+    /// The installed runner tree, from its install stamp.
+    pub runner: String,
+    /// The selected ICD manifests and the libraries they name.
+    pub driver_icd: String,
+    /// Every shared object directly under the loader paths.
+    pub driver_libs: String,
+    /// The EGL vendor files and the drirc files the driver reads.
+    pub driver_config: String,
+    /// The runner's argv without the run directory and the baseline.
+    pub argv: String,
+    /// What the composed environment changed relative to the caller.
+    pub env: String,
+}
+
+impl Content {
+    /// The identity over the seven components.
+    pub fn digest(&self) -> String {
+        hash_identity(&[
+            ("suite", &self.suite),
+            ("runner", &self.runner),
+            ("driver.icd", &self.driver_icd),
+            ("driver.libs", &self.driver_libs),
+            ("driver.config", &self.driver_config),
+            ("argv", &self.argv),
+            ("env", &self.env),
+        ])
+    }
+}
 
 /// A file's content hash, following a symlink to the file it names.
 pub fn hash_file(path: &Path) -> Result<String> {
@@ -41,40 +67,9 @@ pub fn hash_file(path: &Path) -> Result<String> {
         File::open(path).with_context(|| format!("opening {} to hash it", path.display()))?;
     let mut hasher = Sha256::new();
     hasher.update(FILE_DOMAIN);
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let n = file
-            .read(&mut buffer)
-            .with_context(|| format!("reading {} to hash it", path.display()))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buffer[..n]);
-    }
+    std::io::copy(&mut file, &mut hasher)
+        .with_context(|| format!("reading {} to hash it", path.display()))?;
     Ok(digest(hasher))
-}
-
-/// A per-command file-hash cache. A run composes the same driver for several
-/// cases; the loader paths and ICD libraries are the same files each time, so
-/// hashing them once per command is the design's stated cost.
-#[derive(Debug, Default)]
-pub struct HashCache {
-    files: BTreeMap<PathBuf, String>,
-}
-
-impl HashCache {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn hash_file(&mut self, path: &Path) -> Result<String> {
-        if let Some(hash) = self.files.get(path) {
-            return Ok(hash.clone());
-        }
-        let hash = hash_file(path)?;
-        self.files.insert(path.to_path_buf(), hash.clone());
-        Ok(hash)
-    }
 }
 
 /// The canonical hash of an installed tree.
@@ -82,10 +77,9 @@ impl HashCache {
 /// Every file, directory and symlink under `root` is recorded with its relative
 /// path; files carry the executable bit and their content hash, symlinks their
 /// target string, and directories exist as entries so an empty one is visible.
-/// `skip` names paths that are not part of the tree — the install stamp, which
-/// is written after the hash and would otherwise make every install differ from
-/// its own record.
-pub fn hash_tree(root: &Path, skip: &[PathBuf]) -> Result<String> {
+/// `skip` is the install stamp, which is written after the hash and would
+/// otherwise make every install differ from its own record.
+pub fn hash_tree(root: &Path, skip: Option<&Path>) -> Result<String> {
     if !root.is_dir() {
         bail!("tree root {} is not a directory", root.display());
     }
@@ -126,23 +120,18 @@ enum Entry {
 fn walk(
     root: &Path,
     rel: &Path,
-    skip: &[PathBuf],
+    skip: Option<&Path>,
     entries: &mut Vec<(Vec<u8>, Entry)>,
 ) -> Result<()> {
     let dir = root.join(rel);
-    let mut children: Vec<_> = std::fs::read_dir(&dir)
-        .with_context(|| format!("reading directory {}", dir.display()))?
-        .collect::<std::io::Result<Vec<_>>>()
+    let children = std::fs::read_dir(&dir)
+        .and_then(|read| read.collect::<std::io::Result<Vec<_>>>())
         .with_context(|| format!("reading directory {}", dir.display()))?;
-    children.sort_by(|a, b| a.file_name().as_bytes().cmp(b.file_name().as_bytes()));
 
     for child in children {
         let child_rel = rel.join(child.file_name());
         let path = root.join(&child_rel);
-        if skip
-            .iter()
-            .any(|skipped| path.as_path() == skipped.as_path())
-        {
+        if skip == Some(path.as_path()) {
             continue;
         }
         let meta = std::fs::symlink_metadata(&path)
@@ -181,13 +170,13 @@ fn walk(
 
 /// The canonical hash of a labelled set — the loader's ICD manifests and
 /// libraries, the loader paths' shared objects, the loader configuration files.
-/// Duplicate labels must agree; paths are deduplicated by the caller or by this
-/// map.
+/// A label may repeat (two variables naming one directory) only with the same
+/// content.
 pub fn hash_set(entries: &[(String, String)]) -> Result<String> {
     let mut map = BTreeMap::new();
     for (label, hash) in entries {
-        if let Some(previous) = map.insert(label.clone(), hash.clone()) {
-            if previous != *hash {
+        if let Some(previous) = map.insert(label, hash) {
+            if previous != hash {
                 bail!("content set names {label:?} twice with different content");
             }
         }
@@ -201,12 +190,10 @@ pub fn hash_set(entries: &[(String, String)]) -> Result<String> {
     Ok(digest(hasher))
 }
 
-/// The identity: a SHA-256 over the sorted `(label, component hash)` pairs, with
-/// a domain separator so a changed component set cannot collide with an old
-/// state value.
-pub fn hash_identity(components: &[(&str, String)]) -> String {
-    let mut pairs: Vec<_> = components.iter().collect();
-    pairs.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+/// The identity: a SHA-256 over the sorted `(label, component hash)` pairs.
+fn hash_identity(components: &[(&str, &str)]) -> String {
+    let mut pairs = components.to_vec();
+    pairs.sort_unstable();
     let mut hasher = Sha256::new();
     hasher.update(IDENTITY_DOMAIN);
     for (label, hash) in pairs {
@@ -226,27 +213,58 @@ pub fn hash_argv(argv: &[String]) -> String {
     digest(hasher)
 }
 
-/// The canonical hash of the final applied overlay: sets and unsets relative to
-/// the scrubbed caller, with both names and values carried as their exact
-/// bytes.
-pub fn hash_overlay(overlay: &Overlay) -> String {
-    let mut sets: Vec<(&OsString, &OsString)> = overlay.set.iter().map(|(k, v)| (k, v)).collect();
-    sets.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-    let mut unsets: Vec<&OsString> = overlay.unset.iter().collect();
-    unsets.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+/// The canonical hash of what the composed environment changed relative to the
+/// scrubbed caller: every set and every unset, by name.
+///
+/// Where a set extends a value the caller already had, only the added part is
+/// hashed. Meson's developer environment prepends its build directories to
+/// `PATH` (and to `PKG_CONFIG_PATH` when the caller has one), so the full value
+/// embeds the caller's own search path, which differs between a login shell and
+/// the service manager. The caller's value is not part of the identity, like
+/// every variable the overlay leaves alone; what the devenv added is.
+pub fn hash_overlay(overlay: &Overlay, caller: &Env) -> String {
+    let mut sets: Vec<(&[u8], &[u8], &[u8])> = overlay
+        .set
+        .iter()
+        .map(|(name, value)| {
+            let old = caller.get(name).map(|old| old.as_bytes());
+            let (form, part) = added_part(value.as_bytes(), old);
+            (name.as_bytes(), form, part)
+        })
+        .collect();
+    sets.sort_unstable();
+    let mut unsets: Vec<&[u8]> = overlay.unset.iter().map(|name| name.as_bytes()).collect();
+    unsets.sort_unstable();
 
     let mut hasher = Sha256::new();
     hasher.update(ENV_DOMAIN);
-    for (name, value) in sets {
-        hasher.update(b"S");
-        field(&mut hasher, name.as_bytes());
-        field(&mut hasher, value.as_bytes());
+    for (name, form, part) in sets {
+        field(&mut hasher, form);
+        field(&mut hasher, name);
+        field(&mut hasher, part);
     }
     for name in unsets {
-        hasher.update(b"U");
-        field(&mut hasher, name.as_bytes());
+        field(&mut hasher, b"unset");
+        field(&mut hasher, name);
     }
     digest(hasher)
+}
+
+/// How a set value relates to the caller's: a prefix or suffix added to it, or
+/// a value of its own.
+fn added_part<'a>(value: &'a [u8], old: Option<&[u8]>) -> (&'static [u8], &'a [u8]) {
+    match old {
+        Some(old) if !old.is_empty() && value.len() > old.len() => {
+            if value.ends_with(old) {
+                (b"prefix", &value[..value.len() - old.len()])
+            } else if value.starts_with(old) {
+                (b"suffix", &value[old.len()..])
+            } else {
+                (b"set", value)
+            }
+        }
+        _ => (b"set", value),
+    }
 }
 
 fn field(hasher: &mut Sha256, bytes: &[u8]) {
@@ -268,6 +286,7 @@ fn digest(hasher: Sha256) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::fs;
     use std::os::unix::fs::{symlink, PermissionsExt};
 
@@ -278,85 +297,140 @@ mod tests {
         fs::create_dir_all(root.join("sub")).unwrap();
         fs::write(root.join("a"), "a").unwrap();
         fs::write(root.join("sub/b"), "b").unwrap();
-        let first = hash_tree(root, &[]).unwrap();
-        let second = hash_tree(root, &[]).unwrap();
-        assert_eq!(first, second);
+        let first = hash_tree(root, None).unwrap();
+        assert_eq!(first, hash_tree(root, None).unwrap());
 
         fs::set_permissions(root.join("a"), fs::Permissions::from_mode(0o755)).unwrap();
-        let executable = hash_tree(root, &[]).unwrap();
+        let executable = hash_tree(root, None).unwrap();
         assert_ne!(first, executable);
 
         fs::write(root.join("sub/b"), "changed").unwrap();
-        let changed = hash_tree(root, &[]).unwrap();
+        let changed = hash_tree(root, None).unwrap();
         assert_ne!(executable, changed);
 
         symlink("a", root.join("link")).unwrap();
-        let linked = hash_tree(root, &[]).unwrap();
-        assert_ne!(changed, linked);
+        assert_ne!(changed, hash_tree(root, None).unwrap());
         fs::remove_file(root.join("link")).unwrap();
 
-        fs::write(root.join(STAMP), "stamp").unwrap();
-        assert_eq!(hash_tree(root, &[root.join(STAMP)]).unwrap(), changed);
-        assert_ne!(hash_tree(root, &[]).unwrap(), changed);
+        let stamp = root.join(".stamp");
+        fs::write(&stamp, "stamp").unwrap();
+        assert_eq!(hash_tree(root, Some(&stamp)).unwrap(), changed);
+        assert_ne!(hash_tree(root, None).unwrap(), changed);
     }
 
     #[test]
     fn an_empty_directory_is_part_of_the_tree() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        let empty = hash_tree(root, &[]).unwrap();
+        let empty = hash_tree(root, None).unwrap();
         fs::create_dir(root.join("empty")).unwrap();
-        assert_ne!(empty, hash_tree(root, &[]).unwrap());
+        assert_ne!(empty, hash_tree(root, None).unwrap());
+    }
+
+    fn content() -> Content {
+        Content {
+            identity: String::new(),
+            suite: "sha256:1".into(),
+            runner: "sha256:2".into(),
+            driver_icd: "sha256:3".into(),
+            driver_libs: "sha256:4".into(),
+            driver_config: "sha256:5".into(),
+            argv: "sha256:6".into(),
+            env: "sha256:7".into(),
+        }
     }
 
     #[test]
-    fn an_identity_is_order_independent_and_fixed_by_its_labels() {
-        let a = hash_identity(&[("suite", "sha256:1".into()), ("runner", "sha256:2".into())]);
-        let b = hash_identity(&[("runner", "sha256:2".into()), ("suite", "sha256:1".into())]);
-        assert_eq!(a, b);
-        let changed = hash_identity(&[("suite", "sha256:1".into()), ("runner", "sha256:3".into())]);
-        assert_ne!(a, changed);
-        let fewer = hash_identity(&[("suite", "sha256:1".into())]);
-        assert_ne!(a, fewer);
+    fn the_identity_moves_with_every_component() {
+        let base = content().digest();
+        assert_eq!(base, content().digest());
+        let mutations: [fn(&mut Content); 7] = [
+            |c| c.suite.push('x'),
+            |c| c.runner.push('x'),
+            |c| c.driver_icd.push('x'),
+            |c| c.driver_libs.push('x'),
+            |c| c.driver_config.push('x'),
+            |c| c.argv.push('x'),
+            |c| c.env.push('x'),
+        ];
+        for mutate in mutations {
+            let mut changed = content();
+            mutate(&mut changed);
+            assert_ne!(base, changed.digest());
+        }
     }
 
     #[test]
     fn a_set_is_order_independent_and_refuses_a_conflicting_duplicate() {
-        let a = hash_set(&[
-            ("a".into(), "sha256:1".into()),
-            ("b".into(), "sha256:2".into()),
-        ])
-        .unwrap();
-        let b = hash_set(&[
-            ("b".into(), "sha256:2".into()),
-            ("a".into(), "sha256:1".into()),
-        ])
-        .unwrap();
+        let a = hash_set(&[("a".into(), "1".into()), ("b".into(), "2".into())]).unwrap();
+        let b = hash_set(&[("b".into(), "2".into()), ("a".into(), "1".into())]).unwrap();
         assert_eq!(a, b);
-        assert!(hash_set(&[
-            ("a".into(), "sha256:1".into()),
-            ("a".into(), "sha256:2".into())
+        let repeated = hash_set(&[
+            ("a".into(), "1".into()),
+            ("b".into(), "2".into()),
+            ("a".into(), "1".into()),
         ])
-        .is_err());
+        .unwrap();
+        assert_eq!(a, repeated);
+        assert!(hash_set(&[("a".into(), "1".into()), ("a".into(), "2".into())]).is_err());
+    }
+
+    fn env(pairs: &[(&str, &str)]) -> Env {
+        pairs
+            .iter()
+            .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+            .collect()
+    }
+
+    fn overlay(set: &[(&str, &str)], unset: &[&str]) -> Overlay {
+        Overlay {
+            set: set
+                .iter()
+                .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+                .collect(),
+            unset: unset.iter().map(OsString::from).collect(),
+        }
     }
 
     #[test]
-    fn an_overlay_records_sets_and_unsets() {
-        use std::ffi::OsString;
-        let overlay = Overlay {
-            set: vec![(OsString::from("A"), OsString::from("1"))],
-            unset: vec![OsString::from("B")],
-        };
-        let a = hash_overlay(&overlay);
-        let reordered = Overlay {
-            set: vec![(OsString::from("A"), OsString::from("1"))],
-            unset: vec![OsString::from("B")],
-        };
-        assert_eq!(a, hash_overlay(&reordered));
-        let changed = Overlay {
-            set: vec![(OsString::from("A"), OsString::from("2"))],
-            unset: vec![],
-        };
-        assert_ne!(a, hash_overlay(&changed));
+    fn an_extended_caller_value_is_hashed_by_what_was_added() {
+        let shell = env(&[("PATH", "/home/u/.cargo/bin:/usr/bin")]);
+        let service = env(&[("PATH", "/usr/bin")]);
+        let from_shell = overlay(&[("PATH", "/b/bin:/home/u/.cargo/bin:/usr/bin")], &[]);
+        let from_service = overlay(&[("PATH", "/b/bin:/usr/bin")], &[]);
+        assert_eq!(
+            hash_overlay(&from_shell, &shell),
+            hash_overlay(&from_service, &service)
+        );
+
+        let other_build = overlay(&[("PATH", "/c/bin:/usr/bin")], &[]);
+        assert_ne!(
+            hash_overlay(&from_service, &service),
+            hash_overlay(&other_build, &service)
+        );
+
+        let appended = overlay(&[("PATH", "/usr/bin:/b/bin")], &[]);
+        assert_ne!(
+            hash_overlay(&from_service, &service),
+            hash_overlay(&appended, &service)
+        );
+    }
+
+    #[test]
+    fn a_new_or_replaced_value_and_an_unset_are_hashed_whole() {
+        let caller = env(&[("KEEP", "1"), ("GONE", "x")]);
+        let base = overlay(&[("ADD", "a")], &["GONE"]);
+        assert_eq!(
+            hash_overlay(&base, &caller),
+            hash_overlay(&overlay(&[("ADD", "a")], &["GONE"]), &env(&[]))
+        );
+        assert_ne!(
+            hash_overlay(&base, &caller),
+            hash_overlay(&overlay(&[("ADD", "b")], &["GONE"]), &caller)
+        );
+        assert_ne!(
+            hash_overlay(&base, &caller),
+            hash_overlay(&overlay(&[("ADD", "a")], &[]), &caller)
+        );
     }
 }

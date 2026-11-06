@@ -1,15 +1,14 @@
 //! `wits-gputest` — run a GPU test suite against a wits build, compare the
 //! result with the previous build, and keep one self-describing archive.
 //!
-//! The design is `docs/reference/gputest-design.rst`. This binary is a plugin:
-//! `wits gputest …` reaches it through the git-style `$PATH` dispatch, and it
-//! owns its own `-n`/`-v` because `wits` consumes its global pair before
-//! exec'ing the plugin.
+//! The guide is `docs/commands/gputest.rst`. This binary is a plugin: `wits
+//! gputest …` reaches it through the git-style `$PATH` dispatch, and `wits`
+//! forwards its global `-n`/`-v` ahead of the plugin's arguments.
 //!
-//! The shape is deliberately small. A *driver* is a wits project plus a
-//! profile plus an ICD selector; a *suite* is one runner invocation; a *case*
-//! is the driver × suite pair that names the comparison and the store; a *run*
-//! is one execution, one archive, one state update.
+//! A *driver* is a wits project plus a profile plus an ICD selector; a *suite*
+//! is one runner invocation; a *case* is the driver × suite pair that names the
+//! comparison and the store; a *run* is one execution, one archive, and at most
+//! one state update.
 
 mod archive;
 mod cmd;
@@ -19,13 +18,13 @@ mod cores;
 mod device;
 mod env;
 mod icd;
-mod kinds;
 mod pipeline;
 mod report;
 mod resolve;
 mod stamp;
 mod state;
 mod store;
+mod suite;
 #[cfg(test)]
 mod testutil;
 mod time;
@@ -47,7 +46,8 @@ struct Cli {
     #[arg(short = 'v', long, global = true)]
     verbose: bool,
 
-    /// Print what a mutating verb would do instead of doing it.
+    /// Print what a mutating verb would do instead of doing it; `run -n`
+    /// prints each case's plan.
     #[arg(short = 'n', long, global = true)]
     dry_run: bool,
 
@@ -57,16 +57,13 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Validate config, projects, suite assets and install stamps. Nothing runs.
-    Check,
-    /// One line per case: last run id, exit status and asset state.
+    /// One line per case: its newest archive, and whether it can run now.
+    /// Exits 1 when a case cannot.
     List,
-    /// Everything a run would do: environment, argv, identity and baseline.
-    Plan(cmd::PlanArgs),
-    /// Install the test suites and runners named by the config.
+    /// Install the test suites and runners the config names.
     Install(cmd::InstallArgs),
-    /// Run cases and compare each against its previous archive.
-    Run(cmd::RunArgs),
+    /// Run cases and compare each against its baseline (`-n`: print the plan).
+    Run(Box<cmd::RunArgs>),
     /// The archives for one case, newest first.
     History(cmd::HistoryArgs),
     /// Print one archive's `run.toml`, and optionally its failures.
@@ -92,7 +89,7 @@ fn main() -> ExitCode {
         Ok(code) => ExitCode::from(code),
         Err(err) => {
             eprintln!("Error: {err:#}");
-            // A run's exit status is its machine interface: 2 means a case
+            // `run`'s exit status is its machine interface: 2 means a case
             // could not run, which is also what a command-level failure means.
             ExitCode::from(if running { 2 } else { 1 })
         }

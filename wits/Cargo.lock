@@ -1443,8 +1443,6 @@ dependencies = [
  "anyhow",
  "clap",
  "log",
- "minijinja",
- "regex",
  "serde",
  "serde_json",
  "sha2",

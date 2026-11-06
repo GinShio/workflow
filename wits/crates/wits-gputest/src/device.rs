@@ -9,19 +9,26 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 
-/// The first DRM card's PCI identity. `id` is normalised to lower case so the
-/// path component is stable across the kernel's `PCI_ID` spelling.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The first DRM card with a PCI identity, and the kernel driving it. The
+/// archive records it as `[device]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Device {
+    /// The PCI slot, `0000:c4:00.0`.
     pub pci: String,
+    /// `vendor:device`, lower case so the path component is stable across the
+    /// kernel's `PCI_ID` spelling.
     pub id: String,
+    /// The kernel driver bound to the card.
     pub drm: String,
+    /// The kernel release.
     pub kernel: String,
 }
 
 impl Device {
-    /// The path component: `vendor:device` normalised to `vendor-device`.
+    /// The path component: `vendor:device` as `vendor-device`.
     pub fn key(&self) -> String {
         self.id.replace(':', "-")
     }
@@ -38,42 +45,38 @@ pub fn probe_at(root: &Path) -> Result<Device> {
         .with_context(|| format!("reading {}", root.display()))?
         .filter_map(|entry| {
             let entry = entry.ok()?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            let number = name.strip_prefix("card")?;
-            if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
-                return None;
-            }
-            Some((number.parse().ok()?, entry.path()))
+            let number = entry
+                .file_name()
+                .to_str()?
+                .strip_prefix("card")?
+                .parse()
+                .ok()?;
+            Some((number, entry.path()))
         })
         .collect();
     cards.sort_by_key(|(number, _)| *number);
 
     for (_, card) in &cards {
-        let uevent = card.join("device/uevent");
-        let Ok(text) = std::fs::read_to_string(&uevent) else {
+        let Ok(text) = std::fs::read_to_string(card.join("device/uevent")) else {
             continue;
         };
         let values = parse_uevent(&text);
-        let Some(id) = values.get("PCI_ID") else {
+        let Some(id) = values
+            .get("PCI_ID")
+            .map(|id| id.trim().to_ascii_lowercase())
+        else {
             continue;
         };
-        let id = id.trim().to_ascii_lowercase();
         if !valid_pci_id(&id) {
             continue;
         }
+        let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .context("reading the kernel release from /proc/sys/kernel/osrelease")?;
         return Ok(Device {
-            pci: values
-                .get("PCI_SLOT_NAME")
-                .map(|v| v.trim().to_owned())
-                .unwrap_or_default(),
+            pci: values.get("PCI_SLOT_NAME").cloned().unwrap_or_default(),
             id,
-            drm: values
-                .get("DRIVER")
-                .map(|v| v.trim().to_owned())
-                .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| "unknown".to_owned()),
-            kernel: kernel_release(),
+            drm: values.get("DRIVER").cloned().unwrap_or_default(),
+            kernel: kernel.trim().to_owned(),
         });
     }
 
@@ -84,10 +87,10 @@ pub fn probe_at(root: &Path) -> Result<Device> {
 }
 
 /// Parse a sysfs `uevent` file: `KEY=VALUE` lines, last value wins.
-pub fn parse_uevent(text: &str) -> BTreeMap<String, String> {
+fn parse_uevent(text: &str) -> BTreeMap<String, String> {
     text.lines()
         .filter_map(|line| line.split_once('='))
-        .map(|(key, value)| (key.trim().to_owned(), value.to_owned()))
+        .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
         .collect()
 }
 
@@ -101,22 +104,6 @@ fn valid_pci_id(id: &str) -> bool {
             .chars()
             .chain(device.chars())
             .all(|c| c.is_ascii_hexdigit())
-}
-
-/// The kernel release, from the shared host facts so the plugin does not grow
-/// a second source for it.
-fn kernel_release() -> String {
-    let facts = wits_core::system::facts();
-    let os = minijinja::Value::from("os");
-    let kernel = minijinja::Value::from("kernel");
-    let release = minijinja::Value::from("release");
-    facts
-        .get_item(&os)
-        .ok()
-        .and_then(|os| os.get_item(&kernel).ok())
-        .and_then(|kernel| kernel.get_item(&release).ok())
-        .and_then(|release| release.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 #[cfg(test)]

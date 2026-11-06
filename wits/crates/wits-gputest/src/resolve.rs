@@ -1,143 +1,114 @@
-//! Resolve one case into everything a run needs: the composed environment, the
-//! installed roots and stamps, the kind's argv and the identity.
+//! Resolve one case into everything a run needs: the installed trees, the
+//! composed environment, the argv inputs and the identity.
 //!
-//! This is pipeline steps 1–6 of the design. `run` and `plan` share it; the
-//! only difference is that `run` goes on to execute and record. The process
-//! environment has already been scrubbed by the caller, so `caller` is exactly
-//! the environment `compose` diffs against and the runner inherits.
+//! `run` and `run -n` share it. The process environment has already been
+//! scrubbed (`env::scrub`), so `Session::caller` is exactly the environment
+//! `compose` diffs against and the runner inherits.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use clap::Args;
 
 use wits_actions::{compose, overlay_between, DevenvRequest, Env, Identity, Overlay};
 use wits_core::git::Repository;
-use wits_project::{
-    identity_repo, resolve_paths, resolve_plan, BuildInput, PathInput, Profile, Project, Workspace,
-};
+use wits_project::{identity_repo, resolve_paths, PathInput, Profile, Project, Workspace};
 
-use crate::config::{Case, Config, Store, Suite};
-use crate::content;
-use crate::env;
+use crate::archive::DriverRecord;
+use crate::config::Config;
+use crate::content::{self, Content};
+use crate::device::Device;
 use crate::icd;
-use crate::kinds::RunContext;
 use crate::stamp::{self, Stamp};
-use crate::state::State;
-use crate::store::{self, ArchiveRef};
-use crate::time;
+use crate::suite::Suite;
 use crate::util;
 
-/// The per-command flags the plugin honours. They are the ones `build` and
-/// `devenv` already use; the plugin re-declares them because `IdentityArgs`
-/// lives in the CLI binary, not in a library.
-#[derive(Debug, Clone, Default)]
-pub struct Flags {
+/// Which build a run tests when it is not the driver's declared one. These
+/// are the flags `wits build` and `wits devenv` take, so a review checkout is
+/// addressed the same way everywhere; the plugin re-declares them because the
+/// `wits` binary's copy is not a library.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Args)]
+pub struct ProfileFlags {
+    /// Target branch. Default: the driver's branch, else the main branch of
+    /// the resolved focus's identity repo.
+    #[arg(short = 'b', long)]
     pub branch: Option<String>,
+    /// Use the selected detached HEAD as-is, without assigning it a branch
+    /// identity or switching any checkout.
+    #[arg(long, conflicts_with = "branch")]
     pub detach: bool,
+    /// Build type; default: the driver's `build_type` (release).
+    #[arg(short = 'B', long = "build-type")]
     pub build_type: Option<String>,
+    /// Select a declared toolchain.
+    #[arg(short = 'T', long)]
     pub toolchain: Option<String>,
+    /// Build-system generator.
+    #[arg(short = 'G', long)]
     pub generator: Option<String>,
+    /// Apply a preset (repeatable; accepts org/preset).
+    #[arg(short = 'p', long = "preset")]
     pub presets: Vec<String>,
+    /// The repo to build or describe.
+    #[arg(long)]
     pub focus: Option<String>,
+    /// Build the base from this checkout verbatim.
+    #[arg(long = "work-dir", value_name = "DIR")]
     pub work_dir: Option<PathBuf>,
-    pub build_dir: Option<PathBuf>,
+    /// Register a template variable, exposed as `{{spec.KEY}}`.
+    #[arg(long = "spec", value_name = "KEY=VALUE", value_parser = parse_spec)]
+    pub specs: Vec<(String, String)>,
+    /// Override the resolved install prefix.
+    #[arg(long = "install-dir", value_name = "DIR")]
     pub install_dir: Option<PathBuf>,
-    pub specs: BTreeMap<String, String>,
-    /// Where the caller stands; a detached build takes its checkout here.
+    /// Override the resolved build directory.
+    #[arg(long = "build-dir", value_name = "DIR")]
+    pub build_dir: Option<PathBuf>,
+}
+
+fn parse_spec(value: &str) -> Result<(String, String), String> {
+    match value.split_once('=') {
+        Some((key, _)) if key.trim().is_empty() => Err(format!("empty key in spec '{value}'")),
+        Some((key, value)) => Ok((key.trim().to_owned(), value.to_owned())),
+        None => Err(format!("expected KEY=VALUE, got '{value}'")),
+    }
+}
+
+/// What every case of one `run` shares.
+pub struct Session<'a> {
+    pub config: &'a Config,
+    pub ws: &'a Workspace,
+    pub profile: &'a ProfileFlags,
+    /// Where the command runs; a detached build takes its checkout here.
     pub here: Option<PathBuf>,
+    /// The scrubbed process environment.
+    pub caller: Env,
+    pub device: Device,
 }
 
-#[derive(Debug, Clone)]
-pub struct Components {
-    pub driver_icd: String,
-    pub driver_libs: String,
-    pub driver_config: String,
-    pub suite: String,
-    pub runner: String,
-    pub argv: String,
+impl Session<'_> {
+    /// Whether profile flags chose another build than the case's own: a review
+    /// checkout, another branch or build type. Such a run compares against the
+    /// case's state but leaves it alone, so the declared build's next run still
+    /// compares with the declared build.
+    pub fn compare_only(&self) -> bool {
+        *self.profile != ProfileFlags::default()
+    }
 }
 
-#[derive(Debug, Clone)]
-pub struct DriverMeta {
-    pub project: String,
-    pub focus: String,
-    pub branch: Option<String>,
-    pub build_type: String,
-    pub toolchain: Option<String>,
-    pub generator: Option<String>,
-    pub presets: Vec<String>,
-    pub commits: BTreeMap<String, String>,
-}
-
-/// One case, resolved as far as it can be without choosing a run id and
-/// starting the runner.
-pub struct Prepared {
-    pub case: String,
-    pub suite: Suite,
-    pub driver_meta: DriverMeta,
-    pub suite_project: String,
-    pub runner_project: String,
+/// A suite's installed trees, verified the way a run needs them.
+pub struct Installed {
     pub suite_root: PathBuf,
     pub runner_root: PathBuf,
-    pub suite_stamp: Stamp,
-    pub runner_stamp: Stamp,
-    pub env: Env,
-    pub overlay: Overlay,
-    pub components: Components,
-    pub identity: String,
-    pub jobs: u32,
+    pub suite: Stamp,
+    pub runner: Stamp,
 }
 
-impl Prepared {
-    /// The `[test]`/`[runner]` provenance groups the archive records.
-    pub fn test_record(&self) -> crate::archive::TestRecord {
-        crate::archive::TestRecord {
-            project: self.suite_project.clone(),
-            branch: self.suite_stamp.project.branch.clone(),
-            commits: self.suite_stamp.project.commits.clone(),
-        }
-    }
-
-    pub fn runner_record(&self) -> crate::archive::RunnerRecord {
-        crate::archive::RunnerRecord {
-            project: self.runner_project.clone(),
-            branch: self.runner_stamp.project.branch.clone(),
-            commits: self.runner_stamp.project.commits.clone(),
-        }
-    }
-
-    pub fn content_record(&self) -> crate::archive::ContentRecord {
-        crate::archive::ContentRecord {
-            driver_icd: self.components.driver_icd.clone(),
-            driver_libs: self.components.driver_libs.clone(),
-            driver_config: self.components.driver_config.clone(),
-            suite: self.components.suite.clone(),
-            runner: self.components.runner.clone(),
-        }
-    }
-}
-
-/// Resolve the case's driver, suite, environment, assets and identity.
-pub fn prepare(
-    ws: &Workspace,
-    config: &Config,
-    case_name: &str,
-    flags: &Flags,
-    caller: &Env,
-    cache: &mut content::HashCache,
-) -> Result<Prepared> {
-    let case: &Case = config.case(case_name)?;
-    let driver = config.driver(&case.driver)?.clone();
-    let suite = config.suite(&case.suite)?.clone();
-
-    let driver_project = ws.project(&driver.project).with_context(|| {
-        format!(
-            "driver '{}': project '{}' is not in the registry",
-            driver.name, driver.project
-        )
-    })?;
+/// The suite's installed trees: both roots, both stamps, the runner binary and
+/// the kind's assets. `run` and `list` ask the same question here.
+pub fn installed(ws: &Workspace, suite: &Suite) -> Result<Installed> {
     let suite_project = ws.project(&suite.project).with_context(|| {
         format!(
             "suite '{}': project '{}' is not in the registry",
@@ -150,197 +121,107 @@ pub fn prepare(
             suite.name, suite.runner
         )
     })?;
-
-    let here = flags.here.clone().or_else(|| std::env::current_dir().ok());
-    let profile = Profile {
-        build_type: flags
-            .build_type
-            .clone()
-            .or_else(|| Some(driver.build_type.clone())),
-        toolchain: flags.toolchain.clone(),
-        generator: flags.generator.clone(),
-        presets: flags.presets.clone(),
-        focus: flags.focus.clone(),
-        specs: flags.specs.clone(),
+    let suite_root = install_paths(ws, suite_project)?.root;
+    let runner_root = install_paths(ws, runner_project)?.root;
+    let verify = || -> Result<(Stamp, Stamp)> {
+        let suite_stamp = stamp::read(&suite_root, &suite_project.key())?;
+        let runner_stamp = stamp::read(&runner_root, &runner_project.key())?;
+        check_runner(&runner_root, suite)?;
+        suite.check_assets(&suite_root)?;
+        Ok((suite_stamp, runner_stamp))
     };
-
-    if flags.detach && flags.branch.is_some() {
-        bail!("--branch and --detach cannot be used together");
-    }
-    let branch = if flags.detach {
-        None
-    } else if let Some(branch) = flags.branch.clone().or_else(|| driver.branch.clone()) {
-        Some(branch)
-    } else {
-        Some(focus_main_branch(driver_project, flags.focus.as_deref())?)
-    };
-
-    let identity = Identity {
-        profile: profile.clone(),
-        branch: branch.clone(),
-        work_dir: flags.work_dir.clone(),
-        build_dir: flags.build_dir.clone(),
-        install_dir: flags.install_dir.clone(),
-        here: here.clone(),
-    };
-    let capture_program =
-        std::env::current_exe().context("locating the running wits-gputest binary")?;
-    let composed = compose(
-        ws,
-        driver_project,
-        &DevenvRequest {
-            identity,
-            capture_program,
-        },
-        caller,
-    )
-    .with_context(|| format!("composing the environment for case '{case_name}'"))?;
-
-    let mut composed_env = caller.clone();
-    env::apply_overlay(&mut composed_env, &composed);
-    if let Some(select) = &driver.select {
-        composed_env.insert(
-            OsString::from("VK_LOADER_DRIVERS_SELECT"),
-            OsString::from(select),
-        );
-    }
-    for entry in &driver.env {
-        env::apply_entry(&mut composed_env, entry);
-    }
-    for entry in &suite.env {
-        env::apply_entry(&mut composed_env, entry);
-    }
-    for entry in &case.env {
-        env::apply_entry(&mut composed_env, entry);
-    }
-    let overlay = overlay_between(caller, &composed_env);
-
-    suite.shape.check_driver(&composed_env).with_context(|| {
+    let (suite_stamp, runner_stamp) = verify().with_context(|| {
         format!(
-            "case '{case_name}': driver '{}' (project '{}'); if the driver's ICD is not \
-             installed, run `wits build '{}' --install`",
-            driver.name, driver.project, driver.project
+            "suite '{}' is not installed; run `wits gputest install {}`",
+            suite.name, suite.name
         )
     })?;
-
-    let suite_root = install_root(ws, suite_project)?;
-    let runner_root = install_root(ws, runner_project)?;
-    ensure_separate_roots(&suite_root, &runner_root)?;
-    let suite_stamp = stamp::read(&suite_root, &suite_project.key())?;
-    let runner_stamp = stamp::read(&runner_root, &runner_project.key())?;
-
-    let runner_bin = runner_root.join(suite.shape.runner_bin());
-    if !runner_bin.is_file() {
-        bail!(
-            "suite '{}': runner binary {} is missing; install with `wits gputest install {}`",
-            suite.name,
-            runner_bin.display(),
-            suite.name
-        );
-    }
-    if !util::is_executable(&runner_bin)? {
-        bail!(
-            "suite '{}': runner binary {} is not executable",
-            suite.name,
-            runner_bin.display()
-        );
-    }
-    suite.shape.check_assets(&suite, &suite_root)?;
-
-    let jobs = suite.jobs.number();
-    if jobs == 0 {
-        bail!("suite '{}': jobs resolved to zero", suite.name);
-    }
-    let run_ctx = RunContext {
-        run_dir: Path::new(content::RUN_DIR_MARKER),
-        baseline: None,
-        suite_root: &suite_root,
-        runner_root: &runner_root,
-        suite: &suite,
-        jobs,
-    };
-    let identity_argv = suite.shape.identity_argv(&run_ctx)?;
-
-    let components = Components {
-        driver_icd: content::hash_set(&icd::component(&composed_env, cache)?)?,
-        driver_libs: hash_libs(&composed_env, cache)?,
-        driver_config: hash_config(&composed_env, cache)?,
-        suite: suite_stamp.hash.clone(),
-        runner: runner_stamp.hash.clone(),
-        argv: content::hash_argv(&identity_argv),
-    };
-    let identity = content::hash_identity(&[
-        ("suite", components.suite.clone()),
-        ("runner", components.runner.clone()),
-        ("driver.icd", components.driver_icd.clone()),
-        ("driver.libs", components.driver_libs.clone()),
-        ("driver.config", components.driver_config.clone()),
-        ("argv", components.argv.clone()),
-        ("env", content::hash_overlay(&overlay)),
-    ]);
-
-    // `compose` resolves a plan internally; this second resolve is the archive's
-    // metadata source (focus, toolchain, generator, presets, commits), so the
-    // record describes what the build used rather than what the command said.
-    let plan = resolve_plan(
-        ws,
-        driver_project,
-        &BuildInput {
-            paths: PathInput {
-                profile: &profile,
-                branch: branch.as_deref(),
-                work_dir: flags.work_dir.as_deref(),
-                build_dir: flags.build_dir.as_deref(),
-                install_dir: flags.install_dir.as_deref(),
-                here: here.as_deref(),
-            },
-            inject_toolchain: false,
-            injector: None,
-            extra_config_args: &[],
-            extra_build_args: &[],
-            extra_install_args: &[],
-        },
-    )?;
-    let driver_meta = DriverMeta {
-        project: driver_project.key(),
-        focus: plan.paths.focus.clone(),
-        branch: branch.clone(),
-        build_type: plan.paths.build_type.clone(),
-        toolchain: plan.paths.toolchain.as_ref().map(|t| t.name.clone()),
-        generator: plan.paths.generator.clone(),
-        presets: plan.presets.clone(),
-        commits: commits(&plan.paths.work_dirs, branch.as_deref()),
-    };
-
-    Ok(Prepared {
-        case: case.name.clone(),
-        suite,
-        driver_meta,
-        suite_project: suite_project.key(),
-        runner_project: runner_project.key(),
+    Ok(Installed {
         suite_root,
         runner_root,
-        suite_stamp,
-        runner_stamp,
-        env: composed_env,
-        overlay,
-        components,
-        identity,
-        jobs,
+        suite: suite_stamp,
+        runner: runner_stamp,
     })
 }
 
-/// The repo that carries the focus's branch identity: the focus itself when it
-/// has its own git, else its anchor. A subtree has no `main_branch` of its own,
-/// so the branch comes from the nearest own-git repo.
+/// The runner binary the suite's shape needs, present and executable under
+/// `root`.
+pub fn check_runner(root: &Path, suite: &Suite) -> Result<()> {
+    let binary = root.join(suite.kind.runner_bin());
+    if !binary.is_file() {
+        bail!("runner binary {} is missing", binary.display());
+    }
+    if !util::is_executable(&binary)? {
+        bail!("runner binary {} is not executable", binary.display());
+    }
+    Ok(())
+}
+
+/// A suite or runner project's installed tree: the build `install` makes,
+/// `release` on the project's main branch, and the checkouts it reads.
+pub struct InstallPaths {
+    pub branch: String,
+    pub root: PathBuf,
+    pub work_dirs: BTreeMap<String, PathBuf>,
+}
+
+pub fn install_paths(ws: &Workspace, project: &Project) -> Result<InstallPaths> {
+    let (repo, main) = identity_main_branch(project, None)?;
+    let branch = main.with_context(|| {
+        format!(
+            "project '{}' has no main_branch on repo '{repo}'; gputest installs the main \
+             branch, so it must be declared",
+            project.key()
+        )
+    })?;
+    let profile = Profile {
+        build_type: Some("release".to_owned()),
+        ..Profile::default()
+    };
+    let paths = resolve_paths(
+        ws,
+        project,
+        &PathInput {
+            profile: &profile,
+            branch: Some(&branch),
+            work_dir: None,
+            build_dir: None,
+            install_dir: None,
+            here: None,
+        },
+    )
+    .with_context(|| format!("resolving the install root of project '{}'", project.key()))?;
+    let root = paths.install_dir.with_context(|| {
+        format!(
+            "project '{}' declares no install_dir; a suite or runner tree must be installed",
+            project.key()
+        )
+    })?;
+    if !root.is_absolute() {
+        bail!(
+            "project '{}': install_dir {} is not absolute; the runner's argv names absolute paths",
+            project.key(),
+            root.display()
+        );
+    }
+    Ok(InstallPaths {
+        branch,
+        root,
+        work_dirs: paths.work_dirs,
+    })
+}
+
+/// The repo that carries the focus's branch identity — the focus itself when
+/// it has its own git, else its anchor — and that repo's `main_branch`. A
+/// subtree has no `main_branch` of its own.
 fn identity_main_branch(
     project: &Project,
     focus: Option<&str>,
 ) -> Result<(String, Option<String>)> {
     let flag = focus.is_some();
     let focus = project.focus_name(focus);
-    // `resolve_paths` validates the focus too, but the branch is resolved first;
-    // name the bad focus here rather than blame its missing `main_branch`.
+    // `resolve_paths` validates the focus too, but the branch is resolved
+    // first; name the bad focus here rather than blame its missing branch.
     if project.repo(focus).is_none() {
         bail!(
             "project '{}' has no repo '{focus}'{}",
@@ -355,238 +236,184 @@ fn identity_main_branch(
     Ok((name, main))
 }
 
-/// The default branch a driver run resolves when neither the driver table nor
-/// the command line names one: the identity repo's `main_branch` for the
-/// *resolved* focus (`--focus`, else the project's). The resolved focus is
-/// what `resolve_paths`/`compose` build, so the branch and the build cannot
-/// disagree.
-pub fn focus_main_branch(project: &Project, focus: Option<&str>) -> Result<String> {
+/// The branch a driver run resolves when neither the driver table nor the
+/// command line names one: the identity repo's `main_branch` for the
+/// *resolved* focus, which is what `compose` builds, so the branch and the
+/// build cannot disagree.
+fn focus_main_branch(project: &Project, focus: Option<&str>) -> Result<String> {
     let (name, main) = identity_main_branch(project, focus)?;
     main.with_context(|| {
         format!(
-            "project '{}' has no main_branch on repo '{name}'; \
-             pass --branch or declare the branch",
+            "project '{}' has no main_branch on repo '{name}'; pass --branch or declare the \
+             driver's branch",
             project.key()
         )
     })
 }
 
-/// The suite and runner roots must be disjoint. Each install stamp hashes its
-/// whole `install_dir` subtree; a root that contains the other makes one
-/// project's stamp change when the other installs, which turns ordinary suite
-/// maintenance into an identity change. The design states this as a must, so a
-/// nested layout is refused rather than silently accepted.
-pub fn ensure_separate_roots(suite_root: &Path, runner_root: &Path) -> Result<()> {
-    // Compare both as written and, where the paths exist, after resolving
-    // symlinks: two spellings of one root are still one root.
-    let suite_real = wits_core::path::real(suite_root);
-    let runner_real = wits_core::path::real(runner_root);
-    if suite_root == runner_root
-        || suite_real == runner_real
-        || suite_real.starts_with(&runner_real)
-        || runner_real.starts_with(&suite_real)
-    {
-        bail!(
-            "suite root {} and runner root {} overlap; each install stamp hashes its whole \
-             install_dir, so the roots must be disjoint. Give the projects separate roots, \
-             for example $XDG_RUNTIME_DIR/wits/gputest/{{deqp,piglit,runner}}",
-            suite_root.display(),
-            runner_root.display()
-        );
-    }
-    Ok(())
+/// One case, resolved as far as it can be without a run id.
+pub struct Prepared {
+    pub suite: Suite,
+    pub installed: Installed,
+    pub driver: DriverRecord,
+    /// The caller plus the overlay: what the runner is spawned with.
+    pub env: Env,
+    /// What `env` changes relative to the caller.
+    pub overlay: Overlay,
+    pub content: Content,
+    pub jobs: u32,
 }
 
-/// The project's identity-repo `main_branch`: what `install` builds and what
-/// the suite/runner roots resolve against. The identity repo is the nearest
-/// own-git repo from the focus, so a subtree focus still resolves from the
-/// checkout that carries the branch.
-pub fn project_main_branch(project: &Project) -> Result<String> {
-    let (name, main) = identity_main_branch(project, None)?;
-    main.with_context(|| {
+/// Resolve the case's suite, driver, environment and identity.
+pub fn prepare(s: &Session<'_>, case_name: &str) -> Result<Prepared> {
+    let case = s.config.case(case_name)?;
+    let driver = s.config.driver(&case.driver)?;
+    let suite = s.config.suite(&case.suite)?.clone();
+
+    // The installed trees first: checking them reads a few files, while
+    // composing the driver runs Meson.
+    let installed = installed(s.ws, &suite)?;
+
+    let project = s.ws.project(&driver.project).with_context(|| {
         format!(
-            "project '{}' has no main_branch on repo '{name}'; \
-             gputest installs the main branch, so it must be declared",
-            project.key()
+            "driver '{}': project '{}' is not in the registry",
+            driver.name, driver.project
         )
-    })
-}
-
-/// The `install_dir` of a suite or runner project, resolved with `release` on
-/// the project's main branch. Assets are installed, so there is no per-suite
-/// profile here.
-pub fn install_root(ws: &Workspace, project: &Project) -> Result<PathBuf> {
-    let main = project_main_branch(project)?;
+    })?;
+    let flags = s.profile;
     let profile = Profile {
-        build_type: Some("release".to_owned()),
-        ..Profile::default()
+        build_type: Some(
+            flags
+                .build_type
+                .clone()
+                .unwrap_or_else(|| driver.build_type.clone()),
+        ),
+        toolchain: flags.toolchain.clone(),
+        generator: flags.generator.clone(),
+        presets: flags.presets.clone(),
+        focus: flags.focus.clone(),
+        specs: flags.specs.iter().cloned().collect(),
     };
+    let branch = if flags.detach {
+        None
+    } else {
+        match flags.branch.clone().or_else(|| driver.branch.clone()) {
+            Some(branch) => Some(branch),
+            None => Some(focus_main_branch(project, flags.focus.as_deref())?),
+        }
+    };
+    let composed = compose(
+        s.ws,
+        project,
+        &DevenvRequest {
+            identity: Identity {
+                profile: profile.clone(),
+                branch: branch.clone(),
+                work_dir: flags.work_dir.clone(),
+                build_dir: flags.build_dir.clone(),
+                install_dir: flags.install_dir.clone(),
+                here: s.here.clone(),
+            },
+            capture_program: std::env::current_exe()
+                .context("locating the running wits-gputest binary")?,
+        },
+        &s.caller,
+    )
+    .with_context(|| format!("composing the environment for case '{case_name}'"))?;
+
+    let mut env = s.caller.clone();
+    for (name, value) in composed.set {
+        env.insert(name, value);
+    }
+    for name in &composed.unset {
+        env.remove(name);
+    }
+    if let Some(select) = &driver.select {
+        env.insert("VK_LOADER_DRIVERS_SELECT".into(), select.into());
+    }
+    for entry in driver.env.iter().chain(&suite.env).chain(&case.env) {
+        entry.apply(&mut env);
+    }
+    let overlay = overlay_between(&s.caller, &env);
+    suite.check_driver(&env).with_context(|| {
+        format!(
+            "case '{case_name}': driver '{}' (project '{}')",
+            driver.name, driver.project
+        )
+    })?;
+
+    let jobs = suite.jobs.number();
+    let identity_argv = suite.identity_argv(&installed.suite_root, &installed.runner_root, jobs)?;
+    let mut content = Content {
+        identity: String::new(),
+        suite: installed.suite.hash.clone(),
+        runner: installed.runner.hash.clone(),
+        driver_icd: icd::component(&env)?,
+        driver_libs: hash_libs(&env)?,
+        driver_config: hash_config(&env)?,
+        argv: content::hash_argv(&identity_argv),
+        env: content::hash_overlay(&overlay, &s.caller),
+    };
+    content.identity = content.digest();
+
+    // `compose` resolved these paths from the same inputs; the record names
+    // the build tree the environment came from.
     let paths = resolve_paths(
-        ws,
+        s.ws,
         project,
         &PathInput {
             profile: &profile,
-            branch: Some(main.as_str()),
-            work_dir: None,
-            build_dir: None,
-            install_dir: None,
-            here: None,
+            branch: branch.as_deref(),
+            work_dir: flags.work_dir.as_deref(),
+            build_dir: flags.build_dir.as_deref(),
+            install_dir: flags.install_dir.as_deref(),
+            here: s.here.as_deref(),
         },
-    )
-    .with_context(|| format!("resolving the install root of project '{}'", project.key()))?;
-    let root = paths.install_dir.with_context(|| {
-        format!(
-            "project '{}' declares no install_dir; a suite root must be installed",
-            project.key()
-        )
-    })?;
-    if !root.is_absolute() {
-        bail!(
-            "project '{}': install_dir {} is not absolute; suite paths and the runner argv must be absolute",
-            project.key(),
-            root.display()
-        );
-    }
-    Ok(root)
-}
-
-/// The baseline a run would compare against, and the previous archive id the
-/// state will remember.
-#[derive(Debug, Clone)]
-pub struct Baseline {
-    pub archive: Option<ArchiveRef>,
-    pub note: Option<String>,
-}
-
-/// Choose the baseline for this identity from the state.
-///
-/// The same identity uses the stored `baseline`, never the stored `run`: a
-/// rerun must return the same verdict, not compare the build with itself. A
-/// different identity uses the previous run. A missing archive is treated as
-/// no baseline and said so.
-pub fn choose_baseline(
-    store: &Store,
-    case: &str,
-    device: &str,
-    identity: &str,
-    state: Option<&State>,
-) -> Baseline {
-    let candidate = match state {
-        Some(state) if state.hash == identity => state.baseline.clone(),
-        Some(state) => Some(state.run.clone()),
-        None => None,
+    )?;
+    let driver = DriverRecord {
+        project: project.key(),
+        build_dir: paths
+            .build_dir
+            .with_context(|| format!("project '{}' declares no build_dir", project.key()))?,
+        commits: commits(&paths.work_dirs, branch.as_deref()),
+        focus: paths.focus,
+        branch,
+        build_type: paths.build_type,
     };
-    let Some(id) = candidate else {
-        return Baseline {
-            archive: None,
-            note: None,
-        };
-    };
-    let path = store::archive_path(store, case, device, &id);
-    if path.is_file() {
-        Baseline {
-            archive: Some(ArchiveRef {
-                device: device.to_owned(),
-                id,
-                path,
-            }),
-            note: None,
-        }
-    } else {
-        Baseline {
-            archive: None,
-            note: Some(format!(
-                "baseline archive {id} is gone; running without a baseline"
-            )),
-        }
-    }
+
+    Ok(Prepared {
+        suite,
+        installed,
+        driver,
+        env,
+        overlay,
+        content,
+        jobs,
+    })
 }
 
-/// The run directory root: `$XDG_RUNTIME_DIR/gputest`, else the service
-/// runner's `/run/user/<uid>/gputest`.
-pub fn runtime_root() -> Result<PathBuf> {
-    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
-        if !dir.is_empty() {
-            return Ok(PathBuf::from(dir).join("gputest"));
-        }
-    }
-    Ok(PathBuf::from(format!("/run/user/{}/gputest", uid()?)))
-}
-
-/// The run directory for one case and id.
-pub fn run_dir(case: &str, id: &str) -> Result<PathBuf> {
-    Ok(runtime_root()?.join(case).join(id))
-}
-
-/// A run id whose directory and archive do not already exist, with a short
-/// suffix when a second run could start in the same second.
-pub fn next_run_id(
-    store: &Store,
-    case: &str,
-    device: &str,
-    state: Option<&State>,
-) -> Result<String> {
-    let runtime = runtime_root()?;
-    let state_run = state.map(|state| state.run.as_str());
-    let base = time::now_run_id();
-    let taken = |id: &str| {
-        store::archive_path(store, case, device, id).exists()
-            || runtime.join(case).join(id).exists()
-            || state_run == Some(id)
-    };
-    if !taken(&base) {
-        return Ok(base);
-    }
-    for n in 2..=9999 {
-        let id = time::suffixed(&base, n);
-        if !taken(&id) {
-            return Ok(id);
-        }
-    }
-    bail!("could not find an unused run id for case '{case}' at {base}")
-}
-
-fn uid() -> Result<u32> {
-    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
-        for line in status.lines() {
-            if let Some(rest) = line.strip_prefix("Uid:") {
-                if let Some(value) = rest.split_whitespace().next() {
-                    if let Ok(uid) = value.parse() {
-                        return Ok(uid);
-                    }
-                }
-            }
-        }
-    }
-    if let Ok(value) = std::env::var("UID") {
-        if let Ok(uid) = value.parse() {
-            return Ok(uid);
-        }
-    }
-    bail!("cannot determine the process uid for the /run/user fallback; set XDG_RUNTIME_DIR")
-}
-
-pub(crate) fn commits(
+/// Each checkout's commit on `branch`, else at `HEAD`.
+pub fn commits(
     work_dirs: &BTreeMap<String, PathBuf>,
     branch: Option<&str>,
 ) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    for (name, path) in work_dirs {
-        let repo = Repository::new(path);
-        let commit = branch
-            .and_then(|branch| repo.rev_parse(&format!("refs/heads/{branch}")))
-            .or_else(|| repo.rev_parse("HEAD"));
-        if let Some(commit) = commit {
-            out.insert(name.clone(), commit);
-        }
-    }
-    out
+    work_dirs
+        .iter()
+        .filter_map(|(name, path)| {
+            let repo = Repository::new(path);
+            let commit = branch
+                .and_then(|branch| repo.rev_parse(&format!("refs/heads/{branch}")))
+                .or_else(|| repo.rev_parse("HEAD"))?;
+            Some((name.clone(), commit))
+        })
+        .collect()
 }
 
-/// The `driver.libs` component: every `*.so*` directly under the loader paths
-/// the composed environment carries. A symlink is followed to its target's
-/// content and labelled by the path the loader sees.
-fn hash_libs(env: &Env, cache: &mut content::HashCache) -> Result<String> {
+/// The `driver.libs` component: every shared object directly under the loader
+/// paths the composed environment carries, labelled by the path the loader
+/// sees and hashed by the content it resolves to. An entry that resolves to
+/// nothing cannot load, and is skipped.
+fn hash_libs(env: &Env) -> Result<String> {
     let mut entries = Vec::new();
     for key in [
         "LD_LIBRARY_PATH",
@@ -596,7 +423,7 @@ fn hash_libs(env: &Env, cache: &mut content::HashCache) -> Result<String> {
     ] {
         for dir in util::env_paths(env, key) {
             let read = match std::fs::read_dir(&dir) {
-                Ok(entries) => entries,
+                Ok(read) => read,
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(err) => {
                     return Err(err)
@@ -604,97 +431,91 @@ fn hash_libs(env: &Env, cache: &mut content::HashCache) -> Result<String> {
                 }
             };
             for entry in read {
-                let entry = entry?;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if !name.contains(".so") {
-                    continue;
+                let path = entry
+                    .with_context(|| format!("reading loader path {}", dir.display()))?
+                    .path();
+                let shared_object = path
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .is_some_and(|name| name.ends_with(".so") || name.contains(".so."));
+                if shared_object && is_loadable_file(&path)? {
+                    entries.push((
+                        path.to_string_lossy().into_owned(),
+                        content::hash_file(&path)?,
+                    ));
                 }
-                let path = dir.join(&name);
-                let meta = std::fs::metadata(&path)
-                    .with_context(|| format!("reading loader entry {}", path.display()))?;
-                if !meta.is_file() {
-                    continue;
-                }
-                entries.push((
-                    format!("{}", path.to_string_lossy()),
-                    cache.hash_file(&path)?,
-                ));
             }
         }
     }
     content::hash_set(&entries)
 }
 
-/// The `driver.config` component: the EGL vendor files and every `*.conf`
-/// under the drirc config directory.
-fn hash_config(env: &Env, cache: &mut content::HashCache) -> Result<String> {
+/// The `driver.config` component: the EGL vendor files, and the drirc files
+/// Mesa reads (`src/util/xmlconfig.c`, `driParseConfigFiles`): every `*.conf`
+/// directly inside each `DRIRC_CONFIGDIR` entry — scanned, not walked — then
+/// `$HOME/.drirc`. A driver whose environment sets no `DRIRC_CONFIGDIR` reads
+/// its compiled-in data directory instead, which this does not cover.
+fn hash_config(env: &Env) -> Result<String> {
     let mut entries = Vec::new();
     for file in util::env_paths(env, "__EGL_VENDOR_LIBRARY_FILENAMES") {
-        let meta = std::fs::metadata(&file)
-            .with_context(|| format!("reading EGL vendor file {}", file.display()))?;
-        if !meta.is_file() {
+        if !file.is_file() {
             bail!(
                 "__EGL_VENDOR_LIBRARY_FILENAMES names {}, which is not a file",
                 file.display()
             );
         }
         entries.push((
-            format!("{}", file.to_string_lossy()),
-            cache.hash_file(&file)?,
+            file.to_string_lossy().into_owned(),
+            content::hash_file(&file)?,
         ));
     }
     for dir in util::env_paths(env, "DRIRC_CONFIGDIR") {
-        walk_conf(&dir, &mut entries, cache)?;
+        let read = match std::fs::read_dir(&dir) {
+            Ok(read) => read,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("reading drirc directory {}", dir.display()))
+            }
+        };
+        for entry in read {
+            let path = entry
+                .with_context(|| format!("reading drirc directory {}", dir.display()))?
+                .path();
+            if path.extension().is_some_and(|ext| ext == "conf") && is_loadable_file(&path)? {
+                entries.push((
+                    path.to_string_lossy().into_owned(),
+                    content::hash_file(&path)?,
+                ));
+            }
+        }
+    }
+    if let Some(home) = env.get(OsStr::new("HOME")) {
+        let drirc = Path::new(home).join(".drirc");
+        if is_loadable_file(&drirc)? {
+            entries.push((
+                drirc.to_string_lossy().into_owned(),
+                content::hash_file(&drirc)?,
+            ));
+        }
     }
     content::hash_set(&entries)
 }
 
-fn walk_conf(
-    dir: &Path,
-    entries: &mut Vec<(String, String)>,
-    cache: &mut content::HashCache,
-) -> Result<()> {
-    let read = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => {
-            return Err(err).with_context(|| format!("reading drirc directory {}", dir.display()))
-        }
-    };
-    for entry in read {
-        let entry = entry?;
-        let path = entry.path();
-        let meta = std::fs::metadata(&path)
-            .with_context(|| format!("reading drirc entry {}", path.display()))?;
-        if meta.is_dir() {
-            // A symlinked directory is skipped so a loop cannot recurse
-            // forever; the config tree is a regular directory in practice.
-            if entry.file_type()?.is_dir() {
-                walk_conf(&path, entries, cache)?;
-            }
-        } else if path.extension().and_then(|e| e.to_str()) == Some("conf") {
-            entries.push((
-                format!("{}", path.to_string_lossy()),
-                cache.hash_file(&path)?,
-            ));
-        }
+/// Whether `path` resolves to a regular file. A dangling symlink resolves to
+/// nothing, like a missing path.
+fn is_loadable_file(path: &Path) -> Result<bool> {
+    match std::fs::metadata(path) {
+        Ok(meta) => Ok(meta.is_file()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| format!("reading {}", path.display())),
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Store;
-    use crate::state::State;
     use std::fs;
-
-    fn store(root: &Path) -> Store {
-        Store {
-            root: root.to_path_buf(),
-            archive_days: 360,
-        }
-    }
 
     #[test]
     fn a_focus_override_takes_its_identity_repo_main_branch() {
@@ -713,129 +534,60 @@ mod tests {
         .unwrap();
         let ws = Workspace::load_from(dir.path()).unwrap();
         let project = ws.project("p").unwrap();
-
-        // No override: the project's focus (and therefore `main`).
         assert_eq!(focus_main_branch(project, None).unwrap(), "main");
-        // The focus's own identity repo has a different `main_branch`.
         assert_eq!(
             focus_main_branch(project, Some("engine")).unwrap(),
             "stable"
         );
-        // `install` never takes a focus override.
-        assert_eq!(project_main_branch(project).unwrap(), "main");
+        assert!(focus_main_branch(project, Some("nope")).is_err());
     }
 
-    #[test]
-    fn the_same_identity_selects_the_stored_baseline_not_the_previous_run() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = store(dir.path());
-        let device = "1002-150e";
-        for id in ["first", "second"] {
-            let path = store::archive_path(&store, "c", device, id);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, "x").unwrap();
-        }
-        let state = State {
-            hash: "sha256:same".to_owned(),
-            run: "second".to_owned(),
-            baseline: Some("first".to_owned()),
-        };
-        let baseline = choose_baseline(&store, "c", device, "sha256:same", Some(&state));
-        assert_eq!(baseline.archive.unwrap().id, "first");
-        assert!(baseline.note.is_none());
-    }
-
-    #[test]
-    fn a_changed_identity_uses_the_previous_run() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = store(dir.path());
-        let device = "d";
-        let path = store::archive_path(&store, "c", device, "old");
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, "x").unwrap();
-        let state = State {
-            hash: "sha256:old".to_owned(),
-            run: "old".to_owned(),
-            baseline: None,
-        };
-        let baseline = choose_baseline(&store, "c", device, "sha256:new", Some(&state));
-        assert_eq!(baseline.archive.unwrap().id, "old");
-    }
-
-    #[test]
-    fn a_gone_baseline_is_no_baseline_with_a_note() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = store(dir.path());
-        let state = State {
-            hash: "sha256:old".to_owned(),
-            run: "gone".to_owned(),
-            baseline: None,
-        };
-        let baseline = choose_baseline(&store, "c", "d", "sha256:new", Some(&state));
-        assert!(baseline.archive.is_none());
-        assert!(baseline.note.unwrap().contains("gone"));
-    }
-
-    #[test]
-    fn overlapping_suite_and_runner_roots_are_refused() {
-        let siblings = (
-            Path::new("/run/user/1000/wits/gputest/deqp"),
-            Path::new("/run/user/1000/wits/gputest/runner"),
-        );
-        ensure_separate_roots(siblings.0, siblings.1).unwrap();
-
-        for (suite, runner) in [
-            ("/a/deqp", "/a/deqp"),
-            ("/a/deqp", "/a"),
-            ("/a", "/a/runner"),
-        ] {
-            let err = ensure_separate_roots(Path::new(suite), Path::new(runner)).unwrap_err();
-            assert!(
-                format!("{err:#}").contains("overlap"),
-                "{suite} {runner}: {err:#}"
-            );
-        }
-
-        // A symlink alias is the same root even when the spellings differ.
-        let dir = tempfile::tempdir().unwrap();
-        let actual = dir.path().join("actual");
-        std::fs::create_dir_all(actual.join("deqp")).unwrap();
-        std::fs::create_dir_all(actual.join("runner")).unwrap();
-        std::os::unix::fs::symlink(&actual, dir.path().join("alias")).unwrap();
-        let err = ensure_separate_roots(&actual.join("deqp"), &dir.path().join("alias/deqp"))
-            .unwrap_err();
-        assert!(format!("{err:#}").contains("overlap"), "{err:#}");
-    }
-
-    #[test]
-    fn a_non_ascii_path_is_recorded_without_moving_identity() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lib.so.1");
-        fs::write(&path, "x").unwrap();
+    fn env_with(key: &str, value: &Path) -> Env {
         let mut env = Env::new();
-        env.insert("LD_LIBRARY_PATH".into(), dir.path().as_os_str().to_owned());
-        let mut cache = content::HashCache::new();
-        let first = hash_libs(&env, &mut cache).unwrap();
-        let second = hash_libs(&env, &mut cache).unwrap();
-        assert_eq!(first, second);
-        assert!(first.starts_with("sha256:"));
+        env.insert(key.into(), value.as_os_str().to_owned());
+        env
     }
 
     #[test]
-    fn config_hashing_reads_the_drirc_tree() {
+    fn library_hashing_reads_shared_objects_and_skips_what_cannot_load() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("libradeon.so.1"), "x").unwrap();
+        fs::write(dir.path().join("notes.sorted"), "not a library").unwrap();
+        let env = env_with("LD_LIBRARY_PATH", dir.path());
+        let first = hash_libs(&env).unwrap();
+        assert_eq!(first, hash_libs(&env).unwrap());
+
+        std::os::unix::fs::symlink("gone.so.1", dir.path().join("libgone.so")).unwrap();
+        fs::write(dir.path().join("notes.sorted"), "edited").unwrap();
+        assert_eq!(first, hash_libs(&env).unwrap());
+
+        fs::write(dir.path().join("libradeon.so.1"), "y").unwrap();
+        assert_ne!(first, hash_libs(&env).unwrap());
+    }
+
+    #[test]
+    fn config_hashing_reads_drirc_files_the_way_mesa_does() {
         let dir = tempfile::tempdir().unwrap();
         let drirc = dir.path().join("drirc");
-        fs::create_dir_all(drirc.join("nested")).unwrap();
-        fs::write(drirc.join("a.conf"), "a").unwrap();
-        fs::write(drirc.join("nested/b.conf"), "b").unwrap();
-        fs::write(drirc.join("ignored.txt"), "x").unwrap();
-        let mut env = Env::new();
-        env.insert("DRIRC_CONFIGDIR".into(), drirc.into_os_string());
-        let mut cache = content::HashCache::new();
-        let first = hash_config(&env, &mut cache).unwrap();
-        fs::write(dir.path().join("drirc/nested/b.conf"), "changed").unwrap();
-        let mut cache = content::HashCache::new();
-        let second = hash_config(&env, &mut cache).unwrap();
-        assert_ne!(first, second);
+        fs::create_dir_all(drirc.join("tests")).unwrap();
+        fs::write(drirc.join("00-defaults.conf"), "a").unwrap();
+        fs::write(drirc.join("tests/00-test.conf"), "fixture").unwrap();
+        fs::write(drirc.join("README"), "x").unwrap();
+        let home = dir.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let mut env = env_with("DRIRC_CONFIGDIR", &drirc);
+        env.insert("HOME".into(), home.as_os_str().to_owned());
+        let first = hash_config(&env).unwrap();
+
+        // Mesa scans the directory without descending into it.
+        fs::write(drirc.join("tests/00-test.conf"), "edited fixture").unwrap();
+        assert_eq!(first, hash_config(&env).unwrap());
+
+        fs::write(drirc.join("00-defaults.conf"), "b").unwrap();
+        let edited = hash_config(&env).unwrap();
+        assert_ne!(first, edited);
+
+        fs::write(home.join(".drirc"), "<driconf/>").unwrap();
+        assert_ne!(edited, hash_config(&env).unwrap());
     }
 }
