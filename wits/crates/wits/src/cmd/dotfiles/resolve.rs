@@ -118,7 +118,7 @@ pub struct Entrypoint {
 /// `testing.result_dir` must republish the whole `testing` table or it erases
 /// the siblings. And it resolves the file's templates with a templater built
 /// from **that file alone**, so a republished value like
-/// `runner_dir = "{{@@ testing_runner_dir @@}}"` drags its referent in too.
+/// `suite_dir = "{{@@ testing_suite_dir @@}}"` drags its referent in too.
 ///
 /// The alternative — copying every shared variable into every aggregate, which
 /// is what a hand-maintained bundle ends up doing — is correct but expensive in

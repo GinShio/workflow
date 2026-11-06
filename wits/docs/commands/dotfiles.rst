@@ -392,8 +392,8 @@ cannot contribute just that leaf — it would erase the sibling ``testing.*``
 values. So each aggregate republishes the whole top-level key it touches.
 
 **Each imported variables file is resolved on its own.** The templater is
-built from that file alone, so a republished ``runner_dir = "{{@@ testing_runner_dir @@}}"``
-arrives undefined unless ``testing_runner_dir`` travels with it. The generator
+built from that file alone, so a republished ``suite_dir = "{{@@ testing_suite_dir @@}}"``
+arrives undefined unless ``testing_suite_dir`` travels with it. The generator
 therefore closes each aggregate over the shared values its own templates refer
 to, transitively.
 

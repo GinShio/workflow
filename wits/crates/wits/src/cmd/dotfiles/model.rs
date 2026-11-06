@@ -281,14 +281,14 @@ mod tests {
             &Value::Table(table(
                 "a = \"{{@@ sysenv.xdg_config_home @@}}/x\"\n\
                  b = [\"{{@@ env['HOME'] @@}}\"]\n\
-                 [c]\nd = \"{{@@ testing_runner_dir @@}}\"\n\
+                 [c]\nd = \"{{@@ testing_suite_dir @@}}\"\n\
                  e = 'no template here at all'\n",
             )),
             &mut out,
         );
 
         assert!(out.contains("sysenv"));
-        assert!(out.contains("testing_runner_dir"));
+        assert!(out.contains("testing_suite_dir"));
         assert!(out.contains("env"), "the caller filters, not the scanner");
         assert!(
             !out.contains("here"),
