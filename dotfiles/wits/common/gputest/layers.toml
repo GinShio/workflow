@@ -1,0 +1,20 @@
+# A layer is a translation layer such as zink, not a Vulkan loader layer: the
+# API a suite tests, implemented on the driver a case attaches it to. On a
+# driver of its own project it runs from the driver's build; on any other it
+# brings its project's release build on its main branch. `libs` and `config`
+# list what it loads and reads besides the driver.
+{%@@ set mesa_build = projects.root_dir ~ '/' ~ wits.projects.source_info['mesa'].org ~ '/' ~ wits.projects.source_info['mesa'].name ~ '/_build/main-release' @@%}
+
+# A GL test through zink loads Mesa's EGL and GBM stack, which no ICD names.
+# The paths name the nightly's build, which a run given profile flags on a
+# Mesa driver still hashes. zink's own drirc names no Piglit test.
+[layer.zink]
+project = "mesa"
+env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
+libs = [
+    "{{@@ mesa_build @@}}/src/egl/libEGL_mesa.so.0.0.0",
+    "{{@@ mesa_build @@}}/src/gbm/libgbm.so.1",
+    "{{@@ mesa_build @@}}/src/gbm/backends/dri/dri_gbm.so",
+    # libgallium, whose file name carries Mesa's version.
+    "{{@@ mesa_build @@}}/src/gallium/targets/dri",
+]

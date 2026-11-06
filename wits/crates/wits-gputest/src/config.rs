@@ -33,6 +33,7 @@ const CONFIG_ROOT: Root<'static> = Root {
 pub struct Config {
     pub store: Store,
     pub drivers: BTreeMap<String, Driver>,
+    pub layers: BTreeMap<String, Layer>,
     pub suites: BTreeMap<String, Suite>,
     pub cases: BTreeMap<String, Case>,
 }
@@ -54,15 +55,32 @@ pub struct Driver {
     /// `VK_LOADER_DRIVERS_SELECT`.
     pub select: Option<String>,
     pub env: Vec<DevenvEntry>,
-    /// The libraries the driver loads besides its ICD's own, as files and
-    /// directories; their content is `driver.libs`. Absolute.
+    /// The content of `driver.libs` and `driver.config`.
+    pub files: Files,
+}
+
+/// A translation layer such as zink, not a Vulkan loader layer: the API a
+/// suite tests, implemented on the driver a case attaches it to.
+#[derive(Debug, Clone)]
+pub struct Layer {
+    pub name: String,
+    /// Where the layer comes from. On a driver of another project it brings
+    /// this project's own build.
+    pub project: String,
+    pub env: Vec<DevenvEntry>,
+    /// The content of `layer.libs` and `layer.config`.
+    pub files: Files,
+}
+
+/// What a driver or a layer loads and reads besides the ICD.
+#[derive(Debug, Clone, Default)]
+pub struct Files {
+    /// Libraries, as files and directories. Absolute.
     pub libs: Vec<PathBuf>,
-    /// Libraries the driver's ICD links, each by the name a linked library
-    /// carries alone or before its version (`libLLVM.so` for
-    /// `libLLVM.so.23.1`); their content is `driver.libs` too.
+    /// Libraries the ICD links, each by the name a linked library carries
+    /// alone or before its version (`libLLVM.so` for `libLLVM.so.23.1`).
     pub linked: Vec<String>,
-    /// The settings the driver reads, as files and directories; their content
-    /// is `driver.config`. Absolute.
+    /// Settings, as files and directories. Absolute.
     pub config: Vec<PathBuf>,
 }
 
@@ -70,6 +88,7 @@ pub struct Driver {
 pub struct Case {
     pub name: String,
     pub driver: String,
+    pub layer: Option<String>,
     pub suite: String,
     pub env: Vec<DevenvEntry>,
 }
@@ -80,6 +99,8 @@ struct ConfigFile {
     store: Option<StoreDecl>,
     #[serde(default)]
     driver: BTreeMap<String, DriverDecl>,
+    #[serde(default)]
+    layer: BTreeMap<String, LayerDecl>,
     #[serde(default)]
     suite: BTreeMap<String, SuiteDecl>,
     #[serde(default)]
@@ -120,6 +141,18 @@ fn default_build_type() -> String {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct LayerDecl {
+    project: String,
+    #[serde(default)]
+    env: BTreeMap<String, DevenvDecl>,
+    #[serde(default)]
+    libs: Vec<String>,
+    #[serde(default)]
+    config: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SuiteDecl {
     project: String,
     #[serde(default = "default_runner")]
@@ -147,6 +180,7 @@ fn default_timeout() -> u64 {
 #[serde(deny_unknown_fields)]
 struct CaseDecl {
     driver: String,
+    layer: Option<String>,
     suite: String,
     #[serde(default)]
     env: BTreeMap<String, DevenvDecl>,
@@ -197,6 +231,7 @@ impl Config {
 
         let mut store: Option<(StoreDecl, PathBuf)> = None;
         let mut drivers = Declared::new("driver");
+        let mut layers = Declared::new("layer");
         let mut suites = Declared::new("suite");
         let mut cases = Declared::new("case");
         for file in files {
@@ -215,6 +250,7 @@ impl Config {
                 store = Some((decl, file.clone()));
             }
             drivers.add(parsed.driver, &file)?;
+            layers.add(parsed.layer, &file)?;
             suites.add(parsed.suite, &file)?;
             cases.add(parsed.case, &file)?;
         }
@@ -238,6 +274,11 @@ impl Config {
             .into_iter()
             .map(|(name, (decl, _))| Ok((name.clone(), resolve_driver(name, decl)?)))
             .collect::<Result<BTreeMap<_, _>>>()?;
+        let layers = layers
+            .items
+            .into_iter()
+            .map(|(name, (decl, _))| Ok((name.clone(), resolve_layer(name, decl)?)))
+            .collect::<Result<BTreeMap<_, _>>>()?;
         let suites = suites
             .items
             .into_iter()
@@ -251,6 +292,9 @@ impl Config {
                 if !drivers.contains_key(&decl.driver) {
                     bail!("case '{name}': driver '{}' is not declared", decl.driver);
                 }
+                if let Some(layer) = decl.layer.as_ref().filter(|l| !layers.contains_key(*l)) {
+                    bail!("case '{name}': layer '{layer}' is not declared");
+                }
                 if !suites.contains_key(&decl.suite) {
                     bail!("case '{name}': suite '{}' is not declared", decl.suite);
                 }
@@ -258,6 +302,7 @@ impl Config {
                     env: resolve_env(&format!("case.{name}.env"), decl.env)?,
                     name: name.clone(),
                     driver: decl.driver,
+                    layer: decl.layer,
                     suite: decl.suite,
                 };
                 Ok((name, case))
@@ -267,6 +312,7 @@ impl Config {
         Ok(Config {
             store,
             drivers,
+            layers,
             suites,
             cases,
         })
@@ -292,6 +338,12 @@ impl Config {
             .get(name)
             .with_context(|| format!("driver '{name}' is not declared"))
     }
+
+    pub fn layer(&self, name: &str) -> Result<&Layer> {
+        self.layers
+            .get(name)
+            .with_context(|| format!("layer '{name}' is not declared"))
+    }
 }
 
 fn resolve_driver(name: String, decl: DriverDecl) -> Result<Driver> {
@@ -302,20 +354,9 @@ fn resolve_driver(name: String, decl: DriverDecl) -> Result<Driver> {
     if decl.branch.as_deref() == Some("") {
         bail!("driver '{name}': branch is empty");
     }
-    // A name without a `/` is searched for rather than opened, the way the
-    // dynamic loader treats one.
-    let (linked, libs): (Vec<String>, Vec<String>) = decl
-        .libs
-        .into_iter()
-        .partition(|entry| !entry.contains('/'));
-    if linked.iter().any(String::is_empty) {
-        bail!("driver '{name}': a libs entry is empty");
-    }
     Ok(Driver {
         env: resolve_env(&format!("driver.{name}.env"), decl.env)?,
-        libs: absolute_paths(&name, "libs", &libs)?,
-        linked,
-        config: absolute_paths(&name, "config", &decl.config)?,
+        files: resolve_files(&format!("driver '{name}'"), decl.libs, &decl.config)?,
         name,
         project: decl.project,
         build_type: decl.build_type,
@@ -324,16 +365,40 @@ fn resolve_driver(name: String, decl: DriverDecl) -> Result<Driver> {
     })
 }
 
-/// A driver's declared paths with `~` expanded. The runner does not run where
-/// gputest does, so a relative path would name a different file for each of
-/// them.
-fn absolute_paths(driver: &str, key: &str, paths: &[String]) -> Result<Vec<PathBuf>> {
+fn resolve_layer(name: String, decl: LayerDecl) -> Result<Layer> {
+    Ok(Layer {
+        env: resolve_env(&format!("layer.{name}.env"), decl.env)?,
+        files: resolve_files(&format!("layer '{name}'"), decl.libs, &decl.config)?,
+        name,
+        project: decl.project,
+    })
+}
+
+/// The `libs` and `config` lists of `what`, a driver or a layer.
+fn resolve_files(what: &str, libs: Vec<String>, config: &[String]) -> Result<Files> {
+    // A name without a `/` is searched for rather than opened, the way the
+    // dynamic loader treats one.
+    let (linked, libs): (Vec<String>, Vec<String>) =
+        libs.into_iter().partition(|entry| !entry.contains('/'));
+    if linked.iter().any(String::is_empty) {
+        bail!("{what}: a libs entry is empty");
+    }
+    Ok(Files {
+        libs: absolute_paths(what, "libs", &libs)?,
+        linked,
+        config: absolute_paths(what, "config", config)?,
+    })
+}
+
+/// Declared paths with `~` expanded. The runner does not run where gputest
+/// does, so a relative path would name a different file for each of them.
+fn absolute_paths(what: &str, key: &str, paths: &[String]) -> Result<Vec<PathBuf>> {
     paths
         .iter()
         .map(|path| {
             let expanded = expand_tilde(path);
             if !expanded.is_absolute() {
-                bail!("driver '{driver}': {key} path '{path}' is not absolute");
+                bail!("{what}: {key} path '{path}' is not absolute");
             }
             Ok(expanded)
         })
@@ -491,14 +556,18 @@ folder = "lib64/piglit"
 PIGLIT_PLATFORM = "gbm"
 PYTHONDONTWRITEBYTECODE = "1"
 
+[layer.zink]
+project = "mesa"
+env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
+
 [case.radv-vk]
 driver = "radv"
 suite = "deqp-vk"
 
 [case.radv-zink-gl]
 driver = "radv"
+layer = "zink"
 suite = "piglit"
-env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
 "#;
 
     const DEQP_TABLE: &str = "[suite.deqp-vk.deqp]\nexe = \"deqp-vk\"\nwaiver = \"waivers/vk.xml\"\nargs = [\"--deqp-log-images=disable\"]\ntests_per_group = 4096\n";
@@ -538,7 +607,35 @@ env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
             config.suite("piglit").unwrap().env[0].name,
             "PIGLIT_PLATFORM"
         );
-        assert_eq!(config.case("radv-zink-gl").unwrap().env.len(), 1);
+        let zink_gl = config.case("radv-zink-gl").unwrap();
+        assert_eq!(zink_gl.layer.as_deref(), Some("zink"));
+        assert_eq!(config.layer("zink").unwrap().env.len(), 1);
+    }
+
+    #[test]
+    fn a_case_attaches_a_declared_layer_whose_paths_follow_the_driver_rules() {
+        let err = error(&REFERENCE.replace("layer = \"zink\"", "layer = \"angle\""));
+        assert!(
+            err.contains("case 'radv-zink-gl': layer 'angle' is not declared"),
+            "{err}"
+        );
+
+        let body = REFERENCE.replace(
+            "[layer.zink]\nproject = \"mesa\"\n",
+            "[layer.zink]\nproject = \"mesa\"\nlibs = [\"/gl\", \"libgallium.so\"]\n",
+        );
+        let config = load(&body).unwrap();
+        let files = &config.layer("zink").unwrap().files;
+        assert_eq!(files.libs, [PathBuf::from("/gl")]);
+        assert_eq!(files.linked, ["libgallium.so"]);
+        let err = error(&body.replace("\"/gl\"", "\"gl/relative\""));
+        assert!(
+            err.contains("layer 'zink': libs path 'gl/relative' is not absolute"),
+            "{err}"
+        );
+
+        let err = error(&REFERENCE.replace("[layer.zink]\n", "[layer.zink]\nselect = \"*\"\n"));
+        assert!(err.contains("unknown field"), "{err}");
     }
 
     #[test]
@@ -579,7 +676,7 @@ env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
              config = [\"~/settings.cfg\"]\n",
         );
         let config = load(&body).unwrap();
-        let lvp = config.driver("lvp").unwrap();
+        let lvp = &config.driver("lvp").unwrap().files;
         assert_eq!(lvp.libs, [expand_tilde("~/lib")]);
         assert_eq!(lvp.linked, ["libLLVM.so"]);
         assert_eq!(lvp.config, [expand_tilde("~/settings.cfg")]);

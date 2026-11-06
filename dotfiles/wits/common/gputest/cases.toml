@@ -11,9 +11,8 @@ suite = "deqp-vk"
 driver = "lvp"
 suite = "deqp-vk"
 
-# Piglit through zink on the radv build. Zink is a driver rather than a case
-# env on radv: a GL test loads files a Vulkan test does not, and the files
-# the identity hashes are a driver's.
+# Piglit on radv through the zink layer (layers.toml).
 [case.radv-zink-gl]
-driver = "zink"
+driver = "radv"
+layer = "zink"
 suite = "piglit"

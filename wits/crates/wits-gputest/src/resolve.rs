@@ -15,8 +15,8 @@ use wits_actions::{compose, overlay_between, DevenvRequest, Env, Identity, Overl
 use wits_core::git::Repository;
 use wits_project::{identity_repo, resolve_paths, PathInput, Profile, Project, Workspace};
 
-use crate::archive::DriverRecord;
-use crate::config::Config;
+use crate::archive::{BuildRecord, LayerRecord};
+use crate::config::{Config, Files, Layer};
 use crate::content::{self, Content};
 use crate::device::Device;
 use crate::icd;
@@ -254,7 +254,8 @@ fn focus_main_branch(project: &Project, focus: Option<&str>) -> Result<String> {
 pub struct Prepared {
     pub suite: Suite,
     pub installed: Installed,
-    pub driver: DriverRecord,
+    pub driver: BuildRecord,
+    pub layer: Option<LayerRecord>,
     /// The caller plus the overlay: what the runner is spawned with.
     pub env: Env,
     /// What `env` changes relative to the caller.
@@ -263,10 +264,15 @@ pub struct Prepared {
     pub jobs: u32,
 }
 
-/// Resolve the case's suite, driver, environment and identity.
+/// Resolve the case's suite, driver, layer, environment and identity.
 pub fn prepare(s: &Session<'_>, case_name: &str) -> Result<Prepared> {
     let case = s.config.case(case_name)?;
     let driver = s.config.driver(&case.driver)?;
+    let layer = case
+        .layer
+        .as_deref()
+        .map(|name| s.config.layer(name))
+        .transpose()?;
     let suite = s.config.suite(&case.suite)?.clone();
 
     // The installed trees first: checking them reads a few files, while
@@ -301,6 +307,16 @@ pub fn prepare(s: &Session<'_>, case_name: &str) -> Result<Prepared> {
             None => Some(focus_main_branch(project, flags.focus.as_deref())?),
         }
     };
+    let capture_program =
+        std::env::current_exe().context("locating the running wits-gputest binary")?;
+
+    // A layer from another project brings its own build, composed first so
+    // the driver's lands on top: where both set a variable the driver's value
+    // wins, and the ICD stays the driver's.
+    let mut env = s.caller.clone();
+    let layer_record = layer
+        .map(|layer| compose_layer(s, layer, project, &capture_program, &mut env))
+        .transpose()?;
     let composed = compose(
         s.ws,
         project,
@@ -313,24 +329,23 @@ pub fn prepare(s: &Session<'_>, case_name: &str) -> Result<Prepared> {
                 install_dir: flags.install_dir.clone(),
                 here: s.here.clone(),
             },
-            capture_program: std::env::current_exe()
-                .context("locating the running wits-gputest binary")?,
+            capture_program,
         },
-        &s.caller,
+        &env,
     )
     .with_context(|| format!("composing the environment for case '{case_name}'"))?;
-
-    let mut env = s.caller.clone();
-    for (name, value) in composed.set {
-        env.insert(name, value);
-    }
-    for name in &composed.unset {
-        env.remove(name);
-    }
+    apply(&mut env, composed);
     if let Some(select) = &driver.select {
         env.insert("VK_LOADER_DRIVERS_SELECT".into(), select.into());
     }
-    for entry in driver.env.iter().chain(&suite.env).chain(&case.env) {
+    let layer_env = layer.map_or(&[][..], |layer| &layer.env);
+    for entry in driver
+        .env
+        .iter()
+        .chain(layer_env)
+        .chain(&suite.env)
+        .chain(&case.env)
+    {
         entry.apply(&mut env);
     }
     let overlay = overlay_between(&s.caller, &env);
@@ -343,13 +358,17 @@ pub fn prepare(s: &Session<'_>, case_name: &str) -> Result<Prepared> {
 
     let jobs = suite.jobs.number();
     let identity_argv = suite.identity_argv(&installed.suite_root, &installed.runner_root, jobs)?;
+    let no_layer = Files::default();
+    let layer_files = layer.map_or(&no_layer, |layer| &layer.files);
     let mut content = Content {
         identity: String::new(),
         suite: installed.suite.hash.clone(),
         runner: installed.runner.hash.clone(),
         driver_icd: icd::component(&env)?,
-        driver_libs: hash_libs(&driver.libs, &driver.linked, &env)?,
-        driver_config: hash_config(&driver.config)?,
+        driver_libs: hash_libs(&driver.files.libs, &driver.files.linked, &env)?,
+        driver_config: hash_config(&driver.files.config)?,
+        layer_libs: hash_libs(&layer_files.libs, &layer_files.linked, &env)?,
+        layer_config: hash_config(&layer_files.config)?,
         argv: content::hash_argv(&identity_argv),
         env: content::hash_overlay(&overlay, &s.caller),
     };
@@ -357,7 +376,7 @@ pub fn prepare(s: &Session<'_>, case_name: &str) -> Result<Prepared> {
 
     // `compose` resolved these paths from the same inputs; the record names
     // the build tree the environment came from.
-    let paths = resolve_paths(
+    let driver = build_record(
         s.ws,
         project,
         &PathInput {
@@ -369,25 +388,113 @@ pub fn prepare(s: &Session<'_>, case_name: &str) -> Result<Prepared> {
             here: s.here.as_deref(),
         },
     )?;
-    let driver = DriverRecord {
-        project: project.key(),
-        build_dir: paths
-            .build_dir
-            .with_context(|| format!("project '{}' declares no build_dir", project.key()))?,
-        commits: commits(&paths.work_dirs, branch.as_deref()),
-        focus: paths.focus,
-        branch,
-        build_type: paths.build_type,
-    };
 
     Ok(Prepared {
         suite,
         installed,
         driver,
+        layer: layer_record,
         env,
         overlay,
         content,
         jobs,
+    })
+}
+
+/// The case's layer as the archive records it, its build composed into `env`
+/// when it brings one. A layer from the driver's project runs from the
+/// driver's build, whichever build the run selects; one from another project
+/// brings that project's release build on its main branch, the build its
+/// nightly makes, whatever the profile flags say.
+fn compose_layer(
+    s: &Session<'_>,
+    layer: &Layer,
+    driver_project: &Project,
+    capture_program: &Path,
+    env: &mut Env,
+) -> Result<LayerRecord> {
+    let project = s.ws.project(&layer.project).with_context(|| {
+        format!(
+            "layer '{}': project '{}' is not in the registry",
+            layer.name, layer.project
+        )
+    })?;
+    let mut record = LayerRecord {
+        name: layer.name.clone(),
+        project: project.key(),
+        build: None,
+    };
+    if project.key() == driver_project.key() {
+        return Ok(record);
+    }
+    let (repo, main) = identity_main_branch(project, None)?;
+    let branch = main.with_context(|| {
+        format!(
+            "layer '{}': project '{}' has no main_branch on repo '{repo}', and a layer \
+             from another project than its driver's runs from its main branch",
+            layer.name,
+            project.key()
+        )
+    })?;
+    let profile = Profile {
+        build_type: Some("release".to_owned()),
+        ..Profile::default()
+    };
+    let composed = compose(
+        s.ws,
+        project,
+        &DevenvRequest {
+            identity: Identity {
+                profile: profile.clone(),
+                branch: Some(branch.clone()),
+                work_dir: None,
+                build_dir: None,
+                install_dir: None,
+                here: None,
+            },
+            capture_program: capture_program.to_path_buf(),
+        },
+        env,
+    )
+    .with_context(|| format!("composing the environment of layer '{}'", layer.name))?;
+    apply(env, composed);
+    record.build = Some(build_record(
+        s.ws,
+        project,
+        &PathInput {
+            profile: &profile,
+            branch: Some(&branch),
+            work_dir: None,
+            build_dir: None,
+            install_dir: None,
+            here: None,
+        },
+    )?);
+    Ok(record)
+}
+
+/// Apply an overlay to the environment it was composed against.
+fn apply(env: &mut Env, overlay: Overlay) {
+    for (name, value) in overlay.set {
+        env.insert(name, value);
+    }
+    for name in &overlay.unset {
+        env.remove(name);
+    }
+}
+
+/// The record of the build of `project` that `input` names.
+fn build_record(ws: &Workspace, project: &Project, input: &PathInput) -> Result<BuildRecord> {
+    let paths = resolve_paths(ws, project, input)?;
+    Ok(BuildRecord {
+        project: project.key(),
+        build_dir: paths
+            .build_dir
+            .with_context(|| format!("project '{}' declares no build_dir", project.key()))?,
+        commits: commits(&paths.work_dirs, input.branch),
+        focus: paths.focus,
+        branch: input.branch.map(str::to_owned),
+        build_type: paths.build_type,
     })
 }
 

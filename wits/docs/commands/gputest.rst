@@ -27,7 +27,7 @@ service; the runtime environment belongs to :doc:`devenv`; suite installation
 belongs to the suite project's own ``install`` hook. ``gputest`` owns the run,
 the comparison, and the record.
 
-The four nouns
+The five nouns
 --------------
 
 .. list-table::
@@ -40,13 +40,18 @@ The four nouns
      - A wits project plus a profile plus an ICD selector. It is a build, not a
        prefix: its environment is whatever ``devenv`` composes, and ``select``
        chooses which ICD inside that environment the test loads.
+   * - **layer**
+     - A translation layer such as zink, not a Vulkan loader layer: the API a
+       suite tests, implemented on the driver a case attaches it to. It names
+       the project it comes from, the environment that turns it on, and what
+       it loads and reads.
    * - **suite**
      - One runner invocation: a runner shape, the test project whose
        ``install_dir`` is the suite root, the case list, and the runner
        arguments.
    * - **case**
-     - A named ``driver × suite`` plus optional environment, and the unit of
-       history, identity, and baseline.
+     - A named ``driver × suite``, with an optional layer and environment, and
+       the unit of history, identity, and baseline.
    * - **run**
      - One execution: an id, a run directory, one archive in the store, and at
        most one state update.
@@ -62,8 +67,8 @@ The config is a tree of ``*.toml`` files under one root:
 ``$HOME/.wits/gputest``. Files may sit anywhere under it; a section decides what
 a file contributes.
 
-``[store]``, ``[driver.*]``, ``[suite.*]`` and ``[case.*]`` accumulate across
-the tree. The same name twice is a load-time error, not an override; an unknown
+``[store]``, ``[driver.*]``, ``[layer.*]``, ``[suite.*]`` and ``[case.*]``
+accumulate across the tree. The same name twice is a load-time error, not an override; an unknown
 section or key is a load-time error too. An unattended test run cannot afford a
 typo that silently does nothing.
 
@@ -82,6 +87,10 @@ typo that silently does nothing.
    [driver.lvp]
    project = "mesa"
    select = "*lvp*"
+
+   [layer.zink]
+   project = "mesa"               # where the layer comes from
+   env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
 
    [suite.deqp-vk]
    project = "deqp"               # suite root = its install_dir
@@ -119,8 +128,8 @@ typo that silently does nothing.
 
    [case.radv-zink-gl]
    driver = "radv"
+   layer = "zink"                 # Piglit's GL through zink, on radv
    suite = "piglit"
-   env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
 
 .. list-table::
    :header-rows: 1
@@ -151,6 +160,15 @@ typo that silently does nothing.
        loader finds it in the case's environment; naming nothing the ICD
        links is an error. Their content is the identity's ``driver.libs`` and
        ``driver.config``; gputest adds nothing to either on its own.
+   * - ``[layer.*]``
+     - ``project`` is required: where the layer comes from. ``env`` turns it
+       on and is applied after the driver's; ``libs`` and ``config`` take a
+       driver's entries and are the identity's ``layer.libs`` and
+       ``layer.config``. On a driver of the same project the layer runs from
+       the driver's build, whichever build the run selects. On a driver of
+       another project it brings its own: its project's release build on its
+       main branch, composed beneath the driver's, so where both set a
+       variable the driver's value wins and the ICD stays the driver's.
    * - ``[suite.*]``
      - ``project`` is required; ``runner`` defaults to ``runner``.
        ``case_list`` is interpreted by the runner shape. ``jobs`` defaults to
@@ -168,8 +186,9 @@ typo that silently does nothing.
      - ``folder`` is required: the directory holding ``tests/``, ``bin/`` and
        ``lib/``. Piglit takes exactly one profile per invocation.
    * - ``[case.*]``
-     - ``driver`` and ``suite`` are required; ``env`` is applied last. The case
-       name is a path component and must match ``[A-Za-z0-9._-]+``.
+     - ``driver`` and ``suite`` are required; ``layer`` attaches a declared
+       layer to the driver; ``env`` is applied last. The case name is a path
+       component and must match ``[A-Za-z0-9._-]+``.
 
 Every suite path (``exe``, ``waiver``, each caselist, ``folder``) is relative
 to the suite root and must not escape it: absolute paths and components that
@@ -192,7 +211,7 @@ A shape is one runner invocation, not one API. Both run a binary from the
   requires exactly one selected Vulkan ICD.
 * ``piglit`` — Piglit GL through ``piglit-runner``. The installed tree is the
   CMake install output (``<folder>/{tests,bin,lib}``). Its driver guard is
-  empty; a case selects zink with ``env``.
+  empty; a case reaches a Vulkan driver through a layer such as zink.
 
 Adding a shape is a code change, not a config value: a ``Kind`` variant
 carrying its table, and its arms in ``runner_bin``, ``argv``, ``check_assets``
@@ -201,7 +220,7 @@ and ``check_driver``. The pipeline never branches on the shape itself.
 Environment
 -----------
 
-A run's environment is built in one direction and no layer is revisited:
+A run's environment is built in one direction and no step is revisited:
 
 #. The caller's environment, scrubbed of graphics and loader state: ``VK_*``,
    ``MESA_*``, ``LIBGL_*``, ``EGL_*``, ``__EGL_*``, ``GLX_*``, ``__GLX_*``,
@@ -210,13 +229,17 @@ A run's environment is built in one direction and no layer is revisited:
    ``VDPAU_*``, plus ``LD_LIBRARY_PATH``, ``LD_PRELOAD``, ``LD_AUDIT``,
    ``GALLIUM_DRIVER``, ``DRIRC_CONFIGDIR``, ``DRI_PRIME``,
    ``DRI_DEVICE_NAME`` and ``WITS_DEVENV``. ``PATH`` is not scrubbed.
-#. ``devenv``'s overlay: the build system's base (Meson's own ``meson devenv``)
-   plus the project's declared ``devenv`` operations.
+#. The ``devenv`` of the layer's own build, when the layer comes from another
+   project than the driver's.
+#. The ``devenv`` of the driver's build: the build system's base (Meson's own
+   ``meson devenv``, run in the environment so far) plus the project's
+   declared ``devenv`` operations.
 #. ``driver.select``, then the driver's ``env`` table.
+#. The layer's ``env`` table.
 #. The suite's ``env`` table.
 #. The case's ``env`` table.
 
-The three test-only tables use the same vocabulary as the project registry's
+The four test-only tables use the same vocabulary as the project registry's
 ``devenv``: a bare value sets, and ``{ set = … }``, ``{ unset = true }``,
 ``{ prepend = … }``, ``{ append = … }`` name one operation, with an optional
 ``separator``. Values are literal: there is no template language here, and a
@@ -337,8 +360,9 @@ The driver table names the case's build. The ad-hoc flags are the ones
 
 A run given any of them is **compare-only**: it compares against the case's
 state and is archived like any run, but it does not move the state, so the
-declared build's next run still compares with the declared build. A review
-checkout is therefore:
+declared build's next run still compares with the declared build. The flags
+select the driver's build only; a layer from another project keeps its own.
+A review checkout is therefore:
 
 .. code-block:: sh
 
@@ -349,7 +373,7 @@ Identity
 --------
 
 Identity answers one question: *is this the same thing we already tested?* It is
-one SHA-256 over seven component hashes, and the archive records all eight:
+one SHA-256 over nine component hashes, and the archive records all ten:
 
 .. list-table::
    :header-rows: 1
@@ -370,6 +394,11 @@ one SHA-256 over seven component hashes, and the archive records all eight:
        resolves to nothing
    * - ``driver.config``
      - the files the driver's ``config`` lists, read the same way
+   * - ``layer.libs``
+     - what the case's layer's ``libs`` names, read like ``driver.libs``; the
+       empty set without a layer
+   * - ``layer.config``
+     - the files the case's layer's ``config`` lists, read the same way
    * - ``argv``
      - the runner argv with the run directory replaced by a marker and
        ``--baseline`` omitted
@@ -447,8 +476,9 @@ One run that reaches the runner produces one archive:
 ``detail`` (why an error is one), ``baseline`` (the archive compared against),
 ``compare_only``, ``argv`` and ``unset`` at the top, then ``[counts]``,
 ``[env]``, ``[device]``, ``[driver]`` (including the ``build_dir`` whose
-environment the run used), ``[suite]``, ``[runner]`` and ``[content]`` (the
-identity and its seven components).
+environment the run used), ``[layer]`` (its name and project, and the build it
+brought when it comes from another project), ``[suite]``, ``[runner]`` and
+``[content]`` (the identity and its nine components).
 
 The archive keeps whatever evidence the runner produced, even on a signal or an
 unexpected exit. It is written into the store as a synced ``.part`` file and
@@ -522,15 +552,16 @@ When it fails
      - The name is ``.``, ``..``, empty, or holds a character outside
        ``[A-Za-z0-9._-]``. It names the store and state directories.
    * - ``project … is not in the registry``
-     - The driver, suite or runner names a project this machine does not
-       declare.
+     - The driver, layer, suite or runner names a project this machine does
+       not declare.
    * - ``suite … is not installed; run `wits gputest install …```
      - A stamp is missing (the tree was not installed by ``wits gputest
        install``, or that install failed), or the installed layout lacks
        something the suite needs. Run the named command.
    * - ``build directory … does not exist``
      - ``devenv`` cannot compose an environment for a build that was never
-       made. Build it first with :doc:`build`.
+       made, the driver's or the one a layer from another project brings.
+       Build it first with :doc:`build`.
    * - ``driver exposes no ICD`` / ``… matched N of the ICDs``
      - The composed environment does not name exactly one Vulkan driver after
        ``VK_LOADER_DRIVERS_SELECT``. Fix the driver's project ``devenv`` or its

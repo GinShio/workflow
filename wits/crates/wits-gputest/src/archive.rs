@@ -63,18 +63,20 @@ pub struct RunRecord {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     pub device: Device,
-    pub driver: DriverRecord,
+    pub driver: BuildRecord,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<LayerRecord>,
     pub suite: Source,
     pub runner: Source,
     pub content: Content,
 }
 
-/// The build under test: the project, the checkout it came from and the build
+/// A build the run used: the project, the checkout it came from and the build
 /// tree whose environment the run used. The commits are the checkout's,
 /// recorded as provenance; the content hashes say what was actually loaded.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DriverRecord {
+pub struct BuildRecord {
     pub project: String,
     pub focus: String,
     /// `None` for a detached build.
@@ -84,6 +86,17 @@ pub struct DriverRecord {
     pub build_dir: PathBuf,
     #[serde(default)]
     pub commits: BTreeMap<String, String>,
+}
+
+/// The case's layer. It has a build of its own only when it comes from
+/// another project than the driver's; otherwise it ran from the driver's.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayerRecord {
+    pub name: String,
+    pub project: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<BuildRecord>,
 }
 
 impl RunRecord {
@@ -266,14 +279,26 @@ pub(crate) mod tests {
                 drm: "amdgpu".to_owned(),
                 kernel: "7.2.11".to_owned(),
             },
-            driver: DriverRecord {
-                project: "fd.o/mesa".to_owned(),
+            driver: BuildRecord {
+                project: "vendor/vulkan".to_owned(),
                 focus: "main".to_owned(),
                 branch: Some("main".to_owned()),
                 build_type: "release".to_owned(),
-                build_dir: PathBuf::from("/src/mesa/_build/main-release"),
+                build_dir: PathBuf::from("/src/vulkan/_build/main-release"),
                 commits: BTreeMap::from([("main".to_owned(), "abc".to_owned())]),
             },
+            layer: Some(LayerRecord {
+                name: "zink".to_owned(),
+                project: "fd.o/mesa".to_owned(),
+                build: Some(BuildRecord {
+                    project: "fd.o/mesa".to_owned(),
+                    focus: "main".to_owned(),
+                    branch: Some("main".to_owned()),
+                    build_type: "release".to_owned(),
+                    build_dir: PathBuf::from("/src/mesa/_build/main-release"),
+                    commits: BTreeMap::new(),
+                }),
+            }),
             suite: Source {
                 project: "khronos/deqp".to_owned(),
                 branch: "main".to_owned(),
@@ -291,8 +316,10 @@ pub(crate) mod tests {
                 driver_icd: "sha256:3".to_owned(),
                 driver_libs: "sha256:4".to_owned(),
                 driver_config: "sha256:5".to_owned(),
-                argv: "sha256:6".to_owned(),
-                env: "sha256:7".to_owned(),
+                layer_libs: "sha256:6".to_owned(),
+                layer_config: "sha256:7".to_owned(),
+                argv: "sha256:8".to_owned(),
+                env: "sha256:9".to_owned(),
             },
         }
     }
@@ -314,6 +341,12 @@ pub(crate) mod tests {
         assert_eq!(read_back.counts, record().counts);
         assert_eq!(read_back.env["WEIRD KEY"], "line\nnext");
         assert_eq!(read_back.content, record().content);
+        let layer = read_back.layer.as_ref().unwrap();
+        assert_eq!(layer.name, "zink");
+        assert_eq!(
+            layer.build.as_ref().unwrap().build_dir,
+            PathBuf::from("/src/mesa/_build/main-release")
+        );
         assert_eq!(
             read_back.summary(),
             "regression  new=2 carried=3 improved=0"

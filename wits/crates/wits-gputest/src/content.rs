@@ -24,7 +24,7 @@ const IDENTITY_DOMAIN: &[u8] = b"wits-gputest-identity-v1\0";
 const ARGV_DOMAIN: &[u8] = b"wits-gputest-argv-v1\0";
 const ENV_DOMAIN: &[u8] = b"wits-gputest-env-v2\0";
 
-/// A run's identity and the seven component hashes it is made of. The archive
+/// A run's identity and the nine component hashes it is made of. The archive
 /// records all of them, so two runs can be compared component by component.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,6 +40,10 @@ pub struct Content {
     pub driver_libs: String,
     /// What the driver's `config` lists.
     pub driver_config: String,
+    /// What the case's layer's `libs` lists; the empty set without a layer.
+    pub layer_libs: String,
+    /// What the case's layer's `config` lists; the empty set without a layer.
+    pub layer_config: String,
     /// The runner's argv without the run directory and the baseline.
     pub argv: String,
     /// What the composed environment changed relative to the caller.
@@ -47,7 +51,7 @@ pub struct Content {
 }
 
 impl Content {
-    /// The identity over the seven components.
+    /// The identity over the nine components.
     pub fn digest(&self) -> String {
         hash_identity(&[
             ("suite", &self.suite),
@@ -55,6 +59,8 @@ impl Content {
             ("driver.icd", &self.driver_icd),
             ("driver.libs", &self.driver_libs),
             ("driver.config", &self.driver_config),
+            ("layer.libs", &self.layer_libs),
+            ("layer.config", &self.layer_config),
             ("argv", &self.argv),
             ("env", &self.env),
         ])
@@ -169,8 +175,9 @@ fn walk(
 }
 
 /// The canonical hash of a labelled set — the loader's ICD manifests and
-/// libraries, the files a driver lists. A label may repeat (a file listed both
-/// on its own and through its directory) only with the same content.
+/// libraries, the files a driver or a layer lists. A label may repeat (a file
+/// listed both on its own and through its directory) only with the same
+/// content.
 pub fn hash_set(entries: &[(String, String)]) -> Result<String> {
     let mut map = BTreeMap::new();
     for (label, hash) in entries {
@@ -334,8 +341,10 @@ mod tests {
             driver_icd: "sha256:3".into(),
             driver_libs: "sha256:4".into(),
             driver_config: "sha256:5".into(),
-            argv: "sha256:6".into(),
-            env: "sha256:7".into(),
+            layer_libs: "sha256:6".into(),
+            layer_config: "sha256:7".into(),
+            argv: "sha256:8".into(),
+            env: "sha256:9".into(),
         }
     }
 
@@ -343,12 +352,14 @@ mod tests {
     fn the_identity_moves_with_every_component() {
         let base = content().digest();
         assert_eq!(base, content().digest());
-        let mutations: [fn(&mut Content); 7] = [
+        let mutations: [fn(&mut Content); 9] = [
             |c| c.suite.push('x'),
             |c| c.runner.push('x'),
             |c| c.driver_icd.push('x'),
             |c| c.driver_libs.push('x'),
             |c| c.driver_config.push('x'),
+            |c| c.layer_libs.push('x'),
+            |c| c.layer_config.push('x'),
             |c| c.argv.push('x'),
             |c| c.env.push('x'),
         ];

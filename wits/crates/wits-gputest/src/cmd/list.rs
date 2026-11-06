@@ -47,8 +47,8 @@ fn newest(config: &Config, case: &str, device: &str) -> String {
     }
 }
 
-/// Whether the case can run: its driver's project is in the registry and its
-/// suite is installed.
+/// Whether the case can run: its driver's project and its layer's are in the
+/// registry, and its suite is installed.
 fn ready(config: &Config, ws: &Workspace, case: &Case) -> Result<()> {
     let driver = config.driver(&case.driver)?;
     ws.project(&driver.project).with_context(|| {
@@ -57,6 +57,15 @@ fn ready(config: &Config, ws: &Workspace, case: &Case) -> Result<()> {
             driver.name, driver.project
         )
     })?;
+    if let Some(name) = &case.layer {
+        let layer = config.layer(name)?;
+        ws.project(&layer.project).with_context(|| {
+            format!(
+                "layer '{}': project '{}' is not in the registry",
+                layer.name, layer.project
+            )
+        })?;
+    }
     resolve::installed(ws, config.suite(&case.suite)?)?;
     Ok(())
 }

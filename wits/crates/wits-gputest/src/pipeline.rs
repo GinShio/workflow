@@ -133,6 +133,7 @@ fn run_case(
         env,
         device: s.device.clone(),
         driver: prepared.driver,
+        layer: prepared.layer,
         suite: prepared.installed.suite.source,
         runner: prepared.installed.runner.source,
         content: prepared.content,
@@ -311,6 +312,22 @@ fn print_plan(s: &Session<'_>, case: &str) -> Result<()> {
         driver.build_type
     );
     println!("  build dir   {}", driver.build_dir.display());
+    if let Some(layer) = &prepared.layer {
+        match &layer.build {
+            Some(build) => println!(
+                "  layer       {} from {} (branch {}, build_type {}, build dir {})",
+                layer.name,
+                layer.project,
+                build.branch.as_deref().unwrap_or("detached"),
+                build.build_type,
+                build.build_dir.display()
+            ),
+            None => println!(
+                "  layer       {} from {}, in the driver's build",
+                layer.name, layer.project
+            ),
+        }
+    }
     println!(
         "  suite       {} ({}) from {}",
         prepared.suite.name,
@@ -342,6 +359,8 @@ fn print_plan(s: &Session<'_>, case: &str) -> Result<()> {
         ("driver.icd", &content.driver_icd),
         ("driver.libs", &content.driver_libs),
         ("driver.config", &content.driver_config),
+        ("layer.libs", &content.layer_libs),
+        ("layer.config", &content.layer_config),
         ("argv", &content.argv),
         ("env", &content.env),
     ] {
@@ -451,7 +470,17 @@ exit 0
         };
         project(
             "driver",
-            &format!("build_dir = \"{}\"\n", root.join("build").display()),
+            &format!(
+                "build_dir = \"{}\"\n\n[project.devenv]\nSHARED = \"driver\"\n",
+                root.join("build").display()
+            ),
+        );
+        project(
+            "layer",
+            &format!(
+                "build_dir = \"{}\"\n\n[project.devenv]\nSHARED = \"layer\"\nLAYER_ONLY = \"1\"\n",
+                root.join("layer-build").display()
+            ),
         );
         project(
             "suite",
@@ -462,6 +491,8 @@ exit 0
             &format!("install_dir = \"{}\"\n", root.join("runner").display()),
         );
         fs::create_dir_all(root.join("build")).unwrap();
+        fs::create_dir_all(root.join("layer-build")).unwrap();
+        write(&root.join("layer-libs/libgl.so"), "gl", 0o644);
         fs::create_dir_all(root.join("store")).unwrap();
 
         let piglit = root.join("suite/lib64/piglit");
@@ -478,8 +509,14 @@ exit 0
                 "[store]\nroot = \"{}\"\n\n[driver.d]\nproject = \"driver\"\n\n\
                  [suite.p]\nproject = \"suite\"\nrunner = \"runner\"\ncase_list = [\"quick\"]\n\n\
                  [suite.p.piglit]\nfolder = \"lib64/piglit\"\n\n\
-                 [case.c]\ndriver = \"d\"\nsuite = \"p\"\n",
-                root.join("store").display()
+                 [case.c]\ndriver = \"d\"\nsuite = \"p\"\n\n\
+                 [layer.other]\nproject = \"layer\"\nenv = {{ LAYER_ENV = \"on\" }}\n\
+                 libs = [\"{}\"]\n\n\
+                 [layer.same]\nproject = \"driver\"\nenv = {{ LAYER_ENV = \"same\" }}\n\n\
+                 [case.other]\ndriver = \"d\"\nlayer = \"other\"\nsuite = \"p\"\n\n\
+                 [case.same]\ndriver = \"d\"\nlayer = \"same\"\nsuite = \"p\"\n",
+                root.join("store").display(),
+                root.join("layer-libs").display()
             ),
             0o644,
         );
@@ -609,6 +646,60 @@ exit 0
         assert_eq!(fixed.verdict, Verdict::Improved, "{fixed}");
         assert_eq!(fixed.counts, counts(0, 1, 1));
         assert_eq!(store::archives(&config.store, "c").unwrap().len(), 5);
+    }
+
+    #[test]
+    fn a_layer_brings_its_own_build_only_from_another_project() {
+        let _lock = crate::testutil::lock();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let (ws, config) = fixture(root);
+        let profile = ProfileFlags::default();
+        let s = Session {
+            config: &config,
+            ws: &ws,
+            profile: &profile,
+            here: Some(root.to_path_buf()),
+            caller: scrubbed_caller(),
+            device: Device {
+                pci: String::new(),
+                id: "1002:150e".to_owned(),
+                drm: String::new(),
+                kernel: String::new(),
+            },
+        };
+        let var = |prepared: &resolve::Prepared, name: &str| {
+            prepared
+                .env
+                .get(std::ffi::OsStr::new(name))
+                .map(|value| value.to_string_lossy().into_owned())
+        };
+
+        // Another project's build lands beneath the driver's, whose value wins.
+        let other = resolve::prepare(&s, "other").unwrap();
+        assert_eq!(var(&other, "SHARED").as_deref(), Some("driver"));
+        assert_eq!(var(&other, "LAYER_ONLY").as_deref(), Some("1"));
+        assert_eq!(var(&other, "LAYER_ENV").as_deref(), Some("on"));
+        assert_eq!(var(&other, "WITS_DEVENV").as_deref(), Some("driver"));
+        let record = other.layer.as_ref().unwrap();
+        assert_eq!(record.project, "layer");
+        assert_eq!(
+            record.build.as_ref().unwrap().build_dir,
+            root.join("layer-build")
+        );
+
+        // The driver's own project carries the layer in the driver's build.
+        let same = resolve::prepare(&s, "same").unwrap();
+        assert_eq!(var(&same, "LAYER_ONLY"), None);
+        assert_eq!(var(&same, "LAYER_ENV").as_deref(), Some("same"));
+        assert!(same.layer.as_ref().unwrap().build.is_none());
+
+        // What a layer lists is its own component.
+        let plain = resolve::prepare(&s, "c").unwrap();
+        assert!(plain.layer.is_none());
+        assert_eq!(plain.content.layer_libs, same.content.layer_libs);
+        assert_ne!(plain.content.layer_libs, other.content.layer_libs);
+        assert_eq!(plain.content.driver_libs, other.content.driver_libs);
     }
 
     #[test]

@@ -198,8 +198,8 @@ impl Suite {
     }
 
     /// The API-specific driver guard. dEQP Vulkan must load exactly one
-    /// selected ICD; Piglit GL needs no ICD and may select zink through its
-    /// own environment.
+    /// selected ICD; Piglit GL needs no ICD, and reaches one through a layer
+    /// such as zink when it does.
     pub fn check_driver(&self, env: &Env) -> Result<()> {
         match self.kind {
             Kind::Deqp(_) => crate::icd::guard(env),

@@ -3,17 +3,25 @@
 # that environment the test loads, as `VK_LOADER_DRIVERS_SELECT`. The defaults
 # name the nightly's build: release, on the project's main branch.
 #
-# `libs` and `config` list what a driver's tests load and read besides the
-# ICD; the identity hashes nothing else of the build. A dEQP run needs no
-# drirc entry: Mesa's drirc sets options only for the applications and
-# engines it names, and none of them is dEQP.
+# `libs` and `config` list what a driver loads and reads besides its ICD; the
+# identity hashes nothing else of the build. Mesa's drirc sets options only
+# for the applications and engines it names. None of them is dEQP, so a driver
+# lists its drirc only when one of its layers is named there.
 #
 # AMDVLK is a project only on the khronos3d overlay, so its driver and case are
 # declared there.
+{%@@ set mesa_src = projects.root_dir ~ '/' ~ wits.projects.source_info['mesa'].org ~ '/' ~ wits.projects.source_info['mesa'].name @@%}
 
 [driver.radv]
 project = "mesa"
 select = "*radeon*"
+# radv's drirc has `mesa zink` engine sections, which apply whenever the zink
+# layer runs on radv. Mesa reads the files from the checkout at run time and
+# radv's build only validates them, so editing one moves no library.
+config = [
+    "{{@@ mesa_src @@}}/src/amd/vulkan/00-radv-defaults.conf",
+    "{{@@ mesa_src @@}}/src/amd/vulkan/01-radv-performance.conf",
+]
 
 [driver.lvp]
 project = "mesa"
@@ -27,27 +35,3 @@ libs = ["libLLVM.so"]
 # deqp-vk's jobs = "cores". Each process gets its share of the CPUs instead
 # of all of them: online CPUs over physical cores, at least 1.
 env = { LP_NUM_THREADS = "{{@@ [1, (sys_cpu_count | int) // ([1, sys_cpu_cores | int] | max)] | max @@}}" }
-
-{%@@ set mesa_src = projects.root_dir ~ '/' ~ wits.projects.source_info['mesa'].org ~ '/' ~ wits.projects.source_info['mesa'].name @@%}
-{%@@ set mesa_build = mesa_src ~ '/_build/main-release' @@%}
-# Zink on radv's ICD. A GL test loads Mesa's EGL and GBM stack, which no ICD
-# names, and radv applies its drirc's `mesa zink` engine sections to every
-# zink instance. Mesa reads those drirc files from the checkout at run time
-# and radv's build only validates them, so editing one moves no library. The
-# paths name the nightly's build, which a run given profile flags still
-# hashes.
-[driver.zink]
-project = "mesa"
-select = "*radeon*"
-env = { MESA_LOADER_DRIVER_OVERRIDE = "zink" }
-libs = [
-    "{{@@ mesa_build @@}}/src/egl/libEGL_mesa.so.0.0.0",
-    "{{@@ mesa_build @@}}/src/gbm/libgbm.so.1",
-    "{{@@ mesa_build @@}}/src/gbm/backends/dri/dri_gbm.so",
-    # libgallium, whose file name carries Mesa's version.
-    "{{@@ mesa_build @@}}/src/gallium/targets/dri",
-]
-config = [
-    "{{@@ mesa_src @@}}/src/amd/vulkan/00-radv-defaults.conf",
-    "{{@@ mesa_src @@}}/src/amd/vulkan/01-radv-performance.conf",
-]
