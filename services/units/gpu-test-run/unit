@@ -1,7 +1,9 @@
 # The nightly run, against the suites `gpu-test-install` staged. `every` keeps
 # a full dEQP suite (9 CPU-hours on the reference machine) to one night in
 # three; a driver whose content is unchanged since its last completed run is
-# skipped by --if-changed either way.
+# skipped by --if-changed either way. A night that ends in a regression or an
+# error is not recorded, so the next night runs again: it compares the next
+# build with the regressed one, or retries what could not run.
 runs: nightly
 every: 3d
 power: ac
