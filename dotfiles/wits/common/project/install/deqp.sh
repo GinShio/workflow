@@ -45,40 +45,42 @@ install -d "$dest"
 install -m755 "$deqp_vk" "$dest/deqp-vk"
 
 # add_data_dir() already copied the module's data into the build tree; the
-# vulkan tree is staged from there. The per-list directory is not installed:
-# the suite gets one generated caselist instead.
-rm -rf "$dest/vulkan" "$dest/mustpass/vk-default"
+# vulkan tree is staged from there.
+rm -rf "$dest/vulkan" "$dest/mustpass"
 cp -a "$module/vulkan" "$dest/vulkan"
+
+# vk-default.txt is an index of per-list files, which deqp-runner reads
+# recursively (a line ending in .txt names a caselist beside the index). The
+# index exists only in the source tree, so the lists are copied from beside
+# it and the two always agree.
+mustpass="$WITS_SOURCE_DIR/external/vulkancts/mustpass/main"
+index="$mustpass/vk-default.txt"
+test -s "$index" || {
+    echo "deqp.sh: no vk-default index in $mustpass" >&2
+    exit 1
+}
 install -d "$dest/mustpass"
 
-# The suite's caselist is generated from the build tree's per-list files;
-# the individual lists are not installed. The six lists excluded below are
-# part of vk-default too (external/vulkancts/mustpass/main/vk-default.txt
-# names them): this suite leaves them out deliberately, so the installed
-# caselist is vk-default without them. Sort the files so the case order is
-# deterministic; awk keeps each file's lines intact.
-test -d "$module/vk-default" || {
-    echo "deqp.sh: no vk-default case lists in $module" >&2
-    exit 1
-}
-(
-    find "$module/vk-default" -type f -name '*.txt' \
-        ! -path "$module/vk-default/api.txt" \
-        ! -path "$module/vk-default/image/swapchain-mutable.txt" \
-        ! -path "$module/vk-default/info.txt" \
-        ! -path "$module/vk-default/query-pool.txt" \
-        ! -path "$module/vk-default/video.txt" \
-        ! -path "$module/vk-default/wsi.txt" \
-        | LC_ALL=C sort \
-        | while IFS= read -r case_list; do
-            awk '1' "$case_list"
-        done
-) > "$dest/mustpass/vk-default.txt"
-test -s "$dest/mustpass/vk-default.txt" || {
-    echo "deqp.sh: generated an empty vk-default caselist" >&2
-    exit 1
-}
+# The suite leaves six of the indexed lists out deliberately: the installed
+# index is upstream's without them, and only the lists it names are
+# installed. Each must still be named upstream: a rename there would
+# otherwise bring its tests back without a word.
+excluded=$(printf 'vk-default/%s.txt\n' \
+    api image/swapchain-mutable info query-pool video wsi)
+for list in $excluded; do
+    grep -qxF "$list" "$index" || {
+        echo "deqp.sh: upstream's vk-default index no longer names $list" >&2
+        exit 1
+    }
+done
+grep -vxF "$excluded" "$index" > "$dest/mustpass/vk-default.txt"
+while IFS= read -r list; do
+    test -s "$mustpass/$list" || {
+        echo "deqp.sh: the index names $list, which is missing or empty" >&2
+        exit 1
+    }
+    install -D -m644 "$mustpass/$list" "$dest/mustpass/$list"
+done < "$dest/mustpass/vk-default.txt"
 
 install -d "$dest/waivers"
-install -m644 "$WITS_SOURCE_DIR/external/vulkancts/mustpass/main/waivers.xml" \
-    "$dest/waivers/vk.xml"
+install -m644 "$mustpass/waivers.xml" "$dest/waivers/vk.xml"

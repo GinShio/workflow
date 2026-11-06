@@ -160,7 +160,10 @@ typo that silently does nothing.
    * - ``[suite.<name>.deqp]``
      - ``exe`` is required; ``waiver``, ``args`` and ``tests_per_group`` are
        optional. ``deqp`` accepts any number of caselist files and passes one
-       ``--caselist`` per entry.
+       ``--caselist`` per entry. A caselist may be an index, as VK-GL-CTS's
+       mustpass ``vk-default.txt`` is: deqp-runner reads each line that ends
+       in ``.txt`` as another caselist beside the index. Entries are literal
+       paths, so an index, not a glob, is how one entry names many lists.
    * - ``[suite.<name>.piglit]``
      - ``folder`` is required: the directory holding ``tests/``, ``bin/`` and
        ``lib/``. Piglit takes exactly one profile per invocation.

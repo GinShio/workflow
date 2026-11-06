@@ -2,11 +2,13 @@
 # root, so every path below is relative to that root; the `.deqp` or `.piglit`
 # table names the runner shape.
 #
-# The caselist is the one deqp's install hook generates from the build tree's
-# per-list files (`dotfiles/wits/common/project/install/deqp.sh`): vk-default
-# without the api, image/swapchain-mutable, info, query-pool, video and wsi
-# lists, which the hook leaves out deliberately. The per-list files themselves
-# are not installed.
+# The caselist is the index deqp's install hook writes beside the per-list
+# files it copies (`dotfiles/wits/common/project/install/deqp.sh`): upstream's
+# vk-default index without the api, image/swapchain-mutable, info, query-pool,
+# video and wsi lists, which the hook leaves out deliberately and does not
+# install. deqp-runner reads each line of an index as a caselist beside it, so
+# a suite may name one of the installed lists,
+# `mustpass/vk-default/<list>.txt`, instead.
 
 [suite.deqp-vk]
 project = "deqp"
