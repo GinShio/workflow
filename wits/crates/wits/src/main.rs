@@ -167,19 +167,31 @@ fn main() -> anyhow::Result<()> {
         Commands::SliceEditor { spec, todo } => cmd::stack::slice::edit_todo(spec, todo),
         Commands::DevenvCapture { file } => wits_actions::capture(file),
         Commands::Trunk { rev } => print_trunk(*rev),
-        Commands::External(args) => dispatch_plugin(args),
+        Commands::External(args) => dispatch_plugin(&cli, args),
     }
 }
 
 /// Run an unknown subcommand as an external `wits-<name>` executable, git-style.
 /// On success `exec` replaces this process, so the plugin owns the terminal and
 /// its exit status is ours; it only returns here on failure.
-fn dispatch_plugin(args: &[OsString]) -> anyhow::Result<()> {
+///
+/// `wits -n <plugin> …` parses `-n` as its own global flag, so the flags it
+/// consumed are put back ahead of the plugin's arguments: a plugin that honours
+/// `--dry-run` sees it, and one that does not refuses the unknown flag instead
+/// of running for real.
+fn dispatch_plugin(cli: &Cli, args: &[OsString]) -> anyhow::Result<()> {
     let (name, rest) = args
         .split_first()
         .expect("external_subcommand always carries the name");
     let bin = format!("wits-{}", name.to_string_lossy());
-    let err = std::process::Command::new(&bin).args(rest).exec();
+    let mut command = std::process::Command::new(&bin);
+    if cli.dry_run {
+        command.arg("--dry-run");
+    }
+    if cli.verbose {
+        command.arg("--verbose");
+    }
+    let err = command.args(rest).exec();
     match err.kind() {
         std::io::ErrorKind::NotFound => anyhow::bail!(
             "unknown subcommand '{}': no built-in, and no '{bin}' on PATH",

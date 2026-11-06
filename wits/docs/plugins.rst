@@ -21,8 +21,12 @@ The contract
   never reached, because ``stack`` is built in. Pick a name that is not a
   built-in (``wits help`` shows the reserved set).
 * **Invocation.** ``wits gpu a b --flag`` execs ``wits-gpu a b --flag``:
-  everything after the subcommand name is forwarded verbatim. The direct form
-  ``wits-gpu ...`` also works — it is just the executable.
+  everything after the subcommand name is forwarded verbatim. The global
+  ``-n``/``-v`` that ``wits`` parsed before the name are put back in front as
+  ``--dry-run``/``--verbose``: ``wits -n gpu prune`` execs
+  ``wits-gpu --dry-run prune``, so a plugin that does not take the flag refuses
+  it instead of running for real. The direct form ``wits-gpu ...`` also works —
+  it is just the executable.
 * **Process model.** ``wits`` replaces itself with the plugin (``exec``), so
   the plugin owns the terminal and stdin/stdout/stderr, and *its* exit status
   is what the caller sees. ``wits`` adds nothing to the environment.
@@ -33,7 +37,8 @@ The contract
   executable and named correctly.
 
 There are no required flags, but honouring the shared conventions
-(``-n/--dry-run``, ``-v/--verbose``) makes a plugin feel native.
+(``-n/--dry-run``, ``-v/--verbose``, accepted before the verb) makes a plugin
+feel native.
 
 Sharing the ``wits-core`` floor (in-tree Rust plugins)
 ------------------------------------------------------
