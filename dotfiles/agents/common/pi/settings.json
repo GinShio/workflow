@@ -10,10 +10,6 @@
     "npm:@tintinweb/pi-subagents"
   ],
 
-  "workspaceHistory": {
-    "storageDir": "{{@@ sysenv.xdg_state_home @@}}/pi/workspace-history"
-  },
-
   "theme": "dark",
 
   "defaultProvider": "{{@@ pi_vendor @@}}",

@@ -95,6 +95,16 @@
 			}
 		},
 		{
+			"id": "root-home",
+			"action": "deny",
+			"reason": "The root account's home is off-limits — never read, list, or write it; route anything needing its contents to the user.",
+			"pathKind": "any",
+			"underPrefixes": ["/root"],
+			"bash": [
+				"(?:^|[\\s=;&|('\\\",)>])(?:\\/root|~root)(?:[\\s/'\";&|)]|$)"
+			]
+		},
+		{
 			"id": "secret-files",
 			"action": "ask",
 			"reason": "Path looks like secret material — state why the task needs it.",

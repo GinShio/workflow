@@ -7,6 +7,10 @@
  * user through ctx.ui.confirm — the confirm IS the approval gate. Refusal, missing
  * UI, or any guard failure blocks — never a silent allow.
  *
+ * The guard covers the built-in filesystem tools: bash, read, write, edit, grep,
+ * find, and ls. grep/find/ls are read intents; their optional path defaults to the
+ * session cwd, the same default the tools use.
+ *
  * Unattended mode is the designed exception to unbounded confirms: `/unattended
  * on|off|status`, `pi --unattended`, or the cross-tool attendance signal
  * AGENTS_UNATTENDED=1 in the environment, forced on whenever there is no UI
@@ -156,6 +160,13 @@ export default function (pi: ExtensionAPI) {
 		} else if (isToolCallEventType("edit", event)) {
 			// pi's edit tool may batch several edits to one path — one gate per call.
 			intent = { kind: "write", path: event.input.path };
+		} else if (isToolCallEventType("grep", event)) {
+			// Read-only search tools: their path is optional and defaults to cwd.
+			intent = { kind: "read", path: event.input.path ?? ctx.cwd };
+		} else if (isToolCallEventType("find", event)) {
+			intent = { kind: "read", path: event.input.path ?? ctx.cwd };
+		} else if (isToolCallEventType("ls", event)) {
+			intent = { kind: "read", path: event.input.path ?? ctx.cwd };
 		}
 		if (!intent) return undefined;
 
