@@ -29,4 +29,5 @@ Read the relevant one before design, implementation, or review; the `craft/` fil
 - `craft/QUALITY-BAR.md` — the bar: correctness > maintainability > performance > style.
 - `craft/SIMPLICITY.md` — the complexity judgment: whether a boundary earns its place.
 - `craft/COMMENTS.md` — the comment standard: default none; pin non-obvious context to a verifiable source.
+- `craft/COMMITS.md` — the commit-message standard: subject, body, and the attribution trailer.
 - `craft/UPSTREAMS.md` — upstream rules for tool-written text: read it before writing a commit message, comment, or MR description in an upstream's tree.
